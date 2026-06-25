@@ -1,0 +1,27 @@
+database_url: postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable
+metrics:
+  listen_address: :9090
+dvn:
+  mode: shadow
+chains:
+  - eid: 40161
+    name: ethereum-sepolia
+    chain_id: 11155111
+    confirmations: 12
+    rpc_urls:
+      - http://localhost:8545
+  - eid: 40245
+    name: base-sepolia
+    chain_id: 84532
+    confirmations: 12
+    rpc_urls:
+      - http://localhost:8546
+pathways:
+  - src_eid: 40161
+    dst_eid: 40245
+    enabled: true
+    max_message_size: 10000
+  - src_eid: 40245
+    dst_eid: 40161
+    enabled: true
+    max_message_size: 10000

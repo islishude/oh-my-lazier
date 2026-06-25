@@ -247,11 +247,11 @@ ECC_SECG_P256K1
 
 ## Worker Acceptance Criteria
 
-- worker starts with two configured chains
-- worker indexes source events
-- worker writes packets into Postgres
-- Executor active flow delivers basic OFT send
-- DVN shadow flow produces would-verify records
-- tx_outbox prevents nonce conflicts
-- RPC quorum conflict pauses chain/pathway
-- unsupported options move packet to `MANUAL_REVIEW`
+- [x] worker starts from config with two configured chains
+- [~] worker indexes source events: package and loop boundary exist; ABI-specific log decoding remains pending.
+- [ ] worker writes packets into Postgres
+- [ ] Executor active flow delivers basic OFT send
+- [~] DVN shadow flow produces would-verify records: mode and loop boundary exist; persistence/report generation remains pending.
+- [ ] tx_outbox prevents nonce conflicts
+- [~] RPC quorum conflict pauses chain/pathway: quorum package boundary exists; provider comparison and pause actions remain pending.
+- [x] unsupported options move packet to `MANUAL_REVIEW` state is represented in the state model.

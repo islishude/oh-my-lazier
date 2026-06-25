@@ -25,6 +25,22 @@ pragma solidity ^0.8.35;
 - 安装后将解析出的精确版本记录到本计划中
 - 不复制 LayerZero interface，直接从固定版本 package import
 
+当前精确版本：
+
+```text
+hardhat = 3.9.0
+@layerzerolabs/lz-evm-protocol-v2 = 3.0.168
+@layerzerolabs/lz-evm-oapp-v2 = 3.0.168
+@layerzerolabs/lz-evm-messagelib-v2 = 3.0.168
+@openzeppelin/contracts = 5.6.1
+typescript = 6.0.3
+```
+
+实现备注：
+
+- 当前固定版本的 `ILayerZeroExecutor.assignJob` 是 nonpayable；`OpenExecutor` 因此保持接口兼容并只 quote/emit price，不在 `assignJob` 中收取 native fee。
+- 当前固定版本的 LayerZero OFT 通过 OpenZeppelin v5 `Ownable` 继承链编译时，需要最终 OFT 合约显式传入 owner；`OFTPauseAndRateLimit` 使用 `delegate_` 作为 owner。
+
 ## Contract Layout
 
 ```text
@@ -235,19 +251,21 @@ event DVNJobAssigned(
 
 ## Contract Test Tasks
 
-- Executor fee success
-- Executor stale price revert
-- Executor gas below min revert
-- Executor gas above max revert
-- Executor unsupported options revert
-- Executor unauthorized SendLib revert
-- Executor unauthorized OApp sender revert
-- Executor message size revert
-- Executor pause and withdraw tests
-- DVN fee success
-- DVN stale price revert
-- DVN non-empty options revert
-- DVN unauthorized SendLib revert
-- DVN unauthorized OApp sender revert
-- OFT pause tests
-- OFT rate limit tests
+- [x] Executor fee success
+- [x] Executor stale price revert
+- [x] Executor gas below min revert
+- [x] Executor gas above max revert
+- [x] Executor unsupported options revert
+- [x] Executor unauthorized SendLib revert
+- [x] Executor unauthorized OApp sender revert
+- [x] Executor message size revert
+- [x] Executor pause test
+- [x] Executor withdraw test
+- [x] DVN fee success
+- [x] DVN stale price revert
+- [x] DVN non-empty options revert
+- [x] DVN unauthorized SendLib revert
+- [x] DVN unauthorized OApp sender revert
+- [x] DVN withdraw test
+- [x] OFT pause tests
+- [x] OFT rate limit tests

@@ -1,0 +1,9 @@
+node_modules/
+contracts/artifacts/
+contracts/cache/
+coverage/
+.env
+.env.*
+!.env.example
+go/bin/
+tmp/

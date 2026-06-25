@@ -52,9 +52,9 @@ Worker 模型：
 
 | 状态 | 文件                                        | 用途                                  |
 | ---- | ------------------------------------------- | ------------------------------------- |
-| [ ]  | `plans/01-project-scope-and-decisions.md`   | 固定决策、非目标与假设                |
-| [ ]  | `plans/02-contracts-implementation-plan.md` | Solidity 合约实现计划                 |
-| [ ]  | `plans/03-go-worker-implementation-plan.md` | Go worker 实现计划                    |
+| [x]  | `plans/01-project-scope-and-decisions.md`   | 固定决策、非目标与假设                |
+| [x]  | `plans/02-contracts-implementation-plan.md` | Solidity 合约实现计划                 |
+| [~]  | `plans/03-go-worker-implementation-plan.md` | Go worker 实现计划                    |
 | [ ]  | `plans/04-database-and-config-plan.md`      | Postgres schema 与配置文件            |
 | [ ]  | `plans/05-price-bot-and-signer-plan.md`     | Price updater、AWS KMS、本地 keystore |
 | [ ]  | `plans/06-testing-plan.md`                  | 单元测试、集成测试、测试网验证        |
@@ -76,9 +76,20 @@ Worker 模型：
 11. 将 OpenDVN 与 LayerZero Labs DVN 共同加入 required DVNs。
 12. 完成迁移演练并编写主网 runbook。
 
+## 推荐执行顺序状态
+
+| 状态 | 步骤 | 当前证据 |
+| ---- | ---- | -------- |
+| [x] | 1. 初始化 monorepo、Hardhat V3、Go module、Docker Compose | `package.json`、`hardhat.config.ts`、`go/go.mod`、`docker-compose.yml` |
+| [x] | 2. 安装并精确固定 LayerZero / OpenZeppelin 依赖 | `package-lock.json`，精确版本记录在 `plans/02-contracts-implementation-plan.md` |
+| [x] | 3. 实现 TestOFT、OFTPauseAndRateLimit、OpenExecutor、OpenDVN | `contracts/contracts/oft/*`、`contracts/contracts/workers/*`，`contracts/test/OpenWorkers.t.sol` |
+| [~] | 4. 实现 Postgres schema、config loader、chain/pathway registry | config loader 与 chain registry 已有骨架；schema 与 pathway registry 待后续步骤 |
+| [~] | 5. 实现 signer 与 tx manager | signer interface、本地 keystore skeleton、KMS skeleton 与 tx manager loop 已有；完整 nonce/outbox 待后续步骤 |
+| [ ] | 6-12. Executor active path 到主网 runbook | 待后续阶段 |
+
 ## 当前开放项
 
-- 执行 `npm install --save-exact ...@latest` 后，记录 LayerZero 三个包的精确版本。
+- 已执行 `npm install --save-exact ...@latest`，当前精确版本记录在 `plans/02-contracts-implementation-plan.md`。
 - 从 LayerZero deployed contracts 表确认 Ethereum Sepolia 与 Base Sepolia 的 EndpointV2、SendUln302、ReceiveUln302、Executor、DVN 地址。
 - 确认 LayerZero Labs DVN 在两条测试网的地址。
 - 确认 TestOFT 的 name、symbol、initial supply、owner、minting policy。

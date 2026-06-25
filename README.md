@@ -1,0 +1,91 @@
+# oh-my-lazier
+
+Self-hosted LayerZero V2 Executor and DVN worker stack for the initial Ethereum Sepolia <-> Base Sepolia EVM pathway.
+
+The first implementation pass includes:
+
+- Hardhat V3 Solidity workspace using Solidity `^0.8.35`.
+- Fixed LayerZero and OpenZeppelin package versions in `package-lock.json`.
+- `TestOFT` with burn/mint OFT behavior, per-pathway send/receive pause, and outbound token-bucket rate limits.
+- `OpenExecutor` and `OpenDVN` contracts with allowed SendLib checks, pathway gating, stale price rejection, message-size limits, option validation, and assignment events.
+- Go worker module with config loading, chain registry, Postgres connection, metrics health endpoint, tx manager loop, indexer loop, executor committer/deliverer loop, DVN mode wiring, signer interfaces, and state enums.
+- Docker Compose for Postgres plus the worker process.
+
+## Repository Layout
+
+```text
+contracts/contracts/   Solidity contracts
+contracts/scripts/     Deployment and operations scripts
+contracts/test/        Contract tests
+go/                    Go worker module
+config/                Worker config examples
+docs/                  Plans and implementation notes
+```
+
+## Tooling
+
+Use Node.js 26+ and Go 1.26+.
+
+```bash
+npm install
+make check
+```
+
+Common targets:
+
+```bash
+make compile        # Hardhat compile
+make test-solidity  # Solidity tests
+make test-go        # Go package tests
+make lint-go        # golangci-lint
+make fmt-go         # gofmt
+```
+
+`npm run check` remains available for compile plus tests without the Go linter.
+
+## Local Worker
+
+Start Postgres and the worker with:
+
+```bash
+docker compose up
+```
+
+The example worker config is [config/example.yaml](/Users/sudoless/codespace/coding/oh-my-lazier/config/example.yaml). `DATABASE_URL` can override the configured database URL at runtime.
+
+Build the worker image locally with:
+
+```bash
+make docker-build
+```
+
+The image runs `/usr/local/bin/worker` and defaults to `/app/config/example.yaml`. CI publishes `ghcr.io/<owner>/<repo>/worker` from `main` and version tags.
+Docker publishing builds native amd64 and arm64 images on separate GitHub runners, pushes them by digest, and then creates a multi-arch manifest with `docker buildx imagetools`.
+
+## Current Scope
+
+The initial target is Ethereum Sepolia <-> Base Sepolia with:
+
+- `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`
+- `confirmations = 12`
+- basic OFT send only
+- no `composeMsg`
+- no `lzCompose`
+- no native drop
+- no ordered execution
+
+The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJob`, so `OpenExecutor` currently quotes and emits the assignment price while remaining interface-compatible. `OpenDVN` remains payable and enforces `msg.value >= fee`.
+
+## Contract Behavior Notes
+
+- Executor options must be LayerZero type-3 options containing exactly one executor `lzReceive` option.
+- `lzReceive` value must be zero. Compose, native drop, ordered execution, unknown executor options, and other worker IDs are rejected.
+- OFT send pause is keyed by destination endpoint ID; receive pause is keyed by source endpoint ID.
+- OFT outbound rate limits are token buckets. Unconfigured pathways are unrestricted, while an explicitly configured `capacity=0` and `refillPerSecond=0` pathway is a migration drain setting that rejects new sends.
+- Price config is valid only while `updatedAt + staleAfter` has not expired.
+
+## Worker Behavior Notes
+
+- Config is loaded once at startup. Runtime config changes require a process restart.
+- The worker skeleton starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context.
+- A non-cancellation error from any durable loop cancels the worker process so packet state does not advance with missing components.

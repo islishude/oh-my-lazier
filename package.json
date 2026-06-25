@@ -1,0 +1,36 @@
+{
+  "name": "oh-my-lazier",
+  "version": "1.0.0",
+  "description": "Self-hosted LayerZero V2 Executor and DVN worker stack.",
+  "type": "module",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "check": "npm run compile && npx hardhat test solidity && (cd go && go test ./...)"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/islishude/oh-my-lazier.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/islishude/oh-my-lazier/issues"
+  },
+  "homepage": "https://github.com/islishude/oh-my-lazier#readme",
+  "dependencies": {
+    "@layerzerolabs/lz-evm-messagelib-v2": "3.0.168",
+    "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
+    "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "@openzeppelin/contracts": "5.6.1",
+    "@types/node": "26.0.1",
+    "hardhat": "3.9.0",
+    "tsx": "4.22.4",
+    "typescript": "6.0.3"
+  }
+}
