@@ -16,7 +16,7 @@ RUN go mod download
 COPY go/ ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
-FROM alpine:3.23
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 worker
 
