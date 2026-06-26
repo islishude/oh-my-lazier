@@ -1,27 +1,45 @@
 database_url: postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable
 metrics:
   listen_address: :9090
+executor:
+  signer: "0x9999999999999999999999999999999999999999"
 dvn:
   mode: shadow
 chains:
   - eid: 40161
     name: ethereum-sepolia
     chain_id: 11155111
+    endpoint_address: "0x1111111111111111111111111111111111111111"
     confirmations: 12
     rpc_urls:
       - http://localhost:8545
+    workers:
+      open_executor: "0x2222222222222222222222222222222222222222"
+      open_dvn: "0x3333333333333333333333333333333333333333"
   - eid: 40245
     name: base-sepolia
     chain_id: 84532
+    endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
     rpc_urls:
       - http://localhost:8546
+    workers:
+      open_executor: "0x5555555555555555555555555555555555555555"
+      open_dvn: "0x6666666666666666666666666666666666666666"
 pathways:
   - src_eid: 40161
     dst_eid: 40245
+    src_oapp: "0x7777777777777777777777777777777777777777"
+    dst_oapp: "0x8888888888888888888888888888888888888888"
+    send_lib: "0x9999999999999999999999999999999999999999"
+    receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     enabled: true
     max_message_size: 10000
   - src_eid: 40245
     dst_eid: 40161
+    src_oapp: "0x8888888888888888888888888888888888888888"
+    dst_oapp: "0x7777777777777777777777777777777777777777"
+    send_lib: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    receive_lib: "0xcccccccccccccccccccccccccccccccccccccccc"
     enabled: true
     max_message_size: 10000

@@ -6,15 +6,10 @@ WORKDIR /src
 
 RUN apk add --no-cache ca-certificates git
 
-ARG TARGETOS=linux
-ARG TARGETARCH
-
-COPY go/go.mod go/go.sum ./go/
-WORKDIR /src/go
-RUN go mod download
-
-COPY go/ ./
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
+COPY . ./
+RUN  --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -ldflags="-s -w" -o /out/worker ./go/cmd/worker
 
 FROM alpine:3.24
 

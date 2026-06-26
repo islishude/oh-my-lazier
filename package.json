@@ -1,6 +1,7 @@
 {
   "name": "oh-my-lazier",
   "version": "1.0.0",
+  "private": true,
   "description": "Self-hosted LayerZero V2 Executor and DVN worker stack.",
   "type": "module",
   "directories": {
@@ -9,7 +10,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "check": "npm run compile && npx hardhat test solidity && (cd go && go test ./...)"
+    "check": "npm run compile && npm test"
   },
   "repository": {
     "type": "git",

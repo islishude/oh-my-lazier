@@ -1,0 +1,64 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {"name": "srcEid", "type": "uint32"},
+          {"name": "sender", "type": "bytes32"},
+          {"name": "nonce", "type": "uint64"}
+        ],
+        "indexed": false,
+        "name": "origin",
+        "type": "tuple"
+      },
+      {"indexed": false, "name": "receiver", "type": "address"},
+      {"indexed": false, "name": "payloadHash", "type": "bytes32"}
+    ],
+    "name": "PacketVerified",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "components": [
+          {"name": "srcEid", "type": "uint32"},
+          {"name": "sender", "type": "bytes32"},
+          {"name": "nonce", "type": "uint64"}
+        ],
+        "indexed": false,
+        "name": "origin",
+        "type": "tuple"
+      },
+      {"indexed": false, "name": "receiver", "type": "address"}
+    ],
+    "name": "PacketDelivered",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": true, "name": "receiver", "type": "address"},
+      {"indexed": true, "name": "executor", "type": "address"},
+      {
+        "components": [
+          {"name": "srcEid", "type": "uint32"},
+          {"name": "sender", "type": "bytes32"},
+          {"name": "nonce", "type": "uint64"}
+        ],
+        "indexed": false,
+        "name": "origin",
+        "type": "tuple"
+      },
+      {"indexed": false, "name": "guid", "type": "bytes32"},
+      {"indexed": false, "name": "gas", "type": "uint256"},
+      {"indexed": false, "name": "value", "type": "uint256"},
+      {"indexed": false, "name": "message", "type": "bytes"},
+      {"indexed": false, "name": "extraData", "type": "bytes"},
+      {"indexed": false, "name": "reason", "type": "bytes"}
+    ],
+    "name": "LzReceiveAlert",
+    "type": "event"
+  }
+]

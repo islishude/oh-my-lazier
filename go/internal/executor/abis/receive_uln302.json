@@ -1,0 +1,12 @@
+[
+  {
+    "name": "commitVerification",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      {"name": "_packetHeader", "type": "bytes"},
+      {"name": "_payloadHash", "type": "bytes32"}
+    ],
+    "outputs": []
+  }
+]

@@ -15,12 +15,12 @@ test-solidity:
 	npx hardhat test solidity
 
 test-go:
-	cd go && go test ./...
+	go test ./...
 
 lint: lint-go
 
 lint-go:
-	cd go && golangci-lint run --config ../.golangci.yml ./...
+	golangci-lint run ./...
 
 fmt: fmt-go fmt-sol
 

@@ -1,0 +1,196 @@
+package indexer
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+
+	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
+	"github.com/jackc/pgx/v5"
+)
+
+// ExecutorReceiptStore persists executor destination-chain event outcomes.
+type ExecutorReceiptStore interface {
+	MarkExecutorCommitted(ctx context.Context, guid, txHash common.Hash) error
+	MarkExecutorDelivered(ctx context.Context, guid, txHash common.Hash) error
+	MarkExecutorReceiveFailed(ctx context.Context, guid, txHash common.Hash, reason string) error
+}
+
+// ExecutorDestinationStore loads known packets and persists destination-chain executor outcomes.
+type ExecutorDestinationStore interface {
+	ExecutorReceiptStore
+	GetPacket(ctx context.Context, guid common.Hash) (db.PacketRecord, error)
+	GetPacketByDestination(ctx context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error)
+}
+
+// ApplyExecutorDestinationLogs applies known EndpointV2 destination logs for one destination chain.
+func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, logs []gethtypes.Log) (int, error) {
+	if store == nil {
+		return 0, fmt.Errorf("executor destination store is required")
+	}
+	if dstEID == 0 {
+		return 0, fmt.Errorf("destination eid is required")
+	}
+	applied := 0
+	for _, log := range logs {
+		packet, ok, err := packetForDestinationLog(ctx, store, dstEID, log)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return applied, err
+		}
+		if !ok {
+			continue
+		}
+		if packet.DstEID != dstEID {
+			return applied, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+		}
+		didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, log)
+		if err != nil {
+			return applied, err
+		}
+		if didApply {
+			applied++
+		}
+	}
+	return applied, nil
+}
+
+// ApplyExecutorDestinationLog applies one validated destination EndpointV2 log to executor state.
+func ApplyExecutorDestinationLog(ctx context.Context, store ExecutorReceiptStore, packet db.PacketRecord, log gethtypes.Log) (bool, error) {
+	if store == nil {
+		return false, fmt.Errorf("executor receipt store is required")
+	}
+	if err := packet.Validate(); err != nil {
+		return false, err
+	}
+	if len(log.Topics) == 0 {
+		return false, nil
+	}
+	switch log.Topics[0] {
+	case lzabi.PacketVerifiedTopic():
+		event, err := lzabi.DecodePacketVerified(log)
+		if err != nil {
+			return false, err
+		}
+		if err := validatePacketVerified(packet, event); err != nil {
+			return false, err
+		}
+		return true, store.MarkExecutorCommitted(ctx, packet.GUID, log.TxHash)
+	case lzabi.PacketDeliveredTopic():
+		event, err := lzabi.DecodePacketDelivered(log)
+		if err != nil {
+			return false, err
+		}
+		if err := validatePacketDelivered(packet, event); err != nil {
+			return false, err
+		}
+		return true, store.MarkExecutorDelivered(ctx, packet.GUID, log.TxHash)
+	case lzabi.LzReceiveAlertTopic():
+		event, err := lzabi.DecodeLzReceiveAlert(log)
+		if err != nil {
+			return false, err
+		}
+		if err := validateLzReceiveAlert(packet, event); err != nil {
+			return false, err
+		}
+		return true, store.MarkExecutorReceiveFailed(ctx, packet.GUID, log.TxHash, hex.EncodeToString(event.Reason))
+	default:
+		return false, nil
+	}
+}
+
+func packetForDestinationLog(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, log gethtypes.Log) (db.PacketRecord, bool, error) {
+	if len(log.Topics) == 0 {
+		return db.PacketRecord{}, false, nil
+	}
+	switch log.Topics[0] {
+	case lzabi.PacketVerifiedTopic():
+		event, err := lzabi.DecodePacketVerified(log)
+		if err != nil {
+			return db.PacketRecord{}, false, err
+		}
+		packet, err := store.GetPacketByDestination(ctx, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver, event.Origin.Nonce)
+		return packet, true, err
+	case lzabi.PacketDeliveredTopic():
+		event, err := lzabi.DecodePacketDelivered(log)
+		if err != nil {
+			return db.PacketRecord{}, false, err
+		}
+		packet, err := store.GetPacketByDestination(ctx, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver, event.Origin.Nonce)
+		return packet, true, err
+	case lzabi.LzReceiveAlertTopic():
+		event, err := lzabi.DecodeLzReceiveAlert(log)
+		if err != nil {
+			return db.PacketRecord{}, false, err
+		}
+		packet, err := store.GetPacket(ctx, event.GUID)
+		return packet, true, err
+	default:
+		return db.PacketRecord{}, false, nil
+	}
+}
+
+func validatePacketVerified(packet db.PacketRecord, event lzabi.PacketVerified) error {
+	if err := validateOrigin(packet, event.Origin); err != nil {
+		return err
+	}
+	if event.Receiver != packet.Receiver {
+		return fmt.Errorf("PacketVerified receiver %s does not match packet receiver %s", event.Receiver, packet.Receiver)
+	}
+	if event.PayloadHash != packet.PayloadHash {
+		return fmt.Errorf("PacketVerified payload hash %s does not match packet payload hash %s", event.PayloadHash, packet.PayloadHash)
+	}
+	return nil
+}
+
+func validatePacketDelivered(packet db.PacketRecord, event lzabi.PacketDelivered) error {
+	if err := validateOrigin(packet, event.Origin); err != nil {
+		return err
+	}
+	if event.Receiver != packet.Receiver {
+		return fmt.Errorf("PacketDelivered receiver %s does not match packet receiver %s", event.Receiver, packet.Receiver)
+	}
+	return nil
+}
+
+func validateLzReceiveAlert(packet db.PacketRecord, event lzabi.LzReceiveAlert) error {
+	if err := validateOrigin(packet, event.Origin); err != nil {
+		return err
+	}
+	if event.Receiver != packet.Receiver {
+		return fmt.Errorf("LzReceiveAlert receiver %s does not match packet receiver %s", event.Receiver, packet.Receiver)
+	}
+	if event.GUID != packet.GUID {
+		return fmt.Errorf("LzReceiveAlert guid %s does not match packet guid %s", event.GUID, packet.GUID)
+	}
+	if string(event.Message) != string(packet.Message) {
+		return fmt.Errorf("LzReceiveAlert message does not match packet message")
+	}
+	return nil
+}
+
+func validateOrigin(packet db.PacketRecord, origin lzabi.Origin) error {
+	if origin.SrcEID != packet.SrcEID {
+		return fmt.Errorf("origin source eid %d does not match packet source eid %d", origin.SrcEID, packet.SrcEID)
+	}
+	if origin.Sender != common.BytesToHash(packet.Sender.Bytes()) {
+		return fmt.Errorf("origin sender %s does not match packet sender %s", origin.Sender, packet.Sender)
+	}
+	if packet.Nonce == nil || !packet.Nonce.IsUint64() {
+		return fmt.Errorf("packet nonce %s does not fit uint64", packet.Nonce)
+	}
+	if origin.Nonce != packet.Nonce.Uint64() {
+		return fmt.Errorf("origin nonce %d does not match packet nonce %s", origin.Nonce, packet.Nonce)
+	}
+	return nil
+}
+
+func originSenderAddress(origin lzabi.Origin) common.Address {
+	return common.BytesToAddress(origin.Sender.Bytes()[12:])
+}

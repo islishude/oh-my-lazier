@@ -20,22 +20,42 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          node-version: 26.4.0
+          node-version: 26
           cache: npm
           cache-dependency-path: package-lock.json
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Check format
+        run: make fmt-sol-check
 
       - name: Compile contracts
         run: npm run compile
 
       - name: Run Solidity tests
-        run: npx hardhat test solidity
+        run: npx hardhat test
 
   go:
-    name: Go
-    runs-on: ubuntu-latest
+    name: Go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: laz_worker
+          POSTGRES_USER: laz_worker
+          POSTGRES_PASSWORD: laz_worker
+        ports: ["5432:5432"]
+        options: |
+          --health-cmd=pg_isready --health-start-period=1s
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -43,15 +63,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
-
-      - name: Run Go tests
-        working-directory: go
-        run: go test ./...
+          go-version: "stable"
+          check-latest: true
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
-        with:
-          working-directory: go
-          args: --config ../.golangci.yml ./...
+
+      - name: Run Go tests
+        run: go test ./...
+        env:
+          TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"

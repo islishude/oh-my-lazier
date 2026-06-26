@@ -1,0 +1,411 @@
+package indexer
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"math/big"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
+	"github.com/jackc/pgx/v5"
+)
+
+func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	sourceLogs := testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42))
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: sourceLogs,
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", executor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+	indexer.pollInterval = time.Millisecond
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceFromBlock != 0 || result.SourceToBlock != 188 {
+		t.Fatalf("source window = %d..%d, want 0..188", result.SourceFromBlock, result.SourceToBlock)
+	}
+	if result.SourceTransactions != 1 {
+		t.Fatalf("SourceTransactions = %d, want 1", result.SourceTransactions)
+	}
+	if len(store.packets) != 1 || len(store.jobs) != 1 {
+		t.Fatalf("stored packets/jobs = %d/%d, want 1/1", len(store.packets), len(store.jobs))
+	}
+	for guid, packet := range store.packets {
+		if packet.Status != string(packets.ExecutorAssigned) {
+			t.Fatalf("packet status = %q, want %q", packet.Status, packets.ExecutorAssigned)
+		}
+		if store.jobs[guid].AssignedFee.Cmp(big.NewInt(42)) != 0 {
+			t.Fatalf("assigned fee = %s, want 42", store.jobs[guid].AssignedFee)
+		}
+	}
+	if len(client.queries) != 2 {
+		t.Fatalf("queries = %d, want source and destination queries", len(client.queries))
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+}
+
+func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.Status = string(packets.ExecutorCommitTxEnqueued)
+	store := newFakeIndexerStore()
+	store.packets[packet.GUID] = packet
+	client := &fakeLogClient{
+		head:            200,
+		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.DstEID, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 1 {
+		t.Fatalf("DestinationLogs = %d, want 1", result.DestinationLogs)
+	}
+	if store.committedGUID != packet.GUID {
+		t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
+	}
+}
+
+func TestIndexerProcessOnceBackfillsDVNAssignment(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: testDVNSourceLogs(t, dvn, sendLib, big.NewInt(42)),
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DVNTransactions != 1 {
+		t.Fatalf("DVNTransactions = %d, want 1", result.DVNTransactions)
+	}
+	if len(store.packets) != 1 || len(store.dvnJobs) != 1 {
+		t.Fatalf("stored packets/dvn jobs = %d/%d, want 1/1", len(store.packets), len(store.dvnJobs))
+	}
+	for guid, job := range store.dvnJobs {
+		if job.ConfirmationsRequired != 12 {
+			t.Fatalf("confirmations = %d, want 12", job.ConfirmationsRequired)
+		}
+		if store.packets[guid].GUID != guid {
+			t.Fatalf("packet for dvn job %s was not stored", guid)
+		}
+	}
+}
+
+func TestIndexerProcessOnceWaitsForConfirmations(t *testing.T) {
+	client := &fakeLogClient{head: 11}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		newFakeIndexerStore(),
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result != (ProcessResult{}) {
+		t.Fatalf("result = %+v, want zero result", result)
+	}
+	if len(client.queries) != 0 {
+		t.Fatalf("queries = %d, want none before confirmations", len(client.queries))
+	}
+}
+
+func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	store.cursors[cursorKey(40161, executorDestStream)] = 40
+	client := &fakeLogClient{head: 65}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+	indexer.backfillRange = 10
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceFromBlock != 41 || result.SourceToBlock != 50 {
+		t.Fatalf("source window = %d..%d, want 41..50", result.SourceFromBlock, result.SourceToBlock)
+	}
+	if result.DestinationFromBlock != 41 || result.DestinationToBlock != 50 {
+		t.Fatalf("destination window = %d..%d, want 41..50", result.DestinationFromBlock, result.DestinationToBlock)
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 50 {
+		t.Fatalf("source cursor = %d, want 50", store.cursors[cursorKey(40161, executorSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, executorDestStream)] != 50 {
+		t.Fatalf("destination cursor = %d, want 50", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+}
+
+func TestIndexerRunUsesLiveSubscriptionWakeups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var blockCalls atomic.Int32
+	client := &fakeLogClient{
+		head:       200,
+		subscribed: make(chan struct{}),
+		onBlock: func() {
+			if blockCalls.Add(1) == 2 {
+				cancel()
+			}
+		},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		newFakeIndexerStore(),
+		client,
+		discardLogger(),
+	)
+	indexer.pollInterval = time.Hour
+
+	done := make(chan error, 1)
+	go func() {
+		done <- indexer.Run(ctx)
+	}()
+
+	select {
+	case <-client.subscribed:
+	case <-time.After(time.Second):
+		t.Fatal("live subscription was not started")
+	}
+	client.liveSink <- gethtypes.Log{Topics: []common.Hash{lzabi.PacketVerifiedTopic()}}
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not process live wakeup")
+	}
+	if len(client.subscriptions) != 1 {
+		t.Fatalf("subscriptions = %d, want 1", len(client.subscriptions))
+	}
+	if !queryHasTopic(client.subscriptions[0], lzabi.PacketDeliveredTopic()) {
+		t.Fatal("subscription query does not include destination topics")
+	}
+}
+
+type fakeLogClient struct {
+	head            uint64
+	sourceLogs      []gethtypes.Log
+	destinationLogs []gethtypes.Log
+	queries         []ethereum.FilterQuery
+	subscriptions   []ethereum.FilterQuery
+	subscribed      chan struct{}
+	liveSink        chan<- gethtypes.Log
+	onBlock         func()
+}
+
+func (c *fakeLogClient) BlockNumber(context.Context) (uint64, error) {
+	if c.onBlock != nil {
+		c.onBlock()
+	}
+	return c.head, nil
+}
+
+func (c *fakeLogClient) FilterLogs(_ context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
+	c.queries = append(c.queries, query)
+	if queryHasTopic(query, lzabi.PacketSentTopic()) {
+		return append([]gethtypes.Log(nil), c.sourceLogs...), nil
+	}
+	if queryHasTopic(query, lzabi.PacketVerifiedTopic()) {
+		return append([]gethtypes.Log(nil), c.destinationLogs...), nil
+	}
+	return nil, nil
+}
+
+func (c *fakeLogClient) SubscribeFilterLogs(_ context.Context, query ethereum.FilterQuery, ch chan<- gethtypes.Log) (ethereum.Subscription, error) {
+	c.subscriptions = append(c.subscriptions, query)
+	c.liveSink = ch
+	if c.subscribed != nil {
+		close(c.subscribed)
+	}
+	return &fakeSubscription{errCh: make(chan error)}, nil
+}
+
+type fakeSubscription struct {
+	errCh chan error
+}
+
+func (s *fakeSubscription) Unsubscribe() {}
+
+func (s *fakeSubscription) Err() <-chan error {
+	return s.errCh
+}
+
+type fakeIndexerStore struct {
+	packets       map[common.Hash]db.PacketRecord
+	jobs          map[common.Hash]db.ExecutorJobRecord
+	dvnJobs       map[common.Hash]db.DVNJobRecord
+	cursors       map[string]uint64
+	committedGUID common.Hash
+}
+
+func newFakeIndexerStore() *fakeIndexerStore {
+	return &fakeIndexerStore{
+		packets: make(map[common.Hash]db.PacketRecord),
+		jobs:    make(map[common.Hash]db.ExecutorJobRecord),
+		dvnJobs: make(map[common.Hash]db.DVNJobRecord),
+		cursors: make(map[string]uint64),
+	}
+}
+
+func (s *fakeIndexerStore) GetIndexerCursor(_ context.Context, chainEID uint32, stream string) (uint64, error) {
+	cursor, ok := s.cursors[cursorKey(chainEID, stream)]
+	if !ok {
+		return 0, pgx.ErrNoRows
+	}
+	return cursor, nil
+}
+
+func (s *fakeIndexerStore) UpdateIndexerCursor(_ context.Context, chainEID uint32, stream string, lastBlock uint64) error {
+	key := cursorKey(chainEID, stream)
+	if s.cursors[key] < lastBlock {
+		s.cursors[key] = lastBlock
+	}
+	return nil
+}
+
+func (s *fakeIndexerStore) UpsertPacket(_ context.Context, packet db.PacketRecord) error {
+	s.packets[packet.GUID] = packet
+	return nil
+}
+
+func (s *fakeIndexerStore) UpsertExecutorJob(_ context.Context, job db.ExecutorJobRecord) error {
+	s.jobs[job.GUID] = job
+	return nil
+}
+
+func (s *fakeIndexerStore) UpsertDVNJob(_ context.Context, job db.DVNJobRecord) error {
+	s.dvnJobs[job.GUID] = job
+	return nil
+}
+
+func (s *fakeIndexerStore) GetPacket(_ context.Context, guid common.Hash) (db.PacketRecord, error) {
+	packet, ok := s.packets[guid]
+	if !ok {
+		return db.PacketRecord{}, pgx.ErrNoRows
+	}
+	return packet, nil
+}
+
+func (s *fakeIndexerStore) GetPacketByDestination(_ context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error) {
+	for _, packet := range s.packets {
+		if packet.DstEID == dstEID && packet.SrcEID == srcEID && packet.Sender == sender && packet.Receiver == receiver && packet.Nonce.Uint64() == nonce {
+			return packet, nil
+		}
+	}
+	return db.PacketRecord{}, pgx.ErrNoRows
+}
+
+func (s *fakeIndexerStore) MarkExecutorCommitted(_ context.Context, guid, _ common.Hash) error {
+	s.committedGUID = guid
+	return nil
+}
+
+func (s *fakeIndexerStore) MarkExecutorDelivered(context.Context, common.Hash, common.Hash) error {
+	return nil
+}
+
+func (s *fakeIndexerStore) MarkExecutorReceiveFailed(context.Context, common.Hash, common.Hash, string) error {
+	return nil
+}
+
+func testIndexerChain(eid uint32, name string, executor common.Address) chain.Chain {
+	return chain.Chain{
+		EID:             eid,
+		Name:            name,
+		EndpointAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		Confirmations:   12,
+		Workers: chain.WorkerContracts{
+			OpenExecutor: executor,
+			OpenDVN:      common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		},
+	}
+}
+
+func testIndexerPathway() chain.Pathway {
+	return chain.Pathway{
+		SrcEID:         40161,
+		DstEID:         40245,
+		SrcOApp:        common.HexToAddress("0x7777777777777777777777777777777777777777"),
+		DstOApp:        common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		SendLib:        common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		ReceiveLib:     common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Enabled:        true,
+		MaxMessageSize: 10000,
+	}
+}
+
+func queryHasTopic(query ethereum.FilterQuery, topic common.Hash) bool {
+	for _, group := range query.Topics {
+		for _, candidate := range group {
+			if candidate == topic {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func cursorKey(chainEID uint32, stream string) string {
+	return stream + ":" + new(big.Int).SetUint64(uint64(chainEID)).String()
+}

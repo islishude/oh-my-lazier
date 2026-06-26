@@ -2,7 +2,7 @@
 
 ## M1 - Repo Scaffolding
 
-Status: [ ]
+Status: [x]
 
 Tasks:
 
@@ -22,7 +22,7 @@ Acceptance:
 
 ## M2 - Contracts v1
 
-Status: [ ]
+Status: [x]
 
 Tasks:
 
@@ -48,7 +48,7 @@ Acceptance:
 
 ## M3 - DB and Config
 
-Status: [ ]
+Status: [x]
 
 Tasks:
 
@@ -61,64 +61,131 @@ Tasks:
 
 Acceptance:
 
-- worker boots with Sepolia/Base Sepolia config
-- invalid config fails fast
-- DB migrations apply cleanly
+- [x] worker boots with Sepolia/Base Sepolia config
+- [x] invalid config fails fast
+- [x] DB migrations apply cleanly
+
+Evidence:
+
+- `go/migrations/001_initial_schema.sql`
+- `go/internal/db.Store.Migrate`
+- `go/internal/db.Store.SyncConfig`
+- `go/internal/config.Config.Validate`
+- `go/internal/chain.Registry`
+- `go test ./...`
+- `TEST_POSTGRES_URL=... go test ./go/internal/db -run TestMigrateAndSyncConfig -count=1`
 
 ## M4 - Signer and Tx Manager
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- signer interface
-- AWS KMS ECC_SECG_P256K1 signer
-- rustack integration test
-- geth keystore signer
-- tx_outbox
-- advisory lock nonce manager
-- EIP-1559 transaction sender
+- [x] signer interface
+- [x] AWS KMS ECC_SECG_P256K1 signer
+- [~] rustack integration test
+- [x] geth keystore signer
+- [x] tx_outbox
+- [x] advisory lock nonce manager
+- [x] EIP-1559 transaction sender
 
 Acceptance:
 
-- KMS signer recovers expected Ethereum address
-- keystore signer signs valid EIP-1559 tx
-- tx_outbox assigns nonce without collisions
-- replacement tx works in tests
+- [x] KMS signer recovers expected Ethereum address
+- [x] keystore signer signs valid EIP-1559 tx
+- [x] tx_outbox assigns nonce without collisions
+- [x] replacement tx works in tests
+
+Evidence:
+
+- `go/internal/signer.Signer`
+- `go/internal/signer/keystore.Signer`
+- `go test ./go/internal/signer/keystore -count=1`
+- `go/internal/signer/kms.Signer`
+- `go test ./go/internal/signer/kms -count=1`
+- `RUSTACK_KMS_ENDPOINT=http://localhost:4566 go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
+- `go/internal/db.Store.EnqueueTx`
+- `go/internal/db.Store.ClaimNextNonce`
+- `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
+- `go/internal/txmgr.Manager.ProcessNext`
+- `TEST_POSTGRES_URL=... go test ./go/internal/txmgr -count=1`
 
 ## M5 - Executor Active Path
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- PacketSent indexer
-- ExecutorFeePaid indexer
-- OpenExecutor event indexer
-- packet decoder
-- committer
-- deliverer
-- lzReceive tx builder
+- [~] PacketSent indexer
+- [~] ExecutorFeePaid indexer
+- [~] OpenExecutor event indexer
+- [~] packet decoder
+- [~] committer
+- [~] deliverer
+- [x] lzReceive tx builder
 
 Acceptance:
 
-- can deliver basic OFT send on Sepolia/Base Sepolia
-- unsupported options are rejected or marked manual review
-- failed delivery is retriable
+- [ ] can deliver basic OFT send on Sepolia/Base Sepolia
+- [ ] unsupported options are rejected or marked manual review
+- [ ] failed delivery is retriable
+
+Evidence:
+
+- `go/internal/lz.DecodePacketV1`
+- `go/internal/lzabi.DecodePacketSent`
+- `go/internal/lzabi.DecodePacketVerified`
+- `go/internal/lzabi.DecodePacketDelivered`
+- `go/internal/lzabi.DecodeLzReceiveAlert`
+- `go/internal/lzabi.DecodeExecutorFeePaid`
+- `go/internal/lzabi.DecodeExecutorJobAssigned`
+- `go/internal/indexer.PacketRecordFromSentLog`
+- `go/internal/indexer.ExecutorJobFromAssignment`
+- `go/internal/indexer.ExecutorSourceTxRecordsFromLogs`
+- `go/internal/indexer.Indexer.Run`
+- `go/internal/indexer.Indexer.ProcessOnce`
+- `go/internal/indexer.ApplyExecutorDestinationLogs`
+- `go/internal/indexer.ApplyExecutorDestinationLog`
+- `go/internal/lz.DecodeExecutorOptions`
+- `go/internal/executor.BuildCommitVerificationTx`
+- `go/internal/executor.BuildLzReceiveTx`
+- `go/internal/executor.IsCommitVerifiable`
+- `go/internal/executor.IsLzReceiveExecutable`
+- `go/internal/executor.Worker.ProcessCommitterOnce`
+- `go/internal/executor.Worker.ProcessDelivererOnce`
+- `go/internal/rpcquorum.Client.CallContract`
+- `go/internal/rpcquorum.Client.BlockNumber`
+- `go/internal/rpcquorum.Client.FilterLogs`
+- `go/internal/rpcquorum.Client.SubscribeFilterLogs`
+- `go/migrations/001_initial_schema.sql` `indexer_cursors`
+- `go/internal/db.Store.GetIndexerCursor`
+- `go/internal/db.Store.UpdateIndexerCursor`
+- `go/internal/db.Store.UpsertPacket`
+- `go/internal/db.Store.GetPacket`
+- `go/internal/db.Store.GetPacketByDestination`
+- `go/internal/db.Store.UpsertExecutorJob`
+- `go/internal/db.Store.ListExecutorWork`
+- `go/internal/db.Store.EnqueueExecutorTx`
+- `go/internal/db.Store.MarkExecutorCommitted`
+- `go/internal/db.Store.MarkExecutorExecutable`
+- `go/internal/db.Store.MarkExecutorDelivered`
+- `go/internal/db.Store.MarkExecutorReceiveFailed`
+- `go test ./go/internal/lz ./go/internal/lzabi ./go/internal/indexer ./go/internal/executor -count=1`
+- `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
 
 ## M6 - DVN Shadow Path
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- DVN PacketSent indexer
-- DVNFeePaid indexer
-- OpenDVN event indexer
-- confirmation wait
-- RPC quorum verification
-- payload hash computation
-- would-verify report
+- [~] DVN PacketSent indexer
+- [~] DVNFeePaid indexer
+- [~] OpenDVN event indexer
+- [~] confirmation wait
+- [x] RPC quorum verification
+- [x] payload hash computation
+- [x] would-verify report
 
 Acceptance:
 
@@ -128,24 +195,61 @@ Acceptance:
 - detects RPC conflicts
 - does not submit active verification tx
 
+Evidence:
+
+- `go/internal/lzabi.DecodeDVNFeePaid`
+- `go/internal/lzabi.DecodeDVNJobAssigned`
+- `go/internal/indexer.DVNSourceTxRecordsFromLogs`
+- `go/internal/db.Store.UpsertDVNJob`
+- `go/internal/db.Store.ListDVNWork`
+- `go/internal/db.Store.MarkDVNWaitingConfirmations`
+- `go/internal/db.Store.MarkDVNQuorumChecking`
+- `go/internal/db.Store.MarkDVNWouldVerify`
+- `go/internal/db.Store.MarkDVNQuorumConflict`
+- `go/internal/db.Store.PausePathwayForPacket`
+- `go/internal/db.Store.PauseChain`
+- `go/internal/dvn.Worker.ProcessConfirmationsOnce`
+- `go/internal/dvn.Worker.ProcessQuorumOnce`
+- `go/internal/rpcquorum.HeadConflictError`
+- `go/internal/rpcquorum.IsHeadConflict`
+- `go/internal/rpcquorum.Client.CheckHead`
+- `go/internal/rpcquorum.ReceiptConflictError`
+- `go/internal/rpcquorum.IsReceiptConflict`
+- `go/internal/rpcquorum.Client.TransactionReceipt`
+- `go/internal/rpcquorum.selectCanonicalHead`
+- `go/internal/rpcquorum.receiptFingerprint`
+- `go test ./go/internal/lzabi ./go/internal/indexer ./go/internal/db -count=1`
+- `go test ./go/internal/dvn ./go/internal/rpcquorum -count=1`
+- `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
+
 ## M7 - Price Bot
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- Binance client
-- Uniswap client
-- aggregator
-- deviation check
-- gas price fetch
-- setPriceConfig tx enqueue
+- [ ] Binance client
+- [ ] Uniswap client
+- [x] aggregator
+- [x] deviation check
+- [ ] gas price fetch
+- [~] setPriceConfig tx enqueue
 
 Acceptance:
 
 - updates Executor and DVN price config on testnet
 - stops update when deviation exceeds threshold
 - stale config causes contract quote revert
+
+Evidence:
+
+- `go/internal/pricing.SelectPrice`
+- `go/internal/pricing.DeviationBps`
+- `go/internal/pricing.BuildPriceConfig`
+- `go/internal/pricing.BuildSetPriceConfigCalldata`
+- `go/internal/pricing.BuildSetPriceConfigTx`
+- `go/internal/pricing/abis/price_config.json`
+- `go test ./go/internal/pricing -count=1`
 
 ## M8 - Testnet Migration Rehearsal
 

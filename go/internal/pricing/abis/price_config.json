@@ -1,0 +1,23 @@
+[
+  {
+    "inputs": [
+      {"internalType": "uint32", "name": "dstEid", "type": "uint32"},
+      {
+        "components": [
+          {"internalType": "uint256", "name": "baseFee", "type": "uint256"},
+          {"internalType": "uint256", "name": "dstGasPriceInSrcToken", "type": "uint256"},
+          {"internalType": "uint16", "name": "bufferBps", "type": "uint16"},
+          {"internalType": "uint64", "name": "updatedAt", "type": "uint64"},
+          {"internalType": "uint64", "name": "staleAfter", "type": "uint64"}
+        ],
+        "internalType": "struct WorkerTypes.PriceConfig",
+        "name": "config",
+        "type": "tuple"
+      }
+    ],
+    "name": "setPriceConfig",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]

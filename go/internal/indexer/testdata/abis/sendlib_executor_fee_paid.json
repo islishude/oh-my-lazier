@@ -1,0 +1,11 @@
+[
+  {
+    "anonymous": false,
+    "inputs": [
+      {"indexed": false, "name": "executor", "type": "address"},
+      {"indexed": false, "name": "fee", "type": "uint256"}
+    ],
+    "name": "ExecutorFeePaid",
+    "type": "event"
+  }
+]

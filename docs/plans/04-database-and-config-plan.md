@@ -1,5 +1,7 @@
 # 04 - Database and Config Plan
 
+Status: [x]
+
 ## Database
 
 使用 Postgres。
@@ -166,7 +168,7 @@ pricing.sepolia.yaml
 ```yaml
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: lz_workers
       POSTGRES_USER: lz
@@ -186,3 +188,12 @@ services:
     ports:
       - "9090:9090"
 ```
+
+## 当前实现证据
+
+- `go/migrations/001_initial_schema.sql` 实现计划中的核心表、索引与 `schema_migrations` 跟踪表。
+- `go/internal/db.Store.Migrate` 在 worker 启动时应用 embedded migrations，并拒绝已应用 migration 的 checksum drift。
+- `go/internal/db.Store.SyncConfig` 将启动配置中的 chain 与 pathway 元数据 upsert 到 Postgres。
+- `go/internal/config.Config.Validate` 校验 executor signer、chain endpoint、OpenExecutor/OpenDVN、pathway OApp、SendLib/ReceiveLib、confirmations 与 message size。
+- `go/internal/chain.Registry` 同时提供 chain registry、pathway registry 与 worker contract registry。
+- `config/example.yaml` 覆盖 executor signer 与 Ethereum Sepolia <-> Base Sepolia 双向 pathway 的必需配置字段。

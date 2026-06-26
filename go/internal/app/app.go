@@ -38,9 +38,15 @@ func (a *App) Run(ctx context.Context) error {
 	if err := store.Ping(ctx); err != nil {
 		return err
 	}
+	if err := store.Migrate(ctx); err != nil {
+		return err
+	}
 
-	registry, err := chain.NewRegistry(a.cfg.Chains)
+	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
 	if err != nil {
+		return err
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
 		return err
 	}
 
@@ -50,9 +56,7 @@ func (a *App) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, 8+len(a.cfg.Chains))
 	start := func(name string, run func(context.Context) error) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			// Any durable loop failure cancels the whole worker; partial worker operation can
 			// otherwise advance packet state with missing indexers or senders.
 			if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -60,19 +64,20 @@ func (a *App) Run(ctx context.Context) error {
 				cancel()
 			}
 			a.logger.Info("loop stopped", "name", name)
-		}()
+		})
 	}
 
 	start("metrics", metrics.New(a.cfg.Metrics.ListenAddress, a.logger).Run)
+	pathways := registry.Pathways()
 	for _, c := range registry.All() {
-		start("indexer."+c.Name, indexer.New(c, a.logger).Run)
+		start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).Run)
 	}
 	start("txmgr", txmgr.New(store, a.logger).Run)
 
-	executorWorker := executor.New(a.logger)
+	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
 	start("executor.committer", executorWorker.RunCommitter)
 	start("executor.deliverer", executorWorker.RunDeliverer)
-	start("dvn", dvn.New(a.cfg.DVN.Mode, a.logger).Run)
+	start("dvn", dvn.New(a.cfg.DVN.Mode, store, registry, a.logger).Run)
 	start("pricing", pricing.New(a.logger).Run)
 
 	select {

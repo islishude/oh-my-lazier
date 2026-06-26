@@ -8,7 +8,13 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready"]
+      interval: 10s
+      timeout: 5s
+      start_period: 1s
+      retries: 5
 
   worker:
     build:
@@ -17,7 +23,8 @@ services:
     image: oh-my-lazier-worker:local
     command: ["-config", "/app/config/example.yaml"]
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable
     ports:

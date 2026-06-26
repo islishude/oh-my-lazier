@@ -8,7 +8,7 @@ The first implementation pass includes:
 - Fixed LayerZero and OpenZeppelin package versions in `package-lock.json`.
 - `TestOFT` with burn/mint OFT behavior, per-pathway send/receive pause, and outbound token-bucket rate limits.
 - `OpenExecutor` and `OpenDVN` contracts with allowed SendLib checks, pathway gating, stale price rejection, message-size limits, option validation, and assignment events.
-- Go worker module with config loading, chain registry, Postgres connection, metrics health endpoint, tx manager loop, indexer loop, executor committer/deliverer loop, DVN mode wiring, signer interfaces, and state enums.
+- Go worker packages with config loading, chain registry, Postgres connection, metrics health endpoint, tx manager loop, indexer loop, executor committer/deliverer loop, DVN mode wiring, signer interfaces, and state enums.
 - Docker Compose for Postgres plus the worker process.
 
 ## Repository Layout
@@ -17,7 +17,7 @@ The first implementation pass includes:
 contracts/contracts/   Solidity contracts
 contracts/scripts/     Deployment and operations scripts
 contracts/test/        Contract tests
-go/                    Go worker module
+go/                    Go worker package tree
 config/                Worker config examples
 docs/                  Plans and implementation notes
 ```
@@ -39,6 +39,7 @@ make test-solidity  # Solidity tests
 make test-go        # Go package tests
 make lint-go        # golangci-lint
 make fmt-go         # gofmt
+make fmt-sol        # format solidity files
 ```
 
 `npm run check` remains available for compile plus tests without the Go linter.
