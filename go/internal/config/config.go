@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"os"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -16,6 +17,7 @@ type Config struct {
 	Metrics     MetricsConfig   `yaml:"metrics"`
 	Executor    ExecutorConfig  `yaml:"executor"`
 	DVN         DVNConfig       `yaml:"dvn"`
+	Pricing     PricingConfig   `yaml:"pricing"`
 	Chains      []ChainConfig   `yaml:"chains"`
 	Pathways    []PathwayConfig `yaml:"pathways"`
 }
@@ -33,6 +35,40 @@ type ExecutorConfig struct {
 // DVNConfig controls whether the DVN workflow runs in shadow or active mode.
 type DVNConfig struct {
 	Mode string `yaml:"mode"`
+}
+
+// PricingConfig controls optional price update generation.
+type PricingConfig struct {
+	Enabled                 bool                 `yaml:"enabled"`
+	Signer                  string               `yaml:"signer"`
+	IntervalSeconds         uint64               `yaml:"interval_seconds"`
+	BaseFeeWei              string               `yaml:"base_fee_wei"`
+	BufferBps               uint16               `yaml:"buffer_bps"`
+	StaleAfterSeconds       uint64               `yaml:"stale_after_seconds"`
+	MaxDeviationBps         uint64               `yaml:"max_deviation_bps"`
+	AllowUniswapFallback    bool                 `yaml:"allow_uniswap_fallback"`
+	TxGasLimit              uint64               `yaml:"tx_gas_limit"`
+	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string               `yaml:"max_priority_fee_per_gas_wei"`
+	BinanceBaseURL          string               `yaml:"binance_base_url"`
+	Chains                  []PricingChainConfig `yaml:"chains"`
+}
+
+// PricingChainConfig configures price sources for one chain's native asset.
+type PricingChainConfig struct {
+	EID           uint32               `yaml:"eid"`
+	BinanceSymbol string               `yaml:"binance_symbol"`
+	Uniswap       UniswapPricingConfig `yaml:"uniswap"`
+}
+
+// UniswapPricingConfig configures one V3 quoter sanity route.
+type UniswapPricingConfig struct {
+	QuoterAddress    string `yaml:"quoter_address"`
+	TokenIn          string `yaml:"token_in"`
+	TokenOut         string `yaml:"token_out"`
+	Fee              uint32 `yaml:"fee"`
+	AmountInWei      string `yaml:"amount_in_wei"`
+	TokenOutDecimals uint8  `yaml:"token_out_decimals"`
 }
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
@@ -66,6 +102,15 @@ type PathwayConfig struct {
 
 // Load reads a YAML config file, applies environment overrides, and validates the result.
 func Load(path string) (Config, error) {
+	return load(path, true)
+}
+
+// LoadStatic reads a YAML config file, applies defaults, and validates it without environment overrides.
+func LoadStatic(path string) (Config, error) {
+	return load(path, false)
+}
+
+func load(path string, applyEnv bool) (Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -75,7 +120,7 @@ func Load(path string) (Config, error) {
 	if err := yaml.Unmarshal(raw, &cfg); err != nil {
 		return Config{}, err
 	}
-	if env := os.Getenv("DATABASE_URL"); env != "" {
+	if env := os.Getenv("DATABASE_URL"); applyEnv && env != "" {
 		// Compose and managed deployments inject credentials through the environment.
 		cfg.DatabaseURL = env
 	}
@@ -84,6 +129,17 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.DVN.Mode == "" {
 		cfg.DVN.Mode = "shadow"
+	}
+	if cfg.Pricing.Enabled {
+		if cfg.Pricing.IntervalSeconds == 0 {
+			cfg.Pricing.IntervalSeconds = 300
+		}
+		if cfg.Pricing.StaleAfterSeconds == 0 {
+			cfg.Pricing.StaleAfterSeconds = 1800
+		}
+		if cfg.Pricing.MaxDeviationBps == 0 {
+			cfg.Pricing.MaxDeviationBps = 500
+		}
 	}
 	return cfg, cfg.Validate()
 }
@@ -135,6 +191,9 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
 	}
+	if err := c.validatePricing(seen); err != nil {
+		return err
+	}
 	pathways := make(map[string]struct{}, len(c.Pathways))
 	for _, pathway := range c.Pathways {
 		if _, ok := seen[pathway.SrcEID]; !ok {
@@ -167,6 +226,82 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate pathway %s", key)
 		}
 		pathways[key] = struct{}{}
+	}
+	return nil
+}
+
+func (c Config) validatePricing(chains map[uint32]struct{}) error {
+	if !c.Pricing.Enabled {
+		return nil
+	}
+	if !common.IsHexAddress(c.Pricing.Signer) {
+		return errors.New("pricing signer must be a hex address")
+	}
+	if c.Pricing.IntervalSeconds == 0 {
+		return errors.New("pricing interval_seconds is required")
+	}
+	if c.Pricing.StaleAfterSeconds == 0 {
+		return errors.New("pricing stale_after_seconds is required")
+	}
+	if c.Pricing.MaxDeviationBps == 0 {
+		return errors.New("pricing max_deviation_bps is required")
+	}
+	if c.Pricing.BufferBps > 10_000 {
+		return errors.New("pricing buffer_bps exceeds 10000")
+	}
+	for label, value := range map[string]string{
+		"base_fee_wei":                 c.Pricing.BaseFeeWei,
+		"max_fee_per_gas_wei":          c.Pricing.MaxFeePerGasWei,
+		"max_priority_fee_per_gas_wei": c.Pricing.MaxPriorityFeePerGasWei,
+	} {
+		if value == "" {
+			return fmt.Errorf("pricing %s is required", label)
+		}
+		parsed, ok := new(big.Int).SetString(value, 10)
+		if !ok || parsed.Sign() < 0 {
+			return fmt.Errorf("pricing %s must be a non-negative integer", label)
+		}
+	}
+	if c.Pricing.TxGasLimit == 0 {
+		return errors.New("pricing tx_gas_limit is required")
+	}
+	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
+	for _, chain := range c.Pricing.Chains {
+		if _, ok := chains[chain.EID]; !ok {
+			return fmt.Errorf("pricing chain eid %d is not configured", chain.EID)
+		}
+		if _, ok := seen[chain.EID]; ok {
+			return fmt.Errorf("duplicate pricing chain eid %d", chain.EID)
+		}
+		seen[chain.EID] = struct{}{}
+		if chain.BinanceSymbol == "" {
+			return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
+		}
+		for label, value := range map[string]string{
+			"uniswap.quoter_address": chain.Uniswap.QuoterAddress,
+			"uniswap.token_in":       chain.Uniswap.TokenIn,
+			"uniswap.token_out":      chain.Uniswap.TokenOut,
+		} {
+			if !common.IsHexAddress(value) {
+				return fmt.Errorf("pricing chain %d %s must be a hex address", chain.EID, label)
+			}
+		}
+		if chain.Uniswap.Fee > (1<<24)-1 {
+			return fmt.Errorf("pricing chain %d uniswap fee exceeds uint24", chain.EID)
+		}
+		if chain.Uniswap.AmountInWei == "" {
+			return fmt.Errorf("pricing chain %d uniswap amount_in_wei is required", chain.EID)
+		}
+		amountIn, ok := new(big.Int).SetString(chain.Uniswap.AmountInWei, 10)
+		if !ok || amountIn.Sign() <= 0 {
+			return fmt.Errorf("pricing chain %d uniswap amount_in_wei must be positive", chain.EID)
+		}
+		if chain.Uniswap.TokenOutDecimals == 0 {
+			return fmt.Errorf("pricing chain %d uniswap token_out_decimals is required", chain.EID)
+		}
+	}
+	if len(seen) != len(chains) {
+		return errors.New("pricing must configure every chain when enabled")
 	}
 	return nil
 }

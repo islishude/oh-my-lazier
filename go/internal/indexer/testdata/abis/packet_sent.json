@@ -2,9 +2,9 @@
   {
     "anonymous": false,
     "inputs": [
-      {"indexed": false, "name": "encodedPayload", "type": "bytes"},
-      {"indexed": false, "name": "options", "type": "bytes"},
-      {"indexed": false, "name": "sendLibrary", "type": "address"}
+      { "indexed": false, "name": "encodedPayload", "type": "bytes" },
+      { "indexed": false, "name": "options", "type": "bytes" },
+      { "indexed": false, "name": "sendLibrary", "type": "address" }
     ],
     "name": "PacketSent",
     "type": "event"

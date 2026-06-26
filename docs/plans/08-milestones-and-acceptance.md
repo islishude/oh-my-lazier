@@ -127,7 +127,7 @@ Tasks:
 Acceptance:
 
 - [ ] can deliver basic OFT send on Sepolia/Base Sepolia
-- [ ] unsupported options are rejected or marked manual review
+- [x] unsupported options are rejected or marked manual review
 - [ ] failed delivery is retriable
 
 Evidence:
@@ -141,6 +141,8 @@ Evidence:
 - `go/internal/lzabi.DecodeExecutorJobAssigned`
 - `go/internal/indexer.PacketRecordFromSentLog`
 - `go/internal/indexer.ExecutorJobFromAssignment`
+- `go/internal/indexer.TestExecutorJobFromAssignmentMarksUnsupportedOptionsManualReview`
+- `go/internal/indexer.TestIndexerProcessOnceMarksUnsupportedExecutorOptionsManualReview`
 - `go/internal/indexer.ExecutorSourceTxRecordsFromLogs`
 - `go/internal/indexer.Indexer.Run`
 - `go/internal/indexer.Indexer.ProcessOnce`
@@ -228,12 +230,12 @@ Status: [~]
 
 Tasks:
 
-- [ ] Binance client
-- [ ] Uniswap client
+- [x] Binance client
+- [x] Uniswap client
 - [x] aggregator
 - [x] deviation check
-- [ ] gas price fetch
-- [~] setPriceConfig tx enqueue
+- [x] gas price fetch
+- [x] setPriceConfig tx enqueue
 
 Acceptance:
 
@@ -245,25 +247,33 @@ Evidence:
 
 - `go/internal/pricing.SelectPrice`
 - `go/internal/pricing.DeviationBps`
+- `go/internal/pricing.BinanceClient.PriceUSD`
+- `go/internal/pricing.UniswapV3Client.PriceUSD`
 - `go/internal/pricing.BuildPriceConfig`
 - `go/internal/pricing.BuildSetPriceConfigCalldata`
 - `go/internal/pricing.BuildSetPriceConfigTx`
+- `go/internal/pricing.Bot.EnqueueOnce`
+- `go/internal/pricing.Bot.Run`
 - `go/internal/pricing/abis/price_config.json`
-- `go test ./go/internal/pricing -count=1`
+- `go/internal/pricing/abis/uniswap_v3_quoter.json`
+- `go/internal/rpcquorum.Client.SuggestGasPrice`
+- `go/internal/config.PricingConfig`
+- `go/internal/app.App.priceBot`
+- `go test ./go/internal/pricing ./go/internal/config ./go/internal/app -count=1`
 
 ## M8 - Testnet Migration Rehearsal
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- deploy all contracts
-- configure OFT
-- configure OpenExecutor
-- switch Executor
+- [~] deploy all contracts
+- [~] configure OFT
+- [~] configure OpenExecutor
+- [~] switch Executor
 - run canary transfer
-- run DVN shadow
-- pause + drain + DVN join
+- [~] run DVN shadow
+- [~] pause + drain + DVN join
 - rollback rehearsal
 
 Acceptance:
@@ -275,18 +285,34 @@ Acceptance:
 - OFT send resumes after unpause
 - rollback procedure tested
 
+Evidence:
+
+- `contracts/scripts/deploy-workers.ts`
+- `contracts/scripts/configure-workers.ts`
+- `contracts/scripts/README.md`
+- `package.json` `deploy:workers`
+- `package.json` `configure:workers`
+- `package.json` `inspect:lz-config`
+- `package.json` `configure:lz-executor`
+- `package.json` `configure:lz-dvn`
+- `contracts/scripts/lz-config.ts`
+- `contracts/scripts/inspect-lz-config.ts`
+- `contracts/scripts/configure-lz-executor.ts`
+- `contracts/scripts/configure-lz-dvn.ts`
+- `npm run typecheck`
+
 ## M9 - Mainnet Readiness Review
 
-Status: [ ]
+Status: [~]
 
 Tasks:
 
-- security review
-- runbook review
-- monitoring checklist
-- key management review
-- rate-limit review
-- dry-run config diff
+- [~] security review
+- [~] runbook review
+- [x] monitoring checklist
+- [x] key management review
+- [x] rate-limit review
+- [x] dry-run config diff
 
 Acceptance:
 
@@ -294,3 +320,24 @@ Acceptance:
 - mainnet runbook approved
 - alerting requirements documented
 - self-only DVN explicitly rejected for phase 1
+
+Evidence:
+
+- `go/internal/metrics.Handler`
+- `go/internal/metrics.RenderPrometheus`
+- `go/internal/db.Store.Stats`
+- `go/internal/config.LoadStatic`
+- `go/internal/configdiff.Diff`
+- `go/cmd/configdiff`
+- `docs/runbooks/monitoring.md`
+- `docs/runbooks/config-diff.md`
+- `docs/runbooks/key-management.md`
+- `docs/runbooks/rate-limit.md`
+- `docs/runbooks/mainnet-readiness.md`
+- `docs/security/parent-agent-security-review.md`
+- `go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1`
+- `go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1`
+- `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
+- `npx hardhat test solidity`
+- `govulncheck ./...` via temporary `GOBIN`: 0 called Go vulnerabilities
+- `npm audit --audit-level=moderate --json`: open critical/high transitive JavaScript toolchain advisories; M9 `no open critical issues` not satisfied

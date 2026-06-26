@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 	cfg := validConfig()
@@ -30,6 +34,82 @@ func TestValidateRejectsDuplicatePathway(t *testing.T) {
 	cfg.Pathways = append(cfg.Pathways, cfg.Pathways[0])
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want duplicate pathway error")
+	}
+}
+
+func TestValidateAcceptsEnabledPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsIncompletePricingChains(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.Chains = cfg.Pricing.Chains[:1]
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want incomplete pricing chains error")
+	}
+}
+
+func TestLoadStaticIgnoresDatabaseURLEnvOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	body := []byte(`database_url: postgres://file:file@localhost:5432/file?sslmode=disable
+executor:
+  signer: "0x9999999999999999999999999999999999999999"
+dvn:
+  mode: shadow
+chains:
+  - eid: 40161
+    name: ethereum-sepolia
+    chain_id: 11155111
+    endpoint_address: "0x1111111111111111111111111111111111111111"
+    confirmations: 12
+    rpc_urls:
+      - http://localhost:8545
+    workers:
+      open_executor: "0x2222222222222222222222222222222222222222"
+      open_dvn: "0x3333333333333333333333333333333333333333"
+  - eid: 40245
+    name: base-sepolia
+    chain_id: 84532
+    endpoint_address: "0x4444444444444444444444444444444444444444"
+    confirmations: 12
+    rpc_urls:
+      - http://localhost:8546
+    workers:
+      open_executor: "0x5555555555555555555555555555555555555555"
+      open_dvn: "0x6666666666666666666666666666666666666666"
+pathways:
+  - src_eid: 40161
+    dst_eid: 40245
+    src_oapp: "0x7777777777777777777777777777777777777777"
+    dst_oapp: "0x8888888888888888888888888888888888888888"
+    send_lib: "0x9999999999999999999999999999999999999999"
+    receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    enabled: true
+    max_message_size: 10000
+`)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("DATABASE_URL", "postgres://env:env@localhost:5432/env?sslmode=disable")
+
+	staticConfig, err := LoadStatic(path)
+	if err != nil {
+		t.Fatalf("LoadStatic() error = %v", err)
+	}
+	if staticConfig.DatabaseURL != "postgres://file:file@localhost:5432/file?sslmode=disable" {
+		t.Fatalf("LoadStatic() database_url = %q, want file value", staticConfig.DatabaseURL)
+	}
+	workerConfig, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if workerConfig.DatabaseURL != "postgres://env:env@localhost:5432/env?sslmode=disable" {
+		t.Fatalf("Load() database_url = %q, want env override", workerConfig.DatabaseURL)
 	}
 }
 
@@ -84,6 +164,48 @@ func validConfig() Config {
 				ReceiveLib:     "0xcccccccccccccccccccccccccccccccccccccccc",
 				Enabled:        true,
 				MaxMessageSize: 10000,
+			},
+		},
+	}
+}
+
+func validPricingConfig() PricingConfig {
+	return PricingConfig{
+		Enabled:                 true,
+		Signer:                  "0x9999999999999999999999999999999999999999",
+		IntervalSeconds:         300,
+		BaseFeeWei:              "1000",
+		BufferBps:               100,
+		StaleAfterSeconds:       1800,
+		MaxDeviationBps:         500,
+		AllowUniswapFallback:    true,
+		TxGasLimit:              100000,
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+		Chains: []PricingChainConfig{
+			{
+				EID:           40161,
+				BinanceSymbol: "ETHUSDT",
+				Uniswap: UniswapPricingConfig{
+					QuoterAddress:    "0x1111111111111111111111111111111111111111",
+					TokenIn:          "0x2222222222222222222222222222222222222222",
+					TokenOut:         "0x3333333333333333333333333333333333333333",
+					Fee:              500,
+					AmountInWei:      "1000000000000000000",
+					TokenOutDecimals: 6,
+				},
+			},
+			{
+				EID:           40245,
+				BinanceSymbol: "ETHUSDT",
+				Uniswap: UniswapPricingConfig{
+					QuoterAddress:    "0x4444444444444444444444444444444444444444",
+					TokenIn:          "0x5555555555555555555555555555555555555555",
+					TokenOut:         "0x6666666666666666666666666666666666666666",
+					Fee:              500,
+					AmountInWei:      "1000000000000000000",
+					TokenOutDecimals: 6,
+				},
 			},
 		},
 	}

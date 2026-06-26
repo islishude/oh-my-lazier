@@ -37,6 +37,25 @@ npm install --save-exact \
 - worker min/max lzReceive gas
 - price configs
 
+当前仓库证据：
+
+- `contracts/scripts/deploy-workers.ts` 部署 TestOFT、OpenExecutor、OpenDVN。
+- `contracts/scripts/configure-workers.ts` 配置 OFT peer、可选 outbound rate limit、worker SendLib 白名单、pathway limits 与 price config。
+- `contracts/scripts/inspect-lz-config.ts` 读取当前 Endpoint send/receive library 与 SendUln302/ReceiveUln302 configs。
+- `contracts/scripts/configure-lz-executor.ts` 通过 Endpoint `setConfig` 写入 SendUln302 `ExecutorConfig`。
+- `contracts/scripts/configure-lz-dvn.ts` 通过 Endpoint `setConfig` 写入 SendUln302 与 ReceiveUln302 `UlnConfig`，并显式设置 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`、`optionalDVNCount = NIL`。
+- `contracts/scripts/README.md` 记录脚本环境变量与本地方向配置方式。
+- `npm run typecheck` 覆盖部署与配置脚本类型检查。
+
+待执行：
+
+- 分别使用 Ethereum Sepolia 与 Base Sepolia 的 EndpointV2、SendUln302、eid、RPC 与 owner/signer 环境变量运行部署脚本。
+- 两条链部署完成后，按方向运行配置脚本，确保 remote OFT 与 local SendLib 地址匹配。
+- 迁移阶段执行前后都运行 `npm run inspect:lz-config`，记录旧 Executor/DVN config 以支持 rollback。
+- 每次修改 worker YAML 前运行 `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>`，将输出附到迁移记录。
+- 执行 pause/drain/rate-limit 前按 `docs/runbooks/rate-limit.md` 记录容量、refill、canary size 与 owner 可用性。
+- 执行 signer 变更前按 `docs/runbooks/key-management.md` 记录 signer inventory、KMS key spec 或 keystore password source、rollback signer。
+
 ## Phase 3 - Executor Migration
 
 目标：
@@ -60,6 +79,11 @@ Rollback：
 
 - 将 `ExecutorConfig.executor` 重置为之前的 Executor。
 - 对已经 verified 但未 delivered 的 packet 做 manual retry。
+
+当前仓库证据：
+
+- `npm run configure:lz-executor` 使用 pinned `ILayerZeroEndpointV2` artifact 调用 Endpoint `setConfig`，只修改指定 OApp、remote eid 与 SendUln302 的 `ExecutorConfig`。
+- `npm run inspect:lz-config` 可在切换前后输出 active send/receive library 与 decoded Executor/ULN config，作为 rollback 输入。
 
 ## Phase 4 - DVN Shadow Mode
 
@@ -118,6 +142,12 @@ Rollback：
 3. 恢复之前的 send/receive DVN configs。
 4. Canary transfer。
 5. Unpause。
+
+当前仓库证据：
+
+- `npm run configure:lz-dvn` 使用 pinned `ILayerZeroEndpointV2` artifact 调用 Endpoint `setConfig`，在本地链的 SendUln302 与 ReceiveUln302 上写入同一组 required DVNs。
+- DVN 地址会按 LayerZero `UlnConfig` 要求升序排序，并拒绝重复地址。
+- `optionalDVNCount` 写入 LayerZero NIL 值，避免 first-phase 迁移继承默认 optional DVNs。
 
 ## Phase 6 - Gradual Rollout
 

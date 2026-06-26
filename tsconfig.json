@@ -8,5 +8,9 @@
     "resolveJsonModule": true,
     "types": ["node"]
   },
-  "include": ["hardhat.config.ts", "contracts/scripts/**/*.ts", "contracts/test/**/*.ts"]
+  "include": [
+    "hardhat.config.ts",
+    "contracts/scripts/**/*.ts",
+    "contracts/test/**/*.ts"
+  ]
 }

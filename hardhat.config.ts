@@ -8,17 +8,17 @@ const config: HardhatUserConfig = {
     settings: {
       optimizer: {
         enabled: true,
-        runs: 200
+        runs: 200,
       },
-      evmVersion: "prague"
-    }
+      evmVersion: "prague",
+    },
   },
   paths: {
     sources: "contracts/contracts",
     tests: "contracts/test",
     cache: "contracts/cache",
-    artifacts: "contracts/artifacts"
-  }
+    artifacts: "contracts/artifacts",
+  },
 };
 
 export default config;

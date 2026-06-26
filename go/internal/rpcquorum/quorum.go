@@ -18,6 +18,7 @@ var _ interface {
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	CheckHead(context.Context) (HeadResult, error)
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
+	SuggestGasPrice(context.Context) (*big.Int, error)
 	SubscribeFilterLogs(context.Context, ethereum.FilterQuery, chan<- gethtypes.Log) (ethereum.Subscription, error)
 	TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error)
 } = (*Client)(nil)
@@ -191,6 +192,20 @@ func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]
 	}
 	defer client.Close()
 	return client.FilterLogs(ctx, query)
+}
+
+// SuggestGasPrice returns the first healthy provider's legacy gas price estimate.
+func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
+	provider, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	client, err := ethclient.DialContext(ctx, provider.URL)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	return client.SuggestGasPrice(ctx)
 }
 
 // TransactionReceipt returns a receipt only when healthy providers agree on the receipt.

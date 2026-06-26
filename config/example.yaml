@@ -5,6 +5,37 @@ executor:
   signer: "0x9999999999999999999999999999999999999999"
 dvn:
   mode: shadow
+pricing:
+  enabled: false
+  signer: "0x9999999999999999999999999999999999999999"
+  interval_seconds: 300
+  base_fee_wei: "1000"
+  buffer_bps: 100
+  stale_after_seconds: 1800
+  max_deviation_bps: 500
+  allow_uniswap_fallback: true
+  tx_gas_limit: 100000
+  max_fee_per_gas_wei: "2000000000"
+  max_priority_fee_per_gas_wei: "1000000000"
+  chains:
+    - eid: 40161
+      binance_symbol: ETHUSDT
+      uniswap:
+        quoter_address: "0x1111111111111111111111111111111111111111"
+        token_in: "0x2222222222222222222222222222222222222222"
+        token_out: "0x3333333333333333333333333333333333333333"
+        fee: 500
+        amount_in_wei: "1000000000000000000"
+        token_out_decimals: 6
+    - eid: 40245
+      binance_symbol: ETHUSDT
+      uniswap:
+        quoter_address: "0x4444444444444444444444444444444444444444"
+        token_in: "0x5555555555555555555555555555555555555555"
+        token_out: "0x6666666666666666666666666666666666666666"
+        fee: 500
+        amount_in_wei: "1000000000000000000"
+        token_out_decimals: 6
 chains:
   - eid: 40161
     name: ethereum-sepolia

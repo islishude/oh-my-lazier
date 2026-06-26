@@ -10,6 +10,12 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "typecheck": "tsc --noEmit",
+    "deploy:workers": "tsx contracts/scripts/deploy-workers.ts",
+    "configure:workers": "tsx contracts/scripts/configure-workers.ts",
+    "inspect:lz-config": "tsx contracts/scripts/inspect-lz-config.ts",
+    "configure:lz-executor": "tsx contracts/scripts/configure-lz-executor.ts",
+    "configure:lz-dvn": "tsx contracts/scripts/configure-lz-dvn.ts",
     "check": "npm run compile && npm test"
   },
   "repository": {

@@ -70,6 +70,48 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	}
 }
 
+func TestIndexerProcessOnceMarksUnsupportedExecutorOptionsManualReview(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	sourceLogs := []gethtypes.Log{
+		testPacketSentLog(t, txHash, sendLib, 0),
+		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(42), 1),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(42), unsupportedExecutorOptions(), 2),
+	}
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: sourceLogs,
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", executor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceTransactions != 1 {
+		t.Fatalf("SourceTransactions = %d, want 1", result.SourceTransactions)
+	}
+	for guid, packet := range store.packets {
+		if packet.Status != string(packets.ExecutorManualReview) {
+			t.Fatalf("packet status = %q, want %q", packet.Status, packets.ExecutorManualReview)
+		}
+		if store.jobs[guid].Status != string(packets.ExecutorManualReview) {
+			t.Fatalf("job status = %q, want %q", store.jobs[guid].Status, packets.ExecutorManualReview)
+		}
+		if store.jobs[guid].LastError == "" {
+			t.Fatal("job LastError is empty, want unsupported options detail")
+		}
+	}
+}
+
 func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	packet.Status = string(packets.ExecutorCommitTxEnqueued)

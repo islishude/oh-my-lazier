@@ -2,12 +2,12 @@
   {
     "anonymous": false,
     "inputs": [
-      {"indexed": true, "name": "dstEid", "type": "uint32"},
-      {"indexed": true, "name": "sender", "type": "address"},
-      {"indexed": true, "name": "sendLib", "type": "address"},
-      {"indexed": false, "name": "calldataSize", "type": "uint256"},
-      {"indexed": false, "name": "price", "type": "uint256"},
-      {"indexed": false, "name": "options", "type": "bytes"}
+      { "indexed": true, "name": "dstEid", "type": "uint32" },
+      { "indexed": true, "name": "sender", "type": "address" },
+      { "indexed": true, "name": "sendLib", "type": "address" },
+      { "indexed": false, "name": "calldataSize", "type": "uint256" },
+      { "indexed": false, "name": "price", "type": "uint256" },
+      { "indexed": false, "name": "options", "type": "bytes" }
     ],
     "name": "ExecutorJobAssigned",
     "type": "event"

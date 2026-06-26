@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/lz"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
@@ -19,9 +20,16 @@ func ExecutorJobFromAssignment(packet db.PacketRecord, assignment lzabi.Executor
 	if packet.SendLib != assignment.SendLib {
 		return db.ExecutorJobRecord{}, fmt.Errorf("executor assignment send lib %s does not match packet send lib %s", assignment.SendLib, packet.SendLib)
 	}
+	status := string(packets.ExecutorAssigned)
+	var lastError string
+	if _, err := lz.DecodeExecutorOptions(assignment.Options); err != nil {
+		status = string(packets.ExecutorManualReview)
+		lastError = fmt.Sprintf("unsupported executor options: %v", err)
+	}
 	return db.ExecutorJobRecord{
 		GUID:        packet.GUID,
 		AssignedFee: assignment.Price,
-		Status:      string(packets.ExecutorAssigned),
+		Status:      status,
+		LastError:   lastError,
 	}, nil
 }

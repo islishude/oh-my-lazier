@@ -4,20 +4,20 @@
     "type": "function",
     "stateMutability": "view",
     "inputs": [
-      {"name": "_oapp", "type": "address"},
-      {"name": "_remoteEid", "type": "uint32"}
+      { "name": "_oapp", "type": "address" },
+      { "name": "_remoteEid", "type": "uint32" }
     ],
     "outputs": [
       {
         "name": "rtnConfig",
         "type": "tuple",
         "components": [
-          {"name": "confirmations", "type": "uint64"},
-          {"name": "requiredDVNCount", "type": "uint8"},
-          {"name": "optionalDVNCount", "type": "uint8"},
-          {"name": "optionalDVNThreshold", "type": "uint8"},
-          {"name": "requiredDVNs", "type": "address[]"},
-          {"name": "optionalDVNs", "type": "address[]"}
+          { "name": "confirmations", "type": "uint64" },
+          { "name": "requiredDVNCount", "type": "uint8" },
+          { "name": "optionalDVNCount", "type": "uint8" },
+          { "name": "optionalDVNThreshold", "type": "uint8" },
+          { "name": "requiredDVNs", "type": "address[]" },
+          { "name": "optionalDVNs", "type": "address[]" }
         ]
       }
     ]
@@ -31,17 +31,17 @@
         "name": "_config",
         "type": "tuple",
         "components": [
-          {"name": "confirmations", "type": "uint64"},
-          {"name": "requiredDVNCount", "type": "uint8"},
-          {"name": "optionalDVNCount", "type": "uint8"},
-          {"name": "optionalDVNThreshold", "type": "uint8"},
-          {"name": "requiredDVNs", "type": "address[]"},
-          {"name": "optionalDVNs", "type": "address[]"}
+          { "name": "confirmations", "type": "uint64" },
+          { "name": "requiredDVNCount", "type": "uint8" },
+          { "name": "optionalDVNCount", "type": "uint8" },
+          { "name": "optionalDVNThreshold", "type": "uint8" },
+          { "name": "requiredDVNs", "type": "address[]" },
+          { "name": "optionalDVNs", "type": "address[]" }
         ]
       },
-      {"name": "_headerHash", "type": "bytes32"},
-      {"name": "_payloadHash", "type": "bytes32"}
+      { "name": "_headerHash", "type": "bytes32" },
+      { "name": "_payloadHash", "type": "bytes32" }
     ],
-    "outputs": [{"name": "", "type": "bool"}]
+    "outputs": [{ "name": "", "type": "bool" }]
   }
 ]

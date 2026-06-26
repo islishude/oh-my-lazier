@@ -16,6 +16,7 @@ type ExecutorJobRecord struct {
 	GUID        common.Hash
 	AssignedFee *big.Int
 	Status      string
+	LastError   string
 }
 
 // ExecutorWorkItem is a packet plus its executor job state selected for processing.
@@ -39,15 +40,20 @@ func (s *Store) UpsertExecutorJob(ctx context.Context, job ExecutorJobRecord) er
 	if job.AssignedFee != nil {
 		fee = job.AssignedFee.String()
 	}
+	var lastError any
+	if job.LastError != "" {
+		lastError = job.LastError
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO executor_jobs (guid, assigned, assigned_fee, status)
-		VALUES ($1, true, $2, $3)
+		INSERT INTO executor_jobs (guid, assigned, assigned_fee, status, last_error)
+		VALUES ($1, true, $2, $3, $4)
 		ON CONFLICT (guid) DO UPDATE SET
 			assigned = true,
 			assigned_fee = EXCLUDED.assigned_fee,
 			status = EXCLUDED.status,
+			last_error = EXCLUDED.last_error,
 			updated_at = now()
-	`, job.GUID.Bytes(), fee, job.Status)
+	`, job.GUID.Bytes(), fee, job.Status, lastError)
 	return err
 }
 

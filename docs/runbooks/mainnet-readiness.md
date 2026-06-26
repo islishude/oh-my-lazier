@@ -1,0 +1,100 @@
+# Mainnet Readiness Runbook
+
+This runbook is the final review index before any mainnet deployment proposal. Phase 1 remains EVM-only and must not use self-only DVN.
+
+## Required Inputs
+
+- Validated worker config for the target environment.
+- `configdiff` output from the last approved config to the proposed config.
+- `inspect:lz-config` output for every configured direction.
+- Signer inventory and key-management review.
+- Rate-limit and pause review for every OFT pathway.
+- Monitoring dashboard and alert proof.
+- Security review report with no open critical findings.
+
+## Non-Negotiable Phase 1 Scope
+
+- Ethereum Sepolia <-> Base Sepolia rehearsal must complete before mainnet.
+- No `composeMsg`.
+- No `lzCompose`.
+- No native drop.
+- No ordered execution.
+- No non-EVM chain support.
+- No self-only DVN.
+- Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.
+- Confirmations must be 12 unless the top-level plan is explicitly updated.
+
+## Review Sequence
+
+1. Run `make check`.
+2. Run `go run ./go/cmd/configdiff -from <approved.yaml> -to <proposed.yaml>`.
+3. Run `npm run inspect:lz-config` for each configured direction and archive output.
+4. Complete `docs/runbooks/key-management.md`.
+5. Complete `docs/runbooks/rate-limit.md`.
+6. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
+7. Complete security review and resolve all critical findings.
+8. Confirm rollback steps for Executor and DVN config are documented with previous config values.
+9. Confirm canary transfer size, signer, owner, and operator contacts.
+10. Approve the migration ticket only after every artifact above is attached.
+
+## Go / Worker Checks
+
+Required commands:
+
+```bash
+go test ./...
+go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1
+go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1
+go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1
+```
+
+Required runtime checks:
+
+- `/healthz` returns `200`.
+- `/readyz` returns `200`.
+- `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics.
+- No chain or pathway is paused before the migration begins.
+- No tx outbox row is stuck in `failed` for active chains.
+
+## Contract / LayerZero Checks
+
+Required commands:
+
+```bash
+npm run typecheck
+npx hardhat test solidity
+npm run inspect:lz-config
+```
+
+Required state:
+
+- OFT peers are configured in both directions.
+- OpenExecutor and OpenDVN allow only intended SendLib addresses.
+- Worker pathway config is enabled only for approved OApps.
+- `ExecutorConfig.executor` points to OpenExecutor only after the executor migration step.
+- ULN config has required DVNs `[OpenDVN, LayerZero Labs DVN]` only during the DVN join step.
+- Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
+
+## Rollback Approval
+
+The rollback section of the migration ticket must include:
+
+- previous Executor config
+- previous send ULN config
+- previous receive ULN config
+- owner account able to pause/unpause TestOFT
+- signer account able to submit worker transactions
+- manual retry plan for verified but undelivered packets
+
+## Rejection Criteria
+
+Reject mainnet readiness if:
+
+- any critical security finding remains open
+- self-only DVN is proposed
+- required DVNs do not include an independent LayerZero Labs DVN
+- confirmations are not 12 without an explicit plan update
+- signer inventory or rollback signer is missing
+- rate-limit capacity/refill is not documented per pathway
+- monitoring alerts are not active
+- config diff output is missing or unreviewed

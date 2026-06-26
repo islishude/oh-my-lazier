@@ -96,6 +96,18 @@
 - payload hash computation
 - shadow would-verify report
 
+### metrics
+
+- `/healthz` does not require DB stats
+- `/readyz` fails closed when DB stats are unavailable
+- `/metrics` renders chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics
+
+### configdiff
+
+- static config loads ignore environment overrides
+- chain, pathway, and pricing-chain diffs use semantic keys instead of list positions
+- text renderer reports no-op and changed configs
+
 ## Testnet Integration Tests
 
 目标：

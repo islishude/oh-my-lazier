@@ -2,8 +2,18 @@
   {
     "anonymous": false,
     "inputs": [
-      {"indexed": false, "internalType": "address", "name": "executor", "type": "address"},
-      {"indexed": false, "internalType": "uint256", "name": "fee", "type": "uint256"}
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "executor",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "fee",
+        "type": "uint256"
+      }
     ],
     "name": "ExecutorFeePaid",
     "type": "event"
@@ -11,9 +21,24 @@
   {
     "anonymous": false,
     "inputs": [
-      {"indexed": false, "internalType": "address[]", "name": "requiredDVNs", "type": "address[]"},
-      {"indexed": false, "internalType": "address[]", "name": "optionalDVNs", "type": "address[]"},
-      {"indexed": false, "internalType": "uint256[]", "name": "fees", "type": "uint256[]"}
+      {
+        "indexed": false,
+        "internalType": "address[]",
+        "name": "requiredDVNs",
+        "type": "address[]"
+      },
+      {
+        "indexed": false,
+        "internalType": "address[]",
+        "name": "optionalDVNs",
+        "type": "address[]"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256[]",
+        "name": "fees",
+        "type": "uint256[]"
+      }
     ],
     "name": "DVNFeePaid",
     "type": "event"

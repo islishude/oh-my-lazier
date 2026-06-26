@@ -54,7 +54,7 @@ func testExecutorSourceLogs(t *testing.T, executor, sendLib common.Address, fee 
 	return []gethtypes.Log{
 		testPacketSentLog(t, txHash, sendLib, 0),
 		testExecutorFeePaidLog(t, txHash, sendLib, executor, fee, 1),
-		testExecutorJobAssignedLog(t, txHash, executor, sendLib, fee, 2),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, fee, validExecutorOptions(), 2),
 	}
 }
 
@@ -98,13 +98,13 @@ func testExecutorFeePaidLog(t *testing.T, txHash common.Hash, sendLib, executor 
 	}
 }
 
-func testExecutorJobAssignedLog(t *testing.T, txHash common.Hash, executor, sendLib common.Address, fee *big.Int, index uint) gethtypes.Log {
+func testExecutorJobAssignedLogWithOptions(t *testing.T, txHash common.Hash, executor, sendLib common.Address, fee *big.Int, options []byte, index uint) gethtypes.Log {
 	t.Helper()
 	eventABI, err := abi.JSON(strings.NewReader(executorJobAssignedABIJSON))
 	if err != nil {
 		t.Fatalf("abi.JSON() error = %v", err)
 	}
-	data, err := eventABI.Events["ExecutorJobAssigned"].Inputs.NonIndexed().Pack(big.NewInt(5), fee, []byte{0x01, 0x02})
+	data, err := eventABI.Events["ExecutorJobAssigned"].Inputs.NonIndexed().Pack(big.NewInt(5), fee, options)
 	if err != nil {
 		t.Fatalf("Pack ExecutorJobAssigned error = %v", err)
 	}

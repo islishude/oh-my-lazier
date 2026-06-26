@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
 
@@ -30,19 +32,220 @@ var (
 
 // Bot updates worker contract price configuration.
 type Bot struct {
-	logger *slog.Logger
+	store    Store
+	registry *chain.Registry
+	settings Settings
+	sources  map[uint32]ChainSources
+	now      func() time.Time
+	logger   *slog.Logger
 }
 
 // New creates a price bot.
 func New(logger *slog.Logger) *Bot {
-	return &Bot{logger: logger}
+	return &Bot{logger: logger, now: time.Now}
+}
+
+// NewWithDependencies creates an enabled price bot with explicit sources.
+func NewWithDependencies(store Store, registry *chain.Registry, settings Settings, sources map[uint32]ChainSources, logger *slog.Logger) (*Bot, error) {
+	if !settings.Enabled {
+		return New(logger), nil
+	}
+	if store == nil {
+		return nil, errors.New("pricing store is required")
+	}
+	if registry == nil {
+		return nil, errors.New("pricing registry is required")
+	}
+	if err := settings.Validate(); err != nil {
+		return nil, err
+	}
+	copied := make(map[uint32]ChainSources, len(sources))
+	for eid, source := range sources {
+		copied[eid] = source
+	}
+	return &Bot{store: store, registry: registry, settings: settings, sources: copied, now: time.Now, logger: logger}, nil
 }
 
 // Run starts the price update loop until the context is canceled.
 func (b *Bot) Run(ctx context.Context) error {
+	if b == nil || !b.settings.Enabled {
+		b.logger.Info("price bot disabled")
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	b.logger.Info("price bot loop started")
-	<-ctx.Done()
-	return ctx.Err()
+	for {
+		if err := b.EnqueueOnce(ctx); err != nil {
+			return err
+		}
+		timer := time.NewTimer(b.settings.Interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// Store persists price update transactions.
+type Store interface {
+	EnqueueTx(ctx context.Context, request db.TxRequest) (int64, error)
+}
+
+// GasPriceReader reads a destination-chain gas price.
+type GasPriceReader interface {
+	SuggestGasPrice(ctx context.Context) (*big.Int, error)
+}
+
+// PriceReader reads USD/native prices.
+type PriceReader interface {
+	PriceUSD(ctx context.Context) (SourcePrice, error)
+}
+
+// Settings controls price update generation.
+type Settings struct {
+	Enabled       bool
+	SignerID      string
+	Interval      time.Duration
+	BaseFee       *big.Int
+	BufferBps     uint16
+	StaleAfter    time.Duration
+	MaxDeviation  uint64
+	AllowFallback bool
+	TxFees        TxFees
+}
+
+// Validate checks settings required for enabled price updates.
+func (s Settings) Validate() error {
+	if !s.Enabled {
+		return nil
+	}
+	if s.SignerID == "" {
+		return errors.New("pricing signer id is required")
+	}
+	if s.Interval <= 0 {
+		return errors.New("pricing interval must be positive")
+	}
+	if s.BaseFee == nil || s.BaseFee.Sign() < 0 {
+		return errors.New("pricing base fee must be non-negative")
+	}
+	if s.BufferBps > 10_000 {
+		return errors.New("pricing buffer bps exceeds 10000")
+	}
+	if s.StaleAfter <= 0 {
+		return errors.New("pricing stale_after must be positive")
+	}
+	if s.MaxDeviation == 0 {
+		return errors.New("pricing max deviation bps is required")
+	}
+	return nil
+}
+
+// ChainSources are the price and gas inputs for one configured chain.
+type ChainSources struct {
+	Primary PriceReader
+	Sanity  PriceReader
+	Gas     GasPriceReader
+}
+
+// EnqueueOnce computes current price configs and enqueues worker updates for each pathway.
+func (b *Bot) EnqueueOnce(ctx context.Context) error {
+	if b == nil || !b.settings.Enabled {
+		return nil
+	}
+	if b.now == nil {
+		b.now = time.Now
+	}
+	seen := make(map[string]struct{})
+	for _, pathway := range b.registry.Pathways() {
+		key := fmt.Sprintf("%d:%d", pathway.SrcEID, pathway.DstEID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) error {
+	srcChain, err := b.registry.Get(srcEID)
+	if err != nil {
+		return err
+	}
+	dstChain, err := b.registry.Get(dstEID)
+	if err != nil {
+		return err
+	}
+	srcPrice, err := b.chainPrice(ctx, srcEID)
+	if err != nil {
+		return err
+	}
+	dstPrice, err := b.chainPrice(ctx, dstEID)
+	if err != nil {
+		return err
+	}
+	dstSources, ok := b.sources[dstEID]
+	if !ok || dstSources.Gas == nil {
+		return fmt.Errorf("pricing gas source for chain %d is not configured", dstEID)
+	}
+	dstGasPrice, err := dstSources.Gas.SuggestGasPrice(ctx)
+	if err != nil {
+		return err
+	}
+	config, err := BuildPriceConfig(PriceInputs{
+		SrcNativeUSD:      srcPrice,
+		DstNativeUSD:      dstPrice,
+		DstGasPriceWei:    dstGasPrice,
+		BaseFee:           b.settings.BaseFee,
+		BufferBps:         b.settings.BufferBps,
+		UpdatedAtUnix:     uint64(b.now().Unix()),
+		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
+	})
+	if err != nil {
+		return err
+	}
+	for _, request := range []struct {
+		worker  common.Address
+		purpose string
+	}{
+		{worker: srcChain.Workers.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig},
+		{worker: srcChain.Workers.OpenDVN, purpose: TxPurposeSetDVNPriceConfig},
+	} {
+		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config, b.settings.TxFees)
+		if err != nil {
+			return err
+		}
+		if _, err := b.store.EnqueueTx(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
+	sources, ok := b.sources[eid]
+	if !ok {
+		return nil, fmt.Errorf("pricing sources for chain %d are not configured", eid)
+	}
+	var primary SourcePrice
+	if sources.Primary != nil {
+		price, err := sources.Primary.PriceUSD(ctx)
+		if err == nil {
+			primary = price
+		}
+	}
+	var sanity SourcePrice
+	if sources.Sanity != nil {
+		price, err := sources.Sanity.PriceUSD(ctx)
+		if err == nil {
+			sanity = price
+		}
+	}
+	return SelectPrice(primary, sanity, b.settings.MaxDeviation, b.settings.AllowFallback)
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.
