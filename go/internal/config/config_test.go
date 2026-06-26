@@ -29,6 +29,40 @@ func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
+	cfg := validConfig()
+	cfg.Executor.Signer = "0x1111111111111111111111111111111111111111"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want unknown executor signer error")
+	}
+}
+
+func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
+	cfg := validConfig()
+	cfg.Signers[0].Keystore.PasswordEnv = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing keystore password source error")
+	}
+}
+
+func TestValidateRejectsMismatchedKMSSignerAddress(t *testing.T) {
+	cfg := validConfig()
+	cfg.Signers[0] = SignerConfig{
+		ID:   "0x9999999999999999999999999999999999999999",
+		Type: "kms",
+		KMS: KMSSignerConfig{
+			KeyID:              "test-key",
+			Region:             "us-east-1",
+			Address:            "0x1111111111111111111111111111111111111111",
+			AccessKeyIDEnv:     "AWS_ACCESS_KEY_ID",
+			SecretAccessKeyEnv: "AWS_SECRET_ACCESS_KEY",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want mismatched kms address error")
+	}
+}
+
 func TestValidateRejectsDuplicatePathway(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pathways = append(cfg.Pathways, cfg.Pathways[0])
@@ -61,6 +95,12 @@ executor:
   signer: "0x9999999999999999999999999999999999999999"
 dvn:
   mode: shadow
+signers:
+  - id: "0x9999999999999999999999999999999999999999"
+    type: keystore
+    keystore:
+      path: /run/secrets/executor-keystore.json
+      password_env: KEYSTORE_PASSWORD
 chains:
   - eid: 40161
     name: ethereum-sepolia
@@ -118,6 +158,16 @@ func validConfig() Config {
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		Executor:    ExecutorConfig{Signer: "0x9999999999999999999999999999999999999999"},
 		DVN:         DVNConfig{Mode: "shadow"},
+		Signers: []SignerConfig{
+			{
+				ID:   "0x9999999999999999999999999999999999999999",
+				Type: "keystore",
+				Keystore: KeystoreSignerConfig{
+					Path:        "/run/secrets/executor-keystore.json",
+					PasswordEnv: "KEYSTORE_PASSWORD",
+				},
+			},
+		},
 		Chains: []ChainConfig{
 			{
 				EID:             40161,

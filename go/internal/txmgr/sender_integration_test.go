@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -119,6 +120,60 @@ func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	}
 }
 
+func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 33,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+
+	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID:             40161,
+		Purpose:              "lz-receive",
+		To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata:             []byte{0x04, 0x05},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(150_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+
+	processedID, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: 40161,
+		ChainID:  big.NewInt(11155111),
+		Signer:   signer,
+		Client:   client,
+	}, 1)
+	if err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	if processedID != id {
+		t.Fatalf("processed id = %d, want %d", processedID, id)
+	}
+	confirmed, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() after receipt error = %v", err)
+	}
+	if confirmed.Status != db.TxStatusConfirmed {
+		t.Fatalf("status = %q, want %q", confirmed.Status, db.TxStatusConfirmed)
+	}
+}
+
 func openTestStore(t *testing.T) *db.Store {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
@@ -164,6 +219,7 @@ func newTestKeystoreSigner(t *testing.T) *keystore.Signer {
 type fakeChainClient struct {
 	pendingNonce uint64
 	sent         []*types.Transaction
+	receipts     map[common.Hash]*types.Receipt
 }
 
 func (f *fakeChainClient) PendingNonceAt(context.Context, common.Address) (uint64, error) {
@@ -173,6 +229,14 @@ func (f *fakeChainClient) PendingNonceAt(context.Context, common.Address) (uint6
 func (f *fakeChainClient) SendTransaction(_ context.Context, tx *types.Transaction) error {
 	f.sent = append(f.sent, tx)
 	return nil
+}
+
+func (f *fakeChainClient) TransactionReceipt(_ context.Context, txHash common.Hash) (*types.Receipt, error) {
+	receipt, ok := f.receipts[txHash]
+	if !ok {
+		return nil, ethereum.NotFound
+	}
+	return receipt, nil
 }
 
 func testChains() []config.ChainConfig {

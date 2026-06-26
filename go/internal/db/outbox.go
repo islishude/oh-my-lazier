@@ -65,6 +65,7 @@ type OutboxTx struct {
 	MaxFeePerGas         *big.Int
 	MaxPriorityFeePerGas *big.Int
 	Nonce                uint64
+	TxHash               common.Hash
 	SignerID             string
 	Status               string
 	Attempts             uint32
@@ -164,7 +165,7 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		SELECT
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
-			nonce, signer_id, status, attempts
+			nonce, tx_hash, signer_id, status, attempts
 		FROM tx_outbox
 		WHERE id = $1
 	`, id).Scan(
@@ -179,6 +180,7 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		&row.MaxFeePerGas,
 		&row.MaxPriorityFeePerGas,
 		&row.Nonce,
+		&row.TxHash,
 		&row.SignerID,
 		&row.Status,
 		&row.Attempts,
@@ -187,6 +189,66 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		return OutboxTx{}, err
 	}
 	return row.toOutboxTx()
+}
+
+// ListBroadcastTx returns broadcast transactions waiting for receipts for one chain signer.
+func (s *Store) ListBroadcastTx(ctx context.Context, chainEID uint32, signerID string, limit int) ([]OutboxTx, error) {
+	if chainEID == 0 {
+		return nil, errors.New("chain eid is required")
+	}
+	if signerID == "" {
+		return nil, errors.New("signer id is required")
+	}
+	if limit <= 0 {
+		return nil, errors.New("broadcast tx limit must be positive")
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			id, chain_eid, purpose, guid, to_address, calldata, value::text,
+			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
+			nonce, tx_hash, signer_id, status, attempts
+		FROM tx_outbox
+		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3 AND tx_hash IS NOT NULL
+		ORDER BY updated_at, id
+		LIMIT $4
+	`, chainEID, signerID, TxStatusBroadcast, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]OutboxTx, 0)
+	for rows.Next() {
+		var row outboxTxRow
+		if err := rows.Scan(
+			&row.ID,
+			&row.ChainEID,
+			&row.Purpose,
+			&row.GUID,
+			&row.ToAddress,
+			&row.Calldata,
+			&row.Value,
+			&row.GasLimit,
+			&row.MaxFeePerGas,
+			&row.MaxPriorityFeePerGas,
+			&row.Nonce,
+			&row.TxHash,
+			&row.SignerID,
+			&row.Status,
+			&row.Attempts,
+		); err != nil {
+			return nil, err
+		}
+		tx, err := row.toOutboxTx()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, tx)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // MarkTxSigned records that an outbox transaction was signed.
@@ -321,6 +383,7 @@ type outboxTxRow struct {
 	MaxFeePerGas         *string
 	MaxPriorityFeePerGas *string
 	Nonce                *int64
+	TxHash               *[]byte
 	SignerID             string
 	Status               string
 	Attempts             uint32
@@ -352,6 +415,13 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 	if len(r.ToAddress) != common.AddressLength {
 		return OutboxTx{}, fmt.Errorf("outbox tx to_address has length %d", len(r.ToAddress))
 	}
+	var txHash common.Hash
+	if r.TxHash != nil {
+		if len(*r.TxHash) != common.HashLength {
+			return OutboxTx{}, fmt.Errorf("outbox tx tx_hash has length %d", len(*r.TxHash))
+		}
+		txHash = common.BytesToHash(*r.TxHash)
+	}
 	return OutboxTx{
 		ID:                   r.ID,
 		ChainEID:             r.ChainEID,
@@ -364,6 +434,7 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 		MaxFeePerGas:         maxFeePerGas,
 		MaxPriorityFeePerGas: maxPriorityFeePerGas,
 		Nonce:                uint64(*r.Nonce),
+		TxHash:               txHash,
 		SignerID:             r.SignerID,
 		Status:               r.Status,
 		Attempts:             r.Attempts,

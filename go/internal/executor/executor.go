@@ -103,12 +103,16 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 
 // ProcessDelivererOnce enqueues one lzReceive transaction for an executable packet.
 func (w *Worker) ProcessDelivererOnce(ctx context.Context) (bool, error) {
-	work, err := w.store.ListExecutorWork(ctx, string(packets.ExecutorExecutable), 1)
-	if err != nil {
-		return false, err
+	if processed, err := w.processDelivererStatus(ctx, string(packets.ExecutorExecutable)); err != nil || processed {
+		return processed, err
 	}
-	if len(work) == 0 {
-		return false, nil
+	return w.processDelivererStatus(ctx, string(packets.ExecutorLzReceiveFailed))
+}
+
+func (w *Worker) processDelivererStatus(ctx context.Context, status string) (bool, error) {
+	work, err := w.store.ListExecutorWork(ctx, status, 1)
+	if err != nil || len(work) == 0 {
+		return false, err
 	}
 	item := work[0]
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
@@ -126,7 +130,7 @@ func (w *Worker) ProcessDelivererOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	id, err := w.store.EnqueueExecutorTx(ctx, item.Packet.GUID, string(packets.ExecutorExecutable), string(packets.ExecutorLzReceiveTxEnqueued), request)
+	id, err := w.store.EnqueueExecutorTx(ctx, item.Packet.GUID, status, string(packets.ExecutorLzReceiveTxEnqueued), request)
 	if err != nil {
 		return false, err
 	}

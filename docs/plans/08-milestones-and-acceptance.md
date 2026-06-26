@@ -106,8 +106,21 @@ Evidence:
 - `RUSTACK_KMS_ENDPOINT=http://localhost:4566 go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
 - `go/internal/db.Store.EnqueueTx`
 - `go/internal/db.Store.ClaimNextNonce`
+- `go/internal/db.Store.ListBroadcastTx`
+- `go/internal/db.Store.MarkTxConfirmed`
+- `go/internal/db.Store.MarkTxFailed`
 - `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
+- `go/internal/config.SignerConfig`
+- `go/internal/app.App.txTargets`
+- `go/internal/app.TestTxTargetsLoadsKeystoreSignerForEveryChain`
+- `go/internal/txmgr.Manager.Run`
 - `go/internal/txmgr.Manager.ProcessNext`
+- `go/internal/txmgr.Manager.ProcessReceipts`
+- `go/internal/txmgr.TestProcessReceiptsMarksBroadcastTxConfirmed`
+- `go/internal/txmgr.TestRunProcessesTargetsUntilQueueIsEmpty`
+- `go/internal/rpcquorum.Client.PendingNonceAt`
+- `go/internal/rpcquorum.Client.SendTransaction`
+- `go/internal/rpcquorum.Client.TransactionReceipt`
 - `TEST_POSTGRES_URL=... go test ./go/internal/txmgr -count=1`
 
 ## M5 - Executor Active Path
@@ -128,7 +141,7 @@ Acceptance:
 
 - [ ] can deliver basic OFT send on Sepolia/Base Sepolia
 - [x] unsupported options are rejected or marked manual review
-- [ ] failed delivery is retriable
+- [x] failed delivery is retriable
 
 Evidence:
 
@@ -155,6 +168,7 @@ Evidence:
 - `go/internal/executor.IsLzReceiveExecutable`
 - `go/internal/executor.Worker.ProcessCommitterOnce`
 - `go/internal/executor.Worker.ProcessDelivererOnce`
+- `go/internal/executor.TestProcessDelivererOnceRetriesFailedLzReceive`
 - `go/internal/rpcquorum.Client.CallContract`
 - `go/internal/rpcquorum.Client.BlockNumber`
 - `go/internal/rpcquorum.Client.FilterLogs`

@@ -18,6 +18,8 @@ var _ interface {
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	CheckHead(context.Context) (HeadResult, error)
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
+	PendingNonceAt(context.Context, common.Address) (uint64, error)
+	SendTransaction(context.Context, *gethtypes.Transaction) error
 	SuggestGasPrice(context.Context) (*big.Int, error)
 	SubscribeFilterLogs(context.Context, ethereum.FilterQuery, chan<- gethtypes.Log) (ethereum.Subscription, error)
 	TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error)
@@ -206,6 +208,34 @@ func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 	}
 	defer client.Close()
 	return client.SuggestGasPrice(ctx)
+}
+
+// PendingNonceAt returns the first healthy provider's pending account nonce.
+func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
+	provider, err := c.firstHealthyProvider()
+	if err != nil {
+		return 0, err
+	}
+	client, err := ethclient.DialContext(ctx, provider.URL)
+	if err != nil {
+		return 0, err
+	}
+	defer client.Close()
+	return client.PendingNonceAt(ctx, account)
+}
+
+// SendTransaction broadcasts a signed transaction through the first healthy provider.
+func (c *Client) SendTransaction(ctx context.Context, tx *gethtypes.Transaction) error {
+	provider, err := c.firstHealthyProvider()
+	if err != nil {
+		return err
+	}
+	client, err := ethclient.DialContext(ctx, provider.URL)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	return client.SendTransaction(ctx, tx)
 }
 
 // TransactionReceipt returns a receipt only when healthy providers agree on the receipt.

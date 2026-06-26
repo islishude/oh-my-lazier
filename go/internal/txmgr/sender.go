@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
@@ -17,10 +18,14 @@ import (
 type ChainClient interface {
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
+	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 }
 
 // ErrNoQueuedTx indicates no queued outbox row exists for the signer on a chain.
 var ErrNoQueuedTx = errors.New("no queued tx")
+
+// ErrNoReceiptUpdate indicates no broadcast tx receipt changed durable state.
+var ErrNoReceiptUpdate = errors.New("no receipt update")
 
 // ProcessNext signs and broadcasts one queued outbox transaction for a signer.
 func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big.Int, signer signer.Signer, client ChainClient) (int64, error) {
@@ -58,6 +63,40 @@ func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big
 		return 0, err
 	}
 	return outboxTx.ID, nil
+}
+
+// ProcessReceipts checks broadcast transactions and marks mined receipts as confirmed or failed.
+func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int) (int64, error) {
+	if target.Signer == nil {
+		return 0, errors.New("target signer is required")
+	}
+	if target.Client == nil {
+		return 0, errors.New("target client is required")
+	}
+	broadcasts, err := m.store.ListBroadcastTx(ctx, target.ChainEID, target.Signer.Address().Hex(), limit)
+	if err != nil {
+		return 0, err
+	}
+	for _, outboxTx := range broadcasts {
+		receipt, err := target.Client.TransactionReceipt(ctx, outboxTx.TxHash)
+		if errors.Is(err, ethereum.NotFound) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if receipt.Status == types.ReceiptStatusSuccessful {
+			if err := m.store.MarkTxConfirmed(ctx, outboxTx.ID, outboxTx.TxHash); err != nil {
+				return 0, err
+			}
+			return outboxTx.ID, nil
+		}
+		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status)); err != nil {
+			return 0, err
+		}
+		return outboxTx.ID, nil
+	}
+	return 0, ErrNoReceiptUpdate
 }
 
 func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, signer signer.Signer) (*types.Transaction, error) {

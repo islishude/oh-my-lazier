@@ -57,10 +57,10 @@ func TestProcessDelivererOnceEnqueuesLzReceiveTx(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)
 	store := &fakeStore{
-		work: []db.ExecutorWorkItem{{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
 			Packet: packet,
 			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorExecutable)},
-		}},
+		}}},
 	}
 	worker := NewWithCallers(
 		store,
@@ -91,14 +91,49 @@ func TestProcessDelivererOnceEnqueuesLzReceiveTx(t *testing.T) {
 	}
 }
 
+func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorLzReceiveFailed)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorLzReceiveFailed): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorLzReceiveFailed), LastError: "previous alert"},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
+		"0x9999999999999999999999999999999999999999",
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessDelivererOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessDelivererOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorLzReceiveFailed) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorLzReceiveFailed)
+	}
+	if store.nextStatus != string(packets.ExecutorLzReceiveTxEnqueued) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorLzReceiveTxEnqueued)
+	}
+	if store.request.Purpose != TxPurposeLzReceive {
+		t.Fatalf("purpose = %q, want %q", store.request.Purpose, TxPurposeLzReceive)
+	}
+}
+
 func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)
 	store := &fakeStore{
-		work: []db.ExecutorWorkItem{{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
 			Packet: packet,
 			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorExecutable)},
-		}},
+		}}},
 	}
 	worker := NewWithCallers(
 		store,
@@ -122,13 +157,17 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 
 type fakeStore struct {
 	work           []db.ExecutorWorkItem
+	workByStatus   map[string][]db.ExecutorWorkItem
 	guid           common.Hash
 	expectedStatus string
 	nextStatus     string
 	request        db.TxRequest
 }
 
-func (s *fakeStore) ListExecutorWork(_ context.Context, _ string, _ int) ([]db.ExecutorWorkItem, error) {
+func (s *fakeStore) ListExecutorWork(_ context.Context, status string, _ int) ([]db.ExecutorWorkItem, error) {
+	if s.workByStatus != nil {
+		return s.workByStatus[status], nil
+	}
 	return s.work, nil
 }
 

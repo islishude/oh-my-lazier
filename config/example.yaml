@@ -5,6 +5,12 @@ executor:
   signer: "0x9999999999999999999999999999999999999999"
 dvn:
   mode: shadow
+signers:
+  - id: "0x9999999999999999999999999999999999999999"
+    type: keystore
+    keystore:
+      path: /run/secrets/executor-keystore.json
+      password_env: KEYSTORE_PASSWORD
 pricing:
   enabled: false
   signer: "0x9999999999999999999999999999999999999999"

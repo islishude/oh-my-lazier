@@ -18,6 +18,7 @@ type Config struct {
 	Executor    ExecutorConfig  `yaml:"executor"`
 	DVN         DVNConfig       `yaml:"dvn"`
 	Pricing     PricingConfig   `yaml:"pricing"`
+	Signers     []SignerConfig  `yaml:"signers"`
 	Chains      []ChainConfig   `yaml:"chains"`
 	Pathways    []PathwayConfig `yaml:"pathways"`
 }
@@ -69,6 +70,32 @@ type UniswapPricingConfig struct {
 	Fee              uint32 `yaml:"fee"`
 	AmountInWei      string `yaml:"amount_in_wei"`
 	TokenOutDecimals uint8  `yaml:"token_out_decimals"`
+}
+
+// SignerConfig configures one local signing backend without embedding raw secret material.
+type SignerConfig struct {
+	ID       string               `yaml:"id"`
+	Type     string               `yaml:"type"`
+	Keystore KeystoreSignerConfig `yaml:"keystore"`
+	KMS      KMSSignerConfig      `yaml:"kms"`
+}
+
+// KeystoreSignerConfig points at an encrypted geth keystore and its password source.
+type KeystoreSignerConfig struct {
+	Path         string `yaml:"path"`
+	PasswordEnv  string `yaml:"password_env"`
+	PasswordFile string `yaml:"password_file"`
+}
+
+// KMSSignerConfig points at an AWS-compatible KMS signing key.
+type KMSSignerConfig struct {
+	KeyID              string `yaml:"key_id"`
+	Region             string `yaml:"region"`
+	Address            string `yaml:"address"`
+	Endpoint           string `yaml:"endpoint"`
+	AccessKeyIDEnv     string `yaml:"access_key_id_env"`
+	SecretAccessKeyEnv string `yaml:"secret_access_key_env"`
+	SessionTokenEnv    string `yaml:"session_token_env"`
 }
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
@@ -155,6 +182,13 @@ func (c Config) Validate() error {
 	if !common.IsHexAddress(c.Executor.Signer) {
 		return errors.New("executor signer must be a hex address")
 	}
+	signers, err := c.validateSigners()
+	if err != nil {
+		return err
+	}
+	if _, ok := signers[common.HexToAddress(c.Executor.Signer).Hex()]; !ok {
+		return errors.New("executor signer must reference a configured signer")
+	}
 	seen := make(map[uint32]struct{}, len(c.Chains))
 	for _, chain := range c.Chains {
 		if chain.EID == 0 {
@@ -191,7 +225,7 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
 	}
-	if err := c.validatePricing(seen); err != nil {
+	if err := c.validatePricing(seen, signers); err != nil {
 		return err
 	}
 	pathways := make(map[string]struct{}, len(c.Pathways))
@@ -230,12 +264,66 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func (c Config) validatePricing(chains map[uint32]struct{}) error {
+func (c Config) validateSigners() (map[string]struct{}, error) {
+	if len(c.Signers) == 0 {
+		return nil, errors.New("at least one signer is required")
+	}
+	seen := make(map[string]struct{}, len(c.Signers))
+	for _, signer := range c.Signers {
+		if !common.IsHexAddress(signer.ID) {
+			return nil, errors.New("signer id must be a hex address")
+		}
+		id := common.HexToAddress(signer.ID).Hex()
+		if _, ok := seen[id]; ok {
+			return nil, fmt.Errorf("duplicate signer id %s", id)
+		}
+		switch signer.Type {
+		case "keystore":
+			if signer.Keystore.Path == "" {
+				return nil, fmt.Errorf("signer %s keystore.path is required", id)
+			}
+			sources := 0
+			for _, value := range []string{signer.Keystore.PasswordEnv, signer.Keystore.PasswordFile} {
+				if value != "" {
+					sources++
+				}
+			}
+			if sources != 1 {
+				return nil, fmt.Errorf("signer %s must configure exactly one keystore password source", id)
+			}
+		case "kms":
+			if !common.IsHexAddress(signer.KMS.Address) {
+				return nil, fmt.Errorf("signer %s kms.address must be a hex address", id)
+			}
+			if common.HexToAddress(signer.KMS.Address).Hex() != id {
+				return nil, fmt.Errorf("signer %s kms.address must match id", id)
+			}
+			if signer.KMS.KeyID == "" {
+				return nil, fmt.Errorf("signer %s kms.key_id is required", id)
+			}
+			if signer.KMS.Region == "" {
+				return nil, fmt.Errorf("signer %s kms.region is required", id)
+			}
+			if signer.KMS.AccessKeyIDEnv == "" || signer.KMS.SecretAccessKeyEnv == "" {
+				return nil, fmt.Errorf("signer %s kms access key env names are required", id)
+			}
+		default:
+			return nil, fmt.Errorf("unsupported signer type %q", signer.Type)
+		}
+		seen[id] = struct{}{}
+	}
+	return seen, nil
+}
+
+func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]struct{}) error {
 	if !c.Pricing.Enabled {
 		return nil
 	}
 	if !common.IsHexAddress(c.Pricing.Signer) {
 		return errors.New("pricing signer must be a hex address")
+	}
+	if _, ok := signers[common.HexToAddress(c.Pricing.Signer).Hex()]; !ok {
+		return errors.New("pricing signer must reference a configured signer")
 	}
 	if c.Pricing.IntervalSeconds == 0 {
 		return errors.New("pricing interval_seconds is required")

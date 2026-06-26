@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
@@ -18,6 +21,9 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
 	"github.com/islishude/oh-my-lazier/go/internal/metrics"
 	"github.com/islishude/oh-my-lazier/go/internal/pricing"
+	"github.com/islishude/oh-my-lazier/go/internal/signer"
+	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
+	"github.com/islishude/oh-my-lazier/go/internal/signer/kms"
 	"github.com/islishude/oh-my-lazier/go/internal/txmgr"
 )
 
@@ -76,7 +82,11 @@ func (a *App) Run(ctx context.Context) error {
 	for _, c := range registry.All() {
 		start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).Run)
 	}
-	start("txmgr", txmgr.New(store, a.logger).Run)
+	txTargets, err := a.txTargets(ctx, registry)
+	if err != nil {
+		return err
+	}
+	start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
 
 	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
 	start("executor.committer", executorWorker.RunCommitter)
@@ -159,6 +169,94 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		sources[cfg.EID] = pricing.ChainSources{Primary: primary, Sanity: sanity, Gas: configuredChain.RPC}
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
+}
+
+func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.Target, error) {
+	signers, err := a.loadSigners(ctx)
+	if err != nil {
+		return nil, err
+	}
+	required := map[string]struct{}{common.HexToAddress(a.cfg.Executor.Signer).Hex(): {}}
+	if a.cfg.Pricing.Enabled {
+		required[common.HexToAddress(a.cfg.Pricing.Signer).Hex()] = struct{}{}
+	}
+	targets := make([]txmgr.Target, 0, len(required)*len(a.cfg.Chains))
+	for _, configuredChain := range registry.All() {
+		for signerID := range required {
+			configuredSigner, ok := signers[signerID]
+			if !ok {
+				return nil, errors.New("configured signer was not loaded")
+			}
+			targets = append(targets, txmgr.Target{
+				ChainEID: configuredChain.EID,
+				ChainID:  new(big.Int).Set(configuredChain.ChainID),
+				Signer:   configuredSigner,
+				Client:   configuredChain.RPC,
+			})
+		}
+	}
+	return targets, nil
+}
+
+func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error) {
+	signers := make(map[string]signer.Signer, len(a.cfg.Signers))
+	for _, cfg := range a.cfg.Signers {
+		id := common.HexToAddress(cfg.ID).Hex()
+		switch cfg.Type {
+		case "keystore":
+			loaded, err := keystore.LoadWithPasswordSource(cfg.Keystore.Path, keystore.PasswordSource{
+				Env:  cfg.Keystore.PasswordEnv,
+				File: cfg.Keystore.PasswordFile,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if loaded.Address().Hex() != id {
+				return nil, errors.New("keystore signer address does not match configured signer id")
+			}
+			signers[id] = loaded
+		case "kms":
+			accessKeyID, err := envValue(cfg.KMS.AccessKeyIDEnv)
+			if err != nil {
+				return nil, err
+			}
+			secretAccessKey, err := envValue(cfg.KMS.SecretAccessKeyEnv)
+			if err != nil {
+				return nil, err
+			}
+			sessionToken := ""
+			if cfg.KMS.SessionTokenEnv != "" {
+				sessionToken, err = envValue(cfg.KMS.SessionTokenEnv)
+				if err != nil {
+					return nil, err
+				}
+			}
+			awsConfig := aws.Config{
+				Region:      cfg.KMS.Region,
+				Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, sessionToken),
+			}
+			client := kms.NewSDKClient(awsConfig)
+			if cfg.KMS.Endpoint != "" {
+				client = kms.NewSDKClientWithEndpoint(awsConfig, cfg.KMS.Endpoint)
+			}
+			loaded := kms.New(client, cfg.KMS.KeyID, common.HexToAddress(cfg.KMS.Address))
+			if err := loaded.ValidateKey(ctx); err != nil {
+				return nil, err
+			}
+			signers[id] = loaded
+		default:
+			return nil, errors.New("unsupported signer type")
+		}
+	}
+	return signers, nil
+}
+
+func envValue(name string) (string, error) {
+	value := os.Getenv(name)
+	if value == "" {
+		return "", errors.New("required environment variable is empty")
+	}
+	return value, nil
 }
 
 func parseBigInt(value string) (*big.Int, error) {
