@@ -35,6 +35,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
   };
   record.layerZeroAddressCheck = evidence("");
   record.readinessCheck = evidence("");
+  record.runbookReview = evidence("");
   record.rollback.restoredConfigCheck = evidence("");
   record.rollback.canaryAfterRollback = evidence("");
   record.rollback.manualRetryPlan = evidence("");
@@ -45,11 +46,12 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "operatorContacts must contain at least one value",
     "layerZeroAddressCheck.ref must be a non-empty string",
     "readinessCheck.ref must be a non-empty string",
+    "runbookReview.ref must be a non-empty string",
     "directions[0].srcEid and directions[0].dstEid must differ",
     "directions[0].canaryDestinationReceipt.ref must be a non-empty string",
     "directions[0].canary.amountLD must be a positive decimal integer string",
-    "directions[0].canary.senderAccount must be a non-empty string",
-    "directions[0].canary.recipientAccount must be a non-empty string",
+    "directions[0].canary.senderAccount must be an EVM address",
+    "directions[0].canary.recipientAccount must be an EVM address",
     "directions[0].canary.minRecipientBalanceLD must be a positive decimal integer string",
     "directions[0].canary.sourceReceipt.ref must be a non-empty string",
     "directions[0].canary.destinationReceipt.ref must be a non-empty string",
@@ -65,6 +67,29 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "rollback.restoredConfigCheck.ref must be a non-empty string",
     "rollback.canaryAfterRollback.ref must be a non-empty string",
     "rollback.manualRetryPlan.ref must be a non-empty string",
+  ]);
+});
+
+test("validateMigrationEvidenceRecord rejects zero and invalid account addresses", () => {
+  const record = baseRecord();
+  record.ownerAccount = "0x0000000000000000000000000000000000000000";
+  record.signerAccount = "not-an-address";
+  record.directions[0].canary.senderAccount =
+    "0x0000000000000000000000000000000000000000";
+  record.directions[1].canary.recipientAccount = "0xabc";
+  record.rollback.ownerPauseAccount =
+    "0x0000000000000000000000000000000000000000";
+  record.rollback.signerAccount = "";
+
+  const errors = validateMigrationEvidenceRecord(record);
+
+  assert.deepEqual(errors, [
+    "ownerAccount must not be the zero address",
+    "signerAccount must be an EVM address",
+    "directions[0].canary.senderAccount must not be the zero address",
+    "directions[1].canary.recipientAccount must be an EVM address",
+    "rollback.ownerPauseAccount must not be the zero address",
+    "rollback.signerAccount must be an EVM address",
   ]);
 });
 
@@ -122,7 +147,8 @@ function baseRecord(): MigrationEvidenceRecord {
     priceBotReview: evidence("docs/runbooks/price-bot.md"),
     rateLimitReview: evidence("docs/runbooks/rate-limit.md"),
     monitoringReview: evidence("docs/runbooks/monitoring.md"),
-    securityReview: evidence("docs/security/parent-agent-security-review.md"),
+    runbookReview: evidence("artifacts/runbook-review.txt"),
+    securityReview: evidence("docs/security/security-review.md"),
     directions: [
       {
         label: "Ethereum Sepolia to Base Sepolia",
@@ -130,7 +156,9 @@ function baseRecord(): MigrationEvidenceRecord {
         dstEid: 40245,
         configDiff: evidence("artifacts/configdiff-sepolia-base.json"),
         deploymentPreflight: evidence("artifacts/preflight-sepolia.json"),
-        lzConfigBefore: evidence("artifacts/lz-config-sepolia-base.before.json"),
+        lzConfigBefore: evidence(
+          "artifacts/lz-config-sepolia-base.before.json",
+        ),
         lzConfigAfter: evidence("artifacts/lz-config-sepolia-base.after.json"),
         priceConfigCheck: evidence("artifacts/price-config-sepolia-base.json"),
         drainCheckBeforeSwitch: evidence("artifacts/drain-sepolia-base.json"),
@@ -143,7 +171,9 @@ function baseRecord(): MigrationEvidenceRecord {
           minRecipientBalanceLD: "1000000000000000",
           sourceReceipt: evidence("artifacts/canary-source.json"),
           destinationReceipt: evidence("artifacts/canary-destination.json"),
-          recipientBalanceCheck: evidence("artifacts/canary-recipient-balance.json"),
+          recipientBalanceCheck: evidence(
+            "artifacts/canary-recipient-balance.json",
+          ),
         },
         dvnJoin: {
           confirmations: 12,
@@ -159,19 +189,25 @@ function baseRecord(): MigrationEvidenceRecord {
         dstEid: 40161,
         configDiff: evidence("artifacts/configdiff-base-sepolia.json"),
         deploymentPreflight: evidence("artifacts/preflight-base-sepolia.json"),
-        lzConfigBefore: evidence("artifacts/lz-config-base-sepolia.before.json"),
+        lzConfigBefore: evidence(
+          "artifacts/lz-config-base-sepolia.before.json",
+        ),
         lzConfigAfter: evidence("artifacts/lz-config-base-sepolia.after.json"),
         priceConfigCheck: evidence("artifacts/price-config-base-sepolia.json"),
         drainCheckBeforeSwitch: evidence("artifacts/drain-base-sepolia.json"),
         canarySourceReceipt: evidence("artifacts/canary-source-reverse.json"),
-        canaryDestinationReceipt: evidence("artifacts/canary-destination-reverse.json"),
+        canaryDestinationReceipt: evidence(
+          "artifacts/canary-destination-reverse.json",
+        ),
         canary: {
           amountLD: "1000000000000000",
           senderAccount: "0x3333333333333333333333333333333333333333",
           recipientAccount: "0x4444444444444444444444444444444444444444",
           minRecipientBalanceLD: "1000000000000000",
           sourceReceipt: evidence("artifacts/canary-source-reverse.json"),
-          destinationReceipt: evidence("artifacts/canary-destination-reverse.json"),
+          destinationReceipt: evidence(
+            "artifacts/canary-destination-reverse.json",
+          ),
           recipientBalanceCheck: evidence(
             "artifacts/canary-recipient-balance-reverse.json",
           ),
@@ -182,7 +218,9 @@ function baseRecord(): MigrationEvidenceRecord {
           optionalDVNsDisabled: true,
           configCheck: evidence("artifacts/dvn-join-config-reverse.json"),
         },
-        dvnVerificationReceipt: evidence("artifacts/dvn-verification-reverse.json"),
+        dvnVerificationReceipt: evidence(
+          "artifacts/dvn-verification-reverse.json",
+        ),
       },
     ],
     rollback: {

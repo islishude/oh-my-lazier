@@ -62,7 +62,9 @@ export function expectedStateForAction(
       };
     case "set-rate-limit":
       if (rateLimit === undefined) {
-        throw new Error("RATE_LIMIT_CAPACITY and RATE_LIMIT_REFILL_PER_SECOND are required");
+        throw new Error(
+          "RATE_LIMIT_CAPACITY and RATE_LIMIT_REFILL_PER_SECOND are required",
+        );
       }
       return { outboundRateLimitConfig: rateLimit };
   }
@@ -236,9 +238,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       });
     } else {
       const config =
-        action === "drain"
-          ? { capacity: 0n, refillPerSecond: 0n }
-          : rateLimit;
+        action === "drain" ? { capacity: 0n, refillPerSecond: 0n } : rateLimit;
       if (config === undefined) {
         throw new Error("rate-limit config is required");
       }
@@ -259,7 +259,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       testOFTAbi: testOFTArtifact.abi,
     });
     const errors = validateOFTPathwayState(state, expected);
-    console.log(jsonStringify({ ok: errors.length === 0, action, state, errors }));
+    console.log(
+      jsonStringify({ ok: errors.length === 0, action, state, errors }),
+    );
     if (errors.length > 0) {
       process.exitCode = 1;
     }

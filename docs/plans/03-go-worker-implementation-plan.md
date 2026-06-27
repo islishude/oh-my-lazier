@@ -235,6 +235,14 @@ ECC_SECG_P256K1
 - validate recovered address
 - integration test with rustack mock AWS-compatible API
 
+当前证据：
+
+- `go/internal/signer/kms.Signer`
+- `go/internal/signer/kms.TestSignHashRecoversExpectedAddress`
+- `go/internal/signer/kms.TestSignHashNormalizesHighS`
+- `docker-compose.integration.yml`
+- `make test-integration`
+
 ## Geth Keystore Signer
 
 使用 geth keystore JSON 格式。
@@ -245,6 +253,12 @@ ECC_SECG_P256K1
 - decrypt with configured password or password file
 - sign EIP-1559 transactions
 - never log private key material
+
+当前证据：
+
+- `go/internal/signer/keystore.Signer`
+- `go/internal/signer/keystore.TestResolvePasswordSources`
+- `go/internal/signer/keystore.TestSignerSignsEIP1559Transaction`
 
 ## Worker Acceptance Criteria
 

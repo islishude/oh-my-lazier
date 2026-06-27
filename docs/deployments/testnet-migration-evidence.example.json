@@ -3,8 +3,8 @@
   "environment": "testnet",
   "scope": "Ethereum Sepolia <-> Base Sepolia executor migration and required DVN join rehearsal",
   "operatorContacts": ["ops@example.com"],
-  "ownerAccount": "0x0000000000000000000000000000000000000000",
-  "signerAccount": "0x0000000000000000000000000000000000000000",
+  "ownerAccount": "0x1111111111111111111111111111111111111111",
+  "signerAccount": "0x2222222222222222222222222222222222222222",
   "makeCheck": {
     "ref": "artifacts/make-check.txt",
     "capturedAt": "2026-06-27T00:00:00Z",
@@ -32,8 +32,11 @@
   "monitoringReview": {
     "ref": "docs/runbooks/monitoring.md"
   },
+  "runbookReview": {
+    "ref": "artifacts/runbook-review.txt"
+  },
   "securityReview": {
-    "ref": "docs/security/parent-agent-security-review.md"
+    "ref": "docs/security/security-review.md"
   },
   "directions": [
     {
@@ -66,8 +69,8 @@
       },
       "canary": {
         "amountLD": "1000000000000000",
-        "senderAccount": "0x0000000000000000000000000000000000000000",
-        "recipientAccount": "0x0000000000000000000000000000000000000000",
+        "senderAccount": "0x3333333333333333333333333333333333333333",
+        "recipientAccount": "0x4444444444444444444444444444444444444444",
         "minRecipientBalanceLD": "1000000000000000",
         "sourceReceipt": {
           "ref": "artifacts/canary-source-eth-sepolia-to-base-sepolia.json"
@@ -121,8 +124,8 @@
       },
       "canary": {
         "amountLD": "1000000000000000",
-        "senderAccount": "0x0000000000000000000000000000000000000000",
-        "recipientAccount": "0x0000000000000000000000000000000000000000",
+        "senderAccount": "0x3333333333333333333333333333333333333333",
+        "recipientAccount": "0x4444444444444444444444444444444444444444",
         "minRecipientBalanceLD": "1000000000000000",
         "sourceReceipt": {
           "ref": "artifacts/canary-source-base-sepolia-to-eth-sepolia.json"
@@ -163,8 +166,8 @@
     "canaryAfterRollback": {
       "ref": "artifacts/rollback-canary.json"
     },
-    "ownerPauseAccount": "0x0000000000000000000000000000000000000000",
-    "signerAccount": "0x0000000000000000000000000000000000000000",
+    "ownerPauseAccount": "0x1111111111111111111111111111111111111111",
+    "signerAccount": "0x2222222222222222222222222222222222222222",
     "drainCheck": {
       "ref": "artifacts/rollback-draincheck.json"
     },

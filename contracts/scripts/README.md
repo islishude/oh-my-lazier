@@ -17,7 +17,7 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
 npm run check:migration-evidence
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with `confirmations = 12` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with `confirmations = 12` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
 Deploy the local pathway contracts:
 

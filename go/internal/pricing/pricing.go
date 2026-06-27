@@ -144,7 +144,7 @@ func (s Settings) Validate() error {
 // ChainSources are the price and gas inputs for one configured chain.
 type ChainSources struct {
 	Primary PriceReader
-	Sanity  PriceReader
+	Sanity  []PriceReader
 	Gas     GasPriceReader
 }
 
@@ -237,14 +237,17 @@ func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
 			primary = price
 		}
 	}
-	var sanity SourcePrice
-	if sources.Sanity != nil {
-		price, err := sources.Sanity.PriceUSD(ctx)
+	sanityPrices := make([]SourcePrice, 0, len(sources.Sanity))
+	for _, reader := range sources.Sanity {
+		if reader == nil {
+			continue
+		}
+		price, err := reader.PriceUSD(ctx)
 		if err == nil {
-			sanity = price
+			sanityPrices = append(sanityPrices, price)
 		}
 	}
-	return SelectPrice(primary, sanity, b.settings.MaxDeviation, b.settings.AllowFallback)
+	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowFallback)
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.
@@ -253,19 +256,31 @@ type SourcePrice struct {
 	USD    *big.Rat
 }
 
-// SelectPrice applies the phase-1 Binance-primary, Uniswap-sanity policy.
+// SelectPrice applies the phase-1 primary/sanity policy for one sanity source.
 func SelectPrice(primary, sanity SourcePrice, maxDeviationBps uint64, allowFallback bool) (*big.Rat, error) {
+	return SelectPriceWithSanity(primary, []SourcePrice{sanity}, maxDeviationBps, allowFallback)
+}
+
+// SelectPriceWithSanity applies the phase-1 primary/sanity policy.
+func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxDeviationBps uint64, allowFallback bool) (*big.Rat, error) {
 	if primary.USD != nil && primary.USD.Sign() > 0 {
-		if sanity.USD != nil && sanity.USD.Sign() > 0 {
+		for _, sanity := range sanityPrices {
+			if sanity.USD == nil || sanity.USD.Sign() <= 0 {
+				continue
+			}
 			deviation := DeviationBps(primary.USD, sanity.USD)
 			if deviation > maxDeviationBps {
-				return nil, fmt.Errorf("price deviation %d bps exceeds limit %d bps", deviation, maxDeviationBps)
+				return nil, fmt.Errorf("price deviation between %s and %s is %d bps, exceeds limit %d bps", primary.Source, sanity.Source, deviation, maxDeviationBps)
 			}
 		}
 		return cloneRat(primary.USD), nil
 	}
-	if allowFallback && sanity.USD != nil && sanity.USD.Sign() > 0 {
-		return cloneRat(sanity.USD), nil
+	if allowFallback {
+		for _, sanity := range sanityPrices {
+			if sanity.USD != nil && sanity.USD.Sign() > 0 {
+				return cloneRat(sanity.USD), nil
+			}
+		}
 	}
 	return nil, errors.New("no healthy price source")
 }

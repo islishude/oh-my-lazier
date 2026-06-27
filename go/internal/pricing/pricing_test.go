@@ -46,6 +46,21 @@ func TestSelectPriceRejectsFallbackWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestSelectPriceWithSanityRejectsAnyDeviatingSource(t *testing.T) {
+	_, err := SelectPriceWithSanity(
+		SourcePrice{Source: "coinmarketcap", USD: big.NewRat(2000, 1)},
+		[]SourcePrice{
+			{Source: "coingecko", USD: big.NewRat(2000, 1)},
+			{Source: "uniswap", USD: big.NewRat(2200, 1)},
+		},
+		500,
+		true,
+	)
+	if err == nil {
+		t.Fatal("SelectPriceWithSanity() error = nil, want deviation error")
+	}
+}
+
 func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) {
 	config, err := BuildPriceConfig(PriceInputs{
 		SrcNativeUSD:      big.NewRat(2000, 1),

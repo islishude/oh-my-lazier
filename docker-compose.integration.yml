@@ -1,0 +1,24 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: laz_worker
+      POSTGRES_USER: laz_worker
+      POSTGRES_PASSWORD: laz_worker
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./.tmp/integration/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laz_worker -d laz_worker"]
+      interval: 2s
+      timeout: 5s
+      start_period: 1s
+      retries: 30
+
+  rustack:
+    image: ghcr.io/tyrchen/rustack:0.9.1
+    environment:
+      SERVICES: kms
+    ports:
+      - "4566:4566"

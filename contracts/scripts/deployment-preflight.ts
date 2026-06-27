@@ -231,8 +231,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     expectedOwner: envAddress("EXPECTED_OWNER"),
     minOwnerNativeBalance: optionalBigInt("MIN_OWNER_NATIVE_BALANCE") ?? 0n,
     canaryTreasury: optionalAddress("CANARY_TREASURY"),
-    minCanaryNativeBalance:
-      optionalBigInt("MIN_CANARY_NATIVE_BALANCE") ?? 0n,
+    minCanaryNativeBalance: optionalBigInt("MIN_CANARY_NATIVE_BALANCE") ?? 0n,
     minCanaryTokenBalance: optionalBigInt("MIN_CANARY_TOKEN_BALANCE") ?? 0n,
     expectedTestOFTTotalSupply: optionalBigInt("EXPECTED_TOTAL_SUPPLY"),
     testOFTAbi: testOFTArtifact.abi,

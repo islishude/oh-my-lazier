@@ -37,6 +37,69 @@ func TestBinanceClientPriceUSD(t *testing.T) {
 	}
 }
 
+func TestCoinMarketCapClientPriceUSD(t *testing.T) {
+	t.Setenv("CMC_API_KEY", "test-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/cryptocurrency/quotes/latest" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("symbol") != "ETH" {
+			t.Fatalf("symbol = %s", r.URL.Query().Get("symbol"))
+		}
+		if r.URL.Query().Get("convert") != "USD" {
+			t.Fatalf("convert = %s", r.URL.Query().Get("convert"))
+		}
+		if r.Header.Get("X-CMC_PRO_API_KEY") != "test-key" {
+			t.Fatalf("api key header = %q", r.Header.Get("X-CMC_PRO_API_KEY"))
+		}
+		_, _ = w.Write([]byte(`{"data":{"ETH":[{"quote":{"USD":{"price":2000.125}}}]}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewCoinMarketCapClient(server.URL, "CMC_API_KEY", server.Client())
+	if err != nil {
+		t.Fatalf("NewCoinMarketCapClient() error = %v", err)
+	}
+	price, err := client.PriceUSD(context.Background(), "eth")
+	if err != nil {
+		t.Fatalf("PriceUSD() error = %v", err)
+	}
+	if price.Source != "coinmarketcap" {
+		t.Fatalf("source = %q", price.Source)
+	}
+	if price.USD.Cmp(big.NewRat(16001, 8)) != 0 {
+		t.Fatalf("price = %s, want 2000.125", price.USD)
+	}
+}
+
+func TestCoinGeckoClientPriceUSD(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/simple/price" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.URL.Query().Get("ids") != "ethereum" {
+			t.Fatalf("ids = %s", r.URL.Query().Get("ids"))
+		}
+		if r.URL.Query().Get("vs_currencies") != "usd" {
+			t.Fatalf("vs_currencies = %s", r.URL.Query().Get("vs_currencies"))
+		}
+		_, _ = w.Write([]byte(`{"ethereum":{"usd":2000.125}}`))
+	}))
+	defer server.Close()
+
+	client := NewCoinGeckoClient(server.URL, server.Client())
+	price, err := client.PriceUSD(context.Background(), "ethereum")
+	if err != nil {
+		t.Fatalf("PriceUSD() error = %v", err)
+	}
+	if price.Source != "coingecko" {
+		t.Fatalf("source = %q", price.Source)
+	}
+	if price.USD.Cmp(big.NewRat(16001, 8)) != 0 {
+		t.Fatalf("price = %s, want 2000.125", price.USD)
+	}
+}
+
 func TestUniswapV3ClientPriceUSD(t *testing.T) {
 	amountOut := new(big.Int).Mul(big.NewInt(2000), big.NewInt(1_000_000))
 	outputs := abi.Arguments{{Type: mustABIType(t, "uint256")}}

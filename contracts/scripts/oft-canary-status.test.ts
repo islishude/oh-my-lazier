@@ -82,7 +82,10 @@ test("assertCanaryDestinationReceipt verifies delivery and rejects alerts", () =
   assert.throws(
     () =>
       assertCanaryDestinationReceipt({
-        logs: [packetDeliveredLog({ endpoint }), lzReceiveAlertLog({ endpoint })],
+        logs: [
+          packetDeliveredLog({ endpoint }),
+          lzReceiveAlertLog({ endpoint }),
+        ],
         endpoint,
         endpointAbi,
       }),
@@ -113,7 +116,8 @@ test("assertCanaryRecipientBalance verifies minimum destination balance", () => 
 });
 
 function loadAbi(relativePath: string): Abi {
-  return JSON.parse(readFileSync(join(process.cwd(), relativePath), "utf8")).abi as Abi;
+  return JSON.parse(readFileSync(join(process.cwd(), relativePath), "utf8"))
+    .abi as Abi;
 }
 
 function packetSentLog(input: {
@@ -173,7 +177,8 @@ function packetDeliveredLog(input: { endpoint: Address }): CanaryLog {
       [
         {
           srcEid: 40161,
-          sender: "0x0000000000000000000000005555555555555555555555555555555555555555",
+          sender:
+            "0x0000000000000000000000005555555555555555555555555555555555555555",
           nonce: 1n,
         },
         getAddress("0x6666666666666666666666666666666666666666"),
@@ -211,7 +216,8 @@ function lzReceiveAlertLog(input: { endpoint: Address }): CanaryLog {
       [
         {
           srcEid: 40161,
-          sender: "0x0000000000000000000000005555555555555555555555555555555555555555",
+          sender:
+            "0x0000000000000000000000005555555555555555555555555555555555555555",
           nonce: 1n,
         },
         "0x7777777777777777777777777777777777777777777777777777777777777777",

@@ -162,7 +162,9 @@ function sortUniqueAddresses(addresses: Address[]): Address[] {
   return sorted;
 }
 
-function normalizeLzConfigSnapshot(snapshot: LzConfigSnapshot): LzConfigSnapshot {
+function normalizeLzConfigSnapshot(
+  snapshot: LzConfigSnapshot,
+): LzConfigSnapshot {
   return {
     ...snapshot,
     remoteEid: normalizeUint32(snapshot.remoteEid, "snapshot.remoteEid"),

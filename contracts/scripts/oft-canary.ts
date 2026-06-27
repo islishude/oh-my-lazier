@@ -23,14 +23,20 @@ export function buildCanarySendParam(input: {
   minAmountLD: bigint;
   lzReceiveGas: bigint;
 }): OFTSendParam {
-  if (!Number.isInteger(input.dstEid) || input.dstEid < 0 || input.dstEid > 0xffffffff) {
+  if (
+    !Number.isInteger(input.dstEid) ||
+    input.dstEid < 0 ||
+    input.dstEid > 0xffffffff
+  ) {
     throw new Error("dstEid must be a uint32");
   }
   if (input.amountLD <= 0n) {
     throw new Error("amountLD must be positive");
   }
   if (input.minAmountLD <= 0n || input.minAmountLD > input.amountLD) {
-    throw new Error("minAmountLD must be positive and no greater than amountLD");
+    throw new Error(
+      "minAmountLD must be positive and no greater than amountLD",
+    );
   }
   return {
     dstEid: input.dstEid,

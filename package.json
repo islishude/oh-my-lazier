@@ -26,6 +26,8 @@
     "oft:pathway": "tsx contracts/scripts/oft-pathway-control.ts",
     "check:price-config": "tsx contracts/scripts/price-config-check.ts",
     "check:migration-evidence": "tsx contracts/scripts/migration-evidence.ts",
+    "check:npm-audit-disposition": "tsx contracts/scripts/npm-audit-disposition.ts",
+    "check:runbooks": "tsx contracts/scripts/runbook-review.ts",
     "check": "npm run compile && npm test && npm run test:scripts"
   },
   "repository": {

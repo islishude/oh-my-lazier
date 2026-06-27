@@ -7,6 +7,7 @@ Repo-local gates:
 - `make check` runs contract compile, Solidity tests, Go tests, `golangci-lint`, `gofmt -l go`, and `forge fmt --check contracts`.
 - `npm run typecheck` type-checks deployment and LayerZero configuration scripts.
 - `TEST_POSTGRES_URL=... go test ./go/internal/db ./go/internal/txmgr -count=1` runs Postgres-backed state-machine and tx manager integration tests.
+- `make test-integration` starts `docker-compose.integration.yml` with Postgres and Rustack, runs Postgres-backed DB/tx manager tests and the Rustack KMS signer integration test, then tears the containers down and removes `.tmp/integration`.
 
 ## Contract Unit Tests
 
@@ -140,6 +141,8 @@ Current evidence:
 ### pricing
 
 - Binance primary price
+- CoinMarketCap primary or sanity price
+- CoinGecko primary or sanity price
 - Uniswap sanity check
 - deviation threshold
 - stale source handling
@@ -148,6 +151,8 @@ Current evidence:
 Current evidence:
 
 - `go/internal/pricing.TestBinanceClientPriceUSD`
+- `go/internal/pricing.TestCoinMarketCapClientPriceUSD`
+- `go/internal/pricing.TestCoinGeckoClientPriceUSD`
 - `go/internal/pricing.TestUniswapV3ClientPriceUSD`
 - `go/internal/pricing.TestSelectPriceRejectsDeviationAboveThreshold`
 - `go/internal/pricing.TestSelectPriceFallsBackWhenPrimaryUnavailable`

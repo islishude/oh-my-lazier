@@ -6,7 +6,9 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 
 - `pricing.enabled: true` in the validated worker config.
 - The pricing signer is present in `signers` and has funds on every configured source chain.
-- Every configured chain has a Binance symbol, Uniswap V3 sanity route, and at least one healthy RPC URL.
+- Every configured chain has the configured primary source identifier, Uniswap V3 sanity route, and at least one healthy RPC URL.
+- `primary_source` defaults to `binance`; supported values are `binance`, `coinmarketcap`, and `coingecko`.
+- CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap_symbol` is configured; do not put API keys in worker YAML.
 - `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, EIP-1559 fee caps, and `tx_gas_limit` are approved for the target environment.
 - Worker contract addresses and pathway EIDs match the latest deployment record.
 
@@ -18,7 +20,7 @@ Run one price calculation and enqueue the resulting worker transactions:
 go run ./go/cmd/pricebot-once -config <worker.yaml>
 ```
 
-The command runs DB migrations, syncs the validated chain/pathway config, reads Binance and Uniswap prices, reads destination gas prices from RPC, then enqueues `setPriceConfig` transactions for both OpenExecutor and OpenDVN per configured pathway. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
+The command runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for both OpenExecutor and OpenDVN per configured pathway. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
 
 ## Expected Outbox Effects
 
@@ -27,7 +29,7 @@ For each unique `src_eid -> dst_eid` pathway, the command should enqueue:
 - one `pricing_set_executor_price_config` transaction to the source-chain OpenExecutor
 - one `pricing_set_dvn_price_config` transaction to the source-chain OpenDVN
 
-If Binance and Uniswap deviate beyond `max_deviation_bps`, no price update should be enqueued and the command should exit non-zero.
+If the primary source and any configured sanity source deviate beyond `max_deviation_bps`, no price update should be enqueued and the command should exit non-zero.
 
 ## Verification
 

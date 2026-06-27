@@ -53,7 +53,9 @@ export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
     lzExecutor: getAddress("0x34a561197e4eAe356D41B0B02C59F12a5C576C5A"),
     deadDVN: getAddress("0x8b450b0acF56E1B0e25C581bB04FBAbeeb0644b8"),
     layerZeroLabsDVN: getAddress("0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193"),
-    layerZeroLabsReadDVN: getAddress("0x530fbe405189204ef459fa4b767167e4d41e3a37"),
+    layerZeroLabsReadDVN: getAddress(
+      "0x530fbe405189204ef459fa4b767167e4d41e3a37",
+    ),
   },
   {
     chainKey: "base-sepolia",
@@ -66,7 +68,9 @@ export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
     lzExecutor: getAddress("0xD8C74c92a59c2b5b6390eD54f13193C59249e561"),
     deadDVN: getAddress("0x78551ADC2553EF1858a558F5300F7018Aad2FA7e"),
     layerZeroLabsDVN: getAddress("0xe1a12515f9ab2764b887bf60b923ca494ebbb2d6"),
-    layerZeroLabsReadDVN: getAddress("0xbf6ff58f60606edb2f190769b951d825bcb214e2"),
+    layerZeroLabsReadDVN: getAddress(
+      "0xbf6ff58f60606edb2f190769b951d825bcb214e2",
+    ),
   },
 ] as const;
 
@@ -85,7 +89,9 @@ export function verifyLayerZeroAddresses(input: {
         String(record.eid) === chain.eid,
     );
     if (deployment === undefined) {
-      errors.push(`${chain.chainKey}: deployment record for EID ${chain.eid} is missing`);
+      errors.push(
+        `${chain.chainKey}: deployment record for EID ${chain.eid} is missing`,
+      );
       continue;
     }
     if (deployment.nativeChainId !== chain.nativeChainId) {
@@ -93,8 +99,20 @@ export function verifyLayerZeroAddresses(input: {
         `${chain.chainKey}: native chain id ${deployment.nativeChainId} != ${chain.nativeChainId}`,
       );
     }
-    compareAddress(errors, chain.chainKey, "EndpointV2", deployment.endpointV2?.address, chain.endpointV2);
-    compareAddress(errors, chain.chainKey, "SendUln302", deployment.sendUln302?.address, chain.sendUln302);
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "EndpointV2",
+      deployment.endpointV2?.address,
+      chain.endpointV2,
+    );
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "SendUln302",
+      deployment.sendUln302?.address,
+      chain.sendUln302,
+    );
     compareAddress(
       errors,
       chain.chainKey,
@@ -102,12 +120,36 @@ export function verifyLayerZeroAddresses(input: {
       deployment.receiveUln302?.address,
       chain.receiveUln302,
     );
-    compareAddress(errors, chain.chainKey, "Executor", deployment.executor?.address, chain.executor);
-    compareAddress(errors, chain.chainKey, "lzExecutor", deployment.lzExecutor?.address, chain.lzExecutor);
-    compareAddress(errors, chain.chainKey, "Dead DVN", deployment.deadDVN?.address, chain.deadDVN);
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "Executor",
+      deployment.executor?.address,
+      chain.executor,
+    );
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "lzExecutor",
+      deployment.lzExecutor?.address,
+      chain.lzExecutor,
+    );
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "Dead DVN",
+      deployment.deadDVN?.address,
+      chain.deadDVN,
+    );
 
     const pushDVN = findLayerZeroLabsDVN(input.dvns, chain, false);
-    compareAddress(errors, chain.chainKey, "LayerZero Labs DVN", pushDVN?.dvnAddress, chain.layerZeroLabsDVN);
+    compareAddress(
+      errors,
+      chain.chainKey,
+      "LayerZero Labs DVN",
+      pushDVN?.dvnAddress,
+      chain.layerZeroLabsDVN,
+    );
     const readDVN = findLayerZeroLabsDVN(input.dvns, chain, true);
     compareAddress(
       errors,

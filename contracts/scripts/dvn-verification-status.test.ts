@@ -25,7 +25,9 @@ const endpointAbi = loadAbi(
 const receiveUln = getAddress("0x1111111111111111111111111111111111111111");
 const endpoint = getAddress("0x2222222222222222222222222222222222222222");
 const openDVN = getAddress("0x3333333333333333333333333333333333333333");
-const layerZeroLabsDVN = getAddress("0x4444444444444444444444444444444444444444");
+const layerZeroLabsDVN = getAddress(
+  "0x4444444444444444444444444444444444444444",
+);
 const payloadHash =
   "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 

@@ -5,6 +5,7 @@ contracts/artifacts
 contracts/cache
 coverage
 tmp
+.tmp
 .env
 .env.*
 !.env.example

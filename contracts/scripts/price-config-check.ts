@@ -45,8 +45,18 @@ export async function readPriceConfigReport(input: {
 }): Promise<PriceConfigReport> {
   const [chainId, executorConfig, dvnConfig] = await Promise.all([
     input.publicClient.getChainId(),
-    readPriceConfig(input.publicClient, input.openExecutor, input.openExecutorAbi, input.dstEid),
-    readPriceConfig(input.publicClient, input.openDVN, input.openDVNAbi, input.dstEid),
+    readPriceConfig(
+      input.publicClient,
+      input.openExecutor,
+      input.openExecutorAbi,
+      input.dstEid,
+    ),
+    readPriceConfig(
+      input.publicClient,
+      input.openDVN,
+      input.openDVNAbi,
+      input.dstEid,
+    ),
   ]);
   return {
     chainId,
@@ -75,7 +85,9 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
     if (config.updatedAt === 0n) {
       errors.push(`${worker.label} updatedAt is zero`);
     } else if (config.updatedAt > report.checkedAt) {
-      errors.push(`${worker.label} updatedAt ${config.updatedAt} is in the future`);
+      errors.push(
+        `${worker.label} updatedAt ${config.updatedAt} is in the future`,
+      );
     } else if (report.checkedAt - config.updatedAt > report.maxAgeSeconds) {
       errors.push(
         `${worker.label} priceConfig age ${report.checkedAt - config.updatedAt}s exceeds ${report.maxAgeSeconds}s`,

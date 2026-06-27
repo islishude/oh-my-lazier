@@ -4,10 +4,10 @@ This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia
 
 ## Token Identity
 
-| Field | Value |
-| --- | --- |
-| `TOKEN_NAME` | `Oh My Lazier Test OFT` |
-| `TOKEN_SYMBOL` | `OMLTOFT` |
+| Field          | Value                                             |
+| -------------- | ------------------------------------------------- |
+| `TOKEN_NAME`   | `Oh My Lazier Test OFT`                           |
+| `TOKEN_SYMBOL` | `OMLTOFT`                                         |
 | Local decimals | inherited from LayerZero OFT / ERC20 default `18` |
 
 ## Ownership
@@ -34,10 +34,10 @@ After deployment and before any funded migration step, run `npm run check:deploy
 
 Use a single constructor mint on Ethereum Sepolia:
 
-| Chain | `INITIAL_SUPPLY` | `INITIAL_RECIPIENT` |
-| --- | --- | --- |
+| Chain            | `INITIAL_SUPPLY`            | `INITIAL_RECIPIENT`                         |
+| ---------------- | --------------------------- | ------------------------------------------- |
 | Ethereum Sepolia | `1000000000000000000000000` | testnet operations owner or canary treasury |
-| Base Sepolia | `0` | testnet operations owner or canary treasury |
+| Base Sepolia     | `0`                         | testnet operations owner or canary treasury |
 
 The value above is `1,000,000 OMLTOFT` with 18 decimals. Base Sepolia starts with zero supply so destination balances are created only by LayerZero receive-side minting during canary transfers. Reverse-direction canaries must first use tokens minted on Base Sepolia by a successful Ethereum Sepolia -> Base Sepolia transfer.
 

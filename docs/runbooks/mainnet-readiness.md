@@ -13,6 +13,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - Price bot runbook evidence for the latest OpenExecutor/OpenDVN price config update.
 - Rate-limit and pause review for every OFT pathway.
 - Monitoring dashboard and alert proof.
+- Runbook review output from `npm run check:runbooks`.
 - Security review report with no open critical findings.
 
 ## Non-Negotiable Phase 1 Scope
@@ -36,12 +37,13 @@ This runbook is the final review index before any mainnet deployment proposal. P
 5. Complete `docs/runbooks/price-bot.md`.
 6. Complete `docs/runbooks/rate-limit.md`.
 7. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
-8. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
-9. Complete security review and resolve all critical findings.
-10. Confirm rollback steps for Executor and DVN config are documented with previous config values.
-11. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
-12. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
-13. Approve the migration ticket only after every artifact above is attached.
+8. Run `npm run check:runbooks` and archive output.
+9. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
+10. Complete security review and resolve all critical findings.
+11. Confirm rollback steps for Executor and DVN config are documented with previous config values.
+12. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
+13. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
+14. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
 
@@ -53,6 +55,7 @@ go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1
 go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1
 go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1
 go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1
+npm run check:runbooks
 make security-check
 ```
 

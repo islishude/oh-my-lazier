@@ -28,9 +28,13 @@ pricing:
   tx_gas_limit: 100000
   max_fee_per_gas_wei: "2000000000"
   max_priority_fee_per_gas_wei: "1000000000"
+  primary_source: binance
+  # coinmarketcap_api_key_env: COINMARKETCAP_API_KEY
   chains:
     - eid: 40161
       binance_symbol: ETHUSDT
+      coinmarketcap_symbol: ETH
+      coingecko_id: ethereum
       uniswap:
         quoter_address: "0x1111111111111111111111111111111111111111"
         token_in: "0x2222222222222222222222222222222222222222"
@@ -40,6 +44,8 @@ pricing:
         token_out_decimals: 6
     - eid: 40245
       binance_symbol: ETHUSDT
+      coinmarketcap_symbol: ETH
+      coingecko_id: ethereum
       uniswap:
         quoter_address: "0x4444444444444444444444444444444444444444"
         token_in: "0x5555555555555555555555555555555555555555"

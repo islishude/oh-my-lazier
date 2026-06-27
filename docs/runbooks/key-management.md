@@ -50,6 +50,7 @@ Required controls:
 - password comes from an environment variable or password file, not config YAML
 - password file permissions are restricted to the worker user
 - encrypted keystore content and passwords are never logged
+- Never log private key material, decrypted keystore content, KMS signatures, or raw secrets.
 - keystore signer address is recorded in the signer inventory
 
 Implementation evidence:
@@ -61,6 +62,7 @@ Implementation evidence:
 ## Pre-Migration Checklist
 
 - Run `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`.
+- Run `make test-integration` when Docker is available; it starts dedicated Postgres and Rustack containers, runs the DB/tx manager integration tests and the Rustack KMS signing test, and removes the temporary database files on exit.
 - When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.

@@ -117,7 +117,11 @@ type pricingConfigGlobal struct {
 	TxGasLimit              uint64 `json:"tx_gas_limit"`
 	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string `json:"max_priority_fee_per_gas_wei"`
+	PrimarySource           string `json:"primary_source"`
 	BinanceBaseURL          string `json:"binance_base_url"`
+	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
+	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
+	CoinGeckoBaseURL        string `json:"coingecko_base_url"`
 }
 
 func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
@@ -133,7 +137,11 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		TxGasLimit:              pricing.TxGasLimit,
 		MaxFeePerGasWei:         pricing.MaxFeePerGasWei,
 		MaxPriorityFeePerGasWei: pricing.MaxPriorityFeePerGasWei,
+		PrimarySource:           pricing.PrimarySource,
 		BinanceBaseURL:          pricing.BinanceBaseURL,
+		CoinMarketCapBaseURL:    pricing.CoinMarketCapBaseURL,
+		CoinMarketCapAPIKeyEnv:  pricing.CoinMarketCapAPIKeyEnv,
+		CoinGeckoBaseURL:        pricing.CoinGeckoBaseURL,
 	}
 }
 

@@ -17,8 +17,8 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: fixedPrice{price: big.NewRat(2000, 1)}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: fixedPrice{price: big.NewRat(1000, 1)}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
+		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
 	}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -55,8 +55,8 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: fixedPrice{price: big.NewRat(2300, 1)}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: fixedPrice{price: big.NewRat(1000, 1)}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
+		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
 	}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)

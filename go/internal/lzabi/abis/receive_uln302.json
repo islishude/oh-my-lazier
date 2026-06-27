@@ -68,10 +68,30 @@
   {
     "anonymous": false,
     "inputs": [
-      { "indexed": false, "internalType": "address", "name": "dvn", "type": "address" },
-      { "indexed": false, "internalType": "bytes", "name": "header", "type": "bytes" },
-      { "indexed": false, "internalType": "uint256", "name": "confirmations", "type": "uint256" },
-      { "indexed": false, "internalType": "bytes32", "name": "proofHash", "type": "bytes32" }
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "dvn",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes",
+        "name": "header",
+        "type": "bytes"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "confirmations",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "bytes32",
+        "name": "proofHash",
+        "type": "bytes32"
+      }
     ],
     "name": "PayloadVerified",
     "type": "event"

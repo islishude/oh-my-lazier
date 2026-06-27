@@ -114,6 +114,52 @@ func TestValidateRejectsIncompletePricingChains(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsCoinMarketCapPrimaryPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.PrimarySource = "coinmarketcap"
+	cfg.Pricing.CoinMarketCapAPIKeyEnv = "COINMARKETCAP_API_KEY"
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsCoinMarketCapPrimaryWithoutAPIKeyEnv(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.PrimarySource = "coinmarketcap"
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing coinmarketcap api key env error")
+	}
+}
+
+func TestValidateRejectsCoinMarketCapSanityWithoutAPIKeyEnv(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.Chains[0].CoinMarketCapSymbol = "ETH"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing coinmarketcap api key env error")
+	}
+}
+
+func TestValidateAcceptsCoinGeckoPrimaryPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.PrimarySource = "coingecko"
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].CoinGeckoID = "ethereum"
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestLoadStaticIgnoresDatabaseURLEnvOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := []byte(`database_url: postgres://file:file@localhost:5432/file?sslmode=disable

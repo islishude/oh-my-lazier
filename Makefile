@@ -1,10 +1,15 @@
 SHELL := /bin/sh
 
-.PHONY: all check compile typecheck test test-solidity test-scripts test-go security-check lint lint-go fmt fmt-go docker-build clean
+INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compose.integration.yml
+INTEGRATION_TMP_DIR = .tmp/integration
+INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
+INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
+
+.PHONY: all check compile typecheck test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check lint lint-go fmt fmt-go docker-build clean
 
 all: check
 
-check: compile typecheck test-solidity test-scripts test-go lint-go fmt-check
+check: compile typecheck test-solidity test-scripts test-go runbook-check lint-go fmt-check
 
 compile:
 	npm run compile
@@ -23,12 +28,41 @@ test-scripts:
 test-go:
 	go test ./...
 
+test-kms-rustack:
+	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \
+		echo "RUSTACK_KMS_ENDPOINT is required"; \
+		exit 1; \
+	fi
+	go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
+
+integration-up:
+	mkdir -p $(INTEGRATION_TMP_DIR)/postgres
+	$(INTEGRATION_COMPOSE) up -d --wait
+
+integration-down:
+	-$(INTEGRATION_COMPOSE) down -v --remove-orphans
+	rm -rf $(INTEGRATION_TMP_DIR)
+	-rmdir .tmp 2>/dev/null || true
+
+test-integration:
+	mkdir -p $(INTEGRATION_TMP_DIR)/postgres
+	@set -e; \
+	cleanup() { \
+		$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
+		rm -rf $(INTEGRATION_TMP_DIR); \
+		rmdir .tmp 2>/dev/null || true; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	$(INTEGRATION_COMPOSE) up -d --wait; \
+	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" go test ./go/internal/db ./go/internal/txmgr -count=1; \
+	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
+
 security-check:
-	@tmp="$$(mktemp)"; \
-	npm audit --json > "$$tmp" || true; \
-	node -e 'const fs = require("node:fs"); const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const count = report.metadata?.vulnerabilities?.critical ?? 0; if (count > 0) { console.error(`npm audit critical vulnerabilities: ${count}`); process.exit(1); } console.log("npm audit critical vulnerabilities: 0");' "$$tmp"; \
-	rm -f "$$tmp"
+	npm run check:npm-audit-disposition
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+runbook-check:
+	npm run check:runbooks
 
 lint: lint-go
 

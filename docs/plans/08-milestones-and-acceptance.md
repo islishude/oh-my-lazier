@@ -87,13 +87,13 @@ Evidence:
 
 ## M4 - Signer and Tx Manager
 
-Status: [~]
+Status: [x]
 
 Tasks:
 
 - [x] signer interface
 - [x] AWS KMS ECC_SECG_P256K1 signer
-- [~] rustack integration test
+- [x] rustack integration test
 - [x] geth keystore signer
 - [x] tx_outbox
 - [x] advisory lock nonce manager
@@ -115,7 +115,9 @@ Evidence:
 - `go/internal/signer/kms.Signer`
 - `go/internal/signer/kms.TestParseDERSignatureRejectsTrailingBytes`
 - `go test ./go/internal/signer/kms -count=1`
-- `RUSTACK_KMS_ENDPOINT=http://localhost:4566 make test-kms-rustack` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
+- `make test-integration`
+- `docker-compose.integration.yml`
+- `RUSTACK_KMS_ENDPOINT=http://localhost:4566 make test-kms-rustack`
 - `go/internal/db.Store.EnqueueTx`
 - `go/internal/db.Store.ClaimNextNonce`
 - `go/internal/db.Store.ListBroadcastTx`
@@ -145,12 +147,12 @@ Status: [~]
 
 Tasks:
 
-- [~] PacketSent indexer
-- [~] ExecutorFeePaid indexer
-- [~] OpenExecutor event indexer
-- [~] packet decoder
-- [~] committer
-- [~] deliverer
+- [x] PacketSent indexer
+- [x] ExecutorFeePaid indexer
+- [x] OpenExecutor event indexer
+- [x] packet decoder
+- [x] committer
+- [x] deliverer
 - [x] lzReceive tx builder
 
 Acceptance:
@@ -218,10 +220,10 @@ Status: [~]
 
 Tasks:
 
-- [~] DVN PacketSent indexer
-- [~] DVNFeePaid indexer
-- [~] OpenDVN event indexer
-- [~] confirmation wait
+- [x] DVN PacketSent indexer
+- [x] DVNFeePaid indexer
+- [x] OpenDVN event indexer
+- [x] confirmation wait
 - [x] RPC quorum verification
 - [x] payload hash computation
 - [x] would-verify report
@@ -279,6 +281,8 @@ Status: [~]
 Tasks:
 
 - [x] Binance client
+- [x] CoinMarketCap client
+- [x] CoinGecko client
 - [x] Uniswap client
 - [x] aggregator
 - [x] deviation check
@@ -297,6 +301,8 @@ Evidence:
 - `go/internal/pricing.DeviationBps`
 - `go/internal/pricing.TestSelectPriceRejectsFallbackWhenDisabled`
 - `go/internal/pricing.BinanceClient.PriceUSD`
+- `go/internal/pricing.CoinMarketCapClient.PriceUSD`
+- `go/internal/pricing.CoinGeckoClient.PriceUSD`
 - `go/internal/pricing.UniswapV3Client.PriceUSD`
 - `go/internal/pricing.BuildPriceConfig`
 - `go/internal/pricing.BuildSetPriceConfigCalldata`
@@ -406,7 +412,7 @@ Status: [~]
 Tasks:
 
 - [~] security review
-- [~] runbook review
+- [x] runbook review
 - [x] monitoring checklist
 - [x] key management review
 - [x] rate-limit review
@@ -435,15 +441,18 @@ Evidence:
 - `docs/runbooks/key-management.md`
 - `docs/runbooks/rate-limit.md`
 - `docs/runbooks/mainnet-readiness.md`
-- `docs/security/parent-agent-security-review.md`
-- Codex Security preflight with `native` multi-agent `v1` tool-surface facts: `ready`
+- `contracts/scripts/runbook-review.ts`
+- `npm run check:runbooks`
+- `docs/security/security-review.md`
+- `make security-check`
 - `go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1`
 - `go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1`
 - `go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1`
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`
 - `make security-check`
-- `govulncheck ./...` via temporary `GOBIN`: 0 called Go vulnerabilities
+- `npm run check:npm-audit-disposition`
+- `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`: 0 called Go vulnerabilities
 - `package.json` retains `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`
 - `docs/security/npm-audit-disposition.md`
-- `npm audit --audit-level=moderate --json`: 0 critical, 6 high and 4 moderate remaining in pinned LayerZero and retained Hardhat toolbox transitive dependencies; M9 final approval remains open
+- `npm audit --audit-level=moderate --json`: 0 critical, 6 high and 4 moderate remaining in pinned LayerZero and retained Hardhat toolbox transitive dependencies; all current high/moderate findings are tracked by `contracts/scripts/npm-audit-disposition.ts`, but M9 final approval remains open

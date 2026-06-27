@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -177,15 +178,46 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		},
 	}
 	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
+	coinMarketCapClient, err := pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
+	if err != nil {
+		return nil, err
+	}
+	coinGeckoClient := pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, http.DefaultClient)
+	primarySource := a.cfg.Pricing.PrimarySource
+	if primarySource == "" {
+		primarySource = "binance"
+	}
 	sources := make(map[uint32]pricing.ChainSources, len(a.cfg.Pricing.Chains))
 	for _, cfg := range a.cfg.Pricing.Chains {
 		configuredChain, err := registry.Get(cfg.EID)
 		if err != nil {
 			return nil, err
 		}
-		primary, err := pricing.NewBinancePriceReader(binanceClient, cfg.BinanceSymbol)
-		if err != nil {
-			return nil, err
+		readers := make(map[string]pricing.PriceReader)
+		if cfg.BinanceSymbol != "" {
+			reader, err := pricing.NewBinancePriceReader(binanceClient, cfg.BinanceSymbol)
+			if err != nil {
+				return nil, err
+			}
+			readers["binance"] = reader
+		}
+		if cfg.CoinMarketCapSymbol != "" {
+			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCapSymbol)
+			if err != nil {
+				return nil, err
+			}
+			readers["coinmarketcap"] = reader
+		}
+		if cfg.CoinGeckoID != "" {
+			reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGeckoID)
+			if err != nil {
+				return nil, err
+			}
+			readers["coingecko"] = reader
+		}
+		primary := readers[primarySource]
+		if primary == nil {
+			return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, primarySource)
 		}
 		amountIn, err := parseBigInt(cfg.Uniswap.AmountInWei)
 		if err != nil {
@@ -202,7 +234,13 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		if err != nil {
 			return nil, err
 		}
-		sources[cfg.EID] = pricing.ChainSources{Primary: primary, Sanity: sanity, Gas: configuredChain.RPC}
+		sanityReaders := []pricing.PriceReader{sanity}
+		for source, reader := range readers {
+			if source != primarySource {
+				sanityReaders = append(sanityReaders, reader)
+			}
+		}
+		sources[cfg.EID] = pricing.ChainSources{Primary: primary, Sanity: sanityReaders, Gas: configuredChain.RPC}
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
 }

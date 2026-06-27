@@ -67,7 +67,9 @@ if (destinationTxHash !== undefined && destinationTxHash !== "") {
     hash: destinationTxHash as Hex,
   });
   if (destinationReceipt.status !== "success") {
-    throw new Error(`destination transaction ${destinationTxHash} did not succeed`);
+    throw new Error(
+      `destination transaction ${destinationTxHash} did not succeed`,
+    );
   }
   output.destinationTxHash = destinationTxHash as Hex;
   output.destination = assertCanaryDestinationReceipt({

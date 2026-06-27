@@ -55,15 +55,21 @@ type PricingConfig struct {
 	TxGasLimit              uint64               `yaml:"tx_gas_limit"`
 	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string               `yaml:"max_priority_fee_per_gas_wei"`
+	PrimarySource           string               `yaml:"primary_source"`
 	BinanceBaseURL          string               `yaml:"binance_base_url"`
+	CoinMarketCapBaseURL    string               `yaml:"coinmarketcap_base_url"`
+	CoinMarketCapAPIKeyEnv  string               `yaml:"coinmarketcap_api_key_env"`
+	CoinGeckoBaseURL        string               `yaml:"coingecko_base_url"`
 	Chains                  []PricingChainConfig `yaml:"chains"`
 }
 
 // PricingChainConfig configures price sources for one chain's native asset.
 type PricingChainConfig struct {
-	EID           uint32               `yaml:"eid"`
-	BinanceSymbol string               `yaml:"binance_symbol"`
-	Uniswap       UniswapPricingConfig `yaml:"uniswap"`
+	EID                 uint32               `yaml:"eid"`
+	BinanceSymbol       string               `yaml:"binance_symbol"`
+	CoinMarketCapSymbol string               `yaml:"coinmarketcap_symbol"`
+	CoinGeckoID         string               `yaml:"coingecko_id"`
+	Uniswap             UniswapPricingConfig `yaml:"uniswap"`
 }
 
 // UniswapPricingConfig configures one V3 quoter sanity route.
@@ -380,6 +386,18 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.TxGasLimit == 0 {
 		return errors.New("pricing tx_gas_limit is required")
 	}
+	primarySource := c.Pricing.PrimarySource
+	if primarySource == "" {
+		primarySource = "binance"
+	}
+	switch primarySource {
+	case "binance", "coinmarketcap", "coingecko":
+	default:
+		return fmt.Errorf("unsupported pricing primary_source %q", c.Pricing.PrimarySource)
+	}
+	if primarySource == "coinmarketcap" && c.Pricing.CoinMarketCapAPIKeyEnv == "" {
+		return errors.New("pricing coinmarketcap_api_key_env is required when coinmarketcap is primary")
+	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
 	for _, chain := range c.Pricing.Chains {
 		if _, ok := chains[chain.EID]; !ok {
@@ -389,8 +407,22 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 			return fmt.Errorf("duplicate pricing chain eid %d", chain.EID)
 		}
 		seen[chain.EID] = struct{}{}
-		if chain.BinanceSymbol == "" {
-			return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
+		if chain.CoinMarketCapSymbol != "" && c.Pricing.CoinMarketCapAPIKeyEnv == "" {
+			return fmt.Errorf("pricing chain %d coinmarketcap_api_key_env is required when coinmarketcap_symbol is configured", chain.EID)
+		}
+		switch primarySource {
+		case "binance":
+			if chain.BinanceSymbol == "" {
+				return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
+			}
+		case "coinmarketcap":
+			if chain.CoinMarketCapSymbol == "" {
+				return fmt.Errorf("pricing chain %d coinmarketcap_symbol is required", chain.EID)
+			}
+		case "coingecko":
+			if chain.CoinGeckoID == "" {
+				return fmt.Errorf("pricing chain %d coingecko_id is required", chain.EID)
+			}
 		}
 		for label, value := range map[string]string{
 			"uniswap.quoter_address": chain.Uniswap.QuoterAddress,

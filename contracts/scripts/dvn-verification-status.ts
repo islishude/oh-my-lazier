@@ -38,7 +38,9 @@ export function assertDVNVerificationReceipt(
   const verified = findPayloadVerified(input);
   const errors: string[] = [];
   for (const requiredDVN of input.requiredDVNs) {
-    const match = verified.find((item) => isAddressEqual(item.dvn, requiredDVN));
+    const match = verified.find((item) =>
+      isAddressEqual(item.dvn, requiredDVN),
+    );
     if (match === undefined) {
       errors.push(`missing ReceiveUln302 PayloadVerified for ${requiredDVN}`);
       continue;
@@ -53,9 +55,7 @@ export function assertDVNVerificationReceipt(
     input.endpoint === undefined || input.endpointAbi === undefined
       ? false
       : hasPacketVerified(input.logs, input.endpoint, input.endpointAbi);
-  if (
-    (input.endpoint === undefined) !== (input.endpointAbi === undefined)
-  ) {
+  if ((input.endpoint === undefined) !== (input.endpointAbi === undefined)) {
     errors.push("endpoint and endpointAbi must be provided together");
   }
   if (input.endpoint !== undefined && !packetVerified) {

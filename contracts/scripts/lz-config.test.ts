@@ -24,7 +24,8 @@ test("executor config ABI round trips", () => {
 
 test("required DVN config sorts addresses and disables optional DVNs", () => {
   const openDVN = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
-  const layerZeroLabsDVN = "0x1111111111111111111111111111111111111111" as const;
+  const layerZeroLabsDVN =
+    "0x1111111111111111111111111111111111111111" as const;
 
   const config = requiredDVNsConfig(12n, [openDVN, layerZeroLabsDVN]);
 

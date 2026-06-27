@@ -69,6 +69,7 @@ export type MigrationEvidenceRecord = {
   priceBotReview: EvidenceRef;
   rateLimitReview: EvidenceRef;
   monitoringReview: EvidenceRef;
+  runbookReview: EvidenceRef;
   securityReview: EvidenceRef;
   directions: MigrationDirectionEvidence[];
   rollback: RollbackEvidence;
@@ -81,16 +82,21 @@ export function validateMigrationEvidenceRecord(
   requireNonEmpty(errors, record.ticket, "ticket");
   requireNonEmpty(errors, record.environment, "environment");
   requireNonEmpty(errors, record.scope, "scope");
-  requireNonEmpty(errors, record.ownerAccount, "ownerAccount");
-  requireNonEmpty(errors, record.signerAccount, "signerAccount");
+  requireEVMAddress(errors, record.ownerAccount, "ownerAccount");
+  requireEVMAddress(errors, record.signerAccount, "signerAccount");
   requireStringArray(errors, record.operatorContacts, "operatorContacts");
   requireEvidence(errors, record.makeCheck, "makeCheck");
-  requireEvidence(errors, record.layerZeroAddressCheck, "layerZeroAddressCheck");
+  requireEvidence(
+    errors,
+    record.layerZeroAddressCheck,
+    "layerZeroAddressCheck",
+  );
   requireEvidence(errors, record.readinessCheck, "readinessCheck");
   requireEvidence(errors, record.keyManagementReview, "keyManagementReview");
   requireEvidence(errors, record.priceBotReview, "priceBotReview");
   requireEvidence(errors, record.rateLimitReview, "rateLimitReview");
   requireEvidence(errors, record.monitoringReview, "monitoringReview");
+  requireEvidence(errors, record.runbookReview, "runbookReview");
   requireEvidence(errors, record.securityReview, "securityReview");
   validateDirections(errors, record.directions);
   validateRollback(errors, record.rollback);
@@ -127,7 +133,11 @@ function validateDirections(
       direction.deploymentPreflight,
       `${prefix}.deploymentPreflight`,
     );
-    requireEvidence(errors, direction.lzConfigBefore, `${prefix}.lzConfigBefore`);
+    requireEvidence(
+      errors,
+      direction.lzConfigBefore,
+      `${prefix}.lzConfigBefore`,
+    );
     requireEvidence(errors, direction.lzConfigAfter, `${prefix}.lzConfigAfter`);
     requireEvidence(
       errors,
@@ -184,8 +194,12 @@ function validateCanary(
     return;
   }
   requirePositiveDecimalInteger(errors, canary.amountLD, `${field}.amountLD`);
-  requireNonEmpty(errors, canary.senderAccount, `${field}.senderAccount`);
-  requireNonEmpty(errors, canary.recipientAccount, `${field}.recipientAccount`);
+  requireEVMAddress(errors, canary.senderAccount, `${field}.senderAccount`);
+  requireEVMAddress(
+    errors,
+    canary.recipientAccount,
+    `${field}.recipientAccount`,
+  );
   requirePositiveDecimalInteger(
     errors,
     canary.minRecipientBalanceLD,
@@ -218,7 +232,9 @@ function validateDVNJoin(
   }
   requireStringArray(errors, dvnJoin.requiredDVNs, `${field}.requiredDVNs`);
   if (Array.isArray(dvnJoin.requiredDVNs)) {
-    const required = new Set(dvnJoin.requiredDVNs.map((value) => value.toLowerCase()));
+    const required = new Set(
+      dvnJoin.requiredDVNs.map((value) => value.toLowerCase()),
+    );
     for (const label of ["opendvn", "layerzero labs dvn"]) {
       if (!required.has(label)) {
         errors.push(`${field}.requiredDVNs must include ${label}`);
@@ -264,8 +280,12 @@ function validateRollback(errors: string[], rollback: RollbackEvidence): void {
     rollback.canaryAfterRollback,
     "rollback.canaryAfterRollback",
   );
-  requireNonEmpty(errors, rollback.ownerPauseAccount, "rollback.ownerPauseAccount");
-  requireNonEmpty(errors, rollback.signerAccount, "rollback.signerAccount");
+  requireEVMAddress(
+    errors,
+    rollback.ownerPauseAccount,
+    "rollback.ownerPauseAccount",
+  );
+  requireEVMAddress(errors, rollback.signerAccount, "rollback.signerAccount");
   requireEvidence(errors, rollback.drainCheck, "rollback.drainCheck");
   requireEvidence(errors, rollback.manualRetryPlan, "rollback.manualRetryPlan");
 }
@@ -322,13 +342,23 @@ function requirePositiveDecimalInteger(
   }
 }
 
-function requireNonEmpty(
+function requireNonEmpty(errors: string[], value: string, field: string): void {
+  if (typeof value !== "string" || value.trim() === "") {
+    errors.push(`${field} must be a non-empty string`);
+  }
+}
+
+function requireEVMAddress(
   errors: string[],
   value: string,
   field: string,
 ): void {
-  if (typeof value !== "string" || value.trim() === "") {
-    errors.push(`${field} must be a non-empty string`);
+  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    errors.push(`${field} must be an EVM address`);
+    return;
+  }
+  if (/^0x0{40}$/i.test(value)) {
+    errors.push(`${field} must not be the zero address`);
   }
 }
 

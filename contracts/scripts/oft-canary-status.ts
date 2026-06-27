@@ -1,4 +1,9 @@
-import { decodeEventLog, encodeEventTopics, getAddress, isAddressEqual } from "viem";
+import {
+  decodeEventLog,
+  encodeEventTopics,
+  getAddress,
+  isAddressEqual,
+} from "viem";
 import type { Abi, Address, Hex } from "viem";
 
 export type CanaryLog = {
@@ -42,7 +47,11 @@ export type CanaryRecipientBalanceStatus = {
 export function assertCanarySourceReceipt(
   input: SourceCanaryStatusInput,
 ): SourceCanaryStatus {
-  const packetSent = findPacketSent(input.logs, input.endpoint, input.endpointAbi);
+  const packetSent = findPacketSent(
+    input.logs,
+    input.endpoint,
+    input.endpointAbi,
+  );
   if (packetSent === undefined) {
     throw new Error("source receipt is missing EndpointV2 PacketSent");
   }
@@ -52,7 +61,11 @@ export function assertCanarySourceReceipt(
     );
   }
 
-  const feePaid = findExecutorFeePaid(input.logs, input.sendLib, input.sendLibAbi);
+  const feePaid = findExecutorFeePaid(
+    input.logs,
+    input.sendLib,
+    input.sendLibAbi,
+  );
   if (feePaid === undefined) {
     throw new Error("source receipt is missing SendLib ExecutorFeePaid");
   }
@@ -77,7 +90,9 @@ export function assertCanaryDestinationReceipt(
     throw new Error("destination receipt contains EndpointV2 LzReceiveAlert");
   }
   if (!hasPacketDelivered(input.logs, input.endpoint, input.endpointAbi)) {
-    throw new Error("destination receipt is missing EndpointV2 PacketDelivered");
+    throw new Error(
+      "destination receipt is missing EndpointV2 PacketDelivered",
+    );
   }
   return { packetDelivered: true };
 }
@@ -140,7 +155,10 @@ function findExecutorFeePaid(
         topics: mutableTopics(log.topics),
         eventName: "ExecutorFeePaid",
       });
-      const args = decoded.args as unknown as { executor: Address; fee: bigint };
+      const args = decoded.args as unknown as {
+        executor: Address;
+        fee: bigint;
+      };
       return { executor: getAddress(args.executor), fee: args.fee };
     } catch {
       continue;

@@ -37,6 +37,9 @@ Common targets:
 make compile        # Hardhat compile
 make test-solidity  # Solidity tests
 make test-go        # Go package tests
+make test-integration # Postgres and Rustack-backed integration tests
+make security-check # npm audit disposition plus Go vulnerability check
+make runbook-check  # runbook coverage guard
 make lint-go        # golangci-lint
 make fmt-go         # gofmt
 make fmt-sol        # format solidity files
@@ -52,7 +55,7 @@ Start Postgres and the worker with:
 docker compose up
 ```
 
-The example worker config is [config/example.yaml](/Users/sudoless/codespace/coding/oh-my-lazier/config/example.yaml). `DATABASE_URL` can override the configured database URL at runtime.
+The example worker config is [config/example.yaml](config/example.yaml). `DATABASE_URL` can override the configured database URL at runtime.
 
 Build the worker image locally with:
 
