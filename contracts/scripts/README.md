@@ -10,6 +10,15 @@ npm run check:lz-addresses
 
 The check compares `docs/deployments/layerzero-testnet-addresses.md` values encoded in the script against LayerZero's current `deploymentsV2.json` and `dvnDeployments.json` metadata.
 
+Before approving a migration ticket, validate that the ticket has attached the required local evidence references:
+
+```bash
+MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
+npm run check:migration-evidence
+```
+
+The migration evidence checker verifies that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, owner pause account, signer account, drain status, and manual retry plan.
+
 Deploy the local pathway contracts:
 
 ```bash
@@ -207,5 +216,21 @@ npm run check:oft-canary
 ```
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
+
+After DVN join, check a destination-chain verification receipt for both required DVNs:
+
+```bash
+RPC_URL=... \
+CHAIN_ID=84532 \
+TX_HASH=... \
+RECEIVE_ULN=... \
+OPEN_DVN=... \
+LAYERZERO_LABS_DVN=... \
+CONFIRMATIONS=12 \
+ENDPOINT=... \
+npm run check:dvn-verification
+```
+
+`check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
 
 Run the LayerZero config scripts on both chains with the local endpoint, local OApp, local message libraries, and local DVN addresses for each direction. `configure:lz-dvn` explicitly sets `optionalDVNCount` to LayerZero's NIL value so default optional DVNs are not inherited during the first-phase required-DVN migration.

@@ -91,7 +91,11 @@ func (a *App) Run(ctx context.Context) error {
 	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
 	start("executor.committer", executorWorker.RunCommitter)
 	start("executor.deliverer", executorWorker.RunDeliverer)
-	start("dvn", dvn.New(a.cfg.DVN.Mode, store, registry, a.logger).Run)
+	dvnWorker, err := a.dvnWorker(store, registry)
+	if err != nil {
+		return err
+	}
+	start("dvn", dvnWorker.Run)
 	priceBot, err := a.priceBot(store, registry)
 	if err != nil {
 		return err
@@ -203,12 +207,38 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
 }
 
+func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker, error) {
+	if a.cfg.DVN.Mode != string(dvn.ModeActive) {
+		return dvn.New(a.cfg.DVN.Mode, store, registry, a.logger), nil
+	}
+	maxFeePerGas, err := parseBigInt(a.cfg.DVN.MaxFeePerGasWei)
+	if err != nil {
+		return nil, err
+	}
+	maxPriorityFeePerGas, err := parseBigInt(a.cfg.DVN.MaxPriorityFeePerGasWei)
+	if err != nil {
+		return nil, err
+	}
+	settings := dvn.Settings{
+		SignerID: a.cfg.DVN.Signer,
+		TxFees: dvn.TxFees{
+			GasLimit:             new(big.Int).SetUint64(a.cfg.DVN.TxGasLimit),
+			MaxFeePerGas:         maxFeePerGas,
+			MaxPriorityFeePerGas: maxPriorityFeePerGas,
+		},
+	}
+	return dvn.NewWithSettings(a.cfg.DVN.Mode, store, registry, settings, a.logger), nil
+}
+
 func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.Target, error) {
 	signers, err := a.loadSigners(ctx)
 	if err != nil {
 		return nil, err
 	}
 	required := map[string]struct{}{common.HexToAddress(a.cfg.Executor.Signer).Hex(): {}}
+	if a.cfg.DVN.Mode == string(dvn.ModeActive) {
+		required[common.HexToAddress(a.cfg.DVN.Signer).Hex()] = struct{}{}
+	}
 	if a.cfg.Pricing.Enabled {
 		required[common.HexToAddress(a.cfg.Pricing.Signer).Hex()] = struct{}{}
 	}

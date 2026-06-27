@@ -37,6 +37,32 @@ func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
+	cfg := validConfig()
+	cfg.DVN = validActiveDVNConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsActiveDVNWithoutSigner(t *testing.T) {
+	cfg := validConfig()
+	cfg.DVN = validActiveDVNConfig()
+	cfg.DVN.Signer = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing active dvn signer error")
+	}
+}
+
+func TestValidateRejectsActiveDVNWithoutFees(t *testing.T) {
+	cfg := validConfig()
+	cfg.DVN = validActiveDVNConfig()
+	cfg.DVN.MaxFeePerGasWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing active dvn fee error")
+	}
+}
+
 func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
 	cfg := validConfig()
 	cfg.Signers[0].Keystore.PasswordEnv = ""
@@ -216,6 +242,16 @@ func validConfig() Config {
 				MaxMessageSize: 10000,
 			},
 		},
+	}
+}
+
+func validActiveDVNConfig() DVNConfig {
+	return DVNConfig{
+		Mode:                    "active",
+		Signer:                  "0x9999999999999999999999999999999999999999",
+		TxGasLimit:              120000,
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
 	}
 }
 

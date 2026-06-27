@@ -246,3 +246,5 @@ Current evidence:
 14. Confirm destination token balance increased with `npm run check:oft-canary` and `DESTINATION_TEST_OFT` / `RECIPIENT` / `MIN_RECIPIENT_BALANCE`.
 15. Enable DVN shadow mode.
 16. Confirm DVN would-verify report matches third-party verification.
+17. Enable DVN active mode only after shadow evidence is accepted.
+18. Confirm active mode enqueues `ReceiveUln302.verify` and the tx manager marks the DVN job `VERIFIED` after a successful receipt.

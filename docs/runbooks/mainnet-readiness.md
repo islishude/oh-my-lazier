@@ -34,10 +34,12 @@ This runbook is the final review index before any mainnet deployment proposal. P
 5. Complete `docs/runbooks/price-bot.md`.
 6. Complete `docs/runbooks/rate-limit.md`.
 7. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
-8. Complete security review and resolve all critical findings.
-9. Confirm rollback steps for Executor and DVN config are documented with previous config values.
-10. Confirm canary transfer size, signer, owner, and operator contacts.
-11. Approve the migration ticket only after every artifact above is attached.
+8. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
+9. Complete security review and resolve all critical findings.
+10. Confirm rollback steps for Executor and DVN config are documented with previous config values.
+11. Confirm canary transfer size, signer, owner, and operator contacts.
+12. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
+13. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
 
@@ -48,6 +50,7 @@ go test ./...
 go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1
 go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1
 go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1
+go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1
 ```
 
 Required runtime checks:
@@ -57,6 +60,7 @@ Required runtime checks:
 - `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics.
 - No chain or pathway is paused before the migration begins.
 - No tx outbox row is stuck in `failed` for active chains.
+- `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
 ## Contract / LayerZero Checks
 
@@ -88,7 +92,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
-- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row
 
 ## Rejection Criteria
 
@@ -103,3 +107,5 @@ Reject mainnet readiness if:
 - rate-limit capacity/refill is not documented per pathway
 - monitoring alerts are not active
 - config diff output is missing or unreviewed
+- `npm run check:migration-evidence` fails for the migration ticket record
+- `go run ./go/cmd/readinesscheck -config <worker.yaml>` reports any issue

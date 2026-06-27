@@ -1,0 +1,13 @@
+[
+  {
+    "name": "verify",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      { "name": "_packetHeader", "type": "bytes" },
+      { "name": "_payloadHash", "type": "bytes32" },
+      { "name": "_confirmations", "type": "uint64" }
+    ],
+    "outputs": []
+  }
+]

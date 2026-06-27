@@ -3,13 +3,17 @@ package dvn
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
+	"math/big"
+	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
@@ -20,6 +24,18 @@ import (
 )
 
 const loopInterval = 5 * time.Second
+
+const (
+	// TxPurposeVerify identifies ReceiveUln302.verify outbox requests.
+	TxPurposeVerify = "dvn_verify"
+)
+
+var (
+	//go:embed abis/receive_uln302_verify.json
+	receiveUlnVerifyABIJSON string
+
+	receiveUlnVerifyABI = mustParseABI(receiveUlnVerifyABIJSON)
+)
 
 // Mode selects whether the DVN verifier only reports or also submits verification transactions.
 type Mode string
@@ -37,6 +53,7 @@ type Store interface {
 	MarkDVNWaitingConfirmations(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkDVNQuorumChecking(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkDVNWouldVerify(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error
+	EnqueueDVNVerifyTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest, quorumResult []byte) (int64, error)
 	MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
 	PauseChain(ctx context.Context, eid uint32) error
 	PausePathwayForPacket(ctx context.Context, guid common.Hash) error
@@ -52,10 +69,25 @@ type ReceiptReader interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*gethtypes.Receipt, error)
 }
 
+// TxFees carries optional EIP-1559 transaction fee settings for active verify requests.
+type TxFees struct {
+	GasLimit             *big.Int
+	MaxFeePerGas         *big.Int
+	MaxPriorityFeePerGas *big.Int
+}
+
+// Settings controls active DVN verification transaction generation.
+type Settings struct {
+	SignerID string
+	TxFees   TxFees
+}
+
 // Worker runs the DVN verification workflow.
 type Worker struct {
 	mode     Mode
 	store    Store
+	registry *chain.Registry
+	settings Settings
 	heads    map[uint32]HeadReader
 	receipts map[uint32]ReceiptReader
 	logger   *slog.Logger
@@ -63,6 +95,11 @@ type Worker struct {
 
 // New creates a DVN worker for the configured mode.
 func New(mode string, store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
+	return NewWithSettings(mode, store, registry, Settings{}, logger)
+}
+
+// NewWithSettings creates a DVN worker with explicit active-mode transaction settings.
+func NewWithSettings(mode string, store Store, registry *chain.Registry, settings Settings, logger *slog.Logger) *Worker {
 	heads := make(map[uint32]HeadReader)
 	receipts := make(map[uint32]ReceiptReader)
 	if registry != nil {
@@ -73,7 +110,7 @@ func New(mode string, store Store, registry *chain.Registry, logger *slog.Logger
 			}
 		}
 	}
-	return NewWithClients(mode, store, heads, receipts, logger)
+	return NewWithClientsAndSettings(mode, store, registry, settings, heads, receipts, logger)
 }
 
 // NewWithHeads creates a DVN worker with explicit head readers for tests.
@@ -83,11 +120,16 @@ func NewWithHeads(mode string, store Store, heads map[uint32]HeadReader, logger 
 
 // NewWithClients creates a DVN worker with explicit source-chain clients for tests.
 func NewWithClients(mode string, store Store, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
+	return NewWithClientsAndSettings(mode, store, nil, Settings{}, heads, receipts, logger)
+}
+
+// NewWithClientsAndSettings creates a DVN worker with explicit clients and active-mode settings for tests.
+func NewWithClientsAndSettings(mode string, store Store, registry *chain.Registry, settings Settings, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
 	copiedHeads := make(map[uint32]HeadReader, len(heads))
 	maps.Copy(copiedHeads, heads)
 	copiedReceipts := make(map[uint32]ReceiptReader, len(receipts))
 	maps.Copy(copiedReceipts, receipts)
-	return &Worker{mode: Mode(mode), store: store, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
+	return &Worker{mode: Mode(mode), store: store, registry: registry, settings: settings, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
 }
 
 // Run starts the DVN verifier loop until the context is canceled.
@@ -193,11 +235,40 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), payload); err != nil {
-		return false, err
+	switch w.mode {
+	case ModeShadow:
+		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), payload); err != nil {
+			return false, err
+		}
+		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+	case ModeActive:
+		request, err := w.buildVerifyTx(item.Packet, item.Job.ConfirmationsRequired)
+		if err != nil {
+			return false, err
+		}
+		id, err := w.store.EnqueueDVNVerifyTx(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), string(packets.DVNVerifyTxEnqueued), request, payload)
+		if err != nil {
+			return false, err
+		}
+		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
+	default:
+		return false, fmt.Errorf("unsupported dvn mode %q", w.mode)
 	}
-	w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
 	return true, nil
+}
+
+func (w *Worker) buildVerifyTx(packet db.PacketRecord, confirmations uint64) (db.TxRequest, error) {
+	if w.registry == nil {
+		return db.TxRequest{}, errors.New("dvn active mode requires chain registry")
+	}
+	if w.settings.SignerID == "" {
+		return db.TxRequest{}, errors.New("dvn active mode requires signer id")
+	}
+	pathway, err := w.registry.Pathway(packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver)
+	if err != nil {
+		return db.TxRequest{}, err
+	}
+	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, w.settings.SignerID, w.settings.TxFees)
 }
 
 func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord, err error) error {
@@ -283,6 +354,58 @@ func verifySourceReceipt(packet db.PacketRecord, receipt *gethtypes.Receipt) (Qu
 		}, nil
 	}
 	return QuorumReport{}, fmt.Errorf("source receipt missing PacketSent log index %d", packet.SrcLogIndex)
+}
+
+// BuildVerifyCalldata ABI-encodes ReceiveUln302.verify for active DVN mode.
+func BuildVerifyCalldata(packet db.PacketRecord, confirmations uint64) ([]byte, error) {
+	if err := packet.Validate(); err != nil {
+		return nil, err
+	}
+	if confirmations == 0 {
+		return nil, errors.New("dvn confirmations required is required")
+	}
+	return receiveUlnVerifyABI.Pack("verify", packet.PacketHeader, packet.PayloadHash, confirmations)
+}
+
+// BuildVerifyTx creates the outbox request for ReceiveUln302.verify.
+func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmations uint64, signerID string, fees TxFees) (db.TxRequest, error) {
+	if receiveLib == (common.Address{}) {
+		return db.TxRequest{}, errors.New("receive lib address is required")
+	}
+	if signerID == "" {
+		return db.TxRequest{}, errors.New("signer id is required")
+	}
+	calldata, err := BuildVerifyCalldata(packet, confirmations)
+	if err != nil {
+		return db.TxRequest{}, err
+	}
+	return db.TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              TxPurposeVerify,
+		GUID:                 packet.GUID.Bytes(),
+		To:                   receiveLib,
+		Calldata:             calldata,
+		Value:                new(big.Int),
+		GasLimit:             cloneBigInt(fees.GasLimit),
+		MaxFeePerGas:         cloneBigInt(fees.MaxFeePerGas),
+		MaxPriorityFeePerGas: cloneBigInt(fees.MaxPriorityFeePerGas),
+		SignerID:             signerID,
+	}, nil
+}
+
+func mustParseABI(definition string) abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(definition))
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
+
+func cloneBigInt(value *big.Int) *big.Int {
+	if value == nil {
+		return nil
+	}
+	return new(big.Int).Set(value)
 }
 
 func validateReceiptPacket(expected, actual db.PacketRecord) error {

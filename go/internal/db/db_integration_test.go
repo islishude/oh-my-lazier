@@ -542,6 +542,86 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	}
 }
 
+func TestEnqueueDVNVerifyTxAdvancesJobAtomically(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNQuorumChecking),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+
+	id, err := store.EnqueueDVNVerifyTx(ctx, packet.GUID, string(packets.DVNQuorumChecking), string(packets.DVNVerifyTxEnqueued), TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              "dvn_verify",
+		GUID:                 packet.GUID.Bytes(),
+		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata:             []byte{0x01, 0x02},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(120000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             "0x9999999999999999999999999999999999999999",
+	}, []byte(`{"status":"ready"}`))
+	if err != nil {
+		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
+	}
+	if id == 0 {
+		t.Fatal("outbox id = 0, want nonzero")
+	}
+	job, err := store.GetDVNJob(ctx, packet.GUID)
+	if err != nil {
+		t.Fatalf("GetDVNJob() error = %v", err)
+	}
+	if job.Status != string(packets.DVNVerifyTxEnqueued) {
+		t.Fatalf("dvn job status = %q, want %q", job.Status, packets.DVNVerifyTxEnqueued)
+	}
+	verifyHash := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	if err := store.MarkDVNVerified(ctx, packet.GUID, verifyHash); err != nil {
+		t.Fatalf("MarkDVNVerified() error = %v", err)
+	}
+	var status string
+	var hashBytes []byte
+	if err := store.pool.QueryRow(ctx, "SELECT status, verify_tx_hash FROM dvn_jobs WHERE guid = $1", packet.GUID.Bytes()).Scan(&status, &hashBytes); err != nil {
+		t.Fatalf("select dvn verify tx: %v", err)
+	}
+	if status != string(packets.DVNVerified) {
+		t.Fatalf("status = %q, want %q", status, packets.DVNVerified)
+	}
+	if common.BytesToHash(hashBytes) != verifyHash {
+		t.Fatalf("verify hash = %s, want %s", common.BytesToHash(hashBytes), verifyHash)
+	}
+}
+
 func TestExecutorWorkEnqueueAdvancesStatusAtomically(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -736,16 +816,12 @@ func TestCheckDrainStatusReportsPendingWork(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	registry, err := chain.NewRegistry(testChains(), testPathways())
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
-	}
-	if err := store.SyncConfig(ctx, registry); err != nil {
-		t.Fatalf("SyncConfig() error = %v", err)
-	}
-
 	packet := testPacketRecord()
+	packet.SrcEID = 49161
+	packet.DstEID = 49245
 	packet.Status = string(packets.ExecutorExecutable)
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
 	cleanPacketRows(ctx, t, store, packet.GUID)
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
@@ -817,16 +893,12 @@ func TestCheckDrainStatusAcceptsDeliveredShadowPathway(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	registry, err := chain.NewRegistry(testChains(), testPathways())
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
-	}
-	if err := store.SyncConfig(ctx, registry); err != nil {
-		t.Fatalf("SyncConfig() error = %v", err)
-	}
-
 	packet := testPacketRecord()
+	packet.SrcEID = 49162
+	packet.DstEID = 49246
 	packet.Status = string(packets.ExecutorDelivered)
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
 	cleanPacketRows(ctx, t, store, packet.GUID)
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
@@ -945,6 +1017,87 @@ func cleanPacketRows(ctx context.Context, t *testing.T, store *Store, guid commo
 	}
 	if _, err := store.pool.Exec(ctx, "DELETE FROM packets WHERE guid = $1", guid.Bytes()); err != nil {
 		t.Fatalf("delete packet: %v", err)
+	}
+}
+
+func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet PacketRecord) {
+	t.Helper()
+	registry, err := chain.NewRegistry(
+		[]config.ChainConfig{
+			{
+				EID:             packet.SrcEID,
+				Name:            "drain-source",
+				ChainID:         49161,
+				EndpointAddress: "0x1111111111111111111111111111111111111111",
+				Confirmations:   12,
+				RPCURLs:         []string{"http://localhost:8545"},
+				Workers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+			},
+			{
+				EID:             packet.DstEID,
+				Name:            "drain-destination",
+				ChainID:         49245,
+				EndpointAddress: "0x4444444444444444444444444444444444444444",
+				Confirmations:   12,
+				RPCURLs:         []string{"http://localhost:8546"},
+				Workers: config.WorkerContractsConfig{
+					OpenExecutor: "0x5555555555555555555555555555555555555555",
+					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				},
+			},
+		},
+		[]config.PathwayConfig{
+			{
+				SrcEID:         packet.SrcEID,
+				DstEID:         packet.DstEID,
+				SrcOApp:        packet.Sender.Hex(),
+				DstOApp:        packet.Receiver.Hex(),
+				SendLib:        packet.SendLib.Hex(),
+				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Enabled:        true,
+				MaxMessageSize: 10000,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+}
+
+func cleanPathwayRows(ctx context.Context, t *testing.T, store *Store, srcEID, dstEID uint32) {
+	t.Helper()
+	if _, err := store.pool.Exec(ctx, `
+		DELETE FROM tx_outbox
+		WHERE guid IN (
+			SELECT guid FROM packets WHERE src_eid = $1 AND dst_eid = $2
+		)
+	`, srcEID, dstEID); err != nil {
+		t.Fatalf("delete pathway tx_outbox: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		DELETE FROM dvn_jobs
+		WHERE guid IN (
+			SELECT guid FROM packets WHERE src_eid = $1 AND dst_eid = $2
+		)
+	`, srcEID, dstEID); err != nil {
+		t.Fatalf("delete pathway dvn_jobs: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		DELETE FROM executor_jobs
+		WHERE guid IN (
+			SELECT guid FROM packets WHERE src_eid = $1 AND dst_eid = $2
+		)
+	`, srcEID, dstEID); err != nil {
+		t.Fatalf("delete pathway executor_jobs: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM packets WHERE src_eid = $1 AND dst_eid = $2", srcEID, dstEID); err != nil {
+		t.Fatalf("delete pathway packets: %v", err)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 const (
 	executorCommitVerificationPurpose = "executor_commit_verification"
 	executorLzReceivePurpose          = "executor_lz_receive"
+	dvnVerifyPurpose                  = "dvn_verify"
 )
 
 // ChainClient is the tx manager's RPC boundary for nonce reads and broadcasts.
@@ -132,6 +133,12 @@ func (m *Manager) applyWorkflowReceipt(ctx context.Context, outboxTx db.OutboxTx
 		return m.markExecutorReceipt(ctx, guid, func() error {
 			return m.store.MarkExecutorReceiveFailed(ctx, guid, outboxTx.TxHash, "lzReceive transaction reverted")
 		}, packets.ExecutorLzReceiveFailed)
+	case dvnVerifyPurpose:
+		if success {
+			return m.markDVNReceipt(ctx, guid, func() error {
+				return m.store.MarkDVNVerified(ctx, guid, outboxTx.TxHash)
+			}, packets.DVNVerified)
+		}
 	}
 	return nil
 }
@@ -156,6 +163,32 @@ func (m *Manager) executorStatusMatches(ctx context.Context, guid common.Hash, s
 	}
 	for _, status := range statuses {
 		if packet.Status == string(status) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) markDVNReceipt(ctx context.Context, guid common.Hash, mark func() error, alreadyApplied ...packets.DVNState) error {
+	if m.dvnStatusMatches(ctx, guid, alreadyApplied) {
+		return nil
+	}
+	if err := mark(); err != nil {
+		if m.dvnStatusMatches(ctx, guid, alreadyApplied) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) dvnStatusMatches(ctx context.Context, guid common.Hash, statuses []packets.DVNState) bool {
+	job, err := m.store.GetDVNJob(ctx, guid)
+	if err != nil {
+		return false
+	}
+	for _, status := range statuses {
+		if job.Status == string(status) {
 			return true
 		}
 	}

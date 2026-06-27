@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
+	"github.com/jackc/pgx/v5"
 )
 
 // DVNJobRecord records an OpenDVN assignment for a known packet.
@@ -37,6 +39,34 @@ func (s *Store) UpsertDVNJob(ctx context.Context, job DVNJobRecord) error {
 			updated_at = now()
 	`, job.GUID.Bytes(), job.ConfirmationsRequired, job.Status)
 	return err
+}
+
+// GetDVNJob returns one persisted DVN job by packet GUID.
+func (s *Store) GetDVNJob(ctx context.Context, guid common.Hash) (DVNJobRecord, error) {
+	if guid == (common.Hash{}) {
+		return DVNJobRecord{}, errors.New("dvn job guid is required")
+	}
+	var row struct {
+		guid                  []byte
+		confirmationsRequired uint64
+		status                string
+	}
+	err := s.pool.QueryRow(ctx, `
+		SELECT guid, confirmations_required, status
+		FROM dvn_jobs
+		WHERE guid = $1
+	`, guid.Bytes()).Scan(&row.guid, &row.confirmationsRequired, &row.status)
+	if err != nil {
+		return DVNJobRecord{}, err
+	}
+	if len(row.guid) != common.HashLength {
+		return DVNJobRecord{}, fmt.Errorf("dvn job guid has length %d", len(row.guid))
+	}
+	return DVNJobRecord{
+		GUID:                  common.BytesToHash(row.guid),
+		ConfirmationsRequired: row.confirmationsRequired,
+		Status:                row.status,
+	}, nil
 }
 
 // ListDVNWork returns DVN jobs in one durable status with packet data needed to verify.
@@ -119,6 +149,100 @@ func (s *Store) MarkDVNWouldVerify(ctx context.Context, guid common.Hash, expect
 	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNWouldVerify), QuorumResult: quorumResult})
 }
 
+// EnqueueDVNVerifyTx inserts an active DVN verify transaction and advances the job status atomically.
+func (s *Store) EnqueueDVNVerifyTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request TxRequest, quorumResult []byte) (int64, error) {
+	if guid == (common.Hash{}) {
+		return 0, errors.New("dvn job guid is required")
+	}
+	if expectedStatus == "" || nextStatus == "" {
+		return 0, errors.New("dvn transition statuses are required")
+	}
+	if len(request.GUID) == 0 {
+		request.GUID = guid.Bytes()
+	}
+	if len(request.GUID) != common.HashLength || common.BytesToHash(request.GUID) != guid {
+		return 0, errors.New("tx request guid does not match dvn job")
+	}
+	if len(quorumResult) == 0 {
+		return 0, errors.New("dvn quorum result is required")
+	}
+	if request.ChainEID == 0 {
+		return 0, errors.New("chain eid is required")
+	}
+	if request.Purpose == "" {
+		return 0, errors.New("purpose is required")
+	}
+	if request.To == (common.Address{}) {
+		return 0, errors.New("to address is required")
+	}
+	if request.SignerID == "" {
+		return 0, errors.New("signer id is required")
+	}
+	value := request.Value
+	if value == nil {
+		value = new(big.Int)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var currentStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT status
+		FROM dvn_jobs
+		WHERE guid = $1
+		FOR UPDATE
+	`, guid.Bytes()).Scan(&currentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("dvn job %s not found", guid)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if currentStatus != expectedStatus {
+		return 0, fmt.Errorf("dvn job %s status is %s, want %s", guid, currentStatus, expectedStatus)
+	}
+
+	var id int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tx_outbox (
+			chain_eid, purpose, guid, to_address, calldata, value, gas_limit,
+			max_fee_per_gas, max_priority_fee_per_gas, signer_id, status
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id
+	`, request.ChainEID, request.Purpose, optionalBytes(request.GUID), addressBytes(request.To), request.Calldata, value.String(), numericString(request.GasLimit), numericString(request.MaxFeePerGas), numericString(request.MaxPriorityFeePerGas), request.SignerID, TxStatusQueued).Scan(&id); err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE dvn_jobs
+		SET status = $1, quorum_result = $4::jsonb, updated_at = now()
+		WHERE guid = $2 AND status = $3
+	`, nextStatus, guid.Bytes(), expectedStatus, string(quorumResult)); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// MarkDVNVerified records a successful active ReceiveUln302.verify receipt.
+func (s *Store) MarkDVNVerified(ctx context.Context, guid, txHash common.Hash) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("dvn verify tx hash is required")
+	}
+	return s.updateDVNStatus(ctx, dvnStatusUpdate{
+		GUID:              guid,
+		ExpectedStatus:    string(packets.DVNVerifyTxEnqueued),
+		NextStatus:        string(packets.DVNVerified),
+		VerifyTxHashBytes: txHash.Bytes(),
+	})
+}
+
 // MarkDVNQuorumConflict records a quorum verification conflict requiring operator review.
 func (s *Store) MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error {
 	if reason == "" {
@@ -128,11 +252,12 @@ func (s *Store) MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, exp
 }
 
 type dvnStatusUpdate struct {
-	GUID           common.Hash
-	ExpectedStatus string
-	NextStatus     string
-	LastError      string
-	QuorumResult   []byte
+	GUID              common.Hash
+	ExpectedStatus    string
+	NextStatus        string
+	LastError         string
+	QuorumResult      []byte
+	VerifyTxHashBytes []byte
 }
 
 func (s *Store) updateDVNStatus(ctx context.Context, update dvnStatusUpdate) error {
@@ -141,6 +266,9 @@ func (s *Store) updateDVNStatus(ctx context.Context, update dvnStatusUpdate) err
 	}
 	if update.ExpectedStatus == "" || update.NextStatus == "" {
 		return errors.New("dvn transition statuses are required")
+	}
+	if len(update.VerifyTxHashBytes) != 0 && len(update.VerifyTxHashBytes) != common.HashLength {
+		return errors.New("dvn verify tx hash must be 32 bytes")
 	}
 	lastErrorArg := any(nil)
 	if update.LastError != "" {
@@ -156,9 +284,10 @@ func (s *Store) updateDVNStatus(ctx context.Context, update dvnStatusUpdate) err
 			status = $1,
 			last_error = $4,
 			quorum_result = COALESCE($5::jsonb, quorum_result),
+			verify_tx_hash = COALESCE($6, verify_tx_hash),
 			updated_at = now()
 		WHERE guid = $2 AND status = $3
-	`, update.NextStatus, update.GUID.Bytes(), update.ExpectedStatus, lastErrorArg, quorumResultArg)
+	`, update.NextStatus, update.GUID.Bytes(), update.ExpectedStatus, lastErrorArg, quorumResultArg, optionalBytes(update.VerifyTxHashBytes))
 	if err != nil {
 		return err
 	}

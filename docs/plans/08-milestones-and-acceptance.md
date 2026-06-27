@@ -122,6 +122,7 @@ Evidence:
 - `go/internal/db.Store.MarkTxConfirmed`
 - `go/internal/db.Store.MarkTxFailed`
 - `go/internal/db.Store.RetryFailedTx`
+- `go/cmd/txretry`
 - `go/internal/db.TestRetryFailedTxRequeuesWithFreshNonce`
 - `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
 - `go/internal/config.SignerConfig`
@@ -136,6 +137,7 @@ Evidence:
 - `go/internal/rpcquorum.Client.SendTransaction`
 - `go/internal/rpcquorum.Client.TransactionReceipt`
 - `TEST_POSTGRES_URL=... go test ./go/internal/txmgr -count=1`
+- `go test ./go/cmd/txretry -count=1`
 
 ## M5 - Executor Active Path
 
@@ -242,12 +244,17 @@ Evidence:
 - `go/internal/db.Store.MarkDVNWaitingConfirmations`
 - `go/internal/db.Store.MarkDVNQuorumChecking`
 - `go/internal/db.Store.MarkDVNWouldVerify`
+- `go/internal/db.Store.EnqueueDVNVerifyTx`
+- `go/internal/db.Store.MarkDVNVerified`
 - `go/internal/db.Store.MarkDVNQuorumConflict`
 - `go/internal/db.Store.PausePathwayForPacket`
 - `go/internal/db.Store.PauseChain`
 - `go/internal/dvn.Worker.ProcessConfirmationsOnce`
 - `go/internal/dvn.Worker.ProcessQuorumOnce`
+- `go/internal/dvn.BuildVerifyTx`
 - `go/internal/dvn.TestProcessQuorumOnceMarksWouldVerify`
+- `go/internal/dvn.TestProcessQuorumOnceActiveEnqueuesVerifyTx`
+- `go/internal/txmgr.TestProcessReceiptsMarksDVNVerifyTxVerified`
 - `go/internal/rpcquorum.HeadConflictError`
 - `go/internal/rpcquorum.IsHeadConflict`
 - `go/internal/rpcquorum.Client.CheckHead`
@@ -294,6 +301,9 @@ Evidence:
 - `go/internal/pricing.Bot.Run`
 - `go/internal/app.App.RunPriceOnce`
 - `go/cmd/pricebot-once`
+- `package.json` `check:price-config`
+- `contracts/scripts/price-config-check.ts`
+- `contracts/scripts/price-config-check.test.ts`
 - `docs/runbooks/price-bot.md`
 - `go/internal/pricing/abis/price_config.json`
 - `go/internal/pricing/abis/uniswap_v3_quoter.json`
@@ -301,6 +311,7 @@ Evidence:
 - `go/internal/config.PricingConfig`
 - `go/internal/app.App.priceBot`
 - `go test ./go/internal/pricing ./go/internal/config ./go/internal/app -count=1`
+- `npm run test:scripts`
 - `go test ./go/cmd/pricebot-once -count=1`
 
 ## M8 - Testnet Migration Rehearsal
@@ -340,6 +351,8 @@ Evidence:
 - `package.json` `configure:lz-rollback`
 - `package.json` `send:oft-canary`
 - `package.json` `check:oft-canary`
+- `package.json` `check:dvn-verification`
+- `package.json` `check:migration-evidence`
 - `package.json` `check:lz-addresses`
 - `package.json` `check:deployment-preflight`
 - `package.json` `oft:pathway`
@@ -349,15 +362,20 @@ Evidence:
 - `contracts/scripts/oft-pathway-control.ts`
 - `contracts/scripts/oft-canary.ts`
 - `contracts/scripts/oft-canary-status.ts`
+- `contracts/scripts/dvn-verification-status.ts`
+- `contracts/scripts/migration-evidence.ts`
 - `contracts/scripts/inspect-lz-config.ts`
 - `contracts/scripts/configure-lz-executor.ts`
 - `contracts/scripts/configure-lz-dvn.ts`
 - `contracts/scripts/configure-lz-rollback.ts`
 - `contracts/scripts/send-oft-canary.ts`
 - `contracts/scripts/check-oft-canary.ts`
+- `contracts/scripts/check-dvn-verification.ts`
 - `contracts/scripts/check-lz-addresses.ts`
 - `go/internal/db.Store.CheckDrainStatus`
 - `go/cmd/draincheck`
+- `go/cmd/txretry`
+- `docs/deployments/testnet-migration-evidence.example.json`
 - `docs/deployments/layerzero-testnet-addresses.md`
 - `docs/deployments/test-oft-policy.md`
 - `contracts/scripts/lz-config.test.ts`
@@ -365,6 +383,8 @@ Evidence:
 - `contracts/scripts/lz-config.test.ts` `rollback config batches reject mismatched DVN counts`
 - `contracts/scripts/oft-canary.test.ts`
 - `contracts/scripts/oft-canary-status.test.ts`
+- `contracts/scripts/dvn-verification-status.test.ts`
+- `contracts/scripts/migration-evidence.test.ts`
 - `contracts/scripts/lz-addresses.test.ts`
 - `contracts/scripts/deployment-preflight.test.ts`
 - `contracts/scripts/oft-pathway-control.test.ts`
@@ -400,6 +420,8 @@ Evidence:
 - `go/internal/metrics.Handler`
 - `go/internal/metrics.RenderPrometheus`
 - `go/internal/db.Store.Stats`
+- `go/internal/readiness.Evaluate`
+- `go/cmd/readinesscheck`
 - `go/internal/config.LoadStatic`
 - `go/internal/configdiff.Diff`
 - `go/cmd/configdiff`
@@ -410,6 +432,7 @@ Evidence:
 - `docs/runbooks/mainnet-readiness.md`
 - `docs/security/parent-agent-security-review.md`
 - `go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1`
+- `go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1`
 - `go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1`
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`

@@ -35,7 +35,11 @@ type ExecutorConfig struct {
 
 // DVNConfig controls whether the DVN workflow runs in shadow or active mode.
 type DVNConfig struct {
-	Mode string `yaml:"mode"`
+	Mode                    string `yaml:"mode"`
+	Signer                  string `yaml:"signer"`
+	TxGasLimit              uint64 `yaml:"tx_gas_limit"`
+	MaxFeePerGasWei         string `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // PricingConfig controls optional price update generation.
@@ -224,6 +228,29 @@ func (c Config) Validate() error {
 	case "shadow", "active":
 	default:
 		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
+	}
+	if c.DVN.Mode == "active" {
+		if !common.IsHexAddress(c.DVN.Signer) {
+			return errors.New("dvn signer must be a hex address in active mode")
+		}
+		if _, ok := signers[common.HexToAddress(c.DVN.Signer).Hex()]; !ok {
+			return errors.New("dvn signer must reference a configured signer")
+		}
+		if c.DVN.TxGasLimit == 0 {
+			return errors.New("dvn tx_gas_limit is required in active mode")
+		}
+		for label, value := range map[string]string{
+			"max_fee_per_gas_wei":          c.DVN.MaxFeePerGasWei,
+			"max_priority_fee_per_gas_wei": c.DVN.MaxPriorityFeePerGasWei,
+		} {
+			if value == "" {
+				return fmt.Errorf("dvn %s is required in active mode", label)
+			}
+			parsed, ok := new(big.Int).SetString(value, 10)
+			if !ok || parsed.Sign() <= 0 {
+				return fmt.Errorf("dvn %s must be a positive integer", label)
+			}
+		}
 	}
 	if err := c.validatePricing(seen, signers); err != nil {
 		return err

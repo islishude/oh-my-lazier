@@ -46,13 +46,18 @@ npm install --save-exact \
 - `contracts/scripts/configure-lz-dvn.ts` 通过 Endpoint `setConfig` 写入 SendUln302 与 ReceiveUln302 `UlnConfig`，并显式设置 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`、`optionalDVNCount = NIL`。
 - `contracts/scripts/configure-lz-rollback.ts` 使用 `inspect:lz-config` 保存的 JSON 快照重放旧 `ExecutorConfig`、SendUln302 `UlnConfig` 与 ReceiveUln302 `UlnConfig`，作为本地 rollback 输入。
 - `contracts/scripts/check-oft-canary.ts` 检查 canary source receipt 的 EndpointV2 `PacketSent`、SendLib `ExecutorFeePaid.executor = OpenExecutor`，并可独立检查 destination receipt 的 `PacketDelivered`/`LzReceiveAlert` 与 recipient TestOFT 最小余额。
+- `contracts/scripts/check-dvn-verification.ts` 检查 destination-chain ReceiveUln302 `PayloadVerified` 是否包含 OpenDVN 与 LayerZero Labs DVN，并可要求同 receipt 内存在 EndpointV2 `PacketVerified`。
 - `contracts/scripts/check-lz-addresses.ts` 从 LayerZero 官方 metadata 重新核对本地记录的 Sepolia/Base Sepolia EndpointV2、ULN302、Executor、LayerZero Labs DVN 地址。
 - `contracts/scripts/deployment-preflight.ts` 只读检查 TestOFT/OpenExecutor/OpenDVN `owner()`、owner native balance、可选 canary treasury native/TestOFT balance 与 TestOFT totalSupply。
 - `contracts/scripts/oft-pathway-control.ts` 检查或执行 TestOFT `pauseSend`、`pauseReceive`、zero-capacity drain 与 steady-state outbound rate-limit 更新，并在写入后回读确认。
+- `contracts/scripts/price-config-check.ts` 只读检查 OpenExecutor/OpenDVN `priceConfig(dstEid)` 的 fresh `updatedAt`、非零 `dstGasPriceInSrcToken` 与可选 `staleAfter` 预期值。
+- `contracts/scripts/migration-evidence.ts` 校验迁移记录 JSON 是否包含 config diff、preflight、LayerZero config before/after、price config、drain、canary、DVN verification 与 rollback/manual retry 证据引用。
+- `docs/deployments/testnet-migration-evidence.example.json` 提供 Ethereum Sepolia <-> Base Sepolia 双向迁移记录模板。
 - `docs/deployments/layerzero-testnet-addresses.md` 记录 Ethereum Sepolia 与 Base Sepolia 的 EndpointV2、SendUln302、ReceiveUln302、LayerZero Executor、LayerZero Labs DVN 地址。
 - `docs/deployments/test-oft-policy.md` 固定 TestOFT name、symbol、constructor mint、owner 与 post-deploy minting policy。
 - `go run ./go/cmd/pricebot-once -config <worker.yaml>` 可用 worker 配置读取价格源和 RPC gas price，并为 OpenExecutor/OpenDVN enqueue 一次 `setPriceConfig` 更新。
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` 汇总 pathway 下未完成 executor job、DVN job、tx outbox 与 verified-but-undelivered 计数，作为切换 Executor/DVN config 前的 drain 门禁。
+- `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` 支持 rollback/manual retry 时重新排队 failed tx，或对已分配 nonce 的 tx 准备 replacement fee bump。
 - `contracts/scripts/README.md` 记录脚本环境变量与本地方向配置方式。
 - `npm run typecheck` 覆盖部署与配置脚本类型检查。
 
@@ -67,9 +72,10 @@ npm install --save-exact \
 - 切换 Executor/DVN config 前运行 `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>`，确认 `ready: true`。
 - 迁移阶段执行前后都运行 `npm run inspect:lz-config`，记录旧 Executor/DVN config 以支持 rollback。
 - 每次修改 worker YAML 前运行 `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>`，将输出附到迁移记录。
-- 执行 worker price config 更新前后按 `docs/runbooks/price-bot.md` 记录价格源、outbox 交易、receipt 与链上 `priceConfig(dstEid)`。
+- 执行 worker price config 更新前后按 `docs/runbooks/price-bot.md` 记录价格源、outbox 交易、receipt，并运行 `npm run check:price-config` 验证链上 `priceConfig(dstEid)`。
 - 执行 pause/drain/rate-limit 前按 `docs/runbooks/rate-limit.md` 记录容量、refill、canary size 与 owner 可用性。
 - 执行 signer 变更前按 `docs/runbooks/key-management.md` 记录 signer inventory、KMS key spec 或 keystore password source、rollback signer。
+- 批准迁移记录前运行 `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`，确认双向迁移和 rollback 证据引用齐全。
 
 ## Phase 3 - Executor Migration
 
@@ -93,7 +99,7 @@ npm install --save-exact \
 Rollback：
 
 - 将 `ExecutorConfig.executor` 重置为之前的 Executor。
-- 用 `draincheck` 的 `verified_but_undelivered_count` 定位已经 verified 但未 delivered 的 packet，并按 manual retry 计划处理。
+- 用 `draincheck` 的 `verified_but_undelivered_count` 定位已经 verified 但未 delivered 的 packet，并用 `go run ./go/cmd/txretry` 对相关 `tx_outbox` 行执行 `retry-failed` 或 `replace`。
 
 当前仓库证据：
 
@@ -145,8 +151,8 @@ confirmations = 12
 5. 验证 DVN address ordering。
 6. 验证 confirmations = 12。
 7. 发送 canary transfer。
-8. 确认 OpenDVN verification submitted。
-9. 确认 LayerZero Labs DVN verification observed。
+8. 使用 `npm run check:dvn-verification` 确认 OpenDVN verification submitted。
+9. 使用 `npm run check:dvn-verification` 确认 LayerZero Labs DVN verification observed。
 10. 确认 Executor commits and delivers。
 11. Unpause TestOFT send。
 12. 反方向重复。

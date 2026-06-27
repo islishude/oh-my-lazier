@@ -5,6 +5,11 @@ executor:
   signer: "0x9999999999999999999999999999999999999999"
 dvn:
   mode: shadow
+  # Active mode submits ReceiveUln302.verify after quorum checks pass.
+  # signer: "0x9999999999999999999999999999999999999999"
+  # tx_gas_limit: 120000
+  # max_fee_per_gas_wei: "2000000000"
+  # max_priority_fee_per_gas_wei: "1000000000"
 signers:
   - id: "0x9999999999999999999999999999999999999999"
     type: keystore

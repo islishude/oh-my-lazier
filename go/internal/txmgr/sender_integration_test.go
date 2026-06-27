@@ -319,6 +319,74 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	}
 }
 
+func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 66,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+	packet := testExecutorPacket(t)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(t.Context(), db.DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNQuorumChecking),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	if _, err := store.EnqueueDVNVerifyTx(
+		t.Context(),
+		packet.GUID,
+		string(packets.DVNQuorumChecking),
+		string(packets.DVNVerifyTxEnqueued),
+		db.TxRequest{
+			ChainEID:             packet.DstEID,
+			Purpose:              dvnVerifyPurpose,
+			GUID:                 packet.GUID.Bytes(),
+			To:                   packet.Receiver,
+			Calldata:             []byte{0x06, 0x07},
+			Value:                big.NewInt(0),
+			GasLimit:             big.NewInt(120_000),
+			MaxFeePerGas:         big.NewInt(2_000_000_000),
+			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+			SignerID:             signer.Address().Hex(),
+		},
+		[]byte(`{"status":"ready"}`),
+	); err != nil {
+		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	job, err := store.GetDVNJob(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetDVNJob() error = %v", err)
+	}
+	if job.Status != string(packets.DVNVerified) {
+		t.Fatalf("dvn job status = %q, want %q", job.Status, packets.DVNVerified)
+	}
+}
+
 func openTestStore(t *testing.T) *db.Store {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
@@ -365,11 +433,12 @@ func testExecutorPacket(t *testing.T) db.PacketRecord {
 	t.Helper()
 	message := []byte{0x03, 0x04}
 	guid := crypto.Keccak256Hash([]byte(t.Name()))
+	nonce := new(big.Int).SetBytes(guid[:8])
 	return db.PacketRecord{
 		GUID:           guid,
 		SrcEID:         40161,
 		DstEID:         40245,
-		Nonce:          big.NewInt(7),
+		Nonce:          nonce,
 		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
 		SendLib:        common.HexToAddress("0x9999999999999999999999999999999999999999"),

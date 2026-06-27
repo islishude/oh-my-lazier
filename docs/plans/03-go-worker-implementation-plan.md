@@ -168,6 +168,7 @@ Active mode：
 
 - 与 shadow 相同
 - 额外 enqueue verify transaction
+- tx manager 确认 verify receipt 后标记 DVN job `VERIFIED`
 
 ## RPC Quorum
 
@@ -251,7 +252,7 @@ ECC_SECG_P256K1
 - [~] worker indexes source events: package, loop boundary, EndpointV2 `PacketSent`, SendLib `ExecutorFeePaid`, OpenExecutor `ExecutorJobAssigned`, PacketV1 decode, same-transaction correlation, confirmed-window polling backfill, persistent indexer cursors, and live subscription wakeups exist; testnet validation remains pending.
 - [~] worker writes packets into Postgres: `db.Store.UpsertPacket` and `db.Store.UpsertExecutorJob` persist validated source-chain records from the indexer loop; cursor progress is durable in Postgres.
 - [~] Executor active flow delivers basic OFT send: `commitVerification` 与 `lzReceive` calldata/outbox request builder、DB 原子 enqueue/status/receipt transition、committer/deliverer one-shot 处理、EndpointV2/ReceiveUln302 readiness eth_call、destination EndpointV2 event decoders、状态应用、confirmed-window polling backfill 与 live subscription wakeups 已有；testnet send remains pending.
-- [~] DVN shadow flow produces would-verify records: mode、loop boundary、DVN `PacketSent` / `DVNFeePaid` / `DVNJobAssigned` decode/correlation、`dvn_jobs` persistence、confirmation wait transition、source head/receipt/log verification、healthy-provider head/receipt comparison、RPC conflict persistence、block-hash conflict chain pause、receipt/log conflict pathway pause, and `WOULD_VERIFY` report persistence exist; testnet shadow validation remains pending.
+- [~] DVN shadow/active flow verifies source evidence: mode、loop boundary、DVN `PacketSent` / `DVNFeePaid` / `DVNJobAssigned` decode/correlation、`dvn_jobs` persistence、confirmation wait transition、source head/receipt/log verification、healthy-provider head/receipt comparison、RPC conflict persistence、block-hash conflict chain pause、receipt/log conflict pathway pause、shadow `WOULD_VERIFY` report persistence、active `ReceiveUln302.verify` outbox enqueue 与 successful receipt -> `VERIFIED` transition exist; testnet shadow/active validation remains pending.
 - [x] tx_outbox prevents nonce conflicts and tx manager marks broadcast receipts confirmed or failed.
 - [~] RPC quorum conflict pauses chain/pathway: quorum package boundary, first-healthy-provider `eth_call`, source head/receipt provider comparison, chain/pathway durable pause APIs, block-hash conflict chain pause, receipt/log conflict pathway pause, DB-backed `/metrics`, and monitoring checklist exist; testnet validation remains pending.
 - [x] unsupported executor options move packet/job to `MANUAL_REVIEW` with a persisted review reason during source-chain indexing.

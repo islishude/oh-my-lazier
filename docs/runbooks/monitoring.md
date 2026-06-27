@@ -25,6 +25,14 @@ Required alerts:
 - Missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window: page if the chain is actively used.
 - `/readyz` returns non-200 for more than two scrape intervals: page.
 
+Before any migration approval, run the DB-backed readiness gate and attach the JSON output:
+
+```bash
+go run ./go/cmd/readinesscheck -config <worker.yaml> -format json
+```
+
+The readiness gate fails if an enabled chain is paused, an enabled pathway between enabled chains is paused, or an active chain has failed `tx_outbox` rows.
+
 Migration dashboard panels:
 
 - Chain enabled/paused status by `eid` and `name`.

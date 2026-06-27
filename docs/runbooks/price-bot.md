@@ -34,11 +34,24 @@ If Binance and Uniswap deviate beyond `max_deviation_bps`, no price update shoul
 After the tx manager broadcasts and confirms the queued transactions:
 
 1. Confirm the tx outbox rows for the pricing signer reached a terminal confirmed status.
-2. Read `priceConfig(dstEid)` on source-chain OpenExecutor and OpenDVN.
+2. Run `npm run check:price-config` on the source chain for the target `DST_EID`.
 3. Confirm `updatedAt` is recent and `staleAfter` matches the approved config.
 4. Confirm `dstGasPriceInSrcToken` is non-zero and consistent with the recorded gas/price inputs.
 5. Confirm `getFee`/`getFeeOnSend` succeeds before the stale window expires.
 6. Confirm stale configs still cause worker quote/assignment reverts in tests before enabling mainnet use.
+
+Example:
+
+```bash
+RPC_URL=... \
+CHAIN_ID=11155111 \
+OPEN_EXECUTOR=... \
+OPEN_DVN=... \
+DST_EID=40245 \
+MAX_PRICE_AGE_SECONDS=300 \
+EXPECTED_STALE_AFTER=1800 \
+npm run check:price-config
+```
 
 ## Rollback
 

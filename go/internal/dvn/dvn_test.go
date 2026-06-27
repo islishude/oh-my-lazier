@@ -1,6 +1,7 @@
 package dvn
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/binary"
@@ -16,6 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
@@ -151,6 +154,68 @@ func TestProcessQuorumOnceMarksWouldVerify(t *testing.T) {
 	}
 }
 
+func TestProcessQuorumOnceActiveEnqueuesVerifyTx(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNQuorumChecking),
+			},
+		}},
+	}
+	registry := testRegistry(t, packet)
+	worker := NewWithClientsAndSettings(
+		"active",
+		store,
+		registry,
+		Settings{
+			SignerID: "0x9999999999999999999999999999999999999999",
+			TxFees: TxFees{
+				GasLimit:             big.NewInt(120000),
+				MaxFeePerGas:         big.NewInt(2_000_000_000),
+				MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+			},
+		},
+		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
+		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptReader{receipt: testSourceReceipt(t, packet)}},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessQuorumOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessQuorumOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.verifyGUID != packet.GUID {
+		t.Fatalf("verify guid = %s, want %s", store.verifyGUID, packet.GUID)
+	}
+	if store.verifyRequest.Purpose != TxPurposeVerify {
+		t.Fatalf("verify purpose = %q, want %q", store.verifyRequest.Purpose, TxPurposeVerify)
+	}
+	if store.verifyRequest.ChainEID != packet.DstEID {
+		t.Fatalf("verify chain = %d, want %d", store.verifyRequest.ChainEID, packet.DstEID)
+	}
+	if store.verifyRequest.To != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Fatalf("verify target = %s", store.verifyRequest.To)
+	}
+	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnVerifyABI.Methods["verify"].ID) {
+		t.Fatalf("verify calldata selector = %x", store.verifyRequest.Calldata[:4])
+	}
+}
+
+func TestBuildVerifyTxRejectsMissingConfirmations(t *testing.T) {
+	packet := testDVNPacket()
+	_, err := BuildVerifyTx(packet, common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0, "0x9999999999999999999999999999999999999999", TxFees{})
+	if err == nil {
+		t.Fatal("BuildVerifyTx() error = nil, want missing confirmations error")
+	}
+}
+
 func TestProcessQuorumOnceMarksConflictOnMismatchedReceipt(t *testing.T) {
 	packet := testDVNPacket()
 	receipt := testSourceReceipt(t, packet)
@@ -234,6 +299,8 @@ type fakeStore struct {
 	waitingGUID       common.Hash
 	quorumGUID        common.Hash
 	wouldVerifyGUID   common.Hash
+	verifyGUID        common.Hash
+	verifyRequest     db.TxRequest
 	conflictGUID      common.Hash
 	conflictReason    string
 	pausedChainEID    uint32
@@ -266,11 +333,66 @@ func (s *fakeStore) MarkDVNWouldVerify(_ context.Context, guid common.Hash, _ st
 	return nil
 }
 
+func (s *fakeStore) EnqueueDVNVerifyTx(_ context.Context, guid common.Hash, _, _ string, request db.TxRequest, quorumResult []byte) (int64, error) {
+	s.verifyGUID = guid
+	s.verifyRequest = request
+	s.quorumResult = append([]byte(nil), quorumResult...)
+	return 42, nil
+}
+
 func (s *fakeStore) MarkDVNQuorumConflict(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
 	s.conflictGUID = guid
 	s.conflictReason = reason
 	s.quorumResult = append([]byte(nil), quorumResult...)
 	return nil
+}
+
+func testRegistry(t *testing.T, packet db.PacketRecord) *chain.Registry {
+	t.Helper()
+	registry, err := chain.NewRegistry(
+		[]config.ChainConfig{
+			{
+				EID:             packet.SrcEID,
+				Name:            "source",
+				ChainID:         11155111,
+				EndpointAddress: "0x1111111111111111111111111111111111111111",
+				Confirmations:   12,
+				RPCURLs:         []string{"http://localhost:8545"},
+				Workers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+			},
+			{
+				EID:             packet.DstEID,
+				Name:            "destination",
+				ChainID:         84532,
+				EndpointAddress: "0x4444444444444444444444444444444444444444",
+				Confirmations:   12,
+				RPCURLs:         []string{"http://localhost:8546"},
+				Workers: config.WorkerContractsConfig{
+					OpenExecutor: "0x5555555555555555555555555555555555555555",
+					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				},
+			},
+		},
+		[]config.PathwayConfig{
+			{
+				SrcEID:         packet.SrcEID,
+				DstEID:         packet.DstEID,
+				SrcOApp:        packet.Sender.Hex(),
+				DstOApp:        packet.Receiver.Hex(),
+				SendLib:        packet.SendLib.Hex(),
+				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Enabled:        true,
+				MaxMessageSize: 10000,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	return registry
 }
 
 func (s *fakeStore) PauseChain(_ context.Context, eid uint32) error {
