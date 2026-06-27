@@ -92,9 +92,9 @@ func renderCounts(label string, counts []db.StatusCount) string {
 		return fmt.Sprintf("%s: none\n", label)
 	}
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("%s:\n", label))
+	fmt.Fprintf(&out, "%s:\n", label)
 	for _, count := range counts {
-		out.WriteString(fmt.Sprintf("- %s: %d\n", count.Status, count.Count))
+		fmt.Fprintf(&out, "- %s: %d\n", count.Status, count.Count)
 	}
 	return out.String()
 }

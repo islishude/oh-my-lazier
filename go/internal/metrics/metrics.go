@@ -70,42 +70,42 @@ func RenderPrometheus(snapshot db.StatsSnapshot) string {
 	output.WriteString("# HELP laz_chain_enabled Whether a configured chain is enabled.\n")
 	output.WriteString("# TYPE laz_chain_enabled gauge\n")
 	for _, stat := range snapshot.Chains {
-		output.WriteString(fmt.Sprintf("laz_chain_enabled{eid=%q,name=%s} %d\n", strconv.FormatUint(uint64(stat.EID), 10), label(stat.Name), boolGauge(stat.Enabled)))
+		fmt.Fprintf(&output, "laz_chain_enabled{eid=%q,name=%s} %d\n", strconv.FormatUint(uint64(stat.EID), 10), label(stat.Name), boolGauge(stat.Enabled))
 	}
 	output.WriteString("# HELP laz_chain_paused Whether a chain is paused by safety logic.\n")
 	output.WriteString("# TYPE laz_chain_paused gauge\n")
 	for _, stat := range snapshot.Chains {
-		output.WriteString(fmt.Sprintf("laz_chain_paused{eid=%q,name=%s} %d\n", strconv.FormatUint(uint64(stat.EID), 10), label(stat.Name), boolGauge(stat.Paused)))
+		fmt.Fprintf(&output, "laz_chain_paused{eid=%q,name=%s} %d\n", strconv.FormatUint(uint64(stat.EID), 10), label(stat.Name), boolGauge(stat.Paused))
 	}
 	output.WriteString("# HELP laz_pathway_paused Whether a configured pathway is paused by safety logic.\n")
 	output.WriteString("# TYPE laz_pathway_paused gauge\n")
 	for _, stat := range snapshot.Pathways {
-		output.WriteString(fmt.Sprintf("laz_pathway_paused{src_eid=%q,dst_eid=%q} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), boolGauge(stat.Paused)))
+		fmt.Fprintf(&output, "laz_pathway_paused{src_eid=%q,dst_eid=%q} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), boolGauge(stat.Paused))
 	}
 	output.WriteString("# HELP laz_packets_total Packets by source, destination, and status.\n")
 	output.WriteString("# TYPE laz_packets_total gauge\n")
 	for _, stat := range snapshot.Packets {
-		output.WriteString(fmt.Sprintf("laz_packets_total{src_eid=%q,dst_eid=%q,status=%s} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(stat.Status), stat.Count))
+		fmt.Fprintf(&output, "laz_packets_total{src_eid=%q,dst_eid=%q,status=%s} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(stat.Status), stat.Count)
 	}
 	output.WriteString("# HELP laz_executor_jobs_total Executor jobs by status.\n")
 	output.WriteString("# TYPE laz_executor_jobs_total gauge\n")
 	for _, stat := range snapshot.ExecutorJobs {
-		output.WriteString(fmt.Sprintf("laz_executor_jobs_total{status=%s} %d\n", label(stat.Status), stat.Count))
+		fmt.Fprintf(&output, "laz_executor_jobs_total{status=%s} %d\n", label(stat.Status), stat.Count)
 	}
 	output.WriteString("# HELP laz_dvn_jobs_total DVN jobs by status.\n")
 	output.WriteString("# TYPE laz_dvn_jobs_total gauge\n")
 	for _, stat := range snapshot.DVNJobs {
-		output.WriteString(fmt.Sprintf("laz_dvn_jobs_total{status=%s} %d\n", label(stat.Status), stat.Count))
+		fmt.Fprintf(&output, "laz_dvn_jobs_total{status=%s} %d\n", label(stat.Status), stat.Count)
 	}
 	output.WriteString("# HELP laz_tx_outbox_total Transaction outbox rows by chain and status.\n")
 	output.WriteString("# TYPE laz_tx_outbox_total gauge\n")
 	for _, stat := range snapshot.TxOutbox {
-		output.WriteString(fmt.Sprintf("laz_tx_outbox_total{chain_eid=%q,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Status), stat.Count))
+		fmt.Fprintf(&output, "laz_tx_outbox_total{chain_eid=%q,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Status), stat.Count)
 	}
 	output.WriteString("# HELP laz_indexer_cursor_last_block Last indexed block by chain and stream.\n")
 	output.WriteString("# TYPE laz_indexer_cursor_last_block gauge\n")
 	for _, stat := range snapshot.IndexerCursors {
-		output.WriteString(fmt.Sprintf("laz_indexer_cursor_last_block{chain_eid=%q,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Stream), stat.LastBlock))
+		fmt.Fprintf(&output, "laz_indexer_cursor_last_block{chain_eid=%q,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Stream), stat.LastBlock)
 	}
 	return output.String()
 }
