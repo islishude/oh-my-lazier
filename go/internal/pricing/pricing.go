@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math/big"
 	"strings"
 	"time"
@@ -60,9 +61,7 @@ func NewWithDependencies(store Store, registry *chain.Registry, settings Setting
 		return nil, err
 	}
 	copied := make(map[uint32]ChainSources, len(sources))
-	for eid, source := range sources {
-		copied[eid] = source
-	}
+	maps.Copy(copied, sources)
 	return &Bot{store: store, registry: registry, settings: settings, sources: copied, now: time.Now, logger: logger}, nil
 }
 

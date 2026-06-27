@@ -3,7 +3,6 @@ package dvn
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -13,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -24,9 +22,6 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
-
-//go:embed testdata/abis/packet_sent.json
-var packetSentABIJSON string
 
 func TestProcessConfirmationsOnceWaitsForSourceConfirmations(t *testing.T) {
 	packet := testDVNPacket()
@@ -203,7 +198,8 @@ func TestProcessQuorumOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	if store.verifyRequest.To != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
 		t.Fatalf("verify target = %s", store.verifyRequest.To)
 	}
-	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnVerifyABI.Methods["verify"].ID) {
+	receiveUlnABI := lzabi.ReceiveUln302ABI()
+	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnABI.Methods["verify"].ID) {
 		t.Fatalf("verify calldata selector = %x", store.verifyRequest.Calldata[:4])
 	}
 }
@@ -472,10 +468,7 @@ func testDVNPacket() db.PacketRecord {
 
 func testSourceReceipt(t *testing.T, packet db.PacketRecord) *gethtypes.Receipt {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(packetSentABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.EndpointV2ABI()
 	data, err := eventABI.Events["PacketSent"].Inputs.Pack(packet.EncodedPacket, packet.Options, packet.SendLib)
 	if err != nil {
 		t.Fatalf("Pack PacketSent error = %v", err)

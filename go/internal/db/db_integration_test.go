@@ -622,6 +622,45 @@ func TestEnqueueDVNVerifyTxAdvancesJobAtomically(t *testing.T) {
 	}
 }
 
+func TestGetPacketByVerification(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	found, err := store.GetPacketByVerification(ctx, packet.DstEID, packet.PacketHeader, packet.PayloadHash)
+	if err != nil {
+		t.Fatalf("GetPacketByVerification() error = %v", err)
+	}
+	if found.GUID != packet.GUID {
+		t.Fatalf("found guid = %s, want %s", found.GUID, packet.GUID)
+	}
+}
+
 func TestExecutorWorkEnqueueAdvancesStatusAtomically(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {

@@ -31,7 +31,7 @@ Before any migration approval, run the DB-backed readiness gate and attach the J
 go run ./go/cmd/readinesscheck -config <worker.yaml> -format json
 ```
 
-The readiness gate fails if an enabled chain is paused, an enabled pathway between enabled chains is paused, or an active chain has failed `tx_outbox` rows.
+The readiness gate fails if an enabled chain is paused, an enabled pathway between enabled chains is paused, an active chain has failed `tx_outbox` rows, or an enabled pathway's required source/destination indexer cursor is missing or has not advanced past block `0`.
 
 Migration dashboard panels:
 

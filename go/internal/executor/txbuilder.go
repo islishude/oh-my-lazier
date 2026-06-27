@@ -1,15 +1,13 @@
 package executor
 
 import (
-	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lz"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 )
 
 const (
@@ -20,13 +18,7 @@ const (
 )
 
 var (
-	//go:embed abis/receive_uln302.json
-	receiveUlnABIJSON string
-	//go:embed abis/endpoint_lz_receive.json
-	endpointABIJSON string
-
-	receiveUlnABI = mustParseABI(receiveUlnABIJSON)
-	endpointABI   = mustParseABI(endpointABIJSON)
+	endpointABI = lzabi.EndpointV2ABI()
 )
 
 // TxFees carries optional EIP-1559 transaction fee settings for an outbox request.
@@ -41,7 +33,7 @@ func BuildCommitVerificationCalldata(packet db.PacketRecord) ([]byte, error) {
 	if err := packet.Validate(); err != nil {
 		return nil, err
 	}
-	return receiveUlnABI.Pack("commitVerification", packet.PacketHeader, packet.PayloadHash)
+	return lzabi.PackReceiveUln302CommitVerification(packet.PacketHeader, packet.PayloadHash)
 }
 
 // BuildLzReceiveCalldata ABI-encodes EndpointV2.lzReceive for phase-1 delivery.
@@ -119,14 +111,6 @@ type endpointOrigin struct {
 	SrcEID uint32      `abi:"srcEid"`
 	Sender common.Hash `abi:"sender"`
 	Nonce  uint64      `abi:"nonce"`
-}
-
-func mustParseABI(definition string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(definition))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }
 
 func cloneBigInt(value *big.Int) *big.Int {

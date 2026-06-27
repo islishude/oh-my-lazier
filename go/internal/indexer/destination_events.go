@@ -10,6 +10,7 @@ import (
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -25,6 +26,19 @@ type ExecutorDestinationStore interface {
 	ExecutorReceiptStore
 	GetPacket(ctx context.Context, guid common.Hash) (db.PacketRecord, error)
 	GetPacketByDestination(ctx context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error)
+}
+
+// DVNDestinationStore loads known packets and persists destination-chain DVN verification outcomes.
+type DVNDestinationStore interface {
+	GetDVNJob(ctx context.Context, guid common.Hash) (db.DVNJobRecord, error)
+	GetPacketByVerification(ctx context.Context, dstEID uint32, packetHeader []byte, payloadHash common.Hash) (db.PacketRecord, error)
+	MarkDVNVerified(ctx context.Context, guid, txHash common.Hash) error
+}
+
+// DestinationStore persists all destination-chain event outcomes.
+type DestinationStore interface {
+	ExecutorDestinationStore
+	DVNDestinationStore
 }
 
 // ApplyExecutorDestinationLogs applies known EndpointV2 destination logs for one destination chain.
@@ -57,6 +71,60 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		if didApply {
 			applied++
 		}
+	}
+	return applied, nil
+}
+
+// ApplyDVNDestinationLogs applies ReceiveUln302 PayloadVerified logs for the configured OpenDVN.
+func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dstEID uint32, expectedDVN common.Address, logs []gethtypes.Log) (int, error) {
+	if store == nil {
+		return 0, fmt.Errorf("dvn destination store is required")
+	}
+	if dstEID == 0 {
+		return 0, fmt.Errorf("destination eid is required")
+	}
+	if expectedDVN == (common.Address{}) {
+		return 0, fmt.Errorf("expected dvn is required")
+	}
+	applied := 0
+	for _, log := range logs {
+		if len(log.Topics) == 0 || log.Topics[0] != lzabi.PayloadVerifiedTopic() {
+			continue
+		}
+		event, err := lzabi.DecodePayloadVerified(log)
+		if err != nil {
+			return applied, err
+		}
+		if event.DVN != expectedDVN {
+			continue
+		}
+		packet, err := store.GetPacketByVerification(ctx, dstEID, event.Header, event.ProofHash)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return applied, err
+		}
+		if packet.DstEID != dstEID {
+			return applied, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+		}
+		if err := validatePayloadVerified(packet, event); err != nil {
+			return applied, err
+		}
+		job, err := store.GetDVNJob(ctx, packet.GUID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return applied, err
+		}
+		if job.Status == string(packets.DVNVerified) {
+			continue
+		}
+		if err := store.MarkDVNVerified(ctx, packet.GUID, log.TxHash); err != nil {
+			return applied, err
+		}
+		applied++
 	}
 	return applied, nil
 }
@@ -171,6 +239,19 @@ func validateLzReceiveAlert(packet db.PacketRecord, event lzabi.LzReceiveAlert) 
 	}
 	if string(event.Message) != string(packet.Message) {
 		return fmt.Errorf("LzReceiveAlert message does not match packet message")
+	}
+	return nil
+}
+
+func validatePayloadVerified(packet db.PacketRecord, event lzabi.PayloadVerified) error {
+	if string(event.Header) != string(packet.PacketHeader) {
+		return fmt.Errorf("PayloadVerified header does not match packet header")
+	}
+	if event.ProofHash != packet.PayloadHash {
+		return fmt.Errorf("PayloadVerified proof hash %s does not match packet payload hash %s", event.ProofHash, packet.PayloadHash)
+	}
+	if event.Confirmations == nil || event.Confirmations.Sign() <= 0 {
+		return fmt.Errorf("PayloadVerified confirmations must be positive")
 	}
 	return nil
 }

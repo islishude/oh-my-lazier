@@ -3,22 +3,20 @@ package dvn
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"math/big"
-	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
@@ -28,13 +26,6 @@ const loopInterval = 5 * time.Second
 const (
 	// TxPurposeVerify identifies ReceiveUln302.verify outbox requests.
 	TxPurposeVerify = "dvn_verify"
-)
-
-var (
-	//go:embed abis/receive_uln302_verify.json
-	receiveUlnVerifyABIJSON string
-
-	receiveUlnVerifyABI = mustParseABI(receiveUlnVerifyABIJSON)
 )
 
 // Mode selects whether the DVN verifier only reports or also submits verification transactions.
@@ -364,7 +355,7 @@ func BuildVerifyCalldata(packet db.PacketRecord, confirmations uint64) ([]byte, 
 	if confirmations == 0 {
 		return nil, errors.New("dvn confirmations required is required")
 	}
-	return receiveUlnVerifyABI.Pack("verify", packet.PacketHeader, packet.PayloadHash, confirmations)
+	return lzabi.PackReceiveUln302Verify(packet.PacketHeader, packet.PayloadHash, confirmations)
 }
 
 // BuildVerifyTx creates the outbox request for ReceiveUln302.verify.
@@ -391,14 +382,6 @@ func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmati
 		MaxPriorityFeePerGas: cloneBigInt(fees.MaxPriorityFeePerGas),
 		SignerID:             signerID,
 	}, nil
-}
-
-func mustParseABI(definition string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(definition))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }
 
 func cloneBigInt(value *big.Int) *big.Int {

@@ -115,7 +115,7 @@ Evidence:
 - `go/internal/signer/kms.Signer`
 - `go/internal/signer/kms.TestParseDERSignatureRejectsTrailingBytes`
 - `go test ./go/internal/signer/kms -count=1`
-- `RUSTACK_KMS_ENDPOINT=http://localhost:4566 go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
+- `RUSTACK_KMS_ENDPOINT=http://localhost:4566 make test-kms-rustack` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
 - `go/internal/db.Store.EnqueueTx`
 - `go/internal/db.Store.ClaimNextNonce`
 - `go/internal/db.Store.ListBroadcastTx`
@@ -238,8 +238,11 @@ Evidence:
 
 - `go/internal/lzabi.DecodeDVNFeePaid`
 - `go/internal/lzabi.DecodeDVNJobAssigned`
+- `go/internal/lzabi.DecodePayloadVerified`
 - `go/internal/indexer.DVNSourceTxRecordsFromLogs`
+- `go/internal/indexer.ApplyDVNDestinationLogs`
 - `go/internal/db.Store.UpsertDVNJob`
+- `go/internal/db.Store.GetPacketByVerification`
 - `go/internal/db.Store.ListDVNWork`
 - `go/internal/db.Store.MarkDVNWaitingConfirmations`
 - `go/internal/db.Store.MarkDVNQuorumChecking`
@@ -254,6 +257,7 @@ Evidence:
 - `go/internal/dvn.BuildVerifyTx`
 - `go/internal/dvn.TestProcessQuorumOnceMarksWouldVerify`
 - `go/internal/dvn.TestProcessQuorumOnceActiveEnqueuesVerifyTx`
+- `go/internal/indexer.TestIndexerProcessOnceBackfillsDVNVerification`
 - `go/internal/txmgr.TestProcessReceiptsMarksDVNVerifyTxVerified`
 - `go/internal/rpcquorum.HeadConflictError`
 - `go/internal/rpcquorum.IsHeadConflict`
@@ -421,6 +425,7 @@ Evidence:
 - `go/internal/metrics.RenderPrometheus`
 - `go/internal/db.Store.Stats`
 - `go/internal/readiness.Evaluate`
+- `go/internal/readiness.TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors`
 - `go/cmd/readinesscheck`
 - `go/internal/config.LoadStatic`
 - `go/internal/configdiff.Diff`
@@ -431,11 +436,13 @@ Evidence:
 - `docs/runbooks/rate-limit.md`
 - `docs/runbooks/mainnet-readiness.md`
 - `docs/security/parent-agent-security-review.md`
+- Codex Security preflight with `native` multi-agent `v1` tool-surface facts: `ready`
 - `go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1`
 - `go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1`
 - `go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1`
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`
+- `make security-check`
 - `govulncheck ./...` via temporary `GOBIN`: 0 called Go vulnerabilities
 - `package.json` retains `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`
 - `docs/security/npm-audit-disposition.md`

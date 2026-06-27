@@ -3,10 +3,8 @@ package indexer
 import (
 	"encoding/binary"
 	"math/big"
-	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -18,10 +16,7 @@ func TestPacketRecordFromSentLog(t *testing.T) {
 	encodedPacket := testEncodedPacket()
 	options := []byte{0x01, 0x02}
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
-	eventABI, err := abi.JSON(strings.NewReader(packetSentABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.EndpointV2ABI()
 	data, err := eventABI.Events["PacketSent"].Inputs.Pack(encodedPacket, options, sendLib)
 	if err != nil {
 		t.Fatalf("Pack() error = %v", err)

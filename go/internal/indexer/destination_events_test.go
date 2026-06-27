@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -12,6 +11,7 @@ import (
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -142,6 +142,52 @@ func TestApplyExecutorDestinationLogsSkipsUnknownPackets(t *testing.T) {
 	}
 }
 
+func TestApplyDVNDestinationLogsMarksVerified(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x3333333333333333333333333333333333333333"))
+	store := &fakeDestinationStore{
+		byVerification: map[string]db.PacketRecord{
+			verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,
+		},
+		dvnJobs: map[common.Hash]db.DVNJobRecord{
+			packet.GUID: {
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNVerifyTxEnqueued),
+			},
+		},
+	}
+
+	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, common.HexToAddress("0x3333333333333333333333333333333333333333"), []gethtypes.Log{log})
+	if err != nil {
+		t.Fatalf("ApplyDVNDestinationLogs() error = %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1", applied)
+	}
+	if store.dvnVerifiedGUID != packet.GUID {
+		t.Fatalf("dvn verified guid = %s, want %s", store.dvnVerifiedGUID, packet.GUID)
+	}
+	if store.dvnVerifiedTxHash != log.TxHash {
+		t.Fatalf("dvn verified tx = %s, want %s", store.dvnVerifiedTxHash, log.TxHash)
+	}
+}
+
+func TestApplyDVNDestinationLogsSkipsOtherDVN(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{}
+
+	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, common.HexToAddress("0x3333333333333333333333333333333333333333"), []gethtypes.Log{
+		testPayloadVerifiedLog(t, packet, common.HexToAddress("0x4444444444444444444444444444444444444444")),
+	})
+	if err != nil {
+		t.Fatalf("ApplyDVNDestinationLogs() error = %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+}
+
 type fakeReceiptStore struct {
 	committedGUID   common.Hash
 	committedTxHash common.Hash
@@ -175,8 +221,12 @@ func testDestinationPacketRecord() db.PacketRecord {
 
 type fakeDestinationStore struct {
 	fakeReceiptStore
-	byGUID        map[common.Hash]db.PacketRecord
-	byDestination map[string]db.PacketRecord
+	byGUID            map[common.Hash]db.PacketRecord
+	byDestination     map[string]db.PacketRecord
+	byVerification    map[string]db.PacketRecord
+	dvnJobs           map[common.Hash]db.DVNJobRecord
+	dvnVerifiedGUID   common.Hash
+	dvnVerifiedTxHash common.Hash
 }
 
 func (s *fakeDestinationStore) GetPacket(_ context.Context, guid common.Hash) (db.PacketRecord, error) {
@@ -196,8 +246,34 @@ func (s *fakeDestinationStore) GetPacketByDestination(_ context.Context, dstEID,
 	return packet, nil
 }
 
+func (s *fakeDestinationStore) GetPacketByVerification(_ context.Context, dstEID uint32, packetHeader []byte, payloadHash common.Hash) (db.PacketRecord, error) {
+	packet, ok := s.byVerification[verificationLookupKey(dstEID, packetHeader, payloadHash)]
+	if !ok {
+		return db.PacketRecord{}, pgx.ErrNoRows
+	}
+	return packet, nil
+}
+
+func (s *fakeDestinationStore) GetDVNJob(_ context.Context, guid common.Hash) (db.DVNJobRecord, error) {
+	job, ok := s.dvnJobs[guid]
+	if !ok {
+		return db.DVNJobRecord{}, pgx.ErrNoRows
+	}
+	return job, nil
+}
+
+func (s *fakeDestinationStore) MarkDVNVerified(_ context.Context, guid, txHash common.Hash) error {
+	s.dvnVerifiedGUID = guid
+	s.dvnVerifiedTxHash = txHash
+	return nil
+}
+
 func destinationLookupKey(dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) string {
 	return fmt.Sprintf("%d:%d:%s:%s:%d", dstEID, srcEID, sender, receiver, nonce)
+}
+
+func verificationLookupKey(dstEID uint32, packetHeader []byte, payloadHash common.Hash) string {
+	return fmt.Sprintf("%d:%x:%s", dstEID, packetHeader, payloadHash)
 }
 
 func (s *fakeReceiptStore) MarkExecutorCommitted(_ context.Context, guid, txHash common.Hash) error {
@@ -270,6 +346,21 @@ func testLzReceiveAlertLog(t *testing.T, packetRecord db.PacketRecord, reason []
 	}
 }
 
+func testPayloadVerifiedLog(t *testing.T, packetRecord db.PacketRecord, dvn common.Address) gethtypes.Log {
+	t.Helper()
+	receiveUlnABI := lzabi.ReceiveUln302ABI()
+	data, err := receiveUlnABI.Events["PayloadVerified"].Inputs.Pack(dvn, packetRecord.PacketHeader, big.NewInt(12), packetRecord.PayloadHash)
+	if err != nil {
+		t.Fatalf("Pack PayloadVerified error = %v", err)
+	}
+	return gethtypes.Log{
+		Address: common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Topics:  []common.Hash{lzabi.PayloadVerifiedTopic()},
+		Data:    data,
+		TxHash:  common.HexToHash("0x4444444444444444444444444444444444444444444444444444444444444444"),
+	}
+}
+
 func originFromPacketRecord(packet db.PacketRecord) lzabi.Origin {
 	return lzabi.Origin{
 		SrcEID: packet.SrcEID,
@@ -280,9 +371,5 @@ func originFromPacketRecord(packet db.PacketRecord) lzabi.Origin {
 
 func endpointEventInputs(t *testing.T, name string) abi.Arguments {
 	t.Helper()
-	parsed, err := abi.JSON(strings.NewReader(endpointEventsABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
-	return parsed.Events[name].Inputs
+	return lzabi.EndpointV2ABI().Events[name].Inputs
 }

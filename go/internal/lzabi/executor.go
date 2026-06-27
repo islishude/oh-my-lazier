@@ -16,6 +16,11 @@ var openExecutorABIJSON string
 
 var openExecutorABI = mustOpenExecutorABI()
 
+// OpenExecutorABI returns the pinned OpenExecutor ABI used by Go workers.
+func OpenExecutorABI() abi.ABI {
+	return openExecutorABI
+}
+
 // ExecutorJobAssigned is the decoded OpenExecutor assignment event.
 type ExecutorJobAssigned struct {
 	DstEID       uint32

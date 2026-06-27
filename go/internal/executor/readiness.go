@@ -2,7 +2,6 @@ package executor
 
 import (
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"math/big"
@@ -12,16 +11,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 )
 
 var (
-	//go:embed abis/endpoint_view.json
-	endpointViewABIJSON string
-	//go:embed abis/receive_uln302_view.json
-	receiveUlnViewABIJSON string
-
-	endpointViewABI   = mustParseABI(endpointViewABIJSON)
-	receiveUlnViewABI = mustParseABI(receiveUlnViewABIJSON)
+	endpointViewABI   = lzabi.EndpointV2ABI()
+	receiveUlnViewABI = lzabi.ReceiveUln302ABI()
 )
 
 var (

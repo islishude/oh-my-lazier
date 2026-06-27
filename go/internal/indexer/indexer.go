@@ -27,7 +27,7 @@ const (
 
 // Store persists indexed executor source records and destination outcomes.
 type Store interface {
-	ExecutorDestinationStore
+	DestinationStore
 	GetIndexerCursor(ctx context.Context, chainEID uint32, stream string) (uint64, error)
 	UpdateIndexerCursor(ctx context.Context, chainEID uint32, stream string, lastBlock uint64) error
 	UpsertPacket(ctx context.Context, packet db.PacketRecord) error
@@ -49,16 +49,17 @@ type SubscriptionLogClient interface {
 
 // Indexer watches one chain for LayerZero and worker contract events.
 type Indexer struct {
-	chain            chain.Chain
-	sourcePathways   []chain.Pathway
-	destinationEID   uint32
-	store            Store
-	client           LogClient
-	pollInterval     time.Duration
-	backfillRange    uint64
-	expectedExecutor common.Address
-	expectedDVN      common.Address
-	logger           *slog.Logger
+	chain               chain.Chain
+	sourcePathways      []chain.Pathway
+	destinationPathways []chain.Pathway
+	destinationEID      uint32
+	store               Store
+	client              LogClient
+	pollInterval        time.Duration
+	backfillRange       uint64
+	expectedExecutor    common.Address
+	expectedDVN         common.Address
+	logger              *slog.Logger
 }
 
 // New creates an indexer for one configured chain.
@@ -69,22 +70,27 @@ func New(configuredChain chain.Chain, pathways []chain.Pathway, store Store, log
 // NewWithClient creates an indexer with an explicit log client for tests.
 func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store Store, client LogClient, logger *slog.Logger) *Indexer {
 	sourcePathways := make([]chain.Pathway, 0)
+	destinationPathways := make([]chain.Pathway, 0)
 	for _, pathway := range pathways {
 		if pathway.SrcEID == configuredChain.EID {
 			sourcePathways = append(sourcePathways, pathway)
 		}
+		if pathway.DstEID == configuredChain.EID {
+			destinationPathways = append(destinationPathways, pathway)
+		}
 	}
 	return &Indexer{
-		chain:            configuredChain,
-		sourcePathways:   sourcePathways,
-		destinationEID:   configuredChain.EID,
-		store:            store,
-		client:           client,
-		pollInterval:     defaultPollInterval,
-		backfillRange:    defaultBackfillRange,
-		expectedExecutor: configuredChain.Workers.OpenExecutor,
-		expectedDVN:      configuredChain.Workers.OpenDVN,
-		logger:           logger,
+		chain:               configuredChain,
+		sourcePathways:      sourcePathways,
+		destinationPathways: destinationPathways,
+		destinationEID:      configuredChain.EID,
+		store:               store,
+		client:              client,
+		pollInterval:        defaultPollInterval,
+		backfillRange:       defaultBackfillRange,
+		expectedExecutor:    configuredChain.Workers.OpenExecutor,
+		expectedDVN:         configuredChain.Workers.OpenDVN,
+		logger:              logger,
 	}
 }
 
@@ -262,17 +268,26 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64)
 	logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
 		FromBlock: blockNumber(from),
 		ToBlock:   blockNumber(to),
-		Addresses: []common.Address{i.chain.EndpointAddress},
+		Addresses: i.destinationAddresses(),
 		Topics: [][]common.Hash{{
 			lzabi.PacketVerifiedTopic(),
 			lzabi.PacketDeliveredTopic(),
 			lzabi.LzReceiveAlertTopic(),
+			lzabi.PayloadVerifiedTopic(),
 		}},
 	})
 	if err != nil {
 		return 0, err
 	}
-	return ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
+	executorApplied, err := ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
+	if err != nil {
+		return executorApplied, err
+	}
+	dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.expectedDVN, logs)
+	if err != nil {
+		return executorApplied, err
+	}
+	return executorApplied + dvnApplied, nil
 }
 
 func (i *Indexer) runPollingLoop(ctx context.Context) error {
@@ -330,7 +345,9 @@ func (i *Indexer) liveQuery() ethereum.FilterQuery {
 	for _, address := range i.sourceAddresses() {
 		seen[address] = struct{}{}
 	}
-	seen[i.chain.EndpointAddress] = struct{}{}
+	for _, address := range i.destinationAddresses() {
+		seen[address] = struct{}{}
+	}
 	addresses := make([]common.Address, 0, len(seen))
 	for address := range seen {
 		addresses = append(addresses, address)
@@ -349,14 +366,33 @@ func (i *Indexer) liveQuery() ethereum.FilterQuery {
 			lzabi.PacketVerifiedTopic(),
 			lzabi.PacketDeliveredTopic(),
 			lzabi.LzReceiveAlertTopic(),
+			lzabi.PayloadVerifiedTopic(),
 		}},
 	}
+}
+
+func (i *Indexer) destinationAddresses() []common.Address {
+	seen := map[common.Address]struct{}{
+		i.chain.EndpointAddress: {},
+	}
+	for _, pathway := range i.destinationPathways {
+		seen[pathway.ReceiveLib] = struct{}{}
+	}
+	addresses := make([]common.Address, 0, len(seen))
+	for address := range seen {
+		addresses = append(addresses, address)
+	}
+	sort.Slice(addresses, func(a, b int) bool {
+		return addresses[a].Hex() < addresses[b].Hex()
+	})
+	return addresses
 }
 
 func (i *Indexer) sourceAddresses() []common.Address {
 	seen := map[common.Address]struct{}{
 		i.chain.EndpointAddress:      {},
 		i.chain.Workers.OpenExecutor: {},
+		i.chain.Workers.OpenDVN:      {},
 	}
 	for _, pathway := range i.sourcePathways {
 		seen[pathway.SendLib] = struct{}{}

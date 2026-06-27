@@ -6,6 +6,11 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
 
+const (
+	executorSourceStream = "executor_source"
+	executorDestStream   = "executor_destination"
+)
+
 // Issue is one failed pre-migration readiness check.
 type Issue struct {
 	Code    string `json:"code"`
@@ -23,6 +28,7 @@ type Report struct {
 func Evaluate(snapshot db.StatsSnapshot) Report {
 	var issues []Issue
 	activeChains := make(map[uint32]struct{})
+	requiredCursors := make(map[uint32]map[string]struct{})
 	for _, chain := range snapshot.Chains {
 		if !chain.Enabled {
 			continue
@@ -45,6 +51,8 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 		if _, ok := activeChains[pathway.DstEID]; !ok {
 			continue
 		}
+		requireCursor(requiredCursors, pathway.SrcEID, executorSourceStream)
+		requireCursor(requiredCursors, pathway.DstEID, executorDestStream)
 		if pathway.Paused {
 			issues = append(issues, Issue{
 				Code:    "pathway_paused",
@@ -64,5 +72,40 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 			Message: fmt.Sprintf("chain %d has %d failed tx_outbox rows", outbox.ChainEID, outbox.Count),
 		})
 	}
+	cursorProgress := make(map[uint32]map[string]uint64)
+	for _, cursor := range snapshot.IndexerCursors {
+		if _, ok := activeChains[cursor.ChainEID]; !ok {
+			continue
+		}
+		if cursorProgress[cursor.ChainEID] == nil {
+			cursorProgress[cursor.ChainEID] = make(map[string]uint64)
+		}
+		cursorProgress[cursor.ChainEID][cursor.Stream] = cursor.LastBlock
+	}
+	for chainEID, streams := range requiredCursors {
+		for stream := range streams {
+			lastBlock, ok := cursorProgress[chainEID][stream]
+			if !ok {
+				issues = append(issues, Issue{
+					Code:    "indexer_cursor_missing",
+					Message: fmt.Sprintf("chain %d is missing indexer cursor %q", chainEID, stream),
+				})
+				continue
+			}
+			if lastBlock == 0 {
+				issues = append(issues, Issue{
+					Code:    "indexer_cursor_unstarted",
+					Message: fmt.Sprintf("chain %d indexer cursor %q has not advanced", chainEID, stream),
+				})
+			}
+		}
+	}
 	return Report{Ready: len(issues) == 0, Issues: issues, Stats: snapshot}
+}
+
+func requireCursor(required map[uint32]map[string]struct{}, chainEID uint32, stream string) {
+	if required[chainEID] == nil {
+		required[chainEID] = make(map[string]struct{})
+	}
+	required[chainEID][stream] = struct{}{}
 }

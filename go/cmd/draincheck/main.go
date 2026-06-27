@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/islishude/oh-my-lazier/go/internal/config"
@@ -90,9 +91,10 @@ func renderCounts(label string, counts []db.StatusCount) string {
 	if len(counts) == 0 {
 		return fmt.Sprintf("%s: none\n", label)
 	}
-	out := fmt.Sprintf("%s:\n", label)
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("%s:\n", label))
 	for _, count := range counts {
-		out += fmt.Sprintf("- %s: %d\n", count.Status, count.Count)
+		out.WriteString(fmt.Sprintf("- %s: %d\n", count.Status, count.Count))
 	}
-	return out
+	return out.String()
 }

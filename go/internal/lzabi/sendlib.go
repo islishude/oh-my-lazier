@@ -16,6 +16,11 @@ var sendLibBaseABIJSON string
 
 var sendLibBaseABI = mustSendLibBaseABI()
 
+// SendLibBaseABI returns the pinned LayerZero SendLib base ABI used by Go workers.
+func SendLibBaseABI() abi.ABI {
+	return sendLibBaseABI
+}
+
 // ExecutorFeePaid is the decoded LayerZero SendLib executor fee event.
 type ExecutorFeePaid struct {
 	Executor common.Address

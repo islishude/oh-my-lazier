@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 )
 
 func TestBuildCommitVerificationTx(t *testing.T) {
@@ -29,6 +30,7 @@ func TestBuildCommitVerificationTx(t *testing.T) {
 	if !bytes.Equal(request.GUID, packet.GUID.Bytes()) {
 		t.Fatalf("guid bytes mismatch")
 	}
+	receiveUlnABI := lzabi.ReceiveUln302ABI()
 	if len(request.Calldata) < 4 || !bytes.Equal(request.Calldata[:4], receiveUlnABI.Methods["commitVerification"].ID) {
 		t.Fatalf("calldata selector = %x, want commitVerification selector", request.Calldata[:4])
 	}

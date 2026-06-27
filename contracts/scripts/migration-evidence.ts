@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { jsonStringify, requiredEnv } from "./lib.js";
 
+const phase1DirectionKeys = new Set(["40161->40245", "40245->40161"]);
+
 export type EvidenceRef = {
   ref: string;
   capturedAt?: string;
@@ -19,13 +21,34 @@ export type MigrationDirectionEvidence = {
   drainCheckBeforeSwitch: EvidenceRef;
   canarySourceReceipt: EvidenceRef;
   canaryDestinationReceipt: EvidenceRef;
+  canary: CanaryEvidence;
+  dvnJoin: DVNJoinEvidence;
   dvnVerificationReceipt: EvidenceRef;
+};
+
+export type CanaryEvidence = {
+  amountLD: string;
+  senderAccount: string;
+  recipientAccount: string;
+  minRecipientBalanceLD: string;
+  sourceReceipt: EvidenceRef;
+  destinationReceipt: EvidenceRef;
+  recipientBalanceCheck: EvidenceRef;
+};
+
+export type DVNJoinEvidence = {
+  confirmations: number;
+  requiredDVNs: string[];
+  optionalDVNsDisabled: boolean;
+  configCheck: EvidenceRef;
 };
 
 export type RollbackEvidence = {
   previousExecutorConfig: EvidenceRef;
   previousSendUlnConfig: EvidenceRef;
   previousReceiveUlnConfig: EvidenceRef;
+  restoredConfigCheck: EvidenceRef;
+  canaryAfterRollback: EvidenceRef;
   ownerPauseAccount: string;
   signerAccount: string;
   drainCheck: EvidenceRef;
@@ -40,6 +63,8 @@ export type MigrationEvidenceRecord = {
   ownerAccount: string;
   signerAccount: string;
   makeCheck: EvidenceRef;
+  layerZeroAddressCheck: EvidenceRef;
+  readinessCheck: EvidenceRef;
   keyManagementReview: EvidenceRef;
   priceBotReview: EvidenceRef;
   rateLimitReview: EvidenceRef;
@@ -60,6 +85,8 @@ export function validateMigrationEvidenceRecord(
   requireNonEmpty(errors, record.signerAccount, "signerAccount");
   requireStringArray(errors, record.operatorContacts, "operatorContacts");
   requireEvidence(errors, record.makeCheck, "makeCheck");
+  requireEvidence(errors, record.layerZeroAddressCheck, "layerZeroAddressCheck");
+  requireEvidence(errors, record.readinessCheck, "readinessCheck");
   requireEvidence(errors, record.keyManagementReview, "keyManagementReview");
   requireEvidence(errors, record.priceBotReview, "priceBotReview");
   requireEvidence(errors, record.rateLimitReview, "rateLimitReview");
@@ -79,6 +106,7 @@ function validateDirections(
     return;
   }
   const seen = new Set<string>();
+  const directionKeys: string[] = [];
   directions.forEach((direction, index) => {
     const prefix = `directions[${index}]`;
     requireNonEmpty(errors, direction.label, `${prefix}.label`);
@@ -92,6 +120,7 @@ function validateDirections(
       errors.push(`${prefix} duplicates direction ${key}`);
     }
     seen.add(key);
+    directionKeys.push(key);
     requireEvidence(errors, direction.configDiff, `${prefix}.configDiff`);
     requireEvidence(
       errors,
@@ -120,12 +149,89 @@ function validateDirections(
       direction.canaryDestinationReceipt,
       `${prefix}.canaryDestinationReceipt`,
     );
+    validateCanary(errors, direction.canary, `${prefix}.canary`);
+    validateDVNJoin(errors, direction.dvnJoin, `${prefix}.dvnJoin`);
     requireEvidence(
       errors,
       direction.dvnVerificationReceipt,
       `${prefix}.dvnVerificationReceipt`,
     );
   });
+  for (const key of directionKeys) {
+    if (!phase1DirectionKeys.has(key)) {
+      errors.push(`directions contains unsupported phase-1 direction ${key}`);
+    }
+    const [srcEid, dstEid] = key.split("->");
+    const reverseKey = `${dstEid}->${srcEid}`;
+    if (!seen.has(reverseKey)) {
+      errors.push(`directions missing reciprocal direction ${reverseKey}`);
+    }
+  }
+  for (const expectedKey of phase1DirectionKeys) {
+    if (!seen.has(expectedKey)) {
+      errors.push(`directions missing phase-1 direction ${expectedKey}`);
+    }
+  }
+}
+
+function validateCanary(
+  errors: string[],
+  canary: CanaryEvidence,
+  field: string,
+): void {
+  if (!isRecord(canary)) {
+    errors.push(`${field} is required`);
+    return;
+  }
+  requirePositiveDecimalInteger(errors, canary.amountLD, `${field}.amountLD`);
+  requireNonEmpty(errors, canary.senderAccount, `${field}.senderAccount`);
+  requireNonEmpty(errors, canary.recipientAccount, `${field}.recipientAccount`);
+  requirePositiveDecimalInteger(
+    errors,
+    canary.minRecipientBalanceLD,
+    `${field}.minRecipientBalanceLD`,
+  );
+  requireEvidence(errors, canary.sourceReceipt, `${field}.sourceReceipt`);
+  requireEvidence(
+    errors,
+    canary.destinationReceipt,
+    `${field}.destinationReceipt`,
+  );
+  requireEvidence(
+    errors,
+    canary.recipientBalanceCheck,
+    `${field}.recipientBalanceCheck`,
+  );
+}
+
+function validateDVNJoin(
+  errors: string[],
+  dvnJoin: DVNJoinEvidence,
+  field: string,
+): void {
+  if (!isRecord(dvnJoin)) {
+    errors.push(`${field} is required`);
+    return;
+  }
+  if (dvnJoin.confirmations !== 12) {
+    errors.push(`${field}.confirmations must be 12`);
+  }
+  requireStringArray(errors, dvnJoin.requiredDVNs, `${field}.requiredDVNs`);
+  if (Array.isArray(dvnJoin.requiredDVNs)) {
+    const required = new Set(dvnJoin.requiredDVNs.map((value) => value.toLowerCase()));
+    for (const label of ["opendvn", "layerzero labs dvn"]) {
+      if (!required.has(label)) {
+        errors.push(`${field}.requiredDVNs must include ${label}`);
+      }
+    }
+    if (required.size < 2) {
+      errors.push(`${field}.requiredDVNs must not be self-only`);
+    }
+  }
+  if (dvnJoin.optionalDVNsDisabled !== true) {
+    errors.push(`${field}.optionalDVNsDisabled must be true`);
+  }
+  requireEvidence(errors, dvnJoin.configCheck, `${field}.configCheck`);
 }
 
 function validateRollback(errors: string[], rollback: RollbackEvidence): void {
@@ -147,6 +253,16 @@ function validateRollback(errors: string[], rollback: RollbackEvidence): void {
     errors,
     rollback.previousReceiveUlnConfig,
     "rollback.previousReceiveUlnConfig",
+  );
+  requireEvidence(
+    errors,
+    rollback.restoredConfigCheck,
+    "rollback.restoredConfigCheck",
+  );
+  requireEvidence(
+    errors,
+    rollback.canaryAfterRollback,
+    "rollback.canaryAfterRollback",
   );
   requireNonEmpty(errors, rollback.ownerPauseAccount, "rollback.ownerPauseAccount");
   requireNonEmpty(errors, rollback.signerAccount, "rollback.signerAccount");
@@ -193,6 +309,16 @@ function requirePositiveInteger(
 ): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     errors.push(`${field} must be a positive integer`);
+  }
+}
+
+function requirePositiveDecimalInteger(
+  errors: string[],
+  value: string,
+  field: string,
+): void {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
+    errors.push(`${field} must be a positive decimal integer string`);
   }
 }
 

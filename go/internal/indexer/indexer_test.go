@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -138,6 +139,42 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	}
 	if store.committedGUID != packet.GUID {
 		t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
+	}
+}
+
+func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := newFakeIndexerStore()
+	store.packets[packet.GUID] = packet
+	store.dvnJobs[packet.GUID] = db.DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNVerifyTxEnqueued),
+	}
+	client := &fakeLogClient{
+		head:            200,
+		destinationLogs: []gethtypes.Log{testPayloadVerifiedLog(t, packet, common.HexToAddress("0x3333333333333333333333333333333333333333"))},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.DstEID, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 1 {
+		t.Fatalf("DestinationLogs = %d, want 1", result.DestinationLogs)
+	}
+	if store.dvnVerifiedGUID != packet.GUID {
+		t.Fatalf("dvn verified guid = %s, want %s", store.dvnVerifiedGUID, packet.GUID)
+	}
+	if !queriesHaveAddress(client.queries, testIndexerPathway().ReceiveLib) {
+		t.Fatal("destination query does not include receive lib")
 	}
 }
 
@@ -330,11 +367,12 @@ func (s *fakeSubscription) Err() <-chan error {
 }
 
 type fakeIndexerStore struct {
-	packets       map[common.Hash]db.PacketRecord
-	jobs          map[common.Hash]db.ExecutorJobRecord
-	dvnJobs       map[common.Hash]db.DVNJobRecord
-	cursors       map[string]uint64
-	committedGUID common.Hash
+	packets         map[common.Hash]db.PacketRecord
+	jobs            map[common.Hash]db.ExecutorJobRecord
+	dvnJobs         map[common.Hash]db.DVNJobRecord
+	cursors         map[string]uint64
+	committedGUID   common.Hash
+	dvnVerifiedGUID common.Hash
 }
 
 func newFakeIndexerStore() *fakeIndexerStore {
@@ -394,6 +432,23 @@ func (s *fakeIndexerStore) GetPacketByDestination(_ context.Context, dstEID, src
 	return db.PacketRecord{}, pgx.ErrNoRows
 }
 
+func (s *fakeIndexerStore) GetPacketByVerification(_ context.Context, dstEID uint32, packetHeader []byte, payloadHash common.Hash) (db.PacketRecord, error) {
+	for _, packet := range s.packets {
+		if packet.DstEID == dstEID && string(packet.PacketHeader) == string(packetHeader) && packet.PayloadHash == payloadHash {
+			return packet, nil
+		}
+	}
+	return db.PacketRecord{}, pgx.ErrNoRows
+}
+
+func (s *fakeIndexerStore) GetDVNJob(_ context.Context, guid common.Hash) (db.DVNJobRecord, error) {
+	job, ok := s.dvnJobs[guid]
+	if !ok {
+		return db.DVNJobRecord{}, pgx.ErrNoRows
+	}
+	return job, nil
+}
+
 func (s *fakeIndexerStore) MarkExecutorCommitted(_ context.Context, guid, _ common.Hash) error {
 	s.committedGUID = guid
 	return nil
@@ -404,6 +459,15 @@ func (s *fakeIndexerStore) MarkExecutorDelivered(context.Context, common.Hash, c
 }
 
 func (s *fakeIndexerStore) MarkExecutorReceiveFailed(context.Context, common.Hash, common.Hash, string) error {
+	return nil
+}
+
+func (s *fakeIndexerStore) MarkDVNVerified(_ context.Context, guid, _ common.Hash) error {
+	s.dvnVerifiedGUID = guid
+	if job, ok := s.dvnJobs[guid]; ok {
+		job.Status = string(packets.DVNVerified)
+		s.dvnJobs[guid] = job
+	}
 	return nil
 }
 
@@ -435,10 +499,17 @@ func testIndexerPathway() chain.Pathway {
 
 func queryHasTopic(query ethereum.FilterQuery, topic common.Hash) bool {
 	for _, group := range query.Topics {
-		for _, candidate := range group {
-			if candidate == topic {
-				return true
-			}
+		if slices.Contains(group, topic) {
+			return true
+		}
+	}
+	return false
+}
+
+func queriesHaveAddress(queries []ethereum.FilterQuery, address common.Address) bool {
+	for _, query := range queries {
+		if slices.Contains(query.Addresses, address) {
+			return true
 		}
 	}
 	return false

@@ -99,6 +99,27 @@ func (s *Store) GetPacketByDestination(ctx context.Context, dstEID, srcEID uint3
 	`, dstEID, srcEID, addressBytes(sender), addressBytes(receiver), new(big.Int).SetUint64(nonce).String())
 }
 
+// GetPacketByVerification returns one packet by ReceiveUln302 PayloadVerified identity.
+func (s *Store) GetPacketByVerification(ctx context.Context, dstEID uint32, packetHeader []byte, payloadHash common.Hash) (PacketRecord, error) {
+	if dstEID == 0 {
+		return PacketRecord{}, errors.New("packet destination eid is required")
+	}
+	if len(packetHeader) == 0 {
+		return PacketRecord{}, errors.New("packet header is required")
+	}
+	if payloadHash == (common.Hash{}) {
+		return PacketRecord{}, errors.New("packet payload hash is required")
+	}
+	return s.scanPacket(ctx, `
+		SELECT
+			guid, src_eid, dst_eid, nonce::text, sender, receiver, send_lib,
+			src_tx_hash, src_block_number, src_log_index, encoded_packet,
+			packet_header, message, payload_hash, options, status
+		FROM packets
+		WHERE dst_eid = $1 AND packet_header = $2 AND payload_hash = $3
+	`, dstEID, cloneBytes(packetHeader), payloadHash.Bytes())
+}
+
 // Validate checks packet persistence invariants before writing to Postgres.
 func (p PacketRecord) Validate() error {
 	if p.GUID == (common.Hash{}) {

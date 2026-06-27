@@ -1,5 +1,89 @@
 [
   {
+    "name": "isValidReceiveLibrary",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_eid", "type": "uint32" },
+      { "name": "_lib", "type": "address" }
+    ],
+    "outputs": [{ "name": "", "type": "bool" }]
+  },
+  {
+    "name": "verifiable",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      {
+        "name": "_origin",
+        "type": "tuple",
+        "components": [
+          { "name": "srcEid", "type": "uint32" },
+          { "name": "sender", "type": "bytes32" },
+          { "name": "nonce", "type": "uint64" }
+        ]
+      },
+      { "name": "_receiver", "type": "address" }
+    ],
+    "outputs": [{ "name": "", "type": "bool" }]
+  },
+  {
+    "name": "inboundPayloadHash",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_srcEid", "type": "uint32" },
+      { "name": "_sender", "type": "bytes32" },
+      { "name": "_nonce", "type": "uint64" }
+    ],
+    "outputs": [{ "name": "", "type": "bytes32" }]
+  },
+  {
+    "name": "inboundNonce",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_srcEid", "type": "uint32" },
+      { "name": "_sender", "type": "bytes32" }
+    ],
+    "outputs": [{ "name": "", "type": "uint64" }]
+  },
+  {
+    "name": "lazyInboundNonce",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_srcEid", "type": "uint32" },
+      { "name": "_sender", "type": "bytes32" }
+    ],
+    "outputs": [{ "name": "", "type": "uint64" }]
+  },
+  {
+    "name": "lzReceive",
+    "type": "function",
+    "stateMutability": "payable",
+    "inputs": [
+      {
+        "name": "_origin",
+        "type": "tuple",
+        "components": [
+          { "name": "srcEid", "type": "uint32" },
+          { "name": "sender", "type": "bytes32" },
+          { "name": "nonce", "type": "uint64" }
+        ]
+      },
+      { "name": "_receiver", "type": "address" },
+      { "name": "_guid", "type": "bytes32" },
+      { "name": "_message", "type": "bytes" },
+      { "name": "_extraData", "type": "bytes" }
+    ],
+    "outputs": []
+  },
+  {
     "anonymous": false,
     "inputs": [
       {

@@ -61,6 +61,7 @@ Implementation evidence:
 ## Pre-Migration Checklist
 
 - Run `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`.
+- When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.
 - Confirm each configured signer has native gas on its assigned chains.

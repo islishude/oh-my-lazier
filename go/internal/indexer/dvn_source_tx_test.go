@@ -2,10 +2,8 @@ package indexer
 
 import (
 	"math/big"
-	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
@@ -60,10 +58,7 @@ func testDVNSourceLogs(t *testing.T, dvn, sendLib common.Address, fee *big.Int) 
 
 func testDVNFeePaidLog(t *testing.T, txHash common.Hash, sendLib, dvn common.Address, fee *big.Int, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(dvnFeePaidABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.SendLibBaseABI()
 	data, err := eventABI.Events["DVNFeePaid"].Inputs.Pack([]common.Address{dvn}, []common.Address{}, []*big.Int{fee})
 	if err != nil {
 		t.Fatalf("Pack DVNFeePaid error = %v", err)
@@ -80,10 +75,7 @@ func testDVNFeePaidLog(t *testing.T, txHash common.Hash, sendLib, dvn common.Add
 
 func testDVNJobAssignedLog(t *testing.T, txHash common.Hash, dvn, sendLib common.Address, fee *big.Int, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(dvnJobAssignedABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.OpenDVNABI()
 	data, err := eventABI.Events["DVNJobAssigned"].Inputs.NonIndexed().Pack(sendLib, uint64(12), fee)
 	if err != nil {
 		t.Fatalf("Pack DVNJobAssigned error = %v", err)

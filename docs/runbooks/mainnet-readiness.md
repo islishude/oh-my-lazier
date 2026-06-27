@@ -6,6 +6,8 @@ This runbook is the final review index before any mainnet deployment proposal. P
 
 - Validated worker config for the target environment.
 - `configdiff` output from the last approved config to the proposed config.
+- LayerZero address refresh output from `npm run check:lz-addresses`.
+- DB-backed readiness output from `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json`.
 - `inspect:lz-config` output for every configured direction.
 - Signer inventory and key-management review.
 - Price bot runbook evidence for the latest OpenExecutor/OpenDVN price config update.
@@ -37,7 +39,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 8. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
 9. Complete security review and resolve all critical findings.
 10. Confirm rollback steps for Executor and DVN config are documented with previous config values.
-11. Confirm canary transfer size, signer, owner, and operator contacts.
+11. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
 12. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
 13. Approve the migration ticket only after every artifact above is attached.
 
@@ -51,6 +53,7 @@ go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1
 go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1
 go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1
 go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1
+make security-check
 ```
 
 Required runtime checks:
@@ -60,6 +63,7 @@ Required runtime checks:
 - `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics.
 - No chain or pathway is paused before the migration begins.
 - No tx outbox row is stuck in `failed` for active chains.
+- Every enabled pathway has advanced `executor_source` and `executor_destination` indexer cursors on the relevant active chains.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
 ## Contract / LayerZero Checks
@@ -89,6 +93,8 @@ The rollback section of the migration ticket must include:
 - previous Executor config
 - previous send ULN config
 - previous receive ULN config
+- restored Executor/ULN config check after rollback
+- canary transfer evidence after rollback
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
@@ -106,6 +112,8 @@ Reject mainnet readiness if:
 - price config evidence is missing, stale, or not produced through the approved pricing path
 - rate-limit capacity/refill is not documented per pathway
 - monitoring alerts are not active
+- `make security-check` fails
 - config diff output is missing or unreviewed
+- canary amount, sender, recipient, receipt, or recipient balance evidence is missing
 - `npm run check:migration-evidence` fails for the migration ticket record
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` reports any issue

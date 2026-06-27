@@ -50,6 +50,35 @@ func TestDecodeDVNJobAssigned(t *testing.T) {
 	}
 }
 
+func TestDecodePayloadVerified(t *testing.T) {
+	header := []byte{0x01, 0x02, 0x03}
+	proofHash := common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	data, err := receiveUln302ABI.Events["PayloadVerified"].Inputs.Pack(dvn, header, big.NewInt(12), proofHash)
+	if err != nil {
+		t.Fatalf("Pack PayloadVerified error = %v", err)
+	}
+	event, err := DecodePayloadVerified(gethtypes.Log{
+		Topics: []common.Hash{PayloadVerifiedTopic()},
+		Data:   data,
+	})
+	if err != nil {
+		t.Fatalf("DecodePayloadVerified() error = %v", err)
+	}
+	if event.DVN != dvn {
+		t.Fatalf("dvn = %s, want %s", event.DVN, dvn)
+	}
+	if string(event.Header) != string(header) {
+		t.Fatalf("header = %x, want %x", event.Header, header)
+	}
+	if event.Confirmations.Cmp(big.NewInt(12)) != 0 {
+		t.Fatalf("confirmations = %s, want 12", event.Confirmations)
+	}
+	if event.ProofHash != proofHash {
+		t.Fatalf("proof hash = %s, want %s", event.ProofHash, proofHash)
+	}
+}
+
 func TestDecodeDVNJobAssignedRejectsWrongTopic(t *testing.T) {
 	if _, err := DecodeDVNJobAssigned(gethtypes.Log{Topics: []common.Hash{common.HexToHash("0x01")}}); err == nil {
 		t.Fatal("DecodeDVNJobAssigned() error = nil, want topic error")

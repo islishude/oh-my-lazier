@@ -31,6 +31,8 @@ total: 31
 
 `npm audit --audit-level=critical --json` exits successfully with 0 critical vulnerabilities.
 
+`make security-check` runs the critical npm audit gate and Go called-vulnerability gate together.
+
 ## Remediation Applied
 
 - Kept `@nomicfoundation/hardhat-toolbox-viem` as a direct dependency and Hardhat V3 plugin.
@@ -85,6 +87,7 @@ Commands run after remediation:
 npm run check
 npm run typecheck
 npm audit --audit-level=critical --json
+make security-check
 make check
 git diff --check
 ```

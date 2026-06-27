@@ -17,7 +17,7 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
 npm run check:migration-evidence
 ```
 
-The migration evidence checker verifies that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with `confirmations = 12` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
 Deploy the local pathway contracts:
 
@@ -216,6 +216,8 @@ npm run check:oft-canary
 ```
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
+
+The migration evidence record must capture the canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check for each direction. This keeps the approval artifact tied to the exact transfer size and accounts used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 

@@ -16,6 +16,11 @@ var endpointV2ABIJSON string
 
 var endpointV2ABI = mustEndpointV2ABI()
 
+// EndpointV2ABI returns the pinned EndpointV2 ABI used by Go workers.
+func EndpointV2ABI() abi.ABI {
+	return endpointV2ABI
+}
+
 // PacketSent is the decoded EndpointV2 PacketSent event.
 type PacketSent struct {
 	EncodedPayload []byte

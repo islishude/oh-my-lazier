@@ -10,17 +10,19 @@ Scope:
 - package and module dependency metadata
 - runbooks and config examples where they affect operational security
 
-This is a parent-agent local review, not a completed exhaustive Codex Security multi-agent scan. Codex Security preflight returned `incomplete` because the active multi-agent runtime mode and usable worker slot count could not be confirmed. Treat this document as M9 security-review progress, not final mainnet approval.
+This is a parent-agent local review, not final mainnet approval. Codex Security preflight returned `ready` when supplied with the current tool-surface runtime facts (`native` multi-agent `v1`, documented default 6 usable worker slots), but no full multi-agent exhaustive scan report has been finalized for this repository. Treat this document as M9 security-review progress until the exhaustive scan or equivalent human review is completed and approved.
 
 ## Commands
 
 ```bash
 python3 /Users/sudoless/.codex/plugins/cache/openai-curated/codex-security/3fdeeb49/scripts/config_preflight.py --profile security_scan --cwd /Users/sudoless/codespace/coding/oh-my-lazier --runtime-check delegation_available=true --runtime-check goal_tools_available=true --available-plugin-skill security-scan --available-plugin-skill threat-model --available-plugin-skill finding-discovery --available-plugin-skill validation --available-plugin-skill attack-path-analysis
+python3 /Users/sudoless/.codex/plugins/cache/openai-curated/codex-security/3fdeeb49/scripts/config_preflight.py --profile security_scan --cwd /Users/sudoless/codespace/coding/oh-my-lazier --runtime-check delegation_available=true --runtime-check goal_tools_available=true --multi-agent-runtime-owner native --multi-agent-runtime-version v1 --multi-agent-runtime-provenance tool-surface --available-plugin-skill security-scan --available-plugin-skill threat-model --available-plugin-skill finding-discovery --available-plugin-skill validation --available-plugin-skill attack-path-analysis
 rg "(?i)(private[_-]?key|secret|password|signature|keystore|kms|api[_-]?key)" -n go contracts/scripts config docs --glob '!contracts/artifacts/**' --glob '!node_modules/**'
 rg "(?i)(logger\\.|slog\\.|fmt\\.Print|log\\.|console\\.log)" -n go contracts/scripts --glob '!contracts/artifacts/**' --glob '!node_modules/**'
 rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|withdraw|onlyOwner|setAllowedSendLib|setPaused)" contracts/contracts contracts/test -n --glob '!contracts/artifacts/**'
 npm audit --audit-level=moderate --json
 tmpbin=$(mktemp -d) && GOBIN="$tmpbin" go install golang.org/x/vuln/cmd/govulncheck@latest && "$tmpbin/govulncheck" ./...
+make security-check
 ```
 
 ## Summary
@@ -31,12 +33,14 @@ Open critical issue:
 
 No critical code-level issue was confirmed in this local review:
 
+- Codex Security capability preflight is ready for a repository scan when the current `native` multi-agent `v1` tool-surface facts are supplied.
 - No committed private key or raw secret was found in repository source/config examples.
 - Worker logs reviewed in `go` do not print private key material, decrypted keystore JSON, KMS signatures, or raw secret values.
 - Solidity contract review did not find `delegatecall`, `selfdestruct`, `tx.origin`, inline assembly, or unchecked arithmetic in project contracts.
 - Native-token withdrawal uses an external call but is restricted by `onlyOwner` in `WorkerAccess`.
 - SQL query construction is static except `db.statusStats`, which allowlists table names before `fmt.Sprintf`.
 - `govulncheck ./...` found 0 vulnerabilities affecting called Go code.
+- `make security-check` is now the repeatable local gate for 0 critical npm advisories and 0 called Go vulnerabilities.
 
 ## Finding S-001: Open npm audit critical/high advisories in toolchain dependencies
 
@@ -92,7 +96,7 @@ Operational readiness:
 
 ## Non-Exhaustive Review Limitations
 
-- No multi-agent exhaustive file/shard coverage ledger was produced.
+- No multi-agent exhaustive file/shard coverage ledger was produced in this document.
 - No per-candidate discovery/validation/attack-path ledgers were produced.
 - No formal final Codex Security report was sealed.
 - No testnet live deployment or canary transfer evidence was available.

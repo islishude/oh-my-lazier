@@ -2,10 +2,8 @@ package indexer
 
 import (
 	"math/big"
-	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
@@ -60,10 +58,7 @@ func testExecutorSourceLogs(t *testing.T, executor, sendLib common.Address, fee 
 
 func testPacketSentLog(t *testing.T, txHash common.Hash, sendLib common.Address, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(packetSentABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.EndpointV2ABI()
 	data, err := eventABI.Events["PacketSent"].Inputs.Pack(testEncodedPacket(), []byte{0x01, 0x02}, sendLib)
 	if err != nil {
 		t.Fatalf("Pack PacketSent error = %v", err)
@@ -80,10 +75,7 @@ func testPacketSentLog(t *testing.T, txHash common.Hash, sendLib common.Address,
 
 func testExecutorFeePaidLog(t *testing.T, txHash common.Hash, sendLib, executor common.Address, fee *big.Int, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(executorFeePaidABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.SendLibBaseABI()
 	data, err := eventABI.Events["ExecutorFeePaid"].Inputs.Pack(executor, fee)
 	if err != nil {
 		t.Fatalf("Pack ExecutorFeePaid error = %v", err)
@@ -100,10 +92,7 @@ func testExecutorFeePaidLog(t *testing.T, txHash common.Hash, sendLib, executor 
 
 func testExecutorJobAssignedLogWithOptions(t *testing.T, txHash common.Hash, executor, sendLib common.Address, fee *big.Int, options []byte, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI, err := abi.JSON(strings.NewReader(executorJobAssignedABIJSON))
-	if err != nil {
-		t.Fatalf("abi.JSON() error = %v", err)
-	}
+	eventABI := lzabi.OpenExecutorABI()
 	data, err := eventABI.Events["ExecutorJobAssigned"].Inputs.NonIndexed().Pack(big.NewInt(5), fee, options)
 	if err != nil {
 		t.Fatalf("Pack ExecutorJobAssigned error = %v", err)

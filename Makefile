@@ -1,13 +1,16 @@
 SHELL := /bin/sh
 
-.PHONY: all check compile test test-solidity test-scripts test-go lint lint-go fmt fmt-go docker-build clean
+.PHONY: all check compile typecheck test test-solidity test-scripts test-go security-check lint lint-go fmt fmt-go docker-build clean
 
 all: check
 
-check: compile test-solidity test-scripts test-go lint-go fmt-check
+check: compile typecheck test-solidity test-scripts test-go lint-go fmt-check
 
 compile:
 	npm run compile
+
+typecheck:
+	npm run typecheck
 
 test: test-solidity test-go
 
@@ -19,6 +22,13 @@ test-scripts:
 
 test-go:
 	go test ./...
+
+security-check:
+	@tmp="$$(mktemp)"; \
+	npm audit --json > "$$tmp" || true; \
+	node -e 'const fs = require("node:fs"); const report = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const count = report.metadata?.vulnerabilities?.critical ?? 0; if (count > 0) { console.error(`npm audit critical vulnerabilities: ${count}`); process.exit(1); } console.log("npm audit critical vulnerabilities: 0");' "$$tmp"; \
+	rm -f "$$tmp"
+	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 lint: lint-go
 

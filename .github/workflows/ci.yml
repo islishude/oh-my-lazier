@@ -56,6 +56,11 @@ jobs:
         ports: ["5432:5432"]
         options: |
           --health-cmd=pg_isready --health-start-period=1s
+      ruststack:
+        image: ghcr.io/tyrchen/rustack:0.9.1
+        env:
+          SERVICES: kms
+        ports: ["4566:4566"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -73,3 +78,4 @@ jobs:
         run: go test ./...
         env:
           TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"
+          RUSTACK_KMS_ENDPOINT: "http://localhost:4566"

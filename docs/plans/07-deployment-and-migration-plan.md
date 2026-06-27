@@ -51,7 +51,7 @@ npm install --save-exact \
 - `contracts/scripts/deployment-preflight.ts` 只读检查 TestOFT/OpenExecutor/OpenDVN `owner()`、owner native balance、可选 canary treasury native/TestOFT balance 与 TestOFT totalSupply。
 - `contracts/scripts/oft-pathway-control.ts` 检查或执行 TestOFT `pauseSend`、`pauseReceive`、zero-capacity drain 与 steady-state outbound rate-limit 更新，并在写入后回读确认。
 - `contracts/scripts/price-config-check.ts` 只读检查 OpenExecutor/OpenDVN `priceConfig(dstEid)` 的 fresh `updatedAt`、非零 `dstGasPriceInSrcToken` 与可选 `staleAfter` 预期值。
-- `contracts/scripts/migration-evidence.ts` 校验迁移记录 JSON 是否包含 config diff、preflight、LayerZero config before/after、price config、drain、canary、DVN verification 与 rollback/manual retry 证据引用。
+- `contracts/scripts/migration-evidence.ts` 校验迁移记录 JSON 是否包含 `make check`、LayerZero 地址刷新、DB readiness、Ethereum Sepolia `40161` <-> Base Sepolia `40245` 双向 direction、config diff、preflight、LayerZero config before/after、price config、drain、canary 金额/发送账户/接收账户/最小到账余额/source receipt/destination receipt/余额检查、`confirmations = 12` 且 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` 的 DVN join、DVN verification、rollback 后 config/canary 与 manual retry 证据引用。
 - `docs/deployments/testnet-migration-evidence.example.json` 提供 Ethereum Sepolia <-> Base Sepolia 双向迁移记录模板。
 - `docs/deployments/layerzero-testnet-addresses.md` 记录 Ethereum Sepolia 与 Base Sepolia 的 EndpointV2、SendUln302、ReceiveUln302、LayerZero Executor、LayerZero Labs DVN 地址。
 - `docs/deployments/test-oft-policy.md` 固定 TestOFT name、symbol、constructor mint、owner 与 post-deploy minting policy。
@@ -75,7 +75,7 @@ npm install --save-exact \
 - 执行 worker price config 更新前后按 `docs/runbooks/price-bot.md` 记录价格源、outbox 交易、receipt，并运行 `npm run check:price-config` 验证链上 `priceConfig(dstEid)`。
 - 执行 pause/drain/rate-limit 前按 `docs/runbooks/rate-limit.md` 记录容量、refill、canary size 与 owner 可用性。
 - 执行 signer 变更前按 `docs/runbooks/key-management.md` 记录 signer inventory、KMS key spec 或 keystore password source、rollback signer。
-- 批准迁移记录前运行 `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`，确认双向迁移和 rollback 证据引用齐全。
+- 批准迁移记录前运行 `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`，确认双向迁移、结构化 canary 证据和 rollback 证据引用齐全。
 
 ## Phase 3 - Executor Migration
 

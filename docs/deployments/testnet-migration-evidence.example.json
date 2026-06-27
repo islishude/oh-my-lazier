@@ -10,6 +10,16 @@
     "capturedAt": "2026-06-27T00:00:00Z",
     "reviewer": "ops"
   },
+  "layerZeroAddressCheck": {
+    "ref": "artifacts/layerzero-address-check.json",
+    "capturedAt": "2026-06-27T00:00:00Z",
+    "reviewer": "ops"
+  },
+  "readinessCheck": {
+    "ref": "artifacts/readinesscheck.json",
+    "capturedAt": "2026-06-27T00:00:00Z",
+    "reviewer": "ops"
+  },
   "keyManagementReview": {
     "ref": "docs/runbooks/key-management.md"
   },
@@ -54,6 +64,29 @@
       "canaryDestinationReceipt": {
         "ref": "artifacts/canary-destination-eth-sepolia-to-base-sepolia.json"
       },
+      "canary": {
+        "amountLD": "1000000000000000",
+        "senderAccount": "0x0000000000000000000000000000000000000000",
+        "recipientAccount": "0x0000000000000000000000000000000000000000",
+        "minRecipientBalanceLD": "1000000000000000",
+        "sourceReceipt": {
+          "ref": "artifacts/canary-source-eth-sepolia-to-base-sepolia.json"
+        },
+        "destinationReceipt": {
+          "ref": "artifacts/canary-destination-eth-sepolia-to-base-sepolia.json"
+        },
+        "recipientBalanceCheck": {
+          "ref": "artifacts/canary-recipient-balance-eth-sepolia-to-base-sepolia.json"
+        }
+      },
+      "dvnJoin": {
+        "confirmations": 12,
+        "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
+        "optionalDVNsDisabled": true,
+        "configCheck": {
+          "ref": "artifacts/dvn-join-config-eth-sepolia-to-base-sepolia.json"
+        }
+      },
       "dvnVerificationReceipt": {
         "ref": "artifacts/dvn-verification-eth-sepolia-to-base-sepolia.json"
       }
@@ -86,6 +119,29 @@
       "canaryDestinationReceipt": {
         "ref": "artifacts/canary-destination-base-sepolia-to-eth-sepolia.json"
       },
+      "canary": {
+        "amountLD": "1000000000000000",
+        "senderAccount": "0x0000000000000000000000000000000000000000",
+        "recipientAccount": "0x0000000000000000000000000000000000000000",
+        "minRecipientBalanceLD": "1000000000000000",
+        "sourceReceipt": {
+          "ref": "artifacts/canary-source-base-sepolia-to-eth-sepolia.json"
+        },
+        "destinationReceipt": {
+          "ref": "artifacts/canary-destination-base-sepolia-to-eth-sepolia.json"
+        },
+        "recipientBalanceCheck": {
+          "ref": "artifacts/canary-recipient-balance-base-sepolia-to-eth-sepolia.json"
+        }
+      },
+      "dvnJoin": {
+        "confirmations": 12,
+        "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
+        "optionalDVNsDisabled": true,
+        "configCheck": {
+          "ref": "artifacts/dvn-join-config-base-sepolia-to-eth-sepolia.json"
+        }
+      },
       "dvnVerificationReceipt": {
         "ref": "artifacts/dvn-verification-base-sepolia-to-eth-sepolia.json"
       }
@@ -100,6 +156,12 @@
     },
     "previousReceiveUlnConfig": {
       "ref": "artifacts/rollback-receive-uln-config.before.json"
+    },
+    "restoredConfigCheck": {
+      "ref": "artifacts/rollback-lz-config.after.json"
+    },
+    "canaryAfterRollback": {
+      "ref": "artifacts/rollback-canary.json"
     },
     "ownerPauseAccount": "0x0000000000000000000000000000000000000000",
     "signerAccount": "0x0000000000000000000000000000000000000000",

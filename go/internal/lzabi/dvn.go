@@ -16,6 +16,11 @@ var openDVNABIJSON string
 
 var openDVNABI = mustOpenDVNABI()
 
+// OpenDVNABI returns the pinned OpenDVN ABI used by Go workers.
+func OpenDVNABI() abi.ABI {
+	return openDVNABI
+}
+
 // DVNJobAssigned is the decoded OpenDVN assignment event.
 type DVNJobAssigned struct {
 	JobID         common.Hash
