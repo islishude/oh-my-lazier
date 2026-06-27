@@ -8,6 +8,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - `configdiff` output from the last approved config to the proposed config.
 - `inspect:lz-config` output for every configured direction.
 - Signer inventory and key-management review.
+- Price bot runbook evidence for the latest OpenExecutor/OpenDVN price config update.
 - Rate-limit and pause review for every OFT pathway.
 - Monitoring dashboard and alert proof.
 - Security review report with no open critical findings.
@@ -30,12 +31,13 @@ This runbook is the final review index before any mainnet deployment proposal. P
 2. Run `go run ./go/cmd/configdiff -from <approved.yaml> -to <proposed.yaml>`.
 3. Run `npm run inspect:lz-config` for each configured direction and archive output.
 4. Complete `docs/runbooks/key-management.md`.
-5. Complete `docs/runbooks/rate-limit.md`.
-6. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
-7. Complete security review and resolve all critical findings.
-8. Confirm rollback steps for Executor and DVN config are documented with previous config values.
-9. Confirm canary transfer size, signer, owner, and operator contacts.
-10. Approve the migration ticket only after every artifact above is attached.
+5. Complete `docs/runbooks/price-bot.md`.
+6. Complete `docs/runbooks/rate-limit.md`.
+7. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
+8. Complete security review and resolve all critical findings.
+9. Confirm rollback steps for Executor and DVN config are documented with previous config values.
+10. Confirm canary transfer size, signer, owner, and operator contacts.
+11. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
 
@@ -74,6 +76,7 @@ Required state:
 - `ExecutorConfig.executor` points to OpenExecutor only after the executor migration step.
 - ULN config has required DVNs `[OpenDVN, LayerZero Labs DVN]` only during the DVN join step.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
+- OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence.
 
 ## Rollback Approval
 
@@ -84,7 +87,8 @@ The rollback section of the migration ticket must include:
 - previous receive ULN config
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
-- manual retry plan for verified but undelivered packets
+- `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero
 
 ## Rejection Criteria
 
@@ -95,6 +99,7 @@ Reject mainnet readiness if:
 - required DVNs do not include an independent LayerZero Labs DVN
 - confirmations are not 12 without an explicit plan update
 - signer inventory or rollback signer is missing
+- price config evidence is missing, stale, or not produced through the approved pricing path
 - rate-limit capacity/refill is not documented per pathway
 - monitoring alerts are not active
 - config diff output is missing or unreviewed

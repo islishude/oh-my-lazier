@@ -109,6 +109,38 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
+// RunPriceOnce computes current price configs and enqueues one update batch.
+func (a *App) RunPriceOnce(ctx context.Context) error {
+	if !a.cfg.Pricing.Enabled {
+		return errors.New("pricing is disabled")
+	}
+	store, err := db.Connect(ctx, a.cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.Ping(ctx); err != nil {
+		return err
+	}
+	if err := store.Migrate(ctx); err != nil {
+		return err
+	}
+
+	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
+	if err != nil {
+		return err
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		return err
+	}
+
+	priceBot, err := a.priceBot(store, registry)
+	if err != nil {
+		return err
+	}
+	return priceBot.EnqueueOnce(ctx)
+}
+
 func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot, error) {
 	if !a.cfg.Pricing.Enabled {
 		return pricing.New(a.logger), nil

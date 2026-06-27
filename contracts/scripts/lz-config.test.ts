@@ -7,6 +7,10 @@ import {
   encodeUlnConfig,
   NIL_DVN_COUNT,
   requiredDVNsConfig,
+  rollbackConfigBatches,
+  CONFIG_TYPE_EXECUTOR,
+  CONFIG_TYPE_ULN,
+  type LzConfigSnapshot,
 } from "./lz-config.js";
 
 test("executor config ABI round trips", () => {
@@ -58,5 +62,98 @@ test("required DVN config rejects duplicate addresses case-insensitively", () =>
         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
       ]),
     /duplicate DVN address/,
+  );
+});
+
+test("rollback config batches restore executor and both ULN configs", () => {
+  const snapshot: LzConfigSnapshot = {
+    endpoint: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    oapp: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    remoteEid: 40245,
+    inspectedLibraries: {
+      sendUln: "0x1111111111111111111111111111111111111111",
+      receiveUln: "0x2222222222222222222222222222222222222222",
+    },
+    executorConfig: {
+      maxMessageSize: 12_345,
+      executor: "0x3333333333333333333333333333333333333333",
+    },
+    sendUlnConfig: requiredDVNsConfig(12n, [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0x1111111111111111111111111111111111111111",
+    ]),
+    receiveUlnConfig: {
+      confirmations: 15n,
+      requiredDVNCount: 1,
+      optionalDVNCount: 1,
+      optionalDVNThreshold: 1,
+      requiredDVNs: ["0x4444444444444444444444444444444444444444"],
+      optionalDVNs: ["0x5555555555555555555555555555555555555555"],
+    },
+  };
+
+  const batches = rollbackConfigBatches(snapshot);
+
+  assert.deepEqual(batches, [
+    {
+      label: "Endpoint.setConfig SendUln302 rollback",
+      library: snapshot.inspectedLibraries.sendUln,
+      configs: [
+        {
+          eid: snapshot.remoteEid,
+          configType: CONFIG_TYPE_EXECUTOR,
+          config: encodeExecutorConfig(snapshot.executorConfig),
+        },
+        {
+          eid: snapshot.remoteEid,
+          configType: CONFIG_TYPE_ULN,
+          config: encodeUlnConfig(snapshot.sendUlnConfig),
+        },
+      ],
+    },
+    {
+      label: "Endpoint.setConfig ReceiveUln302 rollback",
+      library: snapshot.inspectedLibraries.receiveUln,
+      configs: [
+        {
+          eid: snapshot.remoteEid,
+          configType: CONFIG_TYPE_ULN,
+          config: encodeUlnConfig(snapshot.receiveUlnConfig),
+        },
+      ],
+    },
+  ]);
+});
+
+test("rollback config batches reject mismatched DVN counts", () => {
+  const snapshot: LzConfigSnapshot = {
+    endpoint: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    oapp: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    remoteEid: 40245,
+    inspectedLibraries: {
+      sendUln: "0x1111111111111111111111111111111111111111",
+      receiveUln: "0x2222222222222222222222222222222222222222",
+    },
+    executorConfig: {
+      maxMessageSize: 12_345,
+      executor: "0x3333333333333333333333333333333333333333",
+    },
+    sendUlnConfig: {
+      confirmations: 12n,
+      requiredDVNCount: 2,
+      optionalDVNCount: NIL_DVN_COUNT,
+      optionalDVNThreshold: 0,
+      requiredDVNs: ["0x4444444444444444444444444444444444444444"],
+      optionalDVNs: [],
+    },
+    receiveUlnConfig: requiredDVNsConfig(12n, [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0x1111111111111111111111111111111111111111",
+    ]),
+  };
+
+  assert.throws(
+    () => rollbackConfigBatches(snapshot),
+    /requiredDVNCount does not match requiredDVNs/,
   );
 });

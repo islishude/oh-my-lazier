@@ -719,6 +719,169 @@ func TestExecutorReceiptTransitionsPersistTxHashes(t *testing.T) {
 	}
 }
 
+func TestCheckDrainStatusReportsPendingWork(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorExecutable)
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorExecutable),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNWaitingConfirmations),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	if _, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40245,
+		Purpose:  "executor_lz_receive",
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: "0x9999999999999999999999999999999999999999",
+	}); err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	status, err := store.CheckDrainStatus(ctx, packet.SrcEID, packet.DstEID)
+	if err != nil {
+		t.Fatalf("CheckDrainStatus() error = %v", err)
+	}
+	if status.Ready {
+		t.Fatal("ready = true, want false")
+	}
+	if status.PacketsTotal != 1 {
+		t.Fatalf("packets total = %d, want 1", status.PacketsTotal)
+	}
+	if got := statusCount(status.ExecutorPending, string(packets.ExecutorExecutable)); got != 1 {
+		t.Fatalf("executor pending executable = %d, want 1", got)
+	}
+	if got := statusCount(status.DVNPending, string(packets.DVNWaitingConfirmations)); got != 1 {
+		t.Fatalf("dvn pending waiting confirmations = %d, want 1", got)
+	}
+	if got := statusCount(status.OutboxPending, TxStatusQueued); got != 1 {
+		t.Fatalf("outbox pending queued = %d, want 1", got)
+	}
+	if status.VerifiedButUndeliveredCount != 1 {
+		t.Fatalf("verified but undelivered = %d, want 1", status.VerifiedButUndeliveredCount)
+	}
+}
+
+func TestCheckDrainStatusAcceptsDeliveredShadowPathway(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorDelivered)
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorDelivered),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNWouldVerify),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	id, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40245,
+		Purpose:  "executor_lz_receive",
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: "0x9999999999999999999999999999999999999999",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	if err := store.MarkTxConfirmed(ctx, id, common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")); err != nil {
+		t.Fatalf("MarkTxConfirmed() error = %v", err)
+	}
+
+	status, err := store.CheckDrainStatus(ctx, packet.SrcEID, packet.DstEID)
+	if err != nil {
+		t.Fatalf("CheckDrainStatus() error = %v", err)
+	}
+	if !status.Ready {
+		t.Fatalf("ready = false, status = %+v", status)
+	}
+	if len(status.ExecutorPending) != 0 || len(status.DVNPending) != 0 || len(status.OutboxPending) != 0 {
+		t.Fatalf("pending counts are not empty: %+v", status)
+	}
+}
+
+func statusCount(counts []StatusCount, status string) int64 {
+	for _, count := range counts {
+		if count.Status == status {
+			return count.Count
+		}
+	}
+	return 0
+}
+
 func testChains() []config.ChainConfig {
 	return []config.ChainConfig{
 		{

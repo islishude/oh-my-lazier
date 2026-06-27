@@ -36,13 +36,14 @@ hardhat = 3.9.0
 tsx = 4.22.4
 typescript = 6.0.3
 viem = 2.53.1
+@nomicfoundation/hardhat-toolbox-viem = 5.0.7
 ```
 
 实现备注：
 
 - 当前固定版本的 `ILayerZeroExecutor.assignJob` 是 nonpayable；`OpenExecutor` 因此保持接口兼容并只 quote/emit price，不在 `assignJob` 中收取 native fee。
 - 当前固定版本的 LayerZero OFT 通过 OpenZeppelin v5 `Ownable` 继承链编译时，需要最终 OFT 合约显式传入 owner；`OFTPauseAndRateLimit` 使用 `delegate_` 作为 owner。
-- Hardhat V3 原生编译和 Solidity tests 不需要 `@nomicfoundation/hardhat-toolbox-viem`；部署/配置脚本直接依赖 pinned `viem`，以减少不必要的 transitive audit exposure。
+- `@nomicfoundation/hardhat-toolbox-viem` 保留为 Hardhat V3 插件；部署/配置脚本也直接依赖 pinned `viem`。
 
 ## Contract Layout
 

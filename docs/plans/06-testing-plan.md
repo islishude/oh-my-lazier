@@ -124,6 +124,7 @@ Current evidence:
 - replacement tx
 - receipt confirmation
 - retry after failure
+- drain readiness before migration config switch
 
 Current evidence:
 
@@ -131,6 +132,8 @@ Current evidence:
 - `go/internal/txmgr.TestPrepareReplacementTxPreservesNonceAndBumpsFees`
 - `go/internal/txmgr.TestProcessReceiptsMarksBroadcastTxConfirmed`
 - `go/internal/db.TestRetryFailedTxRequeuesWithFreshNonce`
+- `go/internal/db.TestCheckDrainStatusReportsPendingWork`
+- `go/internal/db.TestCheckDrainStatusAcceptsDeliveredShadowPathway`
 - `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveDelivered`
 - `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveFailed`
 
@@ -240,6 +243,6 @@ Current evidence:
 11. Confirm `ExecutorFeePaid` points to OpenExecutor.
 12. Confirm worker commits verification.
 13. Confirm worker calls `lzReceive`.
-14. Confirm destination token balance increased.
+14. Confirm destination token balance increased with `npm run check:oft-canary` and `DESTINATION_TEST_OFT` / `RECIPIENT` / `MIN_RECIPIENT_BALANCE`.
 15. Enable DVN shadow mode.
 16. Confirm DVN would-verify report matches third-party verification.

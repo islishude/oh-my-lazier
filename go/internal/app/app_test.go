@@ -2,6 +2,7 @@ package app
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
@@ -45,6 +46,20 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 		if target.Client == nil {
 			t.Fatal("target client is nil")
 		}
+	}
+}
+
+func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
+	worker, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	err = worker.RunPriceOnce(t.Context())
+	if err == nil {
+		t.Fatal("RunPriceOnce() error = nil, want disabled pricing error")
+	}
+	if !strings.Contains(err.Error(), "pricing is disabled") {
+		t.Fatalf("RunPriceOnce() error = %v, want disabled pricing error", err)
 	}
 }
 

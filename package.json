@@ -17,6 +17,12 @@
     "inspect:lz-config": "tsx contracts/scripts/inspect-lz-config.ts",
     "configure:lz-executor": "tsx contracts/scripts/configure-lz-executor.ts",
     "configure:lz-dvn": "tsx contracts/scripts/configure-lz-dvn.ts",
+    "configure:lz-rollback": "tsx contracts/scripts/configure-lz-rollback.ts",
+    "send:oft-canary": "tsx contracts/scripts/send-oft-canary.ts",
+    "check:oft-canary": "tsx contracts/scripts/check-oft-canary.ts",
+    "check:lz-addresses": "tsx contracts/scripts/check-lz-addresses.ts",
+    "check:deployment-preflight": "tsx contracts/scripts/deployment-preflight.ts",
+    "oft:pathway": "tsx contracts/scripts/oft-pathway-control.ts",
     "check": "npm run compile && npm test && npm run test:scripts"
   },
   "repository": {
@@ -34,6 +40,7 @@
     "@layerzerolabs/lz-evm-messagelib-v2": "3.0.168",
     "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
     "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",
+    "@nomicfoundation/hardhat-toolbox-viem": "5.0.7",
     "@openzeppelin/contracts": "5.6.1",
     "@types/node": "26.0.1",
     "hardhat": "3.9.0",

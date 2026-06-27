@@ -184,6 +184,9 @@ Evidence:
 - `go/internal/executor.Worker.ProcessCommitterOnce`
 - `go/internal/executor.Worker.ProcessDelivererOnce`
 - `go/internal/executor.TestProcessDelivererOnceRetriesFailedLzReceive`
+- `contracts/scripts/send-oft-canary.ts`
+- `contracts/scripts/oft-canary.test.ts` `buildLzReceiveOption encodes one zero-value executor lzReceive option`
+- `contracts/scripts/oft-canary.test.ts` `buildCanarySendParam builds first-phase OFT send params`
 - `go/internal/txmgr.Manager.ProcessReceipts`
 - `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveDelivered`
 - `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveFailed`
@@ -289,12 +292,16 @@ Evidence:
 - `go/internal/pricing.BuildSetPriceConfigTx`
 - `go/internal/pricing.Bot.EnqueueOnce`
 - `go/internal/pricing.Bot.Run`
+- `go/internal/app.App.RunPriceOnce`
+- `go/cmd/pricebot-once`
+- `docs/runbooks/price-bot.md`
 - `go/internal/pricing/abis/price_config.json`
 - `go/internal/pricing/abis/uniswap_v3_quoter.json`
 - `go/internal/rpcquorum.Client.SuggestGasPrice`
 - `go/internal/config.PricingConfig`
 - `go/internal/app.App.priceBot`
 - `go test ./go/internal/pricing ./go/internal/config ./go/internal/app -count=1`
+- `go test ./go/cmd/pricebot-once -count=1`
 
 ## M8 - Testnet Migration Rehearsal
 
@@ -330,14 +337,43 @@ Evidence:
 - `package.json` `inspect:lz-config`
 - `package.json` `configure:lz-executor`
 - `package.json` `configure:lz-dvn`
+- `package.json` `configure:lz-rollback`
+- `package.json` `send:oft-canary`
+- `package.json` `check:oft-canary`
+- `package.json` `check:lz-addresses`
+- `package.json` `check:deployment-preflight`
+- `package.json` `oft:pathway`
 - `contracts/scripts/lz-config.ts`
+- `contracts/scripts/lz-addresses.ts`
+- `contracts/scripts/deployment-preflight.ts`
+- `contracts/scripts/oft-pathway-control.ts`
+- `contracts/scripts/oft-canary.ts`
+- `contracts/scripts/oft-canary-status.ts`
 - `contracts/scripts/inspect-lz-config.ts`
 - `contracts/scripts/configure-lz-executor.ts`
 - `contracts/scripts/configure-lz-dvn.ts`
+- `contracts/scripts/configure-lz-rollback.ts`
+- `contracts/scripts/send-oft-canary.ts`
+- `contracts/scripts/check-oft-canary.ts`
+- `contracts/scripts/check-lz-addresses.ts`
+- `go/internal/db.Store.CheckDrainStatus`
+- `go/cmd/draincheck`
+- `docs/deployments/layerzero-testnet-addresses.md`
+- `docs/deployments/test-oft-policy.md`
 - `contracts/scripts/lz-config.test.ts`
+- `contracts/scripts/lz-config.test.ts` `rollback config batches restore executor and both ULN configs`
+- `contracts/scripts/lz-config.test.ts` `rollback config batches reject mismatched DVN counts`
+- `contracts/scripts/oft-canary.test.ts`
+- `contracts/scripts/oft-canary-status.test.ts`
+- `contracts/scripts/lz-addresses.test.ts`
+- `contracts/scripts/deployment-preflight.test.ts`
+- `contracts/scripts/oft-pathway-control.test.ts`
+- `go/internal/db.TestCheckDrainStatusReportsPendingWork`
+- `go/internal/db.TestCheckDrainStatusAcceptsDeliveredShadowPathway`
 - `package.json` `test:scripts`
 - `npm run typecheck`
 - `npm run test:scripts`
+- `go test ./go/internal/db ./go/cmd/draincheck -count=1`
 
 ## M9 - Mainnet Readiness Review
 
@@ -378,5 +414,6 @@ Evidence:
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`
 - `govulncheck ./...` via temporary `GOBIN`: 0 called Go vulnerabilities
-- `package.json` removes unused `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`
-- `npm audit --audit-level=moderate --json`: 0 critical, 5 high remaining in pinned LayerZero transitive contract/toolchain dependencies; M9 final approval remains open
+- `package.json` retains `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`
+- `docs/security/npm-audit-disposition.md`
+- `npm audit --audit-level=moderate --json`: 0 critical, 6 high and 4 moderate remaining in pinned LayerZero and retained Hardhat toolbox transitive dependencies; M9 final approval remains open
