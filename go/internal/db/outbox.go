@@ -304,6 +304,36 @@ func (s *Store) PrepareReplacementTx(ctx context.Context, id int64, maxFeePerGas
 	return nil
 }
 
+// RetryFailedTx returns a failed transaction request to the queue with a fresh nonce assignment.
+func (s *Store) RetryFailedTx(ctx context.Context, id int64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
+	if maxFeePerGas != nil && maxFeePerGas.Sign() <= 0 {
+		return errors.New("retry max fee per gas must be positive")
+	}
+	if maxPriorityFeePerGas != nil && maxPriorityFeePerGas.Sign() <= 0 {
+		return errors.New("retry max priority fee per gas must be positive")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			nonce = NULL,
+			tx_hash = NULL,
+			max_fee_per_gas = COALESCE($2, max_fee_per_gas),
+			max_priority_fee_per_gas = COALESCE($3, max_priority_fee_per_gas),
+			attempts = attempts + 1,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $4 AND status = $5
+	`, TxStatusQueued, numericString(maxFeePerGas), numericString(maxPriorityFeePerGas), id, TxStatusFailed)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d is not failed", id)
+	}
+	return nil
+}
+
 func (s *Store) nextNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string, rpcPendingNonce uint64) (uint64, error) {
 	var dbMax *int64
 	if err := tx.QueryRow(ctx, `

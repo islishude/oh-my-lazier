@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"math/big"
 	"os"
 	"sync"
@@ -193,6 +194,99 @@ func TestClaimNextNonceAvoidsCollisions(t *testing.T) {
 		if _, ok := seen[nonce]; !ok {
 			t.Fatalf("nonce %d was not assigned; assigned=%v", nonce, seen)
 		}
+	}
+}
+
+func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	const signerID = "0x8888888888888888888888888888888888888888"
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test rows: %v", err)
+	}
+	id, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID:             40161,
+		Purpose:              "retry-test",
+		To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata:             []byte{0x01, 0x02},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(150_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	claimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 42)
+	if err != nil {
+		t.Fatalf("ClaimNextNonce() error = %v", err)
+	}
+	if claimed.Nonce != 42 {
+		t.Fatalf("initial nonce = %d, want 42", claimed.Nonce)
+	}
+	txHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	if err := store.MarkTxBroadcast(ctx, id, txHash); err != nil {
+		t.Fatalf("MarkTxBroadcast() error = %v", err)
+	}
+	if err := store.MarkTxFailed(ctx, id, errors.New("receipt reverted")); err != nil {
+		t.Fatalf("MarkTxFailed() error = %v", err)
+	}
+
+	if err := store.RetryFailedTx(ctx, id, big.NewInt(3_000_000_000), big.NewInt(1_500_000_000)); err != nil {
+		t.Fatalf("RetryFailedTx() error = %v", err)
+	}
+	reclaimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 43)
+	if err != nil {
+		t.Fatalf("ClaimNextNonce() after retry error = %v", err)
+	}
+	if reclaimed.ID != id {
+		t.Fatalf("reclaimed id = %d, want %d", reclaimed.ID, id)
+	}
+	if reclaimed.Nonce != 43 {
+		t.Fatalf("retry nonce = %d, want 43", reclaimed.Nonce)
+	}
+	retryTx, err := store.GetOutboxTx(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if retryTx.Status != TxStatusNonceAssigned {
+		t.Fatalf("status = %q, want %q", retryTx.Status, TxStatusNonceAssigned)
+	}
+	if retryTx.TxHash != (common.Hash{}) {
+		t.Fatalf("tx hash = %s, want zero hash", retryTx.TxHash)
+	}
+	if retryTx.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
+	}
+	if retryTx.MaxFeePerGas.Cmp(big.NewInt(3_000_000_000)) != 0 {
+		t.Fatalf("max fee = %s, want 3000000000", retryTx.MaxFeePerGas)
+	}
+	if retryTx.MaxPriorityFeePerGas.Cmp(big.NewInt(1_500_000_000)) != 0 {
+		t.Fatalf("priority fee = %s, want 1500000000", retryTx.MaxPriorityFeePerGas)
 	}
 }
 

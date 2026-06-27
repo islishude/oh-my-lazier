@@ -27,7 +27,7 @@ tmpbin=$(mktemp -d) && GOBIN="$tmpbin" go install golang.org/x/vuln/cmd/govulnch
 
 Open critical issue:
 
-- `npm audit` reports 3 critical and 19 high vulnerabilities in transitive JavaScript toolchain dependencies, including `elliptic`, `ethers`, and `ws` paths pulled through Hardhat/LayerZero-related packages. This blocks claiming M9 `no open critical issues`.
+- `npm audit` now reports 0 critical and 5 high vulnerabilities after removing `@nomicfoundation/hardhat-toolbox-viem`, depending on `viem` directly, and applying `overrides` for independent transitive packages (`axios`, `elliptic`, `undici`, and `ws`). The remaining high advisories are still open and block final M9 approval.
 
 No critical code-level issue was confirmed in this local review:
 
@@ -45,22 +45,23 @@ Severity: High for release readiness; open blocker for M9 acceptance.
 Evidence:
 
 - `npm audit --audit-level=moderate --json` returned non-zero.
-- Metadata summary: 38 total vulnerabilities, including 3 critical and 19 high.
-- Critical paths include transitive `elliptic` and `ethers` advisories through `@ethersproject/*` / `zksync-ethers` dependency chains.
-- High paths include `ws`, `viem`, Hardhat toolbox related packages, and LayerZero packages as reported by npm audit.
+- Original metadata summary: 38 total vulnerabilities, including 3 critical and 19 high.
+- Current metadata summary after remediation: 25 total vulnerabilities, including 0 critical and 5 high.
+- The cleared critical paths included transitive `elliptic` and `ethers` advisories through `@ethersproject/*` / `zksync-ethers` dependency chains.
+- The remaining high paths are reported through pinned LayerZero 3.0.168 transitive dependencies, including `@chainlink/contracts-ccip`, old OpenZeppelin contract packages, `@layerzerolabs/lz-evm-messagelib-v2`, and `@layerzerolabs/lz-evm-oapp-v2`.
 
 Assessment:
 
 - These dependencies are currently used by the contract build/test/deployment toolchain, not by the Go worker runtime.
 - They still matter for deployment and migration safety because deployment scripts consume private keys and LayerZero config scripts run against live networks.
-- The audit-suggested fixes include semver-major or package downgrades for LayerZero packages and are not safe to apply automatically because the project plan pins LayerZero packages and requires interface compatibility with current pinned packages.
-- A local remediation attempt with npm `overrides` for independent transitive packages such as `ws`, `undici`, `lodash-es`, and `axios` did not close the critical advisory chain. The critical findings remained rooted in pinned LayerZero-package transitive `ethers@5` / `elliptic` paths, and one override combination increased the critical count, so those changes were not retained.
+- The audit-suggested fixes still include semver-major package changes or a LayerZero package downgrade to `2.0.6`; that is not safe to apply automatically because the project plan pins current LayerZero packages and requires interface compatibility with those pinned packages.
+- Local remediation retained only changes that preserved current compile/test behavior: removed the unused Hardhat toolbox dependency, kept `viem` as a direct dependency for scripts, and overrode `axios`, `elliptic`, `undici`, and `ws`.
 
 Required closure before M9 completion:
 
 - Decide whether to update the Hardhat/LayerZero toolchain, isolate deployment scripts into a locked ephemeral environment, or accept documented testnet-only exposure.
 - Re-run `npm audit`.
-- Record a reviewed disposition for every remaining critical advisory before mainnet readiness approval.
+- Record a reviewed disposition for every remaining high advisory before mainnet readiness approval.
 
 ## Reviewed Controls
 

@@ -64,6 +64,24 @@ func TestSelectCanonicalHeadIgnoresLaggingProvider(t *testing.T) {
 	}
 }
 
+func TestSelectCanonicalHeadAcceptsTwoOfThreeAgreement(t *testing.T) {
+	expectedHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	head, err := selectCanonicalHead("testnet", []providerHead{
+		{URL: "provider-a", Number: big.NewInt(42), Hash: expectedHash},
+		{URL: "provider-b", Number: big.NewInt(42), Hash: expectedHash},
+		{URL: "provider-c", Number: big.NewInt(41), Hash: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+	})
+	if err != nil {
+		t.Fatalf("selectCanonicalHead() error = %v", err)
+	}
+	if head.Number.Uint64() != 42 {
+		t.Fatalf("head number = %s, want 42", head.Number)
+	}
+	if head.Hash != expectedHash.Hex() {
+		t.Fatalf("head hash = %s, want %s", head.Hash, expectedHash.Hex())
+	}
+}
+
 func testReceipt() *gethtypes.Receipt {
 	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	return &gethtypes.Receipt{

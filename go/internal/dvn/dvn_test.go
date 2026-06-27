@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -134,6 +135,19 @@ func TestProcessQuorumOnceMarksWouldVerify(t *testing.T) {
 	}
 	if len(store.quorumResult) == 0 {
 		t.Fatal("quorum result is empty")
+	}
+	var report QuorumReport
+	if err := json.Unmarshal(store.quorumResult, &report); err != nil {
+		t.Fatalf("Unmarshal quorum result error = %v", err)
+	}
+	if report.GUID != packet.GUID.Hex() {
+		t.Fatalf("report guid = %s, want %s", report.GUID, packet.GUID.Hex())
+	}
+	if report.PayloadHash != packet.PayloadHash.Hex() {
+		t.Fatalf("report payload hash = %s, want %s", report.PayloadHash, packet.PayloadHash.Hex())
+	}
+	if report.TxHash != packet.SrcTxHash.Hex() {
+		t.Fatalf("report tx hash = %s, want %s", report.TxHash, packet.SrcTxHash.Hex())
 	}
 }
 

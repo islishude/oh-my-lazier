@@ -10,8 +10,14 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
 	"github.com/jackc/pgx/v5"
+)
+
+const (
+	executorCommitVerificationPurpose = "executor_commit_verification"
+	executorLzReceivePurpose          = "executor_lz_receive"
 )
 
 // ChainClient is the tx manager's RPC boundary for nonce reads and broadcasts.
@@ -86,10 +92,16 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 			return 0, err
 		}
 		if receipt.Status == types.ReceiptStatusSuccessful {
+			if err := m.applyWorkflowReceipt(ctx, outboxTx, true); err != nil {
+				return 0, err
+			}
 			if err := m.store.MarkTxConfirmed(ctx, outboxTx.ID, outboxTx.TxHash); err != nil {
 				return 0, err
 			}
 			return outboxTx.ID, nil
+		}
+		if err := m.applyWorkflowReceipt(ctx, outboxTx, false); err != nil {
+			return 0, err
 		}
 		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status)); err != nil {
 			return 0, err
@@ -97,6 +109,57 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		return outboxTx.ID, nil
 	}
 	return 0, ErrNoReceiptUpdate
+}
+
+func (m *Manager) applyWorkflowReceipt(ctx context.Context, outboxTx db.OutboxTx, success bool) error {
+	if len(outboxTx.GUID) != common.HashLength {
+		return nil
+	}
+	guid := common.BytesToHash(outboxTx.GUID)
+	switch outboxTx.Purpose {
+	case executorCommitVerificationPurpose:
+		if success {
+			return m.markExecutorReceipt(ctx, guid, func() error {
+				return m.store.MarkExecutorCommitted(ctx, guid, outboxTx.TxHash)
+			}, packets.ExecutorCommitted, packets.ExecutorExecutable, packets.ExecutorLzReceiveTxEnqueued, packets.ExecutorLzReceiveFailed, packets.ExecutorDelivered)
+		}
+	case executorLzReceivePurpose:
+		if success {
+			return m.markExecutorReceipt(ctx, guid, func() error {
+				return m.store.MarkExecutorDelivered(ctx, guid, outboxTx.TxHash)
+			}, packets.ExecutorDelivered)
+		}
+		return m.markExecutorReceipt(ctx, guid, func() error {
+			return m.store.MarkExecutorReceiveFailed(ctx, guid, outboxTx.TxHash, "lzReceive transaction reverted")
+		}, packets.ExecutorLzReceiveFailed)
+	}
+	return nil
+}
+
+func (m *Manager) markExecutorReceipt(ctx context.Context, guid common.Hash, mark func() error, alreadyApplied ...packets.ExecutorState) error {
+	if m.executorStatusMatches(ctx, guid, alreadyApplied) {
+		return nil
+	}
+	if err := mark(); err != nil {
+		if m.executorStatusMatches(ctx, guid, alreadyApplied) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) executorStatusMatches(ctx context.Context, guid common.Hash, statuses []packets.ExecutorState) bool {
+	packet, err := m.store.GetPacket(ctx, guid)
+	if err != nil {
+		return false
+	}
+	for _, status := range statuses {
+		if packet.Status == string(status) {
+			return true
+		}
+	}
+	return false
 }
 
 func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, signer signer.Signer) (*types.Transaction, error) {

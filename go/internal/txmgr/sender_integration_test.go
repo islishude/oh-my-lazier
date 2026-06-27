@@ -12,9 +12,11 @@ import (
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
 )
 
@@ -174,6 +176,149 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	}
 }
 
+func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 44,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+	packet := testExecutorPacket(t)
+	packet.Status = string(packets.ExecutorExecutable)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorExecutable),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if _, err := store.EnqueueExecutorTx(
+		t.Context(),
+		packet.GUID,
+		string(packets.ExecutorExecutable),
+		string(packets.ExecutorLzReceiveTxEnqueued),
+		db.TxRequest{
+			ChainEID:             packet.DstEID,
+			Purpose:              executorLzReceivePurpose,
+			GUID:                 packet.GUID.Bytes(),
+			To:                   packet.Receiver,
+			Calldata:             []byte{0x04, 0x05},
+			Value:                big.NewInt(0),
+			GasLimit:             big.NewInt(150_000),
+			MaxFeePerGas:         big.NewInt(2_000_000_000),
+			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+			SignerID:             signer.Address().Hex(),
+		},
+	); err != nil {
+		t.Fatalf("EnqueueExecutorTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	delivered, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket() error = %v", err)
+	}
+	if delivered.Status != string(packets.ExecutorDelivered) {
+		t.Fatalf("packet status = %q, want %q", delivered.Status, packets.ExecutorDelivered)
+	}
+}
+
+func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 55,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+	packet := testExecutorPacket(t)
+	packet.Status = string(packets.ExecutorExecutable)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorExecutable),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if _, err := store.EnqueueExecutorTx(
+		t.Context(),
+		packet.GUID,
+		string(packets.ExecutorExecutable),
+		string(packets.ExecutorLzReceiveTxEnqueued),
+		db.TxRequest{
+			ChainEID:             packet.DstEID,
+			Purpose:              executorLzReceivePurpose,
+			GUID:                 packet.GUID.Bytes(),
+			To:                   packet.Receiver,
+			Calldata:             []byte{0x04, 0x05},
+			Value:                big.NewInt(0),
+			GasLimit:             big.NewInt(150_000),
+			MaxFeePerGas:         big.NewInt(2_000_000_000),
+			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+			SignerID:             signer.Address().Hex(),
+		},
+	); err != nil {
+		t.Fatalf("EnqueueExecutorTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	failedPacket, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket() error = %v", err)
+	}
+	if failedPacket.Status != string(packets.ExecutorLzReceiveFailed) {
+		t.Fatalf("packet status = %q, want %q", failedPacket.Status, packets.ExecutorLzReceiveFailed)
+	}
+	failedTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() after receipt error = %v", err)
+	}
+	if failedTx.Status != db.TxStatusFailed {
+		t.Fatalf("tx status = %q, want %q", failedTx.Status, db.TxStatusFailed)
+	}
+}
+
 func openTestStore(t *testing.T) *db.Store {
 	t.Helper()
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
@@ -214,6 +359,30 @@ func newTestKeystoreSigner(t *testing.T) *keystore.Signer {
 		t.Fatalf("LoadWithPasswordSource() error = %v", err)
 	}
 	return signer
+}
+
+func testExecutorPacket(t *testing.T) db.PacketRecord {
+	t.Helper()
+	message := []byte{0x03, 0x04}
+	guid := crypto.Keccak256Hash([]byte(t.Name()))
+	return db.PacketRecord{
+		GUID:           guid,
+		SrcEID:         40161,
+		DstEID:         40245,
+		Nonce:          big.NewInt(7),
+		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
+		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		SendLib:        common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		SrcTxHash:      crypto.Keccak256Hash([]byte(t.Name() + ":source")),
+		SrcBlockNumber: 123,
+		SrcLogIndex:    4,
+		EncodedPacket:  append([]byte{0x01, 0x02}, message...),
+		PacketHeader:   []byte{0x01, 0x02},
+		Message:        message,
+		PayloadHash:    crypto.Keccak256Hash(message),
+		Options:        []byte{0x07, 0x08},
+		Status:         string(packets.ExecutorNew),
+	}
 }
 
 type fakeChainClient struct {

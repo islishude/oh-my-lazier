@@ -53,6 +53,25 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 	}
 }
 
+func TestIsCommitVerifiableRejectsEmptyPayloadHash(t *testing.T) {
+	packet := testPacketRecord()
+	packet.PayloadHash = common.Hash{}
+
+	ready, err := IsCommitVerifiable(
+		context.Background(),
+		failingCaller{},
+		common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		packet,
+	)
+	if err == nil {
+		t.Fatal("IsCommitVerifiable() error = nil, want payload hash validation error")
+	}
+	if ready {
+		t.Fatal("ready = true, want false")
+	}
+}
+
 func TestProcessDelivererOnceEnqueuesLzReceiveTx(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)
@@ -177,6 +196,12 @@ func (s *fakeStore) EnqueueExecutorTx(_ context.Context, guid common.Hash, expec
 	s.nextStatus = nextStatus
 	s.request = request
 	return 123, nil
+}
+
+type failingCaller struct{}
+
+func (failingCaller) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected eth_call")
 }
 
 type fakeCommitReadyCaller struct{}

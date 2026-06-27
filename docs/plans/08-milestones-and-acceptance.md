@@ -46,6 +46,16 @@ Acceptance:
 - pause/rate-limit tested
 - deployment scripts work on Sepolia/Base Sepolia
 
+Evidence:
+
+- `contracts/test/OpenWorkers.t.sol` `test_executorRejectsNonZeroLzReceiveValue`
+- `contracts/test/OpenWorkers.t.sol` `test_executorRejectsDuplicateLzReceiveOption`
+- `contracts/test/OpenWorkers.t.sol` `test_executorRejectsNativeDropOption`
+- `contracts/test/OpenWorkers.t.sol` `test_executorRejectsOrderedExecutionOption`
+- `contracts/test/OpenWorkers.t.sol` `test_dvnRejectsMessageSize`
+- `contracts/test/OpenWorkers.t.sol` `test_dvnRejectsWhenPaused`
+- `npx hardhat test solidity`
+
 ## M3 - DB and Config
 
 Status: [x]
@@ -95,6 +105,7 @@ Acceptance:
 - [x] keystore signer signs valid EIP-1559 tx
 - [x] tx_outbox assigns nonce without collisions
 - [x] replacement tx works in tests
+- [x] failed tx retry requeues with a fresh nonce
 
 Evidence:
 
@@ -102,6 +113,7 @@ Evidence:
 - `go/internal/signer/keystore.Signer`
 - `go test ./go/internal/signer/keystore -count=1`
 - `go/internal/signer/kms.Signer`
+- `go/internal/signer/kms.TestParseDERSignatureRejectsTrailingBytes`
 - `go test ./go/internal/signer/kms -count=1`
 - `RUSTACK_KMS_ENDPOINT=http://localhost:4566 go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1` 当前会 skip：`ghcr.io/tyrchen/rustack:latest` 的 KMS `CreateKey` 返回 `ECC_SECG_P256K1 is not supported`。
 - `go/internal/db.Store.EnqueueTx`
@@ -109,6 +121,8 @@ Evidence:
 - `go/internal/db.Store.ListBroadcastTx`
 - `go/internal/db.Store.MarkTxConfirmed`
 - `go/internal/db.Store.MarkTxFailed`
+- `go/internal/db.Store.RetryFailedTx`
+- `go/internal/db.TestRetryFailedTxRequeuesWithFreshNonce`
 - `TEST_POSTGRES_URL=... go test ./go/internal/db -count=1`
 - `go/internal/config.SignerConfig`
 - `go/internal/app.App.txTargets`
@@ -165,10 +179,14 @@ Evidence:
 - `go/internal/executor.BuildCommitVerificationTx`
 - `go/internal/executor.BuildLzReceiveTx`
 - `go/internal/executor.IsCommitVerifiable`
+- `go/internal/executor.TestIsCommitVerifiableRejectsEmptyPayloadHash`
 - `go/internal/executor.IsLzReceiveExecutable`
 - `go/internal/executor.Worker.ProcessCommitterOnce`
 - `go/internal/executor.Worker.ProcessDelivererOnce`
 - `go/internal/executor.TestProcessDelivererOnceRetriesFailedLzReceive`
+- `go/internal/txmgr.Manager.ProcessReceipts`
+- `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveDelivered`
+- `go/internal/txmgr.TestProcessReceiptsMarksExecutorLzReceiveFailed`
 - `go/internal/rpcquorum.Client.CallContract`
 - `go/internal/rpcquorum.Client.BlockNumber`
 - `go/internal/rpcquorum.Client.FilterLogs`
@@ -226,12 +244,14 @@ Evidence:
 - `go/internal/db.Store.PauseChain`
 - `go/internal/dvn.Worker.ProcessConfirmationsOnce`
 - `go/internal/dvn.Worker.ProcessQuorumOnce`
+- `go/internal/dvn.TestProcessQuorumOnceMarksWouldVerify`
 - `go/internal/rpcquorum.HeadConflictError`
 - `go/internal/rpcquorum.IsHeadConflict`
 - `go/internal/rpcquorum.Client.CheckHead`
 - `go/internal/rpcquorum.ReceiptConflictError`
 - `go/internal/rpcquorum.IsReceiptConflict`
 - `go/internal/rpcquorum.Client.TransactionReceipt`
+- `go/internal/rpcquorum.TestSelectCanonicalHeadAcceptsTwoOfThreeAgreement`
 - `go/internal/rpcquorum.selectCanonicalHead`
 - `go/internal/rpcquorum.receiptFingerprint`
 - `go test ./go/internal/lzabi ./go/internal/indexer ./go/internal/db -count=1`
@@ -261,6 +281,7 @@ Evidence:
 
 - `go/internal/pricing.SelectPrice`
 - `go/internal/pricing.DeviationBps`
+- `go/internal/pricing.TestSelectPriceRejectsFallbackWhenDisabled`
 - `go/internal/pricing.BinanceClient.PriceUSD`
 - `go/internal/pricing.UniswapV3Client.PriceUSD`
 - `go/internal/pricing.BuildPriceConfig`
@@ -313,7 +334,10 @@ Evidence:
 - `contracts/scripts/inspect-lz-config.ts`
 - `contracts/scripts/configure-lz-executor.ts`
 - `contracts/scripts/configure-lz-dvn.ts`
+- `contracts/scripts/lz-config.test.ts`
+- `package.json` `test:scripts`
 - `npm run typecheck`
+- `npm run test:scripts`
 
 ## M9 - Mainnet Readiness Review
 
@@ -354,4 +378,5 @@ Evidence:
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`
 - `govulncheck ./...` via temporary `GOBIN`: 0 called Go vulnerabilities
-- `npm audit --audit-level=moderate --json`: open critical/high transitive JavaScript toolchain advisories; M9 `no open critical issues` not satisfied
+- `package.json` removes unused `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`
+- `npm audit --audit-level=moderate --json`: 0 critical, 5 high remaining in pinned LayerZero transitive contract/toolchain dependencies; M9 final approval remains open

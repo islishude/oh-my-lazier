@@ -157,6 +157,50 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_executorRejectsNonZeroLzReceiveValue() public {
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.executorFee, (executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 1))),
+            WorkerErrors.NonZeroLzReceiveValue.selector
+        );
+    }
+
+    function test_executorRejectsDuplicateLzReceiveOption() public {
+        bytes memory payload = bytes.concat(bytes16(uint128(100_000)));
+        bytes memory duplicate =
+            bytes.concat(bytes2(uint16(3)), executorOptionEntry(1, payload), executorOptionEntry(1, payload));
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.executorFee, (executor, DST_EID, OAPP, 512, duplicate)),
+            WorkerErrors.DuplicateLzReceiveOption.selector
+        );
+    }
+
+    function test_executorRejectsNativeDropOption() public {
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(
+                sendLib.executorFee,
+                (
+                    executor,
+                    DST_EID,
+                    OAPP,
+                    512,
+                    executorOption(3, bytes.concat(bytes16(uint128(1)), bytes32(uint256(uint160(address(0x1234))))))
+                )
+            ),
+            WorkerErrors.UnsupportedOption.selector
+        );
+    }
+
+    function test_executorRejectsOrderedExecutionOption() public {
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.executorFee, (executor, DST_EID, OAPP, 512, executorOption(4, ""))),
+            WorkerErrors.UnsupportedOption.selector
+        );
+    }
+
     function test_executorRejectsWhenPaused() public {
         executor.setPaused(true);
         expectRevert(
@@ -238,6 +282,21 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_dvnRejectsMessageSize() public {
+        bytes memory packetHeader = new bytes(1025);
+        ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
+            dstEid: DST_EID,
+            packetHeader: packetHeader,
+            payloadHash: bytes32(uint256(1)),
+            confirmations: 12,
+            sender: OAPP
+        });
+
+        expectRevert(
+            address(sendLib), abi.encodeCall(sendLib.assignDVN, (dvn, param, "")), WorkerErrors.MessageTooLarge.selector
+        );
+    }
+
     function test_dvnAssignRejectsInsufficientFee() public {
         ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
             dstEid: DST_EID,
@@ -251,6 +310,21 @@ contract OpenWorkersTest {
             address(sendLib).call{value: 1 ether}(abi.encodeCall(sendLib.assignDVN, (dvn, param, "")));
         require(!ok, "expected revert");
         require(bytes4(data) == WorkerErrors.InsufficientFee.selector, "unexpected revert");
+    }
+
+    function test_dvnRejectsWhenPaused() public {
+        ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
+            dstEid: DST_EID,
+            packetHeader: hex"01020304",
+            payloadHash: bytes32(uint256(1)),
+            confirmations: 12,
+            sender: OAPP
+        });
+
+        dvn.setPaused(true);
+        expectRevert(
+            address(sendLib), abi.encodeCall(sendLib.assignDVN, (dvn, param, "")), WorkerErrors.Paused.selector
+        );
     }
 
     function test_dvnWithdraw() public {
@@ -355,8 +429,10 @@ contract OpenWorkersTest {
     }
 
     function executorOption(uint8 optionType, bytes memory payload) internal pure returns (bytes memory) {
-        return bytes.concat(
-            bytes2(uint16(3)), bytes1(uint8(1)), bytes2(uint16(payload.length + 1)), bytes1(optionType), payload
-        );
+        return bytes.concat(bytes2(uint16(3)), executorOptionEntry(optionType, payload));
+    }
+
+    function executorOptionEntry(uint8 optionType, bytes memory payload) internal pure returns (bytes memory) {
+        return bytes.concat(bytes1(uint8(1)), bytes2(uint16(payload.length + 1)), bytes1(optionType), payload);
     }
 }

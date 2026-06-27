@@ -34,6 +34,18 @@ func TestSelectPriceFallsBackWhenPrimaryUnavailable(t *testing.T) {
 	}
 }
 
+func TestSelectPriceRejectsFallbackWhenDisabled(t *testing.T) {
+	_, err := SelectPrice(
+		SourcePrice{Source: "binance"},
+		SourcePrice{Source: "uniswap", USD: big.NewRat(2000, 1)},
+		500,
+		false,
+	)
+	if err == nil {
+		t.Fatal("SelectPrice() error = nil, want no healthy price source")
+	}
+}
+
 func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) {
 	config, err := BuildPriceConfig(PriceInputs{
 		SrcNativeUSD:      big.NewRat(2000, 1),

@@ -25,6 +25,18 @@ func TestValidateKeyRequiresSecp256k1(t *testing.T) {
 	}
 }
 
+func TestParseDERSignatureRejectsTrailingBytes(t *testing.T) {
+	der, err := derFromSignature(big.NewInt(1), big.NewInt(2))
+	if err != nil {
+		t.Fatalf("derFromSignature() error = %v", err)
+	}
+	der = append(der, 0x00)
+
+	if _, _, err := parseDERSignature(der); err == nil {
+		t.Fatal("parseDERSignature() error = nil, want trailing bytes error")
+	}
+}
+
 func TestSignHashRecoversExpectedAddress(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {

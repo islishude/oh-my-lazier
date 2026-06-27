@@ -10,13 +10,14 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "test:scripts": "tsx --test contracts/scripts/*.test.ts",
     "typecheck": "tsc --noEmit",
     "deploy:workers": "tsx contracts/scripts/deploy-workers.ts",
     "configure:workers": "tsx contracts/scripts/configure-workers.ts",
     "inspect:lz-config": "tsx contracts/scripts/inspect-lz-config.ts",
     "configure:lz-executor": "tsx contracts/scripts/configure-lz-executor.ts",
     "configure:lz-dvn": "tsx contracts/scripts/configure-lz-dvn.ts",
-    "check": "npm run compile && npm test"
+    "check": "npm run compile && npm test && npm run test:scripts"
   },
   "repository": {
     "type": "git",
@@ -33,11 +34,17 @@
     "@layerzerolabs/lz-evm-messagelib-v2": "3.0.168",
     "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
     "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",
-    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
     "@openzeppelin/contracts": "5.6.1",
     "@types/node": "26.0.1",
     "hardhat": "3.9.0",
     "tsx": "4.22.4",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "viem": "2.53.1"
+  },
+  "overrides": {
+    "axios": "1.18.1",
+    "elliptic": "6.6.1",
+    "undici": "6.27.0",
+    "ws": "8.21.0"
   }
 }

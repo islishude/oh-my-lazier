@@ -1,10 +1,10 @@
 SHELL := /bin/sh
 
-.PHONY: all check compile test test-solidity test-go lint lint-go fmt fmt-go docker-build clean
+.PHONY: all check compile test test-solidity test-scripts test-go lint lint-go fmt fmt-go docker-build clean
 
 all: check
 
-check: compile test-solidity test-go lint-go fmt-check
+check: compile test-solidity test-scripts test-go lint-go fmt-check
 
 compile:
 	npm run compile
@@ -13,6 +13,9 @@ test: test-solidity test-go
 
 test-solidity:
 	npx hardhat test solidity
+
+test-scripts:
+	npm run test:scripts
 
 test-go:
 	go test ./...
