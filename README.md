@@ -19,7 +19,7 @@ contracts/scripts/     Deployment and operations scripts
 contracts/test/        Contract tests
 go/                    Go worker package tree
 config/                Worker config examples
-docs/                  Plans and implementation notes
+docs/                  Runbooks, deployment policies, security records, and migration evidence
 ```
 
 ## Tooling

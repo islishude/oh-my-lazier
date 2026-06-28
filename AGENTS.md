@@ -2,16 +2,16 @@
 
 ## Source of Truth
 
-- Use [docs/PLANS.md](docs/PLANS.md) as the top-level implementation plan.
-- Keep plan, runbook, and milestone documents aligned with behavior changes.
-- Do not mark plan items complete unless repository evidence and checks prove them.
+- Use [README.md](README.md), runbooks under [docs/runbooks](docs/runbooks), deployment policy under [docs/deployments](docs/deployments), and release-readiness records under [docs/security](docs/security) as the maintained project documentation.
+- Keep runbook, deployment, security, and migration evidence documents aligned with behavior changes.
+- Do not mark operational or release-readiness work complete unless repository evidence and checks prove it.
 
 ## Phase-1 Scope
 
 - The first phase is EVM-only and scoped to Ethereum Sepolia <-> Base Sepolia.
 - Required DVNs are `OpenDVN` and an independent LayerZero Labs DVN.
-- Confirmations are fixed at `12` unless the plan is explicitly updated.
-- Do not add `composeMsg`, `lzCompose`, native drop, ordered execution, or non-EVM support without an explicit plan update.
+- Confirmations are fixed at `12` unless the maintained scope documentation is explicitly updated.
+- Do not add `composeMsg`, `lzCompose`, native drop, ordered execution, or non-EVM support without an explicit scope documentation update.
 - Do not migrate to self-only DVN.
 
 ## Contracts

@@ -80,7 +80,7 @@ LayerZero phase-1 boundary:
   remain out of scope.
 - Self-only DVN is rejected; required DVNs must include OpenDVN and an
   independent LayerZero Labs DVN.
-- Confirmations are fixed at 12 unless the top-level plan is updated.
+- Confirmations are fixed at 12 unless the maintained scope documentation is updated.
 
 RPC quorum and safety:
 

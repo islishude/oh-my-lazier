@@ -22,7 +22,7 @@ const requiredDocs: RequiredDoc[] = [
       "No non-EVM chain support.",
       "No self-only DVN.",
       "Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.",
-      "Confirmations must be 12 unless the top-level plan is explicitly updated.",
+      "Confirmations must be 12 unless the maintained scope documentation is explicitly updated.",
       "MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence",
       "npm run check:runbooks",
       "make security-check",

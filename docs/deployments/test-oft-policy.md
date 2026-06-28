@@ -51,4 +51,4 @@ After deployment, supply movement is limited to the OFT burn/mint flow:
 - destination-chain receive mints local tokens
 - pause and rate-limit controls gate the flow per pathway
 
-Changing this policy requires updating `docs/PLANS.md` before deployment.
+Changing this policy requires updating this document, the affected runbooks, and migration evidence expectations before deployment.
