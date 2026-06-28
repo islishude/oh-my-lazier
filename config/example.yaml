@@ -61,6 +61,7 @@ chains:
     endpoint_address: "0x1111111111111111111111111111111111111111"
     confirmations: 12
     start_block_number: 0
+    # Supports http(s), ws(s), and absolute IPC socket paths.
     rpc_urls:
       - http://localhost:8545
     workers:

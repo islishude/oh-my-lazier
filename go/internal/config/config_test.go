@@ -21,6 +21,43 @@ func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsSupportedRPCURLFormats(t *testing.T) {
+	for _, rpcURL := range []string{
+		"http://localhost:8545",
+		"https://rpc.example.com",
+		"ws://localhost:8546",
+		"wss://rpc.example.com/ws",
+		"/var/run/geth.ipc",
+	} {
+		t.Run(rpcURL, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].RPCURLs = []string{rpcURL}
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidRPCURLFormats(t *testing.T) {
+	for name, rpcURL := range map[string]string{
+		"empty":       "",
+		"whitespace":  " http://localhost:8545",
+		"missingHost": "https:///rpc",
+		"unknown":     "ftp://localhost/rpc",
+		"relativeIPC": "geth.ipc",
+		"ipcScheme":   "ipc:///var/run/geth.ipc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].RPCURLs = []string{rpcURL}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want invalid rpc url error")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 	cfg := validConfig()
 	cfg.Executor.Signer = ""

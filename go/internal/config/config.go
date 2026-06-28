@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
@@ -230,6 +233,11 @@ func (c Config) Validate() error {
 		if len(chain.RPCURLs) == 0 {
 			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
 		}
+		for i, rpcURL := range chain.RPCURLs {
+			if err := validateRPCURL(rpcURL); err != nil {
+				return fmt.Errorf("chain %s rpc_urls[%d] is invalid: %w", chain.Name, i, err)
+			}
+		}
 		if _, ok := seen[chain.EID]; ok {
 			return fmt.Errorf("duplicate chain eid %d", chain.EID)
 		}
@@ -300,6 +308,33 @@ func (c Config) Validate() error {
 		pathways[key] = struct{}{}
 	}
 	return nil
+}
+
+func validateRPCURL(raw string) error {
+	if raw == "" {
+		return errors.New("value is required")
+	}
+	if strings.TrimSpace(raw) != raw {
+		return errors.New("value must not contain leading or trailing whitespace")
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	switch parsed.Scheme {
+	case "http", "https", "ws", "wss":
+		if parsed.Host == "" {
+			return fmt.Errorf("%s url must include a host", parsed.Scheme)
+		}
+		return nil
+	case "":
+		if !filepath.IsAbs(raw) {
+			return errors.New("ipc path must be absolute")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
+	}
 }
 
 func (c Config) validateSigners() (map[string]struct{}, error) {
