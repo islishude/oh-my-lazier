@@ -20,6 +20,14 @@ Acceptance:
 - `go test ./...` runs empty Go test suite
 - `docker compose up` starts Postgres and worker skeleton
 
+Evidence:
+
+- `Dockerfile`
+- `docker-compose.yml`
+- `Makefile` `docker-build`
+- `Makefile` `docker-smoke`
+- `.github/workflows/ci.yml` `Docker image`
+
 ## M2 - Contracts v1
 
 Status: [x]
@@ -375,6 +383,8 @@ Evidence:
 - `package.json` `check:oft-canary`
 - `package.json` `check:dvn-verification`
 - `package.json` `check:migration-evidence`
+- `Makefile` `migration-evidence-check`
+- `.github/workflows/ci.yml` `Check migration evidence example`
 - `package.json` `check:lz-addresses`
 - `package.json` `check:deployment-preflight`
 - `package.json` `oft:pathway`
@@ -461,20 +471,28 @@ Evidence:
 - `go/internal/configdiff.Diff`
 - `go/cmd/configdiff`
 - `docs/runbooks/monitoring.md`
+- `docs/monitoring/prometheus-alerts.yml`
 - `docs/runbooks/config-diff.md`
 - `docs/runbooks/key-management.md`
 - `docs/runbooks/rate-limit.md`
 - `docs/runbooks/mainnet-readiness.md`
 - `contracts/scripts/runbook-review.ts`
+- `contracts/scripts/runbook-review.ts` `requiredAlertRules`
+- `contracts/scripts/runbook-review.test.ts` `runbook review rejects missing required alert rules`
 - `npm run check:runbooks`
 - `docs/security/security-review.md`
+- `contracts/scripts/security-review.ts`
+- `contracts/scripts/security-review.ts` `validateNoSecretLogging`
+- `contracts/scripts/security-review.test.ts` `secret logging guard rejects secret-bearing log calls`
 - `make security-check`
+- `.github/workflows/ci.yml` `Security gates`
 - `go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1`
 - `go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1`
 - `go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1`
 - `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`
 - `npx hardhat test solidity`
 - `make security-check`
+- `npm run check:security-review`
 - `npm run check:npm-audit-disposition`
 - `go run golang.org/x/vuln/cmd/govulncheck@latest ./...`: 0 called Go vulnerabilities
 - `package.json` retains `@nomicfoundation/hardhat-toolbox-viem`, depends on `viem` directly, and pins `overrides` for `axios`, `elliptic`, `undici`, and `ws`

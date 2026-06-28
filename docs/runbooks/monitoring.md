@@ -14,18 +14,22 @@ Required scrape target:
 http://<worker-host>:9090/metrics
 ```
 
+Required alert rules are tracked in `docs/monitoring/prometheus-alerts.yml`.
+`npm run check:runbooks` verifies that the documented high-signal alerts remain
+present and linked back to this runbook.
+
 Required alerts:
 
-- `laz_chain_paused == 1` for any chain: page immediately. This means chain-wide quorum safety logic paused the worker path.
-- `laz_pathway_paused == 1` for any pathway: page immediately. This means packet-level receipt/log conflict safety logic paused a pathway.
-- `laz_dvn_jobs_total{status="QUORUM_CONFLICT"} > 0`: page immediately and inspect source RPC providers before unpausing.
-- `laz_dvn_jobs_total{status="REORG_DETECTED"} > 0`: page if it persists past the next confirmation loop; inspect source RPC providers and source transaction receipts.
-- `laz_packets_total{status="MANUAL_REVIEW"} > 0`: ticket within one business day; page if count increases during migration.
-- `laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} > 0`: ticket and inspect destination `LzReceiveAlert` logs.
-- `laz_executor_jobs_total{status="MANUAL_REVIEW"} > 0` or `laz_dvn_jobs_total{status="MANUAL_REVIEW"} > 0`: ticket and block migration approval until reviewed.
-- `laz_tx_outbox_total{status="failed"} > 0`: ticket; page if failure count increases for active migration chains.
-- Missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window: page if the chain is actively used.
-- `/readyz` returns non-200 for more than two scrape intervals: page.
+- `LazWorkerReadinessFailed`: `/readyz` returns non-200 for more than two scrape intervals; page.
+- `LazChainPaused`: `laz_chain_paused == 1` for any chain; page immediately. This means chain-wide quorum safety logic paused the worker path.
+- `LazPathwayPaused`: `laz_pathway_paused == 1` for any pathway; page immediately. This means packet-level receipt/log conflict safety logic paused a pathway.
+- `LazDVNQuorumConflict`: `laz_dvn_jobs_total{status="QUORUM_CONFLICT"} > 0`; page immediately and inspect source RPC providers before unpausing.
+- `LazDVNReorgDetected`: `laz_dvn_jobs_total{status="REORG_DETECTED"} > 0`; page if it persists past the next confirmation loop; inspect source RPC providers and source transaction receipts.
+- `LazPacketManualReview`: `laz_packets_total{status="MANUAL_REVIEW"} > 0`; ticket within one business day; page if count increases during migration.
+- `LazExecutorReceiveFailed`: `laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} > 0`; ticket and inspect destination `LzReceiveAlert` logs.
+- `LazWorkerManualReview`: `laz_executor_jobs_total{status="MANUAL_REVIEW"} > 0` or `laz_dvn_jobs_total{status="MANUAL_REVIEW"} > 0`; ticket and block migration approval until reviewed.
+- `LazTxOutboxFailed`: `laz_tx_outbox_total{status="failed"} > 0`; ticket; page if failure count increases for active migration chains.
+- `LazIndexerCursorStalled`: missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window; page if the chain is actively used.
 
 Before any migration approval, run the DB-backed readiness gate and attach the JSON output:
 

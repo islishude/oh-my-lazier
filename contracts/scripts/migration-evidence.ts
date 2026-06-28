@@ -397,10 +397,14 @@ function validateDVNVerification(
     `${field}.expectedPayloadHash`,
   );
   if (verification.expectedSrcEid !== srcEid) {
-    errors.push(`${field}.expectedSrcEid must equal direction srcEid ${srcEid}`);
+    errors.push(
+      `${field}.expectedSrcEid must equal direction srcEid ${srcEid}`,
+    );
   }
   if (verification.expectedDstEid !== dstEid) {
-    errors.push(`${field}.expectedDstEid must equal direction dstEid ${dstEid}`);
+    errors.push(
+      `${field}.expectedDstEid must equal direction dstEid ${dstEid}`,
+    );
   }
   requirePositiveDecimalInteger(
     errors,

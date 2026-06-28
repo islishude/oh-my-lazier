@@ -149,7 +149,9 @@ export function rollbackConfigBatches(
   ];
 }
 
-export function rollbackConfigPlan(snapshot: LzConfigSnapshot): RollbackConfigPlan {
+export function rollbackConfigPlan(
+  snapshot: LzConfigSnapshot,
+): RollbackConfigPlan {
   const normalized = normalizeLzConfigSnapshot(snapshot);
   return {
     endpoint: normalized.endpoint,

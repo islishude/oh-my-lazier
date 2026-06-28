@@ -125,7 +125,10 @@ function findPayloadVerified(
   return out;
 }
 
-function packetHeaderMatches(header: Hex, expected: ExpectedPacketHeader): boolean {
+function packetHeaderMatches(
+  header: Hex,
+  expected: ExpectedPacketHeader,
+): boolean {
   const decoded = decodePacketHeader(header);
   if (decoded === undefined) {
     return false;

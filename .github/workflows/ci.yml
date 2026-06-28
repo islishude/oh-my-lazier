@@ -36,8 +36,20 @@ jobs:
       - name: Compile contracts
         run: npm run compile
 
+      - name: Typecheck scripts
+        run: npm run typecheck
+
+      - name: Run script tests
+        run: npm run test:scripts
+
       - name: Run Solidity tests
         run: npx hardhat test
+
+      - name: Check runbooks
+        run: npm run check:runbooks
+
+      - name: Check migration evidence example
+        run: MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
 
   go:
     name: Go (${{ matrix.os }})
@@ -74,8 +86,50 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
 
+      - name: Check Go format
+        run: make fmt-go-check
+
       - name: Run Go tests
         run: go test ./...
         env:
           TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"
           RUSTACK_KMS_ENDPOINT: "http://localhost:4566"
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and smoke test worker image
+        run: make docker-smoke
+
+  security:
+    name: Security gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "stable"
+          check-latest: true
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Run security gates
+        run: make security-check

@@ -14,6 +14,7 @@ test, and deployment toolchain. It is not final mainnet approval.
 
 ```bash
 npm run check:npm-audit-disposition
+npm run check:security-review
 make security-check
 ```
 
@@ -23,7 +24,8 @@ make security-check
 - zero critical findings
 - every high or moderate finding to be present in the recorded disposition set
 
-`make security-check` runs the npm audit disposition gate and `govulncheck`.
+`make security-check` runs the security review document gate, npm audit
+disposition gate, and `govulncheck`.
 
 Current npm audit metadata:
 
@@ -87,6 +89,7 @@ compatible upstream fix or explicit approval before mainnet readiness.
 
 ```bash
 npm run check:npm-audit-disposition
+npm run check:security-review
 make security-check
 make check
 git diff --check

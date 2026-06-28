@@ -4,7 +4,8 @@ Status: [~]
 
 Repo-local gates:
 
-- `make check` runs contract compile, Solidity tests, Go tests, `golangci-lint`, `gofmt -l go`, and `forge fmt --check contracts`.
+- `make check` runs contract compile, TypeScript typecheck, Solidity tests, TypeScript script tests, Go tests, runbook checks, migration evidence example validation, `golangci-lint`, `gofmt -l go`, and `forge fmt --check contracts`.
+- CI runs TypeScript typecheck, TypeScript script tests, runbook checks, migration evidence example validation, Go tests, Go lint, Go format checks, Docker image build/smoke validation, and `make security-check`.
 - `npm run typecheck` type-checks deployment and LayerZero configuration scripts.
 - `TEST_POSTGRES_URL=... go test ./go/internal/db ./go/internal/txmgr -count=1` runs Postgres-backed state-machine and tx manager integration tests.
 - `make test-integration` starts `docker-compose.integration.yml` with Postgres and Rustack, runs Postgres-backed DB/tx manager tests and the Rustack KMS signer integration test, then tears the containers down and removes `.tmp/integration`.
@@ -242,6 +243,9 @@ Current evidence:
 - Migration evidence checker rejects stale or mismatched price config artifacts.
 - Migration evidence checker requires rollback dry-run evidence before approval.
 - Rollback config planner exposes the exact dry-run `Endpoint.setConfig` batches before signing.
+- Runbook review gate verifies required Prometheus alert rules for readiness, pauses, conflicts, manual review, tx failures, and stalled indexers.
+- Security review gate verifies the release-readiness security documents retain required phase-1 boundaries, open release blockers, and no host-specific scan notes.
+- Security review gate statically rejects Go or TypeScript log calls that mention secret-bearing material.
 
 Current evidence:
 
@@ -250,6 +254,19 @@ Current evidence:
 - `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects stale or mismatched price config evidence`
 - `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects missing required artifacts`
 - `contracts/scripts/lz-config.test.ts` `rollback config plan exposes dry-run review payload`
+- `contracts/scripts/runbook-review.ts` `requiredAlertRules`
+- `contracts/scripts/runbook-review.test.ts` `runbook review rejects missing required alert rules`
+- `contracts/scripts/runbook-review.test.ts` `runbook review rejects missing runbook anchors`
+- `docs/monitoring/prometheus-alerts.yml`
+- `contracts/scripts/security-review.ts`
+- `contracts/scripts/security-review.ts` `validateNoSecretLogging`
+- `contracts/scripts/security-review.test.ts` `secret logging guard rejects secret-bearing log calls`
+- `package.json` `check:security-review`
+- `.github/workflows/ci.yml` `Security gates`
+- `Makefile` `migration-evidence-check`
+- `.github/workflows/ci.yml` `Check migration evidence example`
+- `Makefile` `docker-smoke`
+- `.github/workflows/ci.yml` `Docker image`
 
 ## Testnet Integration Tests
 

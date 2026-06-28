@@ -38,14 +38,18 @@ make compile        # Hardhat compile
 make test-solidity  # Solidity tests
 make test-go        # Go package tests
 make test-integration # Postgres and Rustack-backed integration tests
-make security-check # npm audit disposition plus Go vulnerability check
+make security-check # security doc/log guard, npm audit disposition, and Go vulnerability check
 make runbook-check  # runbook coverage guard
+make migration-evidence-check # validates the example migration evidence record
 make lint-go        # golangci-lint
 make fmt-go         # gofmt
 make fmt-sol        # format solidity files
 ```
 
 `npm run check` remains available for compile plus tests without the Go linter.
+CI mirrors the local gates with contract/script/runbook/migration-evidence
+checks, Go tests and lint, Docker image build validation, and a dedicated
+`make security-check` job.
 
 ## Local Worker
 
@@ -63,8 +67,13 @@ Build the worker image locally with:
 make docker-build
 ```
 
-The image runs `/usr/local/bin/worker` and defaults to `/app/config/example.yaml`. CI publishes `ghcr.io/<owner>/<repo>/worker` from `main` and version tags.
-Docker publishing builds native amd64 and arm64 images on separate GitHub runners, pushes them by digest, and then creates a multi-arch manifest with `docker buildx imagetools`.
+Smoke-test the image entrypoint without loading worker config:
+
+```bash
+make docker-smoke
+```
+
+The image runs `/usr/local/bin/worker` and defaults to `/app/config/example.yaml`. CI builds and smoke-tests the local worker image. The release publishing path builds native amd64 and arm64 images on separate GitHub runners, pushes them by digest, and then creates a multi-arch manifest with `docker buildx imagetools`.
 
 ## Current Scope
 

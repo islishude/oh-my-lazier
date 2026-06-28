@@ -5,11 +5,11 @@ INTEGRATION_TMP_DIR = .tmp/integration
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 
-.PHONY: all check compile typecheck test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check lint lint-go fmt fmt-go docker-build clean
+.PHONY: all check compile typecheck test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
 
 all: check
 
-check: compile typecheck test-solidity test-scripts test-go runbook-check lint-go fmt-check
+check: compile typecheck test-solidity test-scripts test-go runbook-check migration-evidence-check lint-go fmt-check
 
 compile:
 	npm run compile
@@ -58,11 +58,15 @@ test-integration:
 	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
 
 security-check:
+	npm run check:security-review
 	npm run check:npm-audit-disposition
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
 runbook-check:
 	npm run check:runbooks
+
+migration-evidence-check:
+	MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
 
 lint: lint-go
 
@@ -87,6 +91,9 @@ fmt-sol-check:
 
 docker-build:
 	docker build -t oh-my-lazier-worker:local .
+
+docker-smoke: docker-build
+	docker run --rm oh-my-lazier-worker:local -h
 
 clean:
 	npx hardhat clean

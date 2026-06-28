@@ -20,6 +20,7 @@ ticket:
 ```bash
 make check
 make security-check
+npm run check:security-review
 npm run check:npm-audit-disposition
 ```
 
@@ -34,7 +35,14 @@ rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|wit
 ## Current Status
 
 - `make security-check` requires `npm run check:npm-audit-disposition` to pass and
-  runs `govulncheck` against the Go code.
+  runs `npm run check:security-review`, `npm run check:npm-audit-disposition`,
+  and `govulncheck` against the Go code.
+- `npm run check:security-review` verifies that the release-readiness security
+  documents retain the required phase-1 boundaries, open release blockers, and
+  no host-specific scan notes. It also includes a secret logging guard that
+  fails when Go or TypeScript log calls mention private keys, secrets,
+  passwords, signatures, API keys, access keys, session tokens, keystores, or
+  credentials.
 - `npm run check:npm-audit-disposition` requires zero critical npm findings and
   fails if any high or moderate finding appears outside the recorded
   disposition set.
@@ -54,6 +62,8 @@ Signer and key boundary:
 - Missing or empty keystore password sources are rejected.
 - Private key material, decrypted keystore JSON, KMS signatures, and raw secrets
   must never be logged.
+- The `npm run check:security-review` secret logging guard blocks newly added
+  log calls that mention secret-bearing material.
 
 Contract authority:
 

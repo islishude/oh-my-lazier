@@ -1,0 +1,92 @@
+groups:
+  - name: oh-my-lazier.worker
+    rules:
+      - alert: LazWorkerReadinessFailed
+        expr: probe_success{job="laz-worker-readyz"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: LayerZero worker readiness check is failing
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazChainPaused
+        expr: laz_chain_paused == 1
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: LayerZero worker chain is paused by safety logic
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazPathwayPaused
+        expr: laz_pathway_paused == 1
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: LayerZero worker pathway is paused by safety logic
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazDVNQuorumConflict
+        expr: laz_dvn_jobs_total{status="QUORUM_CONFLICT"} > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: DVN RPC quorum conflict requires operator review
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazDVNReorgDetected
+        expr: laz_dvn_jobs_total{status="REORG_DETECTED"} > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: DVN job remains in reorg-detected state
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazPacketManualReview
+        expr: laz_packets_total{status="MANUAL_REVIEW"} > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Packet requires manual review before migration approval
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazExecutorReceiveFailed
+        expr: laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Executor delivery failed and needs retry review
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazWorkerManualReview
+        expr: laz_executor_jobs_total{status="MANUAL_REVIEW"} > 0 or laz_dvn_jobs_total{status="MANUAL_REVIEW"} > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Worker job requires manual review before migration approval
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazTxOutboxFailed
+        expr: laz_tx_outbox_total{status="failed"} > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Transaction outbox has failed rows
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazIndexerCursorStalled
+        expr: changes(laz_indexer_cursor_last_block[10m]) == 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: Worker indexer cursor has not advanced
+          runbook: docs/runbooks/monitoring.md

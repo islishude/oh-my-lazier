@@ -56,6 +56,7 @@ make check
 - TypeScript script tests
 - Go tests
 - runbook coverage check
+- migration evidence example check
 - `golangci-lint`
 - Go formatting check
 - Solidity formatting check
@@ -71,4 +72,4 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm 
 
 Use `make test-integration` for the dedicated Postgres/Rustack integration stack. It starts the containers with Docker Compose, waits for health checks, runs DB/tx manager and Rustack KMS tests, then tears down containers and temporary database files.
 
-`make security-check` runs the npm audit disposition gate and Go vulnerability check.
+`make security-check` runs the security review document and secret logging guard, npm audit disposition gate, and Go vulnerability check.
