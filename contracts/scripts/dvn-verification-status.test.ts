@@ -45,6 +45,13 @@ test("assertDVNVerificationReceipt verifies both required DVNs and Endpoint Pack
     endpoint,
     endpointAbi,
     expectedPayloadHash: payloadHash,
+    expectedPacket: {
+      srcEid: 40161,
+      dstEid: 40245,
+      nonce: 1n,
+      sender: getAddress("0x5555555555555555555555555555555555555555"),
+      receiver: getAddress("0x7777777777777777777777777777777777777777"),
+    },
   });
 
   assert.equal(status.payloadVerified.length, 2);
@@ -101,6 +108,25 @@ test("assertDVNVerificationReceipt rejects missing PacketVerified when endpoint 
   );
 });
 
+test("assertDVNVerificationReceipt rejects mismatched expected packet header", () => {
+  assert.throws(
+    () =>
+      assertDVNVerificationReceipt({
+        logs: [
+          payloadVerifiedLog({ dvn: openDVN, confirmations: 12n }),
+          payloadVerifiedLog({ dvn: layerZeroLabsDVN, confirmations: 12n }),
+        ],
+        receiveUln,
+        requiredDVNs: [openDVN, layerZeroLabsDVN],
+        minConfirmations: 12n,
+        receiveUlnAbi,
+        expectedPayloadHash: payloadHash,
+        expectedPacket: { srcEid: 40245 },
+      }),
+    /missing ReceiveUln302 PayloadVerified/,
+  );
+});
+
 function loadAbi(relativePath: string): Abi {
   return JSON.parse(readFileSync(join(process.cwd(), relativePath), "utf8"))
     .abi as Abi;
@@ -123,9 +149,44 @@ function payloadVerifiedLog(input: {
         { type: "uint256" },
         { type: "bytes32" },
       ],
-      [input.dvn, "0x01020304", input.confirmations, payloadHash],
+      [
+        input.dvn,
+        packetHeader({
+          nonce: 1n,
+          srcEid: 40161,
+          dstEid: 40245,
+          sender: getAddress("0x5555555555555555555555555555555555555555"),
+          receiver: getAddress("0x7777777777777777777777777777777777777777"),
+        }),
+        input.confirmations,
+        payloadHash,
+      ],
     ),
   };
+}
+
+function packetHeader(input: {
+  nonce: bigint;
+  srcEid: number;
+  dstEid: number;
+  sender: Address;
+  receiver: Address;
+}): Hex {
+  return `0x01${uintHex(input.nonce, 8)}${uintHex(
+    BigInt(input.srcEid),
+    4,
+  )}${addressBytes32(input.sender)}${uintHex(
+    BigInt(input.dstEid),
+    4,
+  )}${addressBytes32(input.receiver)}` as Hex;
+}
+
+function uintHex(value: bigint, bytes: number): string {
+  return value.toString(16).padStart(bytes * 2, "0");
+}
+
+function addressBytes32(address: Address): string {
+  return address.slice(2).padStart(64, "0");
 }
 
 function packetVerifiedLog(): VerificationLog {

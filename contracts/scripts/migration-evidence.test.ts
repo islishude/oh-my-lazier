@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   validateMigrationEvidenceRecord,
+  type DVNVerificationEvidence,
   type EvidenceRef,
   type MigrationEvidenceRecord,
+  type PriceConfigEvidence,
 } from "./migration-evidence.js";
 
 test("validateMigrationEvidenceRecord accepts complete migration evidence", () => {
@@ -36,6 +38,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
   record.layerZeroAddressCheck = evidence("");
   record.readinessCheck = evidence("");
   record.runbookReview = evidence("");
+  record.rollback.dryRun = evidence("");
   record.rollback.restoredConfigCheck = evidence("");
   record.rollback.canaryAfterRollback = evidence("");
   record.rollback.manualRetryPlan = evidence("");
@@ -48,6 +51,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "readinessCheck.ref must be a non-empty string",
     "runbookReview.ref must be a non-empty string",
     "directions[0].srcEid and directions[0].dstEid must differ",
+    "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40161",
     "directions[0].canaryDestinationReceipt.ref must be a non-empty string",
     "directions[0].canary.amountLD must be a positive decimal integer string",
     "directions[0].canary.senderAccount must be an EVM address",
@@ -61,9 +65,11 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "directions[0].dvnJoin.requiredDVNs must not be self-only",
     "directions[0].dvnJoin.optionalDVNsDisabled must be true",
     "directions[0].dvnJoin.configCheck.ref must be a non-empty string",
+    "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40161",
     "directions contains unsupported phase-1 direction 40161->40161",
     "directions missing reciprocal direction 40161->40245",
     "directions missing phase-1 direction 40161->40245",
+    "rollback.dryRun.ref must be a non-empty string",
     "rollback.restoredConfigCheck.ref must be a non-empty string",
     "rollback.canaryAfterRollback.ref must be a non-empty string",
     "rollback.manualRetryPlan.ref must be a non-empty string",
@@ -125,10 +131,67 @@ test("validateMigrationEvidenceRecord rejects unsupported phase-1 directions", (
   const errors = validateMigrationEvidenceRecord(record);
 
   assert.deepEqual(errors, [
+    "directions[1].priceConfigCheck.dstEid must equal direction dstEid 99999",
+    "directions[1].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 99999",
     "directions missing reciprocal direction 40245->40161",
     "directions contains unsupported phase-1 direction 40245->99999",
     "directions missing reciprocal direction 99999->40245",
     "directions missing phase-1 direction 40245->40161",
+  ]);
+});
+
+test("validateMigrationEvidenceRecord rejects weak DVN verification packet identity", () => {
+  const record = baseRecord();
+  record.directions[0].dvnVerificationReceipt = {
+    ...record.directions[0].dvnVerificationReceipt,
+    expectedPayloadHash: "0xabc",
+    expectedSrcEid: 40245,
+    expectedDstEid: 40161,
+    expectedNonce: "0",
+    expectedSender: "0x0000000000000000000000000000000000000000",
+    expectedReceiver: "not-an-address",
+  };
+
+  const errors = validateMigrationEvidenceRecord(record);
+
+  assert.deepEqual(errors, [
+    "directions[0].dvnVerificationReceipt.expectedPayloadHash must be a bytes32 hex string",
+    "directions[0].dvnVerificationReceipt.expectedSrcEid must equal direction srcEid 40161",
+    "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40245",
+    "directions[0].dvnVerificationReceipt.expectedNonce must be a positive decimal integer string",
+    "directions[0].dvnVerificationReceipt.expectedSender must not be the zero address",
+    "directions[0].dvnVerificationReceipt.expectedReceiver must be an EVM address",
+  ]);
+});
+
+test("validateMigrationEvidenceRecord rejects stale or mismatched price config evidence", () => {
+  const record = baseRecord();
+  record.directions[0].priceConfigCheck = {
+    ...record.directions[0].priceConfigCheck,
+    dstEid: 40161,
+    checkedAt: "1000",
+    maxAgeSeconds: "60",
+    expectedStaleAfter: "1800",
+    executor: {
+      updatedAt: "900",
+      staleAfter: "120",
+      dstGasPriceInSrcToken: "0",
+    },
+    dvn: {
+      updatedAt: "1001",
+      staleAfter: "1800",
+      dstGasPriceInSrcToken: "2",
+    },
+  };
+
+  const errors = validateMigrationEvidenceRecord(record);
+
+  assert.deepEqual(errors, [
+    "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40245",
+    "directions[0].priceConfigCheck.executor.dstGasPriceInSrcToken must be a positive decimal integer string",
+    "directions[0].priceConfigCheck.executor.updatedAt age exceeds 60s",
+    "directions[0].priceConfigCheck.executor.staleAfter must equal expectedStaleAfter 1800",
+    "directions[0].priceConfigCheck.dvn.updatedAt must not be in the future",
   ]);
 });
 
@@ -160,7 +223,10 @@ function baseRecord(): MigrationEvidenceRecord {
           "artifacts/lz-config-sepolia-base.before.json",
         ),
         lzConfigAfter: evidence("artifacts/lz-config-sepolia-base.after.json"),
-        priceConfigCheck: evidence("artifacts/price-config-sepolia-base.json"),
+        priceConfigCheck: priceConfigEvidence(
+          "artifacts/price-config-sepolia-base.json",
+          40245,
+        ),
         drainCheckBeforeSwitch: evidence("artifacts/drain-sepolia-base.json"),
         canarySourceReceipt: evidence("artifacts/canary-source.json"),
         canaryDestinationReceipt: evidence("artifacts/canary-destination.json"),
@@ -181,7 +247,11 @@ function baseRecord(): MigrationEvidenceRecord {
           optionalDVNsDisabled: true,
           configCheck: evidence("artifacts/dvn-join-config.json"),
         },
-        dvnVerificationReceipt: evidence("artifacts/dvn-verification.json"),
+        dvnVerificationReceipt: dvnVerification(
+          "artifacts/dvn-verification.json",
+          40161,
+          40245,
+        ),
       },
       {
         label: "Base Sepolia to Ethereum Sepolia",
@@ -193,7 +263,10 @@ function baseRecord(): MigrationEvidenceRecord {
           "artifacts/lz-config-base-sepolia.before.json",
         ),
         lzConfigAfter: evidence("artifacts/lz-config-base-sepolia.after.json"),
-        priceConfigCheck: evidence("artifacts/price-config-base-sepolia.json"),
+        priceConfigCheck: priceConfigEvidence(
+          "artifacts/price-config-base-sepolia.json",
+          40161,
+        ),
         drainCheckBeforeSwitch: evidence("artifacts/drain-base-sepolia.json"),
         canarySourceReceipt: evidence("artifacts/canary-source-reverse.json"),
         canaryDestinationReceipt: evidence(
@@ -218,8 +291,10 @@ function baseRecord(): MigrationEvidenceRecord {
           optionalDVNsDisabled: true,
           configCheck: evidence("artifacts/dvn-join-config-reverse.json"),
         },
-        dvnVerificationReceipt: evidence(
+        dvnVerificationReceipt: dvnVerification(
           "artifacts/dvn-verification-reverse.json",
+          40245,
+          40161,
         ),
       },
     ],
@@ -227,6 +302,7 @@ function baseRecord(): MigrationEvidenceRecord {
       previousExecutorConfig: evidence("artifacts/executor-before.json"),
       previousSendUlnConfig: evidence("artifacts/send-uln-before.json"),
       previousReceiveUlnConfig: evidence("artifacts/receive-uln-before.json"),
+      dryRun: evidence("artifacts/rollback-dry-run.json"),
       restoredConfigCheck: evidence("artifacts/rollback-lz-config.after.json"),
       canaryAfterRollback: evidence("artifacts/rollback-canary.json"),
       ownerPauseAccount: "0x1111111111111111111111111111111111111111",
@@ -239,4 +315,41 @@ function baseRecord(): MigrationEvidenceRecord {
 
 function evidence(ref: string): EvidenceRef {
   return { ref, capturedAt: "2026-06-27T00:00:00Z", reviewer: "ops" };
+}
+
+function priceConfigEvidence(ref: string, dstEid: number): PriceConfigEvidence {
+  return {
+    ...evidence(ref),
+    dstEid,
+    checkedAt: "1000",
+    maxAgeSeconds: "60",
+    expectedStaleAfter: "1800",
+    executor: {
+      updatedAt: "950",
+      staleAfter: "1800",
+      dstGasPriceInSrcToken: "2",
+    },
+    dvn: {
+      updatedAt: "950",
+      staleAfter: "1800",
+      dstGasPriceInSrcToken: "2",
+    },
+  };
+}
+
+function dvnVerification(
+  ref: string,
+  srcEid: number,
+  dstEid: number,
+): DVNVerificationEvidence {
+  return {
+    ...evidence(ref),
+    expectedPayloadHash:
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    expectedSrcEid: srcEid,
+    expectedDstEid: dstEid,
+    expectedNonce: "1",
+    expectedSender: "0x3333333333333333333333333333333333333333",
+    expectedReceiver: "0x4444444444444444444444444444444444444444",
+  };
 }

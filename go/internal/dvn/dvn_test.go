@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -101,7 +102,36 @@ func TestProcessConfirmationsOncePausesChainOnHeadConflict(t *testing.T) {
 	}
 }
 
-func TestProcessQuorumOnceMarksWouldVerify(t *testing.T) {
+func TestProcessConfirmationsOnceRollsReorgBackToWaiting(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReorgDetected),
+			},
+		}},
+	}
+	worker := NewWithHeads("shadow", store, nil, discardLogger())
+
+	processed, err := worker.ProcessConfirmationsOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessConfirmationsOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.waitingGUID != packet.GUID {
+		t.Fatalf("waiting guid = %s, want %s", store.waitingGUID, packet.GUID)
+	}
+	if store.waitingExpectedStatus != string(packets.DVNReorgDetected) {
+		t.Fatalf("waiting expected status = %q, want %q", store.waitingExpectedStatus, packets.DVNReorgDetected)
+	}
+}
+
+func TestProcessQuorumOnceMarksReadyToVerify(t *testing.T) {
 	packet := testDVNPacket()
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
@@ -128,8 +158,8 @@ func TestProcessQuorumOnceMarksWouldVerify(t *testing.T) {
 	if !processed {
 		t.Fatal("processed = false, want true")
 	}
-	if store.wouldVerifyGUID != packet.GUID {
-		t.Fatalf("would verify guid = %s, want %s", store.wouldVerifyGUID, packet.GUID)
+	if store.readyGUID != packet.GUID {
+		t.Fatalf("ready guid = %s, want %s", store.readyGUID, packet.GUID)
 	}
 	if len(store.quorumResult) == 0 {
 		t.Fatal("quorum result is empty")
@@ -149,15 +179,48 @@ func TestProcessQuorumOnceMarksWouldVerify(t *testing.T) {
 	}
 }
 
-func TestProcessQuorumOnceActiveEnqueuesVerifyTx(t *testing.T) {
+func TestProcessReadyToVerifyOnceMarksWouldVerify(t *testing.T) {
 	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
 			Packet: packet,
 			Job: db.DVNJobRecord{
 				GUID:                  packet.GUID,
 				ConfirmationsRequired: 12,
-				Status:                string(packets.DVNQuorumChecking),
+				Status:                string(packets.DVNReadyToVerify),
+				QuorumResult:          report,
+			},
+		}},
+	}
+	worker := NewWithClients("shadow", store, nil, nil, discardLogger())
+
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.wouldVerifyGUID != packet.GUID {
+		t.Fatalf("would verify guid = %s, want %s", store.wouldVerifyGUID, packet.GUID)
+	}
+	if !bytes.Equal(store.quorumResult, report) {
+		t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
+	}
+}
+
+func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
+	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReadyToVerify),
+				QuorumResult:          report,
 			},
 		}},
 	}
@@ -175,13 +238,13 @@ func TestProcessQuorumOnceActiveEnqueuesVerifyTx(t *testing.T) {
 			},
 		},
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
-		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptReader{receipt: testSourceReceipt(t, packet)}},
+		nil,
 		discardLogger(),
 	)
 
-	processed, err := worker.ProcessQuorumOnce(context.Background())
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
 	if err != nil {
-		t.Fatalf("ProcessQuorumOnce() error = %v", err)
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
 	}
 	if !processed {
 		t.Fatal("processed = false, want true")
@@ -201,6 +264,9 @@ func TestProcessQuorumOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	receiveUlnABI := lzabi.ReceiveUln302ABI()
 	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnABI.Methods["verify"].ID) {
 		t.Fatalf("verify calldata selector = %x", store.verifyRequest.Calldata[:4])
+	}
+	if !bytes.Equal(store.quorumResult, report) {
+		t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
 	}
 }
 
@@ -290,18 +356,63 @@ func TestProcessQuorumOnceMarksConflictOnRPCDisagreement(t *testing.T) {
 	}
 }
 
+func TestProcessQuorumOnceMarksReorgWhenReceiptDisappears(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNQuorumChecking),
+			},
+		}},
+	}
+	worker := NewWithClients(
+		"shadow",
+		store,
+		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
+		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptNotFoundReader{}},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessQuorumOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessQuorumOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.reorgGUID != packet.GUID {
+		t.Fatalf("reorg guid = %s, want %s", store.reorgGUID, packet.GUID)
+	}
+	if store.reorgReason == "" {
+		t.Fatal("reorg reason is empty")
+	}
+	if store.pausedPathwayGUID != (common.Hash{}) {
+		t.Fatalf("paused pathway guid = %s, want zero", store.pausedPathwayGUID)
+	}
+	if len(store.quorumResult) == 0 {
+		t.Fatal("quorum result is empty")
+	}
+}
+
 type fakeStore struct {
-	work              []db.DVNWorkItem
-	waitingGUID       common.Hash
-	quorumGUID        common.Hash
-	wouldVerifyGUID   common.Hash
-	verifyGUID        common.Hash
-	verifyRequest     db.TxRequest
-	conflictGUID      common.Hash
-	conflictReason    string
-	pausedChainEID    uint32
-	pausedPathwayGUID common.Hash
-	quorumResult      []byte
+	work                  []db.DVNWorkItem
+	waitingGUID           common.Hash
+	waitingExpectedStatus string
+	quorumGUID            common.Hash
+	readyGUID             common.Hash
+	wouldVerifyGUID       common.Hash
+	verifyGUID            common.Hash
+	verifyRequest         db.TxRequest
+	conflictGUID          common.Hash
+	conflictReason        string
+	reorgGUID             common.Hash
+	reorgReason           string
+	pausedChainEID        uint32
+	pausedPathwayGUID     common.Hash
+	quorumResult          []byte
 }
 
 func (s *fakeStore) ListDVNWork(_ context.Context, status string, _ int) ([]db.DVNWorkItem, error) {
@@ -313,13 +424,20 @@ func (s *fakeStore) ListDVNWork(_ context.Context, status string, _ int) ([]db.D
 	return nil, nil
 }
 
-func (s *fakeStore) MarkDVNWaitingConfirmations(_ context.Context, guid common.Hash, _ string) error {
+func (s *fakeStore) MarkDVNWaitingConfirmations(_ context.Context, guid common.Hash, expectedStatus string) error {
 	s.waitingGUID = guid
+	s.waitingExpectedStatus = expectedStatus
 	return nil
 }
 
 func (s *fakeStore) MarkDVNQuorumChecking(_ context.Context, guid common.Hash, _ string) error {
 	s.quorumGUID = guid
+	return nil
+}
+
+func (s *fakeStore) MarkDVNReadyToVerify(_ context.Context, guid common.Hash, _ string, quorumResult []byte) error {
+	s.readyGUID = guid
+	s.quorumResult = append([]byte(nil), quorumResult...)
 	return nil
 }
 
@@ -339,6 +457,13 @@ func (s *fakeStore) EnqueueDVNVerifyTx(_ context.Context, guid common.Hash, _, _
 func (s *fakeStore) MarkDVNQuorumConflict(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
 	s.conflictGUID = guid
 	s.conflictReason = reason
+	s.quorumResult = append([]byte(nil), quorumResult...)
+	return nil
+}
+
+func (s *fakeStore) MarkDVNReorgDetected(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
+	s.reorgGUID = guid
+	s.reorgReason = reason
 	s.quorumResult = append([]byte(nil), quorumResult...)
 	return nil
 }
@@ -442,6 +567,12 @@ func (r fakeReceiptConflictReader) TransactionReceipt(context.Context, common.Ha
 		TxHash:  r.txHash,
 		Details: []string{"provider a disagrees with provider b"},
 	}
+}
+
+type fakeReceiptNotFoundReader struct{}
+
+func (r fakeReceiptNotFoundReader) TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error) {
+	return nil, ethereum.NotFound
 }
 
 func testDVNPacket() db.PacketRecord {

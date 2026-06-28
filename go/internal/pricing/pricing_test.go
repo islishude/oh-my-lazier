@@ -99,6 +99,15 @@ func TestBuildPriceConfigRoundsUpFractionalWei(t *testing.T) {
 	}
 }
 
+func TestGasIncreaseBpsOnlyCountsUpwardMoves(t *testing.T) {
+	if got := GasIncreaseBps(big.NewInt(100), big.NewInt(110)); got != 1000 {
+		t.Fatalf("GasIncreaseBps() = %d, want 1000", got)
+	}
+	if got := GasIncreaseBps(big.NewInt(100), big.NewInt(90)); got != 0 {
+		t.Fatalf("GasIncreaseBps() = %d, want 0 for gas decrease", got)
+	}
+}
+
 func TestBuildSetPriceConfigCalldata(t *testing.T) {
 	config := testPriceConfig()
 	calldata, err := BuildSetPriceConfigCalldata(40245, config)

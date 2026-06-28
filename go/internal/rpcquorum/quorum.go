@@ -130,7 +130,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	heads := make([]providerHead, 0, len(c.providers))
 	var transientErrs []error
 	for _, provider := range c.providers {
-		if provider.Status != ProviderHealthy {
+		if provider.Status == ProviderConflict {
 			continue
 		}
 		header, err := c.headerByNumberFromProvider(ctx, provider, nil)
@@ -146,11 +146,13 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	}
 	result, err := selectCanonicalHead(c.chainName, heads)
 	if err != nil {
+		c.updateHeadProviderStatuses(heads, HeadResult{})
 		if len(heads) == 0 && len(transientErrs) > 0 {
 			return HeadResult{}, errors.Join(transientErrs...)
 		}
 		return HeadResult{}, err
 	}
+	c.updateHeadProviderStatuses(heads, result)
 	return result, nil
 }
 
@@ -336,6 +338,20 @@ func (c *Client) firstHealthyProvider() (Provider, error) {
 	return Provider{}, errors.New("no healthy rpc providers configured")
 }
 
+func (c *Client) updateHeadProviderStatuses(heads []providerHead, canonical HeadResult) {
+	if c == nil {
+		return
+	}
+	statusByURL := classifyHeadProviderStatuses(heads, canonical)
+	for index, provider := range c.providers {
+		status, ok := statusByURL[provider.URL]
+		if !ok {
+			continue
+		}
+		c.providers[index].Status = status
+	}
+}
+
 type managedSubscription struct {
 	ethereum.Subscription
 	close func()
@@ -432,4 +448,59 @@ func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, er
 		}
 	}
 	return HeadResult{Number: new(big.Int).Set(canonical.Number), Hash: canonical.Hash.Hex()}, nil
+}
+
+func classifyHeadProviderStatuses(heads []providerHead, canonical HeadResult) map[string]ProviderStatus {
+	statuses := make(map[string]ProviderStatus, len(heads))
+	if len(heads) == 0 {
+		return statuses
+	}
+	if canonical.Number != nil && canonical.Hash != "" {
+		for _, head := range heads {
+			if head.Number == nil {
+				continue
+			}
+			switch {
+			case head.Number.Cmp(canonical.Number) < 0:
+				statuses[head.URL] = ProviderLagging
+			case head.Number.Cmp(canonical.Number) == 0 && head.Hash.Hex() == canonical.Hash:
+				statuses[head.URL] = ProviderHealthy
+			case head.Number.Cmp(canonical.Number) == 0:
+				statuses[head.URL] = ProviderConflict
+			default:
+				statuses[head.URL] = ProviderHealthy
+			}
+		}
+		return statuses
+	}
+	var maxNumber *big.Int
+	hashesAtMax := make(map[common.Hash]struct{})
+	for _, head := range heads {
+		if head.Number == nil {
+			continue
+		}
+		if maxNumber == nil || head.Number.Cmp(maxNumber) > 0 {
+			maxNumber = new(big.Int).Set(head.Number)
+			hashesAtMax = map[common.Hash]struct{}{head.Hash: {}}
+			continue
+		}
+		if head.Number.Cmp(maxNumber) == 0 {
+			hashesAtMax[head.Hash] = struct{}{}
+		}
+	}
+	for _, head := range heads {
+		if head.Number == nil || maxNumber == nil {
+			continue
+		}
+		if head.Number.Cmp(maxNumber) < 0 {
+			statuses[head.URL] = ProviderLagging
+			continue
+		}
+		if len(hashesAtMax) > 1 {
+			statuses[head.URL] = ProviderConflict
+			continue
+		}
+		statuses[head.URL] = ProviderHealthy
+	}
+	return statuses
 }

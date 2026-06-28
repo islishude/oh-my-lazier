@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
 
 func TestEvaluateAcceptsCleanActiveState(t *testing.T) {
@@ -92,6 +93,54 @@ func TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors(t *testing.T) {
 	}
 	if gotCodes["indexer_cursor_unstarted"] != 1 {
 		t.Fatalf("unstarted cursor issues = %d, want 1; issues = %+v", gotCodes["indexer_cursor_unstarted"], report.Issues)
+	}
+}
+
+func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
+	report := Evaluate(db.StatsSnapshot{
+		Chains: []db.ChainStat{
+			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
+			{EID: 40245, Name: "base-sepolia", Enabled: true},
+		},
+		Pathways: []db.PathwayStat{
+			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+		},
+		Packets: []db.PacketStat{
+			{SrcEID: 40161, DstEID: 40245, Status: string(packets.ExecutorManualReview), Count: 2},
+		},
+		ExecutorJobs: []db.StatusStat{
+			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
+			{Status: string(packets.ExecutorManualReview), Count: 1},
+		},
+		DVNJobs: []db.StatusStat{
+			{Status: string(packets.DVNQuorumConflict), Count: 1},
+			{Status: string(packets.DVNReorgDetected), Count: 1},
+			{Status: string(packets.DVNManualReview), Count: 1},
+		},
+		IndexerCursors: []db.IndexerCursorStat{
+			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+		},
+	})
+
+	if report.Ready {
+		t.Fatal("ready = true, want false")
+	}
+	gotCodes := make(map[string]int)
+	for _, issue := range report.Issues {
+		gotCodes[issue.Code]++
+	}
+	for _, want := range []string{
+		"packet_manual_review",
+		"executor_lz_receive_failed",
+		"executor_manual_review",
+		"dvn_quorum_conflict",
+		"dvn_reorg_detected",
+		"dvn_manual_review",
+	} {
+		if gotCodes[want] != 1 {
+			t.Fatalf("issue %q count = %d, want 1; issues = %+v", want, gotCodes[want], report.Issues)
+		}
 	}
 }
 

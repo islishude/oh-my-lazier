@@ -9,7 +9,7 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 - Every configured chain has the configured primary source identifier, Uniswap V3 sanity route, and at least one healthy RPC URL.
 - `primary_source` defaults to `binance`; supported values are `binance`, `coinmarketcap`, and `coingecko`.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap_symbol` is configured; do not put API keys in worker YAML.
-- `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, EIP-1559 fee caps, and `tx_gas_limit` are approved for the target environment.
+- `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, `gas_spike_bps`, EIP-1559 fee caps, and `tx_gas_limit` are approved for the target environment.
 - Worker contract addresses and pathway EIDs match the latest deployment record.
 
 ## One-Shot Update
@@ -31,6 +31,8 @@ For each unique `src_eid -> dst_eid` pathway, the command should enqueue:
 
 If the primary source and any configured sanity source deviate beyond `max_deviation_bps`, no price update should be enqueued and the command should exit non-zero.
 
+During the long-running worker loop, the bot also tracks the last destination gas price used for each unique pathway. If a later destination gas read increases by at least `gas_spike_bps`, it enqueues a fresh OpenExecutor/OpenDVN price update before the next scheduled interval.
+
 ## Verification
 
 After the tx manager broadcasts and confirms the queued transactions:
@@ -39,8 +41,9 @@ After the tx manager broadcasts and confirms the queued transactions:
 2. Run `npm run check:price-config` on the source chain for the target `DST_EID`.
 3. Confirm `updatedAt` is recent and `staleAfter` matches the approved config.
 4. Confirm `dstGasPriceInSrcToken` is non-zero and consistent with the recorded gas/price inputs.
-5. Confirm `getFee`/`getFeeOnSend` succeeds before the stale window expires.
-6. Confirm stale configs still cause worker quote/assignment reverts in tests before enabling mainnet use.
+5. Confirm `gas_spike_bps` matches the approved config and is included in config-diff review evidence.
+6. Confirm `getFee`/`getFeeOnSend` succeeds before the stale window expires.
+7. Confirm stale configs still cause worker quote/assignment reverts in tests before enabling mainnet use.
 
 Example:
 

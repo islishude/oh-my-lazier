@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
 
 const (
@@ -71,6 +72,60 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 			Code:    "failed_outbox",
 			Message: fmt.Sprintf("chain %d has %d failed tx_outbox rows", outbox.ChainEID, outbox.Count),
 		})
+	}
+	for _, packet := range snapshot.Packets {
+		if packet.Status != string(packets.ExecutorManualReview) || packet.Count == 0 {
+			continue
+		}
+		if _, ok := activeChains[packet.SrcEID]; !ok {
+			continue
+		}
+		if _, ok := activeChains[packet.DstEID]; !ok {
+			continue
+		}
+		issues = append(issues, Issue{
+			Code:    "packet_manual_review",
+			Message: fmt.Sprintf("pathway %d -> %d has %d packets requiring manual review", packet.SrcEID, packet.DstEID, packet.Count),
+		})
+	}
+	for _, job := range snapshot.ExecutorJobs {
+		if job.Count == 0 {
+			continue
+		}
+		switch job.Status {
+		case string(packets.ExecutorLzReceiveFailed):
+			issues = append(issues, Issue{
+				Code:    "executor_lz_receive_failed",
+				Message: fmt.Sprintf("executor has %d failed lzReceive jobs", job.Count),
+			})
+		case string(packets.ExecutorManualReview):
+			issues = append(issues, Issue{
+				Code:    "executor_manual_review",
+				Message: fmt.Sprintf("executor has %d jobs requiring manual review", job.Count),
+			})
+		}
+	}
+	for _, job := range snapshot.DVNJobs {
+		if job.Count == 0 {
+			continue
+		}
+		switch job.Status {
+		case string(packets.DVNQuorumConflict):
+			issues = append(issues, Issue{
+				Code:    "dvn_quorum_conflict",
+				Message: fmt.Sprintf("dvn has %d quorum conflict jobs", job.Count),
+			})
+		case string(packets.DVNReorgDetected):
+			issues = append(issues, Issue{
+				Code:    "dvn_reorg_detected",
+				Message: fmt.Sprintf("dvn has %d jobs waiting for reorg rollback", job.Count),
+			})
+		case string(packets.DVNManualReview):
+			issues = append(issues, Issue{
+				Code:    "dvn_manual_review",
+				Message: fmt.Sprintf("dvn has %d jobs requiring manual review", job.Count),
+			})
+		}
 	}
 	cursorProgress := make(map[uint32]map[string]uint64)
 	for _, cursor := range snapshot.IndexerCursors {

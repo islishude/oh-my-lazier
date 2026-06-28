@@ -113,6 +113,7 @@ type pricingConfigGlobal struct {
 	BufferBps               uint16 `json:"buffer_bps"`
 	StaleAfterSeconds       uint64 `json:"stale_after_seconds"`
 	MaxDeviationBps         uint64 `json:"max_deviation_bps"`
+	GasSpikeBps             uint64 `json:"gas_spike_bps"`
 	AllowUniswapFallback    bool   `json:"allow_uniswap_fallback"`
 	TxGasLimit              uint64 `json:"tx_gas_limit"`
 	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
@@ -133,6 +134,7 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		BufferBps:               pricing.BufferBps,
 		StaleAfterSeconds:       pricing.StaleAfterSeconds,
 		MaxDeviationBps:         pricing.MaxDeviationBps,
+		GasSpikeBps:             pricing.GasSpikeBps,
 		AllowUniswapFallback:    pricing.AllowUniswapFallback,
 		TxGasLimit:              pricing.TxGasLimit,
 		MaxFeePerGasWei:         pricing.MaxFeePerGasWei,

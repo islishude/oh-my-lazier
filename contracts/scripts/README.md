@@ -17,7 +17,7 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
 npm run check:migration-evidence
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction has config diff, deployment preflight, LayerZero config before/after, price config, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with `confirmations = 12` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence, and that rollback evidence includes previous Executor/ULN configs, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction has config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with `confirmations = 12` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
 Deploy the local pathway contracts:
 
@@ -170,6 +170,8 @@ LZ_CONFIG_SNAPSHOT=sepolia-to-base-lz-config.before.json \
 npm run configure:lz-rollback
 ```
 
+Use `DRY_RUN=1` with the same `LZ_CONFIG_SNAPSHOT` before signing. The dry run validates the snapshot and prints the exact `Endpoint.setConfig` batches and encoded config bytes without requiring RPC or `PRIVATE_KEY`.
+
 Send a basic OFT canary transfer after the local and remote OFTs are peered and the pathway is configured:
 
 ```bash
@@ -217,7 +219,7 @@ npm run check:oft-canary
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
 
-The migration evidence record must capture the canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check for each direction. This keeps the approval artifact tied to the exact transfer size and accounts used in the rehearsal.
+The migration evidence record must capture the canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check for each direction. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `updatedAt`, `staleAfter`, and non-zero `dstGasPriceInSrcToken` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, price freshness, packet, and direction used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 
@@ -234,5 +236,6 @@ npm run check:dvn-verification
 ```
 
 `check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
+Set `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` to also require the `PayloadVerified` PacketV1 header to match the exact migration direction and packet identity.
 
 Run the LayerZero config scripts on both chains with the local endpoint, local OApp, local message libraries, and local DVN addresses for each direction. `configure:lz-dvn` explicitly sets `optionalDVNCount` to LayerZero's NIL value so default optional DVNs are not inherited during the first-phase required-DVN migration.

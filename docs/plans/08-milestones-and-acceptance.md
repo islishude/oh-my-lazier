@@ -248,22 +248,30 @@ Evidence:
 - `go/internal/db.Store.ListDVNWork`
 - `go/internal/db.Store.MarkDVNWaitingConfirmations`
 - `go/internal/db.Store.MarkDVNQuorumChecking`
+- `go/internal/db.Store.MarkDVNReadyToVerify`
 - `go/internal/db.Store.MarkDVNWouldVerify`
 - `go/internal/db.Store.EnqueueDVNVerifyTx`
 - `go/internal/db.Store.MarkDVNVerified`
 - `go/internal/db.Store.MarkDVNQuorumConflict`
+- `go/internal/db.Store.MarkDVNReorgDetected`
 - `go/internal/db.Store.PausePathwayForPacket`
 - `go/internal/db.Store.PauseChain`
 - `go/internal/dvn.Worker.ProcessConfirmationsOnce`
 - `go/internal/dvn.Worker.ProcessQuorumOnce`
+- `go/internal/dvn.Worker.ProcessReadyToVerifyOnce`
 - `go/internal/dvn.BuildVerifyTx`
-- `go/internal/dvn.TestProcessQuorumOnceMarksWouldVerify`
-- `go/internal/dvn.TestProcessQuorumOnceActiveEnqueuesVerifyTx`
+- `go/internal/dvn.TestProcessQuorumOnceMarksReadyToVerify`
+- `go/internal/dvn.TestProcessReadyToVerifyOnceMarksWouldVerify`
+- `go/internal/dvn.TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx`
+- `go/internal/dvn.TestProcessQuorumOnceMarksReorgWhenReceiptDisappears`
+- `go/internal/dvn.TestProcessConfirmationsOnceRollsReorgBackToWaiting`
 - `go/internal/indexer.TestIndexerProcessOnceBackfillsDVNVerification`
 - `go/internal/txmgr.TestProcessReceiptsMarksDVNVerifyTxVerified`
 - `go/internal/rpcquorum.HeadConflictError`
 - `go/internal/rpcquorum.IsHeadConflict`
 - `go/internal/rpcquorum.Client.CheckHead`
+- `go/internal/rpcquorum.TestClassifyHeadProviderStatusesDegradesLaggingProvider`
+- `go/internal/rpcquorum.TestUpdateHeadProviderStatusesAllowsLaggingProviderRecovery`
 - `go/internal/rpcquorum.ReceiptConflictError`
 - `go/internal/rpcquorum.IsReceiptConflict`
 - `go/internal/rpcquorum.Client.TransactionReceipt`
@@ -287,6 +295,7 @@ Tasks:
 - [x] aggregator
 - [x] deviation check
 - [x] gas price fetch
+- [x] gas spike threshold update
 - [x] setPriceConfig tx enqueue
 
 Acceptance:
@@ -308,6 +317,8 @@ Evidence:
 - `go/internal/pricing.BuildSetPriceConfigCalldata`
 - `go/internal/pricing.BuildSetPriceConfigTx`
 - `go/internal/pricing.Bot.EnqueueOnce`
+- `go/internal/pricing.Bot.EnqueueOnGasSpike`
+- `go/internal/pricing.GasIncreaseBps`
 - `go/internal/pricing.Bot.Run`
 - `go/internal/app.App.RunPriceOnce`
 - `go/cmd/pricebot-once`
@@ -319,6 +330,7 @@ Evidence:
 - `go/internal/pricing/abis/uniswap_v3_quoter.json`
 - `go/internal/rpcquorum.Client.SuggestGasPrice`
 - `go/internal/config.PricingConfig`
+- `go/internal/config.PricingConfig.GasSpikeBps`
 - `go/internal/app.App.priceBot`
 - `go test ./go/internal/pricing ./go/internal/config ./go/internal/app -count=1`
 - `npm run test:scripts`
@@ -373,11 +385,16 @@ Evidence:
 - `contracts/scripts/oft-canary.ts`
 - `contracts/scripts/oft-canary-status.ts`
 - `contracts/scripts/dvn-verification-status.ts`
+- `contracts/scripts/dvn-verification-status.ts` `expectedPacket` header identity checks
 - `contracts/scripts/migration-evidence.ts`
+- `contracts/scripts/migration-evidence.ts` `PriceConfigEvidence`
+- `contracts/scripts/migration-evidence.ts` `DVNVerificationEvidence`
+- `contracts/scripts/migration-evidence.ts` `RollbackEvidence.dryRun`
 - `contracts/scripts/inspect-lz-config.ts`
 - `contracts/scripts/configure-lz-executor.ts`
 - `contracts/scripts/configure-lz-dvn.ts`
 - `contracts/scripts/configure-lz-rollback.ts`
+- `contracts/scripts/lz-config.ts` `rollbackConfigPlan`
 - `contracts/scripts/send-oft-canary.ts`
 - `contracts/scripts/check-oft-canary.ts`
 - `contracts/scripts/check-dvn-verification.ts`
@@ -391,10 +408,14 @@ Evidence:
 - `contracts/scripts/lz-config.test.ts`
 - `contracts/scripts/lz-config.test.ts` `rollback config batches restore executor and both ULN configs`
 - `contracts/scripts/lz-config.test.ts` `rollback config batches reject mismatched DVN counts`
+- `contracts/scripts/lz-config.test.ts` `rollback config plan exposes dry-run review payload`
 - `contracts/scripts/oft-canary.test.ts`
 - `contracts/scripts/oft-canary-status.test.ts`
 - `contracts/scripts/dvn-verification-status.test.ts`
+- `contracts/scripts/dvn-verification-status.test.ts` `assertDVNVerificationReceipt rejects mismatched expected packet header`
 - `contracts/scripts/migration-evidence.test.ts`
+- `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects stale or mismatched price config evidence`
+- `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects weak DVN verification packet identity`
 - `contracts/scripts/lz-addresses.test.ts`
 - `contracts/scripts/deployment-preflight.test.ts`
 - `contracts/scripts/oft-pathway-control.test.ts`
@@ -432,7 +453,10 @@ Evidence:
 - `go/internal/db.Store.Stats`
 - `go/internal/readiness.Evaluate`
 - `go/internal/readiness.TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors`
+- `go/internal/readiness.TestEvaluateRejectsUnsafeDurableJobStates`
 - `go/cmd/readinesscheck`
+- `go/internal/metrics.TestHandlerReadyReportsReadinessFailure`
+- `go/internal/metrics.TestHandlerReadyAcceptsCleanSnapshot`
 - `go/internal/config.LoadStatic`
 - `go/internal/configdiff.Diff`
 - `go/cmd/configdiff`

@@ -56,7 +56,21 @@
         "ref": "artifacts/lz-config-eth-sepolia-to-base-sepolia.after.json"
       },
       "priceConfigCheck": {
-        "ref": "artifacts/price-config-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/price-config-eth-sepolia-to-base-sepolia.json",
+        "dstEid": 40245,
+        "checkedAt": "1800000000",
+        "maxAgeSeconds": "1800",
+        "expectedStaleAfter": "1800",
+        "executor": {
+          "updatedAt": "1799999940",
+          "staleAfter": "1800",
+          "dstGasPriceInSrcToken": "1"
+        },
+        "dvn": {
+          "updatedAt": "1799999940",
+          "staleAfter": "1800",
+          "dstGasPriceInSrcToken": "1"
+        }
       },
       "drainCheckBeforeSwitch": {
         "ref": "artifacts/drain-eth-sepolia-to-base-sepolia.json"
@@ -91,7 +105,13 @@
         }
       },
       "dvnVerificationReceipt": {
-        "ref": "artifacts/dvn-verification-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/dvn-verification-eth-sepolia-to-base-sepolia.json",
+        "expectedPayloadHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expectedSrcEid": 40161,
+        "expectedDstEid": 40245,
+        "expectedNonce": "1",
+        "expectedSender": "0x3333333333333333333333333333333333333333",
+        "expectedReceiver": "0x4444444444444444444444444444444444444444"
       }
     },
     {
@@ -111,7 +131,21 @@
         "ref": "artifacts/lz-config-base-sepolia-to-eth-sepolia.after.json"
       },
       "priceConfigCheck": {
-        "ref": "artifacts/price-config-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/price-config-base-sepolia-to-eth-sepolia.json",
+        "dstEid": 40161,
+        "checkedAt": "1800000000",
+        "maxAgeSeconds": "1800",
+        "expectedStaleAfter": "1800",
+        "executor": {
+          "updatedAt": "1799999940",
+          "staleAfter": "1800",
+          "dstGasPriceInSrcToken": "1"
+        },
+        "dvn": {
+          "updatedAt": "1799999940",
+          "staleAfter": "1800",
+          "dstGasPriceInSrcToken": "1"
+        }
       },
       "drainCheckBeforeSwitch": {
         "ref": "artifacts/drain-base-sepolia-to-eth-sepolia.json"
@@ -146,7 +180,13 @@
         }
       },
       "dvnVerificationReceipt": {
-        "ref": "artifacts/dvn-verification-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/dvn-verification-base-sepolia-to-eth-sepolia.json",
+        "expectedPayloadHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "expectedSrcEid": 40245,
+        "expectedDstEid": 40161,
+        "expectedNonce": "1",
+        "expectedSender": "0x3333333333333333333333333333333333333333",
+        "expectedReceiver": "0x4444444444444444444444444444444444444444"
       }
     }
   ],
@@ -159,6 +199,9 @@
     },
     "previousReceiveUlnConfig": {
       "ref": "artifacts/rollback-receive-uln-config.before.json"
+    },
+    "dryRun": {
+      "ref": "artifacts/rollback-dry-run.json"
     },
     "restoredConfigCheck": {
       "ref": "artifacts/rollback-lz-config.after.json"

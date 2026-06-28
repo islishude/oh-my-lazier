@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
@@ -43,9 +44,11 @@ type Store interface {
 	ListDVNWork(ctx context.Context, status string, limit int) ([]db.DVNWorkItem, error)
 	MarkDVNWaitingConfirmations(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkDVNQuorumChecking(ctx context.Context, guid common.Hash, expectedStatus string) error
+	MarkDVNReadyToVerify(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error
 	MarkDVNWouldVerify(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error
 	EnqueueDVNVerifyTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest, quorumResult []byte) (int64, error)
 	MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
+	MarkDVNReorgDetected(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
 	PauseChain(ctx context.Context, eid uint32) error
 	PausePathwayForPacket(ctx context.Context, guid common.Hash) error
 }
@@ -137,6 +140,12 @@ func (w *Worker) Run(ctx context.Context) error {
 				return err
 			}
 		}
+		if !processed {
+			processed, err = w.ProcessReadyToVerifyOnce(ctx)
+			if err != nil {
+				return err
+			}
+		}
 		if processed {
 			continue
 		}
@@ -152,7 +161,7 @@ func (w *Worker) Run(ctx context.Context) error {
 
 // ProcessConfirmationsOnce advances one DVN job once source confirmations are available.
 func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
-	for _, status := range []string{string(packets.DVNAssigned), string(packets.DVNWaitingConfirmations)} {
+	for _, status := range []string{string(packets.DVNReorgDetected), string(packets.DVNAssigned), string(packets.DVNWaitingConfirmations)} {
 		work, err := w.store.ListDVNWork(ctx, status, 1)
 		if err != nil {
 			return false, err
@@ -161,6 +170,13 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 			continue
 		}
 		item := work[0]
+		if status == string(packets.DVNReorgDetected) {
+			if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
+				return false, err
+			}
+			w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+			return true, nil
+		}
 		headReader := w.head(item.Packet.SrcEID)
 		if headReader == nil {
 			return false, fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID)
@@ -216,6 +232,9 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 		if rpcquorum.IsReceiptConflict(err) {
 			return true, w.markQuorumConflict(ctx, item.Packet, err)
 		}
+		if errors.Is(err, ethereum.NotFound) {
+			return true, w.markReorgDetected(ctx, item.Packet, err)
+		}
 		return false, err
 	}
 	report, err := verifySourceReceipt(item.Packet, receipt)
@@ -226,9 +245,29 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := w.store.MarkDVNReadyToVerify(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), payload); err != nil {
+		return false, err
+	}
+	w.logger.Info("dvn job ready to verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+	return true, nil
+}
+
+// ProcessReadyToVerifyOnce advances one verified DVN job into shadow report or active tx enqueue.
+func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
+	work, err := w.store.ListDVNWork(ctx, string(packets.DVNReadyToVerify), 1)
+	if err != nil {
+		return false, err
+	}
+	if len(work) == 0 {
+		return false, nil
+	}
+	item := work[0]
+	if len(item.Job.QuorumResult) == 0 {
+		return false, fmt.Errorf("dvn job %s ready to verify without quorum result", item.Packet.GUID)
+	}
 	switch w.mode {
 	case ModeShadow:
-		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), payload); err != nil {
+		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
 			return false, err
 		}
 		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
@@ -237,7 +276,7 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		id, err := w.store.EnqueueDVNVerifyTx(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), string(packets.DVNVerifyTxEnqueued), request, payload)
+		id, err := w.store.EnqueueDVNVerifyTx(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), request, item.Job.QuorumResult)
 		if err != nil {
 			return false, err
 		}
@@ -277,6 +316,21 @@ func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord,
 		return err
 	}
 	w.logger.Warn("dvn quorum conflict paused pathway", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "error", err.Error())
+	return nil
+}
+
+func (w *Worker) markReorgDetected(ctx context.Context, packet db.PacketRecord, err error) error {
+	payload, marshalErr := json.Marshal(map[string]any{
+		"tx_hash": packet.SrcTxHash.Hex(),
+		"error":   err.Error(),
+	})
+	if marshalErr != nil {
+		return marshalErr
+	}
+	if err := w.store.MarkDVNReorgDetected(ctx, packet.GUID, string(packets.DVNQuorumChecking), err.Error(), payload); err != nil {
+		return err
+	}
+	w.logger.Warn("dvn source reorg detected", "guid", packet.GUID, "src_eid", packet.SrcEID, "tx_hash", packet.SrcTxHash)
 	return nil
 }
 

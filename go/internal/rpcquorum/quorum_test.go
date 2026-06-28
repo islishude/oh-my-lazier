@@ -82,6 +82,53 @@ func TestSelectCanonicalHeadAcceptsTwoOfThreeAgreement(t *testing.T) {
 	}
 }
 
+func TestClassifyHeadProviderStatusesDegradesLaggingProvider(t *testing.T) {
+	canonicalHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	statuses := classifyHeadProviderStatuses([]providerHead{
+		{URL: "provider-a", Number: big.NewInt(42), Hash: canonicalHash},
+		{URL: "provider-b", Number: big.NewInt(41), Hash: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+	}, HeadResult{Number: big.NewInt(42), Hash: canonicalHash.Hex()})
+
+	if statuses["provider-a"] != ProviderHealthy {
+		t.Fatalf("provider-a status = %q, want %q", statuses["provider-a"], ProviderHealthy)
+	}
+	if statuses["provider-b"] != ProviderLagging {
+		t.Fatalf("provider-b status = %q, want %q", statuses["provider-b"], ProviderLagging)
+	}
+}
+
+func TestClassifyHeadProviderStatusesMarksSameHeightConflict(t *testing.T) {
+	statuses := classifyHeadProviderStatuses([]providerHead{
+		{URL: "provider-a", Number: big.NewInt(42), Hash: common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+		{URL: "provider-b", Number: big.NewInt(42), Hash: common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+	}, HeadResult{})
+
+	if statuses["provider-a"] != ProviderConflict {
+		t.Fatalf("provider-a status = %q, want %q", statuses["provider-a"], ProviderConflict)
+	}
+	if statuses["provider-b"] != ProviderConflict {
+		t.Fatalf("provider-b status = %q, want %q", statuses["provider-b"], ProviderConflict)
+	}
+}
+
+func TestUpdateHeadProviderStatusesAllowsLaggingProviderRecovery(t *testing.T) {
+	canonicalHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client := &Client{providers: []Provider{
+		{URL: "provider-a", Status: ProviderHealthy},
+		{URL: "provider-b", Status: ProviderLagging},
+	}}
+
+	client.updateHeadProviderStatuses([]providerHead{
+		{URL: "provider-a", Number: big.NewInt(43), Hash: canonicalHash},
+		{URL: "provider-b", Number: big.NewInt(43), Hash: canonicalHash},
+	}, HeadResult{Number: big.NewInt(43), Hash: canonicalHash.Hex()})
+
+	providers := client.Providers()
+	if providers[1].Status != ProviderHealthy {
+		t.Fatalf("provider-b status = %q, want %q", providers[1].Status, ProviderHealthy)
+	}
+}
+
 func testReceipt() *gethtypes.Receipt {
 	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	return &gethtypes.Receipt{

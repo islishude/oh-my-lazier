@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
 
 func TestHandlerHealthDoesNotRequireStats(t *testing.T) {
@@ -33,6 +34,33 @@ func TestHandlerReadyReportsStatsFailure(t *testing.T) {
 
 	if recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandlerReadyReportsReadinessFailure(t *testing.T) {
+	handler := Handler(fakeProvider{snapshot: cleanSnapshotWith(func(snapshot *db.StatsSnapshot) {
+		snapshot.DVNJobs = []db.StatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
+	})})
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestHandlerReadyAcceptsCleanSnapshot(t *testing.T) {
+	handler := Handler(fakeProvider{snapshot: cleanSnapshotWith(nil)})
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	if recorder.Body.String() != "ready\n" {
+		t.Fatalf("body = %q, want ready", recorder.Body.String())
 	}
 }
 
@@ -92,4 +120,24 @@ type fakeProvider struct {
 
 func (p fakeProvider) Stats(context.Context) (db.StatsSnapshot, error) {
 	return p.snapshot, p.err
+}
+
+func cleanSnapshotWith(mutator func(*db.StatsSnapshot)) db.StatsSnapshot {
+	snapshot := db.StatsSnapshot{
+		Chains: []db.ChainStat{
+			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
+			{EID: 40245, Name: "base-sepolia", Enabled: true},
+		},
+		Pathways: []db.PathwayStat{
+			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+		},
+		IndexerCursors: []db.IndexerCursorStat{
+			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
+			{ChainEID: 40245, Stream: "executor_destination", LastBlock: 100},
+		},
+	}
+	if mutator != nil {
+		mutator(&snapshot)
+	}
+	return snapshot
 }

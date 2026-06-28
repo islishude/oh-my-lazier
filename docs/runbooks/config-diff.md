@@ -36,7 +36,7 @@ Review checklist:
 - Confirm chain `eid`, `chain_id`, endpoint, worker contract, and RPC changes are intentional.
 - Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, enablement, and max message size changes are intentional.
 - Confirm signer changes are expected and do not point to unapproved keys.
-- Confirm pricing source, stale threshold, gas limit, and fee cap changes are expected.
+- Confirm pricing source, stale threshold, gas spike threshold, gas limit, and fee cap changes are expected.
 - For DVN migration, confirm the proposed config still uses `dvn.mode: shadow` until the explicit active-mode change is approved.
 - Keep the text output in the migration ticket and the JSON output as an immutable review artifact.
 

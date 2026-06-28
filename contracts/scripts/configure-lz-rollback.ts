@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { rollbackConfigBatches, type LzConfigSnapshot } from "./lz-config.js";
+import { rollbackConfigPlan, type LzConfigSnapshot } from "./lz-config.js";
 import {
   createClients,
   jsonStringify,
@@ -16,10 +16,15 @@ const snapshotPath = requiredEnv("LZ_CONFIG_SNAPSHOT");
 const snapshot = JSON.parse(
   readFileSync(snapshotPath, "utf8"),
 ) as LzConfigSnapshot;
-const batches = rollbackConfigBatches(snapshot);
+const plan = rollbackConfigPlan(snapshot);
+if (process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true") {
+  console.log(jsonStringify({ dryRun: true, ...plan }));
+  process.exit(0);
+}
+
 const { account, publicClient, walletClient } = createClients();
 
-for (const batch of batches) {
+for (const batch of plan.batches) {
   await waitForTx(
     publicClient,
     batch.label,
@@ -36,15 +41,7 @@ for (const batch of batches) {
 
 console.log(
   jsonStringify({
-    endpoint: snapshot.endpoint,
-    oapp: snapshot.oapp,
-    remoteEid: snapshot.remoteEid,
-    restoredLibraries: {
-      sendUln: snapshot.inspectedLibraries.sendUln,
-      receiveUln: snapshot.inspectedLibraries.receiveUln,
-    },
-    restoredExecutorConfig: snapshot.executorConfig,
-    restoredSendUlnConfig: snapshot.sendUlnConfig,
-    restoredReceiveUlnConfig: snapshot.receiveUlnConfig,
+    dryRun: false,
+    ...plan,
   }),
 );

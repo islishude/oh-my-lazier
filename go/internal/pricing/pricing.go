@@ -33,12 +33,13 @@ var (
 
 // Bot updates worker contract price configuration.
 type Bot struct {
-	store    Store
-	registry *chain.Registry
-	settings Settings
-	sources  map[uint32]ChainSources
-	now      func() time.Time
-	logger   *slog.Logger
+	store         Store
+	registry      *chain.Registry
+	settings      Settings
+	sources       map[uint32]ChainSources
+	lastGasPrices map[string]*big.Int
+	now           func() time.Time
+	logger        *slog.Logger
 }
 
 // New creates a price bot.
@@ -62,7 +63,7 @@ func NewWithDependencies(store Store, registry *chain.Registry, settings Setting
 	}
 	copied := make(map[uint32]ChainSources, len(sources))
 	maps.Copy(copied, sources)
-	return &Bot{store: store, registry: registry, settings: settings, sources: copied, now: time.Now, logger: logger}, nil
+	return &Bot{store: store, registry: registry, settings: settings, sources: copied, lastGasPrices: make(map[string]*big.Int), now: time.Now, logger: logger}, nil
 }
 
 // Run starts the price update loop until the context is canceled.
@@ -73,16 +74,26 @@ func (b *Bot) Run(ctx context.Context) error {
 		return ctx.Err()
 	}
 	b.logger.Info("price bot loop started")
+	if err := b.EnqueueOnce(ctx); err != nil {
+		return err
+	}
+	interval := time.NewTicker(b.settings.Interval)
+	defer interval.Stop()
+	gasCheckInterval := minDuration(b.settings.Interval, 15*time.Second)
+	gasCheck := time.NewTicker(gasCheckInterval)
+	defer gasCheck.Stop()
 	for {
-		if err := b.EnqueueOnce(ctx); err != nil {
-			return err
-		}
-		timer := time.NewTimer(b.settings.Interval)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return ctx.Err()
-		case <-timer.C:
+		case <-interval.C:
+			if err := b.EnqueueOnce(ctx); err != nil {
+				return err
+			}
+		case <-gasCheck.C:
+			if err := b.EnqueueOnGasSpike(ctx); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -111,6 +122,7 @@ type Settings struct {
 	BufferBps     uint16
 	StaleAfter    time.Duration
 	MaxDeviation  uint64
+	GasSpikeBps   uint64
 	AllowFallback bool
 	TxFees        TxFees
 }
@@ -138,6 +150,9 @@ func (s Settings) Validate() error {
 	if s.MaxDeviation == 0 {
 		return errors.New("pricing max deviation bps is required")
 	}
+	if s.GasSpikeBps == 0 {
+		return errors.New("pricing gas spike bps is required")
+	}
 	return nil
 }
 
@@ -156,44 +171,66 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b.now == nil {
 		b.now = time.Now
 	}
-	seen := make(map[string]struct{})
-	for _, pathway := range b.registry.Pathways() {
-		key := fmt.Sprintf("%d:%d", pathway.SrcEID, pathway.DstEID)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		if err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID); err != nil {
+	for _, pathway := range b.uniquePathways() {
+		if _, err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) error {
+// EnqueueOnGasSpike enqueues updates for pathways whose destination gas price rose past the configured threshold.
+func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
+	if b == nil || !b.settings.Enabled {
+		return nil
+	}
+	if b.lastGasPrices == nil {
+		b.lastGasPrices = make(map[string]*big.Int)
+	}
+	for _, pathway := range b.uniquePathways() {
+		key := pathwayKey(pathway.SrcEID, pathway.DstEID)
+		current, err := b.currentDstGasPrice(ctx, pathway.DstEID)
+		if err != nil {
+			return err
+		}
+		previous := b.lastGasPrices[key]
+		if previous == nil {
+			b.lastGasPrices[key] = cloneBigInt(current)
+			continue
+		}
+		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
+			continue
+		}
+		enqueuedGas, err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID)
+		if err != nil {
+			return err
+		}
+		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", pathway.SrcEID, "dst_eid", pathway.DstEID, "previous_gas_wei", previous, "current_gas_wei", current)
+		b.lastGasPrices[key] = cloneBigInt(enqueuedGas)
+	}
+	return nil
+}
+
+func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) (*big.Int, error) {
 	srcChain, err := b.registry.Get(srcEID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dstChain, err := b.registry.Get(dstEID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	srcPrice, err := b.chainPrice(ctx, srcEID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	dstPrice, err := b.chainPrice(ctx, dstEID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	dstSources, ok := b.sources[dstEID]
-	if !ok || dstSources.Gas == nil {
-		return fmt.Errorf("pricing gas source for chain %d is not configured", dstEID)
-	}
-	dstGasPrice, err := dstSources.Gas.SuggestGasPrice(ctx)
+	dstGasPrice, err := b.currentDstGasPrice(ctx, dstEID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	config, err := BuildPriceConfig(PriceInputs{
 		SrcNativeUSD:      srcPrice,
@@ -205,7 +242,7 @@ func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) error {
 		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, request := range []struct {
 		worker  common.Address
@@ -216,13 +253,18 @@ func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) error {
 	} {
 		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config, b.settings.TxFees)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := b.store.EnqueueTx(ctx, tx); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	key := pathwayKey(srcEID, dstEID)
+	if b.lastGasPrices == nil {
+		b.lastGasPrices = make(map[string]*big.Int)
+	}
+	b.lastGasPrices[key] = cloneBigInt(dstGasPrice)
+	return dstGasPrice, nil
 }
 
 func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
@@ -248,6 +290,42 @@ func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
 		}
 	}
 	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowFallback)
+}
+
+func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {
+	dstSources, ok := b.sources[dstEID]
+	if !ok || dstSources.Gas == nil {
+		return nil, fmt.Errorf("pricing gas source for chain %d is not configured", dstEID)
+	}
+	dstGasPrice, err := dstSources.Gas.SuggestGasPrice(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dstGasPrice == nil || dstGasPrice.Sign() <= 0 {
+		return nil, fmt.Errorf("pricing gas source for chain %d returned non-positive gas price", dstEID)
+	}
+	return dstGasPrice, nil
+}
+
+func (b *Bot) uniquePathways() []struct{ SrcEID, DstEID uint32 } {
+	if b == nil || b.registry == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	pathways := make([]struct{ SrcEID, DstEID uint32 }, 0)
+	for _, pathway := range b.registry.Pathways() {
+		key := pathwayKey(pathway.SrcEID, pathway.DstEID)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		pathways = append(pathways, struct{ SrcEID, DstEID uint32 }{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID})
+	}
+	return pathways
+}
+
+func pathwayKey(srcEID, dstEID uint32) string {
+	return fmt.Sprintf("%d:%d", srcEID, dstEID)
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.
@@ -283,6 +361,20 @@ func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxD
 		}
 	}
 	return nil, errors.New("no healthy price source")
+}
+
+// GasIncreaseBps returns max((current-previous)/previous, 0) in basis points.
+func GasIncreaseBps(previous, current *big.Int) uint64 {
+	if previous == nil || current == nil || previous.Sign() <= 0 || current.Sign() <= 0 {
+		return ^uint64(0)
+	}
+	if current.Cmp(previous) <= 0 {
+		return 0
+	}
+	diff := new(big.Int).Sub(current, previous)
+	ratio := new(big.Rat).SetFrac(diff, previous)
+	ratio.Mul(ratio, big.NewRat(10_000, 1))
+	return ceilRat(ratio).Uint64()
 }
 
 // DeviationBps returns abs(left-right)/left in basis points.
@@ -439,6 +531,13 @@ func ceilRat(value *big.Rat) *big.Int {
 		quotient.Add(quotient, big.NewInt(1))
 	}
 	return quotient
+}
+
+func minDuration(left, right time.Duration) time.Duration {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func cloneRat(value *big.Rat) *big.Rat {

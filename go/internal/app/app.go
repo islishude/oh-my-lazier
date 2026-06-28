@@ -170,6 +170,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		BufferBps:     a.cfg.Pricing.BufferBps,
 		StaleAfter:    time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
 		MaxDeviation:  a.cfg.Pricing.MaxDeviationBps,
+		GasSpikeBps:   a.cfg.Pricing.GasSpikeBps,
 		AllowFallback: a.cfg.Pricing.AllowUniswapFallback,
 		TxFees: pricing.TxFees{
 			GasLimit:             new(big.Int).SetUint64(a.cfg.Pricing.TxGasLimit),

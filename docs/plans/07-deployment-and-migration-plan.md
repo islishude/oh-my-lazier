@@ -44,14 +44,14 @@ npm install --save-exact \
 - `contracts/scripts/inspect-lz-config.ts` 读取当前 Endpoint send/receive library 与 SendUln302/ReceiveUln302 configs。
 - `contracts/scripts/configure-lz-executor.ts` 通过 Endpoint `setConfig` 写入 SendUln302 `ExecutorConfig`。
 - `contracts/scripts/configure-lz-dvn.ts` 通过 Endpoint `setConfig` 写入 SendUln302 与 ReceiveUln302 `UlnConfig`，并显式设置 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`、`optionalDVNCount = NIL`。
-- `contracts/scripts/configure-lz-rollback.ts` 使用 `inspect:lz-config` 保存的 JSON 快照重放旧 `ExecutorConfig`、SendUln302 `UlnConfig` 与 ReceiveUln302 `UlnConfig`，作为本地 rollback 输入。
+- `contracts/scripts/configure-lz-rollback.ts` 使用 `inspect:lz-config` 保存的 JSON 快照重放旧 `ExecutorConfig`、SendUln302 `UlnConfig` 与 ReceiveUln302 `UlnConfig`，并支持 `DRY_RUN=1` 输出待签名的 rollback `setConfig` batches，作为本地 rollback 输入。
 - `contracts/scripts/check-oft-canary.ts` 检查 canary source receipt 的 EndpointV2 `PacketSent`、SendLib `ExecutorFeePaid.executor = OpenExecutor`，并可独立检查 destination receipt 的 `PacketDelivered`/`LzReceiveAlert` 与 recipient TestOFT 最小余额。
 - `contracts/scripts/check-dvn-verification.ts` 检查 destination-chain ReceiveUln302 `PayloadVerified` 是否包含 OpenDVN 与 LayerZero Labs DVN，并可要求同 receipt 内存在 EndpointV2 `PacketVerified`。
 - `contracts/scripts/check-lz-addresses.ts` 从 LayerZero 官方 metadata 重新核对本地记录的 Sepolia/Base Sepolia EndpointV2、ULN302、Executor、LayerZero Labs DVN 地址。
 - `contracts/scripts/deployment-preflight.ts` 只读检查 TestOFT/OpenExecutor/OpenDVN `owner()`、owner native balance、可选 canary treasury native/TestOFT balance 与 TestOFT totalSupply。
 - `contracts/scripts/oft-pathway-control.ts` 检查或执行 TestOFT `pauseSend`、`pauseReceive`、zero-capacity drain 与 steady-state outbound rate-limit 更新，并在写入后回读确认。
 - `contracts/scripts/price-config-check.ts` 只读检查 OpenExecutor/OpenDVN `priceConfig(dstEid)` 的 fresh `updatedAt`、非零 `dstGasPriceInSrcToken` 与可选 `staleAfter` 预期值。
-- `contracts/scripts/migration-evidence.ts` 校验迁移记录 JSON 是否包含 `make check`、LayerZero 地址刷新、DB readiness、key/price/rate-limit/monitoring/runbook/security review、Ethereum Sepolia `40161` <-> Base Sepolia `40245` 双向 direction、非零 owner/signer/canary EVM 地址、config diff、preflight、LayerZero config before/after、price config、drain、canary 金额/发送账户/接收账户/最小到账余额/source receipt/destination receipt/余额检查、`confirmations = 12` 且 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` 的 DVN join、DVN verification、rollback 后 config/canary 与 manual retry 证据引用。
+- `contracts/scripts/migration-evidence.ts` 校验迁移记录 JSON 是否包含 `make check`、LayerZero 地址刷新、DB readiness、key/price/rate-limit/monitoring/runbook/security review、Ethereum Sepolia `40161` <-> Base Sepolia `40245` 双向 direction、非零 owner/signer/canary EVM 地址、config diff、preflight、LayerZero config before/after、带 dstEid/freshness/staleAfter/非零 gas price 的 price config、drain、canary 金额/发送账户/接收账户/最小到账余额/source receipt/destination receipt/余额检查、`confirmations = 12` 且 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` 的 DVN join、带 payload hash 与 PacketV1 identity 的 DVN verification、rollback dry-run、rollback 后 config/canary 与 manual retry 证据引用。
 - `docs/deployments/testnet-migration-evidence.example.json` 提供 Ethereum Sepolia <-> Base Sepolia 双向迁移记录模板。
 - `docs/deployments/layerzero-testnet-addresses.md` 记录 Ethereum Sepolia 与 Base Sepolia 的 EndpointV2、SendUln302、ReceiveUln302、LayerZero Executor、LayerZero Labs DVN 地址。
 - `docs/deployments/test-oft-policy.md` 固定 TestOFT name、symbol、constructor mint、owner 与 post-deploy minting policy。
@@ -105,7 +105,7 @@ Rollback：
 
 - `npm run configure:lz-executor` 使用 pinned `ILayerZeroEndpointV2` artifact 调用 Endpoint `setConfig`，只修改指定 OApp、remote eid 与 SendUln302 的 `ExecutorConfig`。
 - `npm run inspect:lz-config` 可在切换前后输出 active send/receive library 与 decoded Executor/ULN config，作为 rollback 输入。
-- `npm run configure:lz-rollback` 可从切换前保存的 `inspect:lz-config` JSON 恢复旧 ExecutorConfig 与 ULN config。
+- `DRY_RUN=1 npm run configure:lz-rollback` 可先从切换前保存的 `inspect:lz-config` JSON 输出旧 ExecutorConfig 与 ULN config 的恢复批次，`npm run configure:lz-rollback` 再执行签名恢复。
 
 ## Phase 4 - DVN Shadow Mode
 
@@ -171,7 +171,7 @@ Rollback：
 - `npm run configure:lz-dvn` 使用 pinned `ILayerZeroEndpointV2` artifact 调用 Endpoint `setConfig`，在本地链的 SendUln302 与 ReceiveUln302 上写入同一组 required DVNs。
 - DVN 地址会按 LayerZero `UlnConfig` 要求升序排序，并拒绝重复地址。
 - `optionalDVNCount` 写入 LayerZero NIL 值，避免 first-phase 迁移继承默认 optional DVNs。
-- `npm run configure:lz-rollback` 可恢复旧 SendUln302/ReceiveUln302 UlnConfig，包括非 first-phase 的 optional DVN/default count 字段。
+- `DRY_RUN=1 npm run configure:lz-rollback` 可预览旧 SendUln302/ReceiveUln302 UlnConfig 恢复批次，包括非 first-phase 的 optional DVN/default count 字段；`npm run configure:lz-rollback` 可执行恢复。
 
 ## Phase 6 - Gradual Rollout
 

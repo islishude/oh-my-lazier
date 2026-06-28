@@ -1,4 +1,4 @@
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import {
   assertDVNVerificationReceipt,
   type DVNVerificationStatus,
@@ -9,6 +9,7 @@ import {
   envBigInt,
   jsonStringify,
   loadABIArtifact,
+  optionalBigInt,
   requiredEnv,
 } from "./lib.js";
 
@@ -35,6 +36,11 @@ const expectedPayloadHash =
   process.env.EXPECTED_PAYLOAD_HASH === ""
     ? undefined
     : (requiredEnv("EXPECTED_PAYLOAD_HASH") as Hex);
+const expectedSrcEid = optionalUint32("EXPECTED_SRC_EID");
+const expectedDstEid = optionalUint32("EXPECTED_DST_EID");
+const expectedNonce = optionalBigInt("EXPECTED_NONCE");
+const expectedSender = optionalAddress("EXPECTED_SENDER");
+const expectedReceiver = optionalAddress("EXPECTED_RECEIVER");
 
 const status: DVNVerificationStatus = assertDVNVerificationReceipt({
   logs: receipt.logs,
@@ -45,6 +51,20 @@ const status: DVNVerificationStatus = assertDVNVerificationReceipt({
   endpoint,
   endpointAbi: endpoint === undefined ? undefined : endpointArtifact.abi,
   expectedPayloadHash,
+  expectedPacket:
+    expectedSrcEid === undefined &&
+    expectedDstEid === undefined &&
+    expectedNonce === undefined &&
+    expectedSender === undefined &&
+    expectedReceiver === undefined
+      ? undefined
+      : {
+          srcEid: expectedSrcEid,
+          dstEid: expectedDstEid,
+          nonce: expectedNonce,
+          sender: expectedSender,
+          receiver: expectedReceiver,
+        },
 });
 
 console.log(
@@ -54,3 +74,22 @@ console.log(
     status,
   }),
 );
+
+function optionalUint32(name: string): number | undefined {
+  const value = optionalBigInt(name);
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value > 0xffffffffn) {
+    throw new Error(`${name} exceeds uint32`);
+  }
+  return Number(value);
+}
+
+function optionalAddress(name: string): Address | undefined {
+  const value = process.env[name];
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  return envAddress(name);
+}

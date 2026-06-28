@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/readiness"
 )
 
 // StatsProvider supplies read-only worker state for metrics rendering.
@@ -42,7 +43,13 @@ func Handler(provider StatsProvider) http.Handler {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		if _, err := provider.Stats(r.Context()); err != nil {
+		snapshot, err := provider.Stats(r.Context())
+		if err != nil {
+			http.Error(w, "not ready\n", http.StatusServiceUnavailable)
+			return
+		}
+		report := readiness.Evaluate(snapshot)
+		if !report.Ready {
 			http.Error(w, "not ready\n", http.StatusServiceUnavailable)
 			return
 		}

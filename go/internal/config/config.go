@@ -51,6 +51,7 @@ type PricingConfig struct {
 	BufferBps               uint16               `yaml:"buffer_bps"`
 	StaleAfterSeconds       uint64               `yaml:"stale_after_seconds"`
 	MaxDeviationBps         uint64               `yaml:"max_deviation_bps"`
+	GasSpikeBps             uint64               `yaml:"gas_spike_bps"`
 	AllowUniswapFallback    bool                 `yaml:"allow_uniswap_fallback"`
 	TxGasLimit              uint64               `yaml:"tx_gas_limit"`
 	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
@@ -176,6 +177,9 @@ func load(path string, applyEnv bool) (Config, error) {
 		}
 		if cfg.Pricing.MaxDeviationBps == 0 {
 			cfg.Pricing.MaxDeviationBps = 500
+		}
+		if cfg.Pricing.GasSpikeBps == 0 {
+			cfg.Pricing.GasSpikeBps = 1_000
 		}
 	}
 	return cfg, cfg.Validate()
@@ -366,6 +370,9 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	}
 	if c.Pricing.MaxDeviationBps == 0 {
 		return errors.New("pricing max_deviation_bps is required")
+	}
+	if c.Pricing.GasSpikeBps == 0 {
+		return errors.New("pricing gas_spike_bps is required")
 	}
 	if c.Pricing.BufferBps > 10_000 {
 		return errors.New("pricing buffer_bps exceeds 10000")

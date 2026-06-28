@@ -525,8 +525,21 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	if len(work) != 1 {
 		t.Fatalf("quorum work length = %d, want 1", len(work))
 	}
-	report := []byte(`{"status":"would_verify"}`)
-	if err := store.MarkDVNWouldVerify(ctx, packet.GUID, string(packets.DVNQuorumChecking), report); err != nil {
+	report := []byte(`{"status": "would_verify"}`)
+	if err := store.MarkDVNReadyToVerify(ctx, packet.GUID, string(packets.DVNQuorumChecking), report); err != nil {
+		t.Fatalf("MarkDVNReadyToVerify() error = %v", err)
+	}
+	work, err = store.ListDVNWork(ctx, string(packets.DVNReadyToVerify), 10)
+	if err != nil {
+		t.Fatalf("ListDVNWork() ready error = %v", err)
+	}
+	if len(work) != 1 {
+		t.Fatalf("ready work length = %d, want 1", len(work))
+	}
+	if string(work[0].Job.QuorumResult) != string(report) {
+		t.Fatalf("ready quorum result = %s, want %s", work[0].Job.QuorumResult, report)
+	}
+	if err := store.MarkDVNWouldVerify(ctx, packet.GUID, string(packets.DVNReadyToVerify), report); err != nil {
 		t.Fatalf("MarkDVNWouldVerify() error = %v", err)
 	}
 	var status string
@@ -579,8 +592,12 @@ func TestEnqueueDVNVerifyTxAdvancesJobAtomically(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("UpsertDVNJob() error = %v", err)
 	}
+	report := []byte(`{"status":"ready"}`)
+	if err := store.MarkDVNReadyToVerify(ctx, packet.GUID, string(packets.DVNQuorumChecking), report); err != nil {
+		t.Fatalf("MarkDVNReadyToVerify() error = %v", err)
+	}
 
-	id, err := store.EnqueueDVNVerifyTx(ctx, packet.GUID, string(packets.DVNQuorumChecking), string(packets.DVNVerifyTxEnqueued), TxRequest{
+	id, err := store.EnqueueDVNVerifyTx(ctx, packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), TxRequest{
 		ChainEID:             packet.DstEID,
 		Purpose:              "dvn_verify",
 		GUID:                 packet.GUID.Bytes(),
@@ -591,7 +608,7 @@ func TestEnqueueDVNVerifyTxAdvancesJobAtomically(t *testing.T) {
 		MaxFeePerGas:         big.NewInt(2_000_000_000),
 		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
 		SignerID:             "0x9999999999999999999999999999999999999999",
-	}, []byte(`{"status":"ready"}`))
+	}, report)
 	if err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}

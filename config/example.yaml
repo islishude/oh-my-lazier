@@ -24,6 +24,7 @@ pricing:
   buffer_bps: 100
   stale_after_seconds: 1800
   max_deviation_bps: 500
+  gas_spike_bps: 1000
   allow_uniswap_fallback: true
   tx_gas_limit: 100000
   max_fee_per_gas_wei: "2000000000"

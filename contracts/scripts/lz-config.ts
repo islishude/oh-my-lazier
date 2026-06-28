@@ -72,6 +72,20 @@ export type SetConfigBatch = {
   configs: SetConfigEntry[];
 };
 
+export type RollbackConfigPlan = {
+  endpoint: Address;
+  oapp: Address;
+  remoteEid: number;
+  restoredLibraries: {
+    sendUln: Address;
+    receiveUln: Address;
+  };
+  batches: SetConfigBatch[];
+  restoredExecutorConfig: ExecutorConfig;
+  restoredSendUlnConfig: UlnConfig;
+  restoredReceiveUlnConfig: UlnConfig;
+};
+
 export function encodeExecutorConfig(config: ExecutorConfig): Hex {
   return encodeAbiParameters(executorConfigParameters, [config]);
 }
@@ -133,6 +147,23 @@ export function rollbackConfigBatches(
       ],
     },
   ];
+}
+
+export function rollbackConfigPlan(snapshot: LzConfigSnapshot): RollbackConfigPlan {
+  const normalized = normalizeLzConfigSnapshot(snapshot);
+  return {
+    endpoint: normalized.endpoint,
+    oapp: normalized.oapp,
+    remoteEid: normalized.remoteEid,
+    restoredLibraries: {
+      sendUln: normalized.inspectedLibraries.sendUln,
+      receiveUln: normalized.inspectedLibraries.receiveUln,
+    },
+    batches: rollbackConfigBatches(normalized),
+    restoredExecutorConfig: normalized.executorConfig,
+    restoredSendUlnConfig: normalized.sendUlnConfig,
+    restoredReceiveUlnConfig: normalized.receiveUlnConfig,
+  };
 }
 
 export function requiredDVNsConfig(

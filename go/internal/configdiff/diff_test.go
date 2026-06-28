@@ -67,6 +67,7 @@ func validConfig() config.Config {
 			BufferBps:               100,
 			StaleAfterSeconds:       1800,
 			MaxDeviationBps:         500,
+			GasSpikeBps:             1000,
 			AllowUniswapFallback:    true,
 			TxGasLimit:              100000,
 			MaxFeePerGasWei:         "2000000000",

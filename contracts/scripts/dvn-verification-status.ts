@@ -21,6 +21,7 @@ export type DVNVerificationStatusInput = {
   endpoint?: Address;
   endpointAbi?: Abi;
   expectedPayloadHash?: Hex;
+  expectedPacket?: ExpectedPacketHeader;
 };
 
 export type DVNVerificationStatus = {
@@ -30,6 +31,14 @@ export type DVNVerificationStatus = {
     payloadHash: Hex;
   }>;
   packetVerified: boolean;
+};
+
+export type ExpectedPacketHeader = {
+  srcEid?: number;
+  dstEid?: number;
+  nonce?: bigint;
+  sender?: Address;
+  receiver?: Address;
 };
 
 export function assertDVNVerificationReceipt(
@@ -88,12 +97,19 @@ function findPayloadVerified(
       });
       const args = decoded.args as unknown as {
         dvn: Address;
+        header: Hex;
         confirmations: bigint;
         proofHash: Hex;
       };
       if (
         input.expectedPayloadHash !== undefined &&
         args.proofHash.toLowerCase() !== input.expectedPayloadHash.toLowerCase()
+      ) {
+        continue;
+      }
+      if (
+        input.expectedPacket !== undefined &&
+        !packetHeaderMatches(args.header, input.expectedPacket)
       ) {
         continue;
       }
@@ -107,6 +123,67 @@ function findPayloadVerified(
     }
   }
   return out;
+}
+
+function packetHeaderMatches(header: Hex, expected: ExpectedPacketHeader): boolean {
+  const decoded = decodePacketHeader(header);
+  if (decoded === undefined) {
+    return false;
+  }
+  if (expected.srcEid !== undefined && decoded.srcEid !== expected.srcEid) {
+    return false;
+  }
+  if (expected.dstEid !== undefined && decoded.dstEid !== expected.dstEid) {
+    return false;
+  }
+  if (expected.nonce !== undefined && decoded.nonce !== expected.nonce) {
+    return false;
+  }
+  if (
+    expected.sender !== undefined &&
+    !isAddressEqual(decoded.sender, expected.sender)
+  ) {
+    return false;
+  }
+  if (
+    expected.receiver !== undefined &&
+    !isAddressEqual(decoded.receiver, expected.receiver)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function decodePacketHeader(header: Hex):
+  | {
+      nonce: bigint;
+      srcEid: number;
+      sender: Address;
+      dstEid: number;
+      receiver: Address;
+    }
+  | undefined {
+  if (!/^0x[0-9a-fA-F]*$/.test(header) || header.length !== 164) {
+    return undefined;
+  }
+  if (byteAt(header, 0) !== 1) {
+    return undefined;
+  }
+  return {
+    nonce: BigInt(`0x${hexSlice(header, 1, 9)}`),
+    srcEid: Number.parseInt(hexSlice(header, 9, 13), 16),
+    sender: getAddress(`0x${hexSlice(header, 25, 45)}`),
+    dstEid: Number.parseInt(hexSlice(header, 45, 49), 16),
+    receiver: getAddress(`0x${hexSlice(header, 61, 81)}`),
+  };
+}
+
+function byteAt(hex: Hex, offset: number): number {
+  return Number.parseInt(hex.slice(2 + offset * 2, 4 + offset * 2), 16);
+}
+
+function hexSlice(hex: Hex, start: number, end: number): string {
+  return hex.slice(2 + start * 2, 2 + end * 2);
 }
 
 function hasPacketVerified(

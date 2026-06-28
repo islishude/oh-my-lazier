@@ -70,6 +70,44 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	}
 }
 
+func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
+	registry := testRegistry(t)
+	store := &fakeStore{}
+	sourceGas := &mutableGas{price: big.NewInt(1_000_000_000)}
+	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
+	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas},
+		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas},
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 4 {
+		t.Fatalf("initial enqueued requests = %d, want 4", len(store.requests))
+	}
+
+	destinationGas.price = big.NewInt(2_100_000_000)
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() below threshold error = %v", err)
+	}
+	if len(store.requests) != 4 {
+		t.Fatalf("below-threshold enqueued requests = %d, want 4", len(store.requests))
+	}
+
+	destinationGas.price = big.NewInt(2_300_000_000)
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() above threshold error = %v", err)
+	}
+	if len(store.requests) != 6 {
+		t.Fatalf("above-threshold enqueued requests = %d, want 6", len(store.requests))
+	}
+}
+
 type fakeStore struct {
 	requests []db.TxRequest
 }
@@ -95,6 +133,14 @@ func (g fixedGas) SuggestGasPrice(context.Context) (*big.Int, error) {
 	return new(big.Int).Set(g.price), nil
 }
 
+type mutableGas struct {
+	price *big.Int
+}
+
+func (g *mutableGas) SuggestGasPrice(context.Context) (*big.Int, error) {
+	return new(big.Int).Set(g.price), nil
+}
+
 func testSettings() Settings {
 	return Settings{
 		Enabled:       true,
@@ -104,6 +150,7 @@ func testSettings() Settings {
 		BufferBps:     100,
 		StaleAfter:    30 * time.Minute,
 		MaxDeviation:  500,
+		GasSpikeBps:   1000,
 		AllowFallback: true,
 		TxFees: TxFees{
 			GasLimit:             big.NewInt(100_000),

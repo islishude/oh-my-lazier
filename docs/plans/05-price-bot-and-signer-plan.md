@@ -101,3 +101,12 @@ Signer 按链配置选择。
 - `go/internal/signer/keystore.Signer`
 - `go/internal/signer/keystore.TestResolvePasswordSources`
 - `go/internal/signer/keystore.TestSignerSignsEIP1559Transaction`
+
+## Price Bot Evidence
+
+- `go/internal/pricing.Bot.EnqueueOnce`
+- `go/internal/pricing.Bot.EnqueueOnGasSpike`
+- `go/internal/pricing.GasIncreaseBps`
+- `go/internal/pricing.TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold`
+- `go/internal/config.PricingConfig.GasSpikeBps`
+- `go/internal/configdiff.Diff`

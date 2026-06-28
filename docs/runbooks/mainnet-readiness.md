@@ -96,6 +96,7 @@ The rollback section of the migration ticket must include:
 - previous Executor config
 - previous send ULN config
 - previous receive ULN config
+- `DRY_RUN=1 npm run configure:lz-rollback` output showing the exact rollback `setConfig` batches
 - restored Executor/ULN config check after rollback
 - canary transfer evidence after rollback
 - owner account able to pause/unpause TestOFT

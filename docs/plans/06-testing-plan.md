@@ -95,6 +95,8 @@ Current evidence:
 - `go/internal/rpcquorum.TestSelectCanonicalHeadAcceptsTwoOfThreeAgreement`
 - `go/internal/rpcquorum.TestSelectCanonicalHeadIgnoresLaggingProvider`
 - `go/internal/rpcquorum.TestSelectCanonicalHeadRejectsSameHeightHashConflict`
+- `go/internal/rpcquorum.TestClassifyHeadProviderStatusesDegradesLaggingProvider`
+- `go/internal/rpcquorum.TestUpdateHeadProviderStatusesAllowsLaggingProviderRecovery`
 - `go/internal/rpcquorum.TestReceiptFingerprintIncludesLogEvidence`
 - `go/internal/rpcquorum.TestIsReceiptConflict`
 
@@ -146,6 +148,7 @@ Current evidence:
 - Uniswap sanity check
 - deviation threshold
 - stale source handling
+- gas spike threshold update
 - setPriceConfig transaction enqueue
 
 Current evidence:
@@ -161,6 +164,7 @@ Current evidence:
 - `go/internal/pricing.TestBuildSetPriceConfigTx`
 - `go/internal/pricing.TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates`
 - `go/internal/pricing.TestBotEnqueueOnceRejectsDeviationWithoutEnqueue`
+- `go/internal/pricing.TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold`
 
 ### executor
 
@@ -198,9 +202,13 @@ Current evidence:
 - `go/internal/indexer.TestDVNSourceTxRecordsFromLogs`
 - `go/internal/dvn.TestProcessConfirmationsOnceWaitsForSourceConfirmations`
 - `go/internal/dvn.TestProcessConfirmationsOnceMarksQuorumChecking`
-- `go/internal/dvn.TestProcessQuorumOnceMarksWouldVerify`
+- `go/internal/dvn.TestProcessConfirmationsOnceRollsReorgBackToWaiting`
+- `go/internal/dvn.TestProcessQuorumOnceMarksReadyToVerify`
+- `go/internal/dvn.TestProcessReadyToVerifyOnceMarksWouldVerify`
+- `go/internal/dvn.TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx`
 - `go/internal/dvn.TestProcessQuorumOnceMarksConflictOnMismatchedReceipt`
 - `go/internal/dvn.TestProcessQuorumOnceMarksConflictOnRPCDisagreement`
+- `go/internal/dvn.TestProcessQuorumOnceMarksReorgWhenReceiptDisappears`
 
 ### metrics
 
@@ -226,6 +234,22 @@ Current evidence:
 - `go/internal/configdiff.TestDiffUsesSemanticKeysForLists`
 - `go/internal/configdiff.TestRenderTextReportsNoConfigChanges`
 - `go/internal/configdiff.TestRenderTextIncludesChangedPath`
+
+## Script Tests
+
+- DVN verification receipt checker rejects receipts whose `PayloadVerified` header does not match the expected packet identity.
+- Migration evidence checker rejects DVN verification artifacts that do not record the exact payload hash and PacketV1 identity for the migration direction.
+- Migration evidence checker rejects stale or mismatched price config artifacts.
+- Migration evidence checker requires rollback dry-run evidence before approval.
+- Rollback config planner exposes the exact dry-run `Endpoint.setConfig` batches before signing.
+
+Current evidence:
+
+- `contracts/scripts/dvn-verification-status.test.ts` `assertDVNVerificationReceipt rejects mismatched expected packet header`
+- `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects weak DVN verification packet identity`
+- `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects stale or mismatched price config evidence`
+- `contracts/scripts/migration-evidence.test.ts` `validateMigrationEvidenceRecord rejects missing required artifacts`
+- `contracts/scripts/lz-config.test.ts` `rollback config plan exposes dry-run review payload`
 
 ## Testnet Integration Tests
 

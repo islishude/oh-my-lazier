@@ -16,6 +16,7 @@ type DVNJobRecord struct {
 	GUID                  common.Hash
 	ConfirmationsRequired uint64
 	Status                string
+	QuorumResult          []byte
 }
 
 // UpsertDVNJob persists DVN assignment state for a packet.
@@ -82,7 +83,8 @@ func (s *Store) ListDVNWork(ctx context.Context, status string, limit int) ([]DV
 			p.guid, p.src_eid, p.dst_eid, p.nonce::text, p.sender, p.receiver,
 			p.send_lib, p.src_tx_hash, p.src_block_number, p.src_log_index,
 			p.encoded_packet, p.packet_header, p.message, p.payload_hash,
-			p.options, p.status, dj.confirmations_required, dj.status
+			p.options, p.status, dj.confirmations_required, dj.status,
+			COALESCE(dj.quorum_result::text, '')
 		FROM dvn_jobs dj
 		JOIN packets p ON p.guid = dj.guid
 		WHERE dj.status = $1 AND (dj.next_retry_at IS NULL OR dj.next_retry_at <= now())
@@ -116,6 +118,7 @@ func (s *Store) ListDVNWork(ctx context.Context, status string, limit int) ([]DV
 			&row.PacketStatus,
 			&row.ConfirmationsRequired,
 			&row.JobStatus,
+			&row.QuorumResult,
 		); err != nil {
 			return nil, err
 		}
@@ -139,6 +142,14 @@ func (s *Store) MarkDVNWaitingConfirmations(ctx context.Context, guid common.Has
 // MarkDVNQuorumChecking records that a DVN job has enough source confirmations for quorum checks.
 func (s *Store) MarkDVNQuorumChecking(ctx context.Context, guid common.Hash, expectedStatus string) error {
 	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNQuorumChecking)})
+}
+
+// MarkDVNReadyToVerify records a quorum report for a packet ready for shadow or active verification.
+func (s *Store) MarkDVNReadyToVerify(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error {
+	if len(quorumResult) == 0 {
+		return errors.New("dvn quorum result is required")
+	}
+	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNReadyToVerify), QuorumResult: quorumResult})
 }
 
 // MarkDVNWouldVerify records a shadow-mode report for a packet that passed quorum checks.
@@ -251,6 +262,14 @@ func (s *Store) MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, exp
 	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNQuorumConflict), LastError: reason, QuorumResult: quorumResult})
 }
 
+// MarkDVNReorgDetected records that the previously indexed source receipt disappeared.
+func (s *Store) MarkDVNReorgDetected(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error {
+	if reason == "" {
+		return errors.New("dvn reorg reason is required")
+	}
+	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNReorgDetected), LastError: reason, QuorumResult: quorumResult})
+}
+
 type dvnStatusUpdate struct {
 	GUID              common.Hash
 	ExpectedStatus    string
@@ -322,6 +341,7 @@ type dvnWorkRow struct {
 	PacketStatus          string
 	ConfirmationsRequired uint64
 	JobStatus             string
+	QuorumResult          string
 }
 
 func (r dvnWorkRow) toDVNWorkItem() (DVNWorkItem, error) {
@@ -355,6 +375,7 @@ func (r dvnWorkRow) toDVNWorkItem() (DVNWorkItem, error) {
 			GUID:                  packet.GUID,
 			ConfirmationsRequired: r.ConfirmationsRequired,
 			Status:                r.JobStatus,
+			QuorumResult:          []byte(r.QuorumResult),
 		},
 	}, nil
 }
