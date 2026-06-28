@@ -101,4 +101,5 @@ The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJ
 
 - Config is loaded once at startup. Runtime config changes require a process restart.
 - The worker skeleton starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context.
+- Per-chain `start_block_number` is optional and defaults to `0`. It only seeds the first indexer backfill when no durable cursor exists; after a cursor is written, the database cursor is authoritative.
 - A non-cancellation error from any durable loop cancels the worker process so packet state does not advance with missing components.

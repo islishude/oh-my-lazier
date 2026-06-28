@@ -216,6 +216,9 @@ pathways:
 	if staticConfig.DatabaseURL != "postgres://file:file@localhost:5432/file?sslmode=disable" {
 		t.Fatalf("LoadStatic() database_url = %q, want file value", staticConfig.DatabaseURL)
 	}
+	if staticConfig.Chains[0].StartBlockNumber != 0 {
+		t.Fatalf("LoadStatic() start_block_number = %d, want default 0", staticConfig.Chains[0].StartBlockNumber)
+	}
 	workerConfig, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)

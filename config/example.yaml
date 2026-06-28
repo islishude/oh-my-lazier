@@ -60,6 +60,7 @@ chains:
     chain_id: 11155111
     endpoint_address: "0x1111111111111111111111111111111111111111"
     confirmations: 12
+    start_block_number: 0
     rpc_urls:
       - http://localhost:8545
     workers:
@@ -70,6 +71,7 @@ chains:
     chain_id: 84532
     endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
+    start_block_number: 0
     rpc_urls:
       - http://localhost:8546
     workers:

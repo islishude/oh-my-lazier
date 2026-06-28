@@ -430,6 +430,11 @@ func (i *Indexer) cursorWindow(ctx context.Context, stream string, confirmedTo u
 			return 0, 0, false, nil
 		}
 		from = cursor + 1
+	} else {
+		from = i.chain.StartBlockNumber
+		if from > confirmedTo {
+			return 0, 0, false, nil
+		}
 	}
 	to := confirmedTo
 	if i.backfillRange > 0 && to-from+1 > i.backfillRange {

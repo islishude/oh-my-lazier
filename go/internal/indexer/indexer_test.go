@@ -268,6 +268,65 @@ func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 	}
 }
 
+func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 200}
+	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
+	configuredChain.StartBlockNumber = 150
+	indexer := NewWithClient(
+		configuredChain,
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceFromBlock != 150 || result.SourceToBlock != 188 {
+		t.Fatalf("source window = %d..%d, want 150..188", result.SourceFromBlock, result.SourceToBlock)
+	}
+	if result.DestinationFromBlock != 150 || result.DestinationToBlock != 188 {
+		t.Fatalf("destination window = %d..%d, want 150..188", result.DestinationFromBlock, result.DestinationToBlock)
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+}
+
+func TestIndexerProcessOnceSkipsUntilStartBlockIsConfirmed(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 200}
+	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
+	configuredChain.StartBlockNumber = 250
+	indexer := NewWithClient(
+		configuredChain,
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceFromBlock != 0 || result.SourceToBlock != 0 || result.DestinationFromBlock != 0 || result.DestinationToBlock != 0 {
+		t.Fatalf("result windows = %+v, want no indexed windows", result)
+	}
+	if len(client.queries) != 0 {
+		t.Fatalf("queries = %d, want none before configured start block is confirmed", len(client.queries))
+	}
+	if len(store.cursors) != 0 {
+		t.Fatalf("cursors = %d, want none before configured start block is confirmed", len(store.cursors))
+	}
+}
+
 func TestIndexerRunUsesLiveSubscriptionWakeups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

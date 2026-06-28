@@ -11,13 +11,14 @@ import (
 
 // Chain is a configured LayerZero endpoint chain plus its RPC quorum client.
 type Chain struct {
-	EID             uint32
-	Name            string
-	ChainID         *big.Int
-	EndpointAddress common.Address
-	Confirmations   uint64
-	Workers         WorkerContracts
-	RPC             *rpcquorum.Client
+	EID              uint32
+	Name             string
+	ChainID          *big.Int
+	EndpointAddress  common.Address
+	Confirmations    uint64
+	StartBlockNumber uint64
+	Workers          WorkerContracts
+	RPC              *rpcquorum.Client
 }
 
 // WorkerContracts identifies the self-hosted worker contracts deployed on one chain.
@@ -52,11 +53,12 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 	}
 	for _, cfg := range chains {
 		registry.byEID[cfg.EID] = Chain{
-			EID:             cfg.EID,
-			Name:            cfg.Name,
-			ChainID:         big.NewInt(cfg.ChainID),
-			EndpointAddress: common.HexToAddress(cfg.EndpointAddress),
-			Confirmations:   cfg.Confirmations,
+			EID:              cfg.EID,
+			Name:             cfg.Name,
+			ChainID:          big.NewInt(cfg.ChainID),
+			EndpointAddress:  common.HexToAddress(cfg.EndpointAddress),
+			Confirmations:    cfg.Confirmations,
+			StartBlockNumber: cfg.StartBlockNumber,
 			Workers: WorkerContracts{
 				OpenExecutor: common.HexToAddress(cfg.Workers.OpenExecutor),
 				OpenDVN:      common.HexToAddress(cfg.Workers.OpenDVN),

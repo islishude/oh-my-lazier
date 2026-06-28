@@ -23,6 +23,9 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if ethereum.Workers.OpenExecutor != common.HexToAddress("0x2222222222222222222222222222222222222222") {
 		t.Fatalf("open executor address = %s", ethereum.Workers.OpenExecutor)
 	}
+	if ethereum.StartBlockNumber != 12345 {
+		t.Fatalf("StartBlockNumber = %d, want 12345", ethereum.StartBlockNumber)
+	}
 
 	pathway, err := registry.Pathway(
 		40161,
@@ -60,12 +63,13 @@ func TestRegistryRejectsUnknownPathway(t *testing.T) {
 func testChains() []config.ChainConfig {
 	return []config.ChainConfig{
 		{
-			EID:             40161,
-			Name:            "ethereum-sepolia",
-			ChainID:         11155111,
-			EndpointAddress: "0x1111111111111111111111111111111111111111",
-			Confirmations:   12,
-			RPCURLs:         []string{"http://localhost:8545"},
+			EID:              40161,
+			Name:             "ethereum-sepolia",
+			ChainID:          11155111,
+			EndpointAddress:  "0x1111111111111111111111111111111111111111",
+			Confirmations:    12,
+			StartBlockNumber: 12345,
+			RPCURLs:          []string{"http://localhost:8545"},
 			Workers: config.WorkerContractsConfig{
 				OpenExecutor: "0x2222222222222222222222222222222222222222",
 				OpenDVN:      "0x3333333333333333333333333333333333333333",

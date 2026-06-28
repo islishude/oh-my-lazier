@@ -111,13 +111,14 @@ type KMSSignerConfig struct {
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
 type ChainConfig struct {
-	EID             uint32                `yaml:"eid"`
-	Name            string                `yaml:"name"`
-	ChainID         int64                 `yaml:"chain_id"`
-	EndpointAddress string                `yaml:"endpoint_address"`
-	Confirmations   uint64                `yaml:"confirmations"`
-	RPCURLs         []string              `yaml:"rpc_urls"`
-	Workers         WorkerContractsConfig `yaml:"workers"`
+	EID              uint32                `yaml:"eid"`
+	Name             string                `yaml:"name"`
+	ChainID          int64                 `yaml:"chain_id"`
+	EndpointAddress  string                `yaml:"endpoint_address"`
+	Confirmations    uint64                `yaml:"confirmations"`
+	StartBlockNumber uint64                `yaml:"start_block_number"`
+	RPCURLs          []string              `yaml:"rpc_urls"`
+	Workers          WorkerContractsConfig `yaml:"workers"`
 }
 
 // WorkerContractsConfig identifies the self-hosted worker contracts deployed on one chain.
