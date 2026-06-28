@@ -35,6 +35,10 @@ Common targets:
 
 ```bash
 make compile        # Hardhat compile
+make generate-lzabi # regenerate committed Go LayerZero ABI JSON
+make check-lzabi    # verify generated Go LayerZero ABI JSON has no drift
+make generate-pricing-abi # regenerate committed Go pricing ABI JSON
+make check-pricing-abi    # verify generated Go pricing ABI JSON has no drift
 make test-solidity  # Solidity tests
 make test-go        # Go package tests
 make test-integration # Postgres and Rustack-backed integration tests
@@ -50,6 +54,20 @@ make fmt-sol        # format solidity files
 CI mirrors the local gates with contract/script/runbook/migration-evidence
 checks, Go tests and lint, Docker image build validation, and a dedicated
 `make security-check` job.
+
+The Go worker embeds compact LayerZero ABI JSON from `go/internal/lzabi/abis`.
+Regenerate those files with `make generate-lzabi` after changing local worker
+contracts or updating pinned LayerZero packages. The generator reads local
+Hardhat artifacts for `OpenDVN` and `OpenExecutor`, and pinned LayerZero package
+artifacts for EndpointV2, ReceiveUln302, and SendUln302 events. `make check`
+includes `make check-lzabi` so ABI drift is caught before handoff.
+
+The Go pricing package also embeds compact ABI JSON from
+`go/internal/pricing/abis`. Regenerate it with `make generate-pricing-abi` after
+worker price-config contract changes or pinned Uniswap package updates. The
+generator reads local Hardhat artifacts for worker `setPriceConfig` calldata and
+`@uniswap/v3-periphery` for the Uniswap V3 quoter interface. `make check`
+includes `make check-pricing-abi`.
 
 ## Local Worker
 

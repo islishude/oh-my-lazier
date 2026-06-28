@@ -75,7 +75,7 @@ func testPacketSentLog(t *testing.T, txHash common.Hash, sendLib common.Address,
 
 func testExecutorFeePaidLog(t *testing.T, txHash common.Hash, sendLib, executor common.Address, fee *big.Int, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI := lzabi.SendLibBaseABI()
+	eventABI := lzabi.SendUln302ABI()
 	data, err := eventABI.Events["ExecutorFeePaid"].Inputs.Pack(executor, fee)
 	if err != nil {
 		t.Fatalf("Pack ExecutorFeePaid error = %v", err)

@@ -47,9 +47,9 @@ rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|wit
   fails if any high or moderate finding appears outside the recorded
   disposition set.
 - `govulncheck` currently reports no vulnerabilities in called Go code.
-- The remaining npm audit findings are transitive toolchain findings described
-  in `docs/security/npm-audit-disposition.md`; they block final mainnet
-  approval until upgraded or formally accepted.
+- The remaining npm audit findings are toolchain and artifact-source findings
+  described in `docs/security/npm-audit-disposition.md`; they block final
+  mainnet approval until upgraded or formally accepted.
 
 ## Reviewed Controls
 
@@ -107,14 +107,15 @@ Evidence:
 
 - `npm audit --audit-level=moderate --json` reports zero critical findings.
 - The remaining high and moderate findings are limited to pinned LayerZero
-  transitive dependencies and retained Hardhat toolbox transitive dependencies.
+  transitive dependencies, retained Hardhat toolbox transitive dependencies,
+  and the pinned Uniswap V3 periphery package used as an ABI source.
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 
 Assessment:
 
-- The findings are in the build, test, and deployment toolchain rather than the
-  Go worker runtime.
+- The findings are in the build, test, deployment, and ABI-generation toolchain
+  rather than the Go worker runtime.
 - They still matter for live deployment because deployment scripts run with
   network access and signer material.
 - Automatic npm audit fixes currently suggest incompatible or unsafe package

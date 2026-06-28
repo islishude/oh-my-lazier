@@ -58,7 +58,7 @@ func testDVNSourceLogs(t *testing.T, dvn, sendLib common.Address, fee *big.Int) 
 
 func testDVNFeePaidLog(t *testing.T, txHash common.Hash, sendLib, dvn common.Address, fee *big.Int, index uint) gethtypes.Log {
 	t.Helper()
-	eventABI := lzabi.SendLibBaseABI()
+	eventABI := lzabi.SendUln302ABI()
 	data, err := eventABI.Events["DVNFeePaid"].Inputs.Pack([]common.Address{dvn}, []common.Address{}, []*big.Int{fee})
 	if err != nil {
 		t.Fatalf("Pack DVNFeePaid error = %v", err)

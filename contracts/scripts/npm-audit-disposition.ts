@@ -28,6 +28,7 @@ const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
   ["@nomicfoundation/hardhat-ignition", "moderate"],
   ["@nomicfoundation/hardhat-ignition-viem", "moderate"],
   ["@nomicfoundation/ignition-core", "moderate"],
+  ["@uniswap/v3-periphery", "moderate"],
 ]);
 
 function runAudit(): AuditReport {

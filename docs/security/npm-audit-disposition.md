@@ -32,9 +32,9 @@ Current npm audit metadata:
 ```text
 critical: 0
 high: 6
-moderate: 4
+moderate: 5
 low: 21
-total: 31
+total: 32
 ```
 
 ## Remediation Applied
@@ -64,15 +64,19 @@ LayerZero package versions or removing Hardhat toolbox support.
 ## Remaining Moderate Findings
 
 The remaining moderate findings are attached to retained Hardhat toolbox
-dependencies:
+dependencies and the pinned Uniswap V3 periphery artifact package used for ABI
+generation:
 
 - `@nomicfoundation/hardhat-toolbox-viem`
 - `@nomicfoundation/hardhat-ignition`
 - `@nomicfoundation/hardhat-ignition-viem`
 - `@nomicfoundation/ignition-core`
+- `@uniswap/v3-periphery`
 
 These are not accepted for mainnet by this document. They require either a
 compatible upstream fix or explicit approval before mainnet readiness.
+`@uniswap/v3-periphery` is used as a pinned source for `IQuoter` ABI generation;
+the project does not deploy its bundled contracts.
 
 ## Release Decision
 
@@ -81,7 +85,7 @@ compatible upstream fix or explicit approval before mainnet readiness.
 - Do not apply npm's suggested LayerZero downgrade automatically; the project
   relies on the currently pinned package interfaces.
 - Mainnet readiness requires one of:
-  - a compatible LayerZero/Hardhat package update that clears these advisories
+  - compatible LayerZero/Hardhat/Uniswap package updates that clear these advisories
   - an explicit security approval accepting the remaining transitive toolchain
     exposure for the planned release
 

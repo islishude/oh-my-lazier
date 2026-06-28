@@ -5,17 +5,29 @@ INTEGRATION_TMP_DIR = .tmp/integration
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 
-.PHONY: all check compile typecheck test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
+.PHONY: all check compile typecheck generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
 
 all: check
 
-check: compile typecheck test-solidity test-scripts test-go runbook-check migration-evidence-check lint-go fmt-check
+check: compile typecheck check-lzabi check-pricing-abi test-solidity test-scripts test-go runbook-check migration-evidence-check lint-go fmt-check
 
 compile:
 	npm run compile
 
 typecheck:
 	npm run typecheck
+
+generate-lzabi:
+	npm run generate:lzabi
+
+check-lzabi:
+	npm run check:lzabi
+
+generate-pricing-abi:
+	npm run generate:pricing-abi
+
+check-pricing-abi:
+	npm run check:pricing-abi
 
 test: test-solidity test-go
 

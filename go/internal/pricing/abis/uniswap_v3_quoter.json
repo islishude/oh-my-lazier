@@ -5,11 +5,7 @@
       { "internalType": "address", "name": "tokenOut", "type": "address" },
       { "internalType": "uint24", "name": "fee", "type": "uint24" },
       { "internalType": "uint256", "name": "amountIn", "type": "uint256" },
-      {
-        "internalType": "uint160",
-        "name": "sqrtPriceLimitX96",
-        "type": "uint160"
-      }
+      { "internalType": "uint160", "name": "sqrtPriceLimitX96", "type": "uint160" }
     ],
     "name": "quoteExactInputSingle",
     "outputs": [

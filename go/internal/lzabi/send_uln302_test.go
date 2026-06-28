@@ -11,7 +11,7 @@ import (
 func TestDecodeExecutorFeePaid(t *testing.T) {
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	fee := big.NewInt(123)
-	data, err := sendLibBaseABI.Events["ExecutorFeePaid"].Inputs.Pack(executor, fee)
+	data, err := sendUln302ABI.Events["ExecutorFeePaid"].Inputs.Pack(executor, fee)
 	if err != nil {
 		t.Fatalf("Pack() error = %v", err)
 	}
@@ -41,7 +41,7 @@ func TestDecodeDVNFeePaid(t *testing.T) {
 	requiredDVNs := []common.Address{common.HexToAddress("0x3333333333333333333333333333333333333333")}
 	optionalDVNs := []common.Address{common.HexToAddress("0x4444444444444444444444444444444444444444")}
 	fees := []*big.Int{big.NewInt(123), big.NewInt(456)}
-	data, err := sendLibBaseABI.Events["DVNFeePaid"].Inputs.Pack(requiredDVNs, optionalDVNs, fees)
+	data, err := sendUln302ABI.Events["DVNFeePaid"].Inputs.Pack(requiredDVNs, optionalDVNs, fees)
 	if err != nil {
 		t.Fatalf("Pack() error = %v", err)
 	}
