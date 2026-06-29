@@ -1,6 +1,7 @@
 package lz
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -45,12 +46,12 @@ func DecodePacketV1(encoded []byte) (PacketV1, error) {
 		Version:     version,
 		Nonce:       binary.BigEndian.Uint64(encoded[1:9]),
 		SrcEID:      binary.BigEndian.Uint32(encoded[9:13]),
-		Sender:      bytes32ToAddress(encoded[13:45]),
+		Sender:      common.BytesToAddress(encoded[13:45]),
 		DstEID:      binary.BigEndian.Uint32(encoded[45:49]),
-		Receiver:    bytes32ToAddress(encoded[49:81]),
+		Receiver:    common.BytesToAddress(encoded[49:81]),
 		GUID:        common.BytesToHash(encoded[packetV1GUIDOffset:packetV1MessageOffset]),
-		Message:     cloneBytes(encoded[packetV1MessageOffset:]),
-		Header:      cloneBytes(encoded[:packetV1HeaderLength]),
+		Message:     bytes.Clone(encoded[packetV1MessageOffset:]),
+		Header:      bytes.Clone(encoded[:packetV1HeaderLength]),
 		PayloadHash: crypto.Keccak256Hash(encoded[packetV1PayloadOffset:]),
 	}
 	if packet.Nonce == 0 {
@@ -69,17 +70,4 @@ func DecodePacketV1(encoded []byte) (PacketV1, error) {
 		return PacketV1{}, errors.New("packet guid is required")
 	}
 	return packet, nil
-}
-
-func bytes32ToAddress(value []byte) common.Address {
-	return common.BytesToAddress(value[12:32])
-}
-
-func cloneBytes(value []byte) []byte {
-	if len(value) == 0 {
-		return nil
-	}
-	copied := make([]byte, len(value))
-	copy(copied, value)
-	return copied
 }
