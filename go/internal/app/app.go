@@ -355,7 +355,7 @@ func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error)
 func envValue(name string) (string, error) {
 	value := os.Getenv(name)
 	if value == "" {
-		return "", errors.New("required environment variable is empty")
+		return "", fmt.Errorf("required environment variable %s is empty", name)
 	}
 	return value, nil
 }
