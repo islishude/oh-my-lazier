@@ -6,6 +6,11 @@
 - Keep runbook, deployment, security, and migration evidence documents aligned with behavior changes.
 - Do not mark operational or release-readiness work complete unless repository evidence and checks prove it.
 
+## Development Stage
+
+- This repository is still in active code development. Do not preserve backward compatibility for retired repo-local config, schema, state, APIs, generated artifacts, fixtures, or test expectations.
+- When behavior changes, update callers, docs, tests, and examples in lockstep; delete obsolete fallback paths, dual-decode paths, migration shims, and legacy compatibility tests unless explicitly requested.
+
 ## Phase-1 Scope
 
 - The first phase is EVM-only and scoped to Ethereum Sepolia <-> Base Sepolia.
@@ -39,6 +44,11 @@
 - Keep Markdown free of local machine paths, user names, tool-cache paths, and host-specific execution details.
 - Use relative repository paths in links.
 - Keep `docs/security` as release-readiness documentation, not personal or machine-specific scan notes.
+
+## Tests
+
+- Prefer adding coverage to existing table-driven tests, or converting adjacent similar cases into table-driven coverage when practical.
+- Avoid adding near-duplicate one-off tests for each bug fix or feature when the same behavior can be covered by an existing table or a shared table-driven test.
 
 ## Checks
 
