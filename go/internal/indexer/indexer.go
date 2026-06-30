@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,10 +20,11 @@ import (
 )
 
 const (
-	defaultPollInterval  = 5 * time.Second
-	defaultBackfillRange = uint64(500)
-	executorSourceStream = "executor_source"
-	executorDestStream   = "executor_destination"
+	defaultPollInterval    = 5 * time.Second
+	defaultBackfillRange   = uint64(500)
+	defaultQueryBlockRange = uint64(500)
+	executorSourceStream   = "executor_source"
+	executorDestStream     = "executor_destination"
 )
 
 // Store persists indexed executor source records and destination outcomes.
@@ -57,6 +59,7 @@ type Indexer struct {
 	client              LogClient
 	pollInterval        time.Duration
 	backfillRange       uint64
+	queryBlockRange     uint64
 	expectedExecutor    common.Address
 	expectedDVN         common.Address
 	logger              *slog.Logger
@@ -79,6 +82,10 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 			destinationPathways = append(destinationPathways, pathway)
 		}
 	}
+	queryBlockRange := configuredChain.IndexerQueryBlockRange
+	if queryBlockRange == 0 {
+		queryBlockRange = defaultQueryBlockRange
+	}
 	return &Indexer{
 		chain:               configuredChain,
 		sourcePathways:      sourcePathways,
@@ -88,6 +95,7 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		client:              client,
 		pollInterval:        defaultPollInterval,
 		backfillRange:       defaultBackfillRange,
+		queryBlockRange:     queryBlockRange,
 		expectedExecutor:    configuredChain.Workers.OpenExecutor,
 		expectedDVN:         configuredChain.Workers.OpenDVN,
 		logger:              logger,
@@ -97,7 +105,8 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 // Run starts the chain indexer loop until the context is canceled.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("indexer loop started", "chain", i.chain.Name, "eid", i.chain.EID)
-	if _, err := i.ProcessOnce(ctx); err != nil {
+	result, err := i.ProcessOnce(ctx)
+	if err != nil {
 		return err
 	}
 	subscriber, ok := i.client.(SubscriptionLogClient)
@@ -105,7 +114,8 @@ func (i *Indexer) Run(ctx context.Context) error {
 		return i.runPollingLoop(ctx)
 	}
 	logs := make(chan gethtypes.Log, 256)
-	subscription, err := subscriber.SubscribeFilterLogs(ctx, i.liveQuery(), logs)
+	subscriptionFrom := i.liveSubscriptionFrom(result)
+	subscription, err := subscriber.SubscribeFilterLogs(ctx, i.liveQuery(subscriptionFrom), logs)
 	if err != nil {
 		i.logger.Warn("indexer live subscription unavailable; using polling", "chain", i.chain.Name, "error", err)
 		return i.runPollingLoop(ctx)
@@ -128,10 +138,10 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 		return ProcessResult{}, err
 	}
 	if head < i.chain.Confirmations {
-		return ProcessResult{}, nil
+		return ProcessResult{ObservedHeadBlock: head}, nil
 	}
 	confirmedTo := head - i.chain.Confirmations
-	result := ProcessResult{ConfirmedToBlock: confirmedTo}
+	result := ProcessResult{ConfirmedToBlock: confirmedTo, ObservedHeadBlock: head}
 	if from, to, ok, err := i.cursorWindow(ctx, executorSourceStream, confirmedTo); err != nil {
 		return ProcessResult{}, err
 	} else if ok {
@@ -164,9 +174,17 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	return result, nil
 }
 
+func (i *Indexer) liveSubscriptionFrom(result ProcessResult) uint64 {
+	if result.ObservedHeadBlock < i.chain.Confirmations {
+		return 0
+	}
+	return result.ConfirmedToBlock + 1
+}
+
 // ProcessResult summarizes one indexer polling pass.
 type ProcessResult struct {
 	ConfirmedToBlock     uint64
+	ObservedHeadBlock    uint64
 	SourceFromBlock      uint64
 	SourceToBlock        uint64
 	DestinationFromBlock uint64
@@ -180,51 +198,143 @@ func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64) (int
 	if len(i.sourcePathways) == 0 {
 		return 0, 0, nil
 	}
-	logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
-		FromBlock: blockNumber(from),
-		ToBlock:   blockNumber(to),
-		Addresses: i.sourceAddresses(),
-		Topics: [][]common.Hash{{
-			lzabi.PacketSentTopic(),
-			lzabi.ExecutorFeePaidTopic(),
-			lzabi.ExecutorJobAssignedTopic(),
-			lzabi.DVNFeePaidTopic(),
-			lzabi.DVNJobAssignedTopic(),
-		}},
-	})
-	if err != nil {
-		return 0, 0, err
-	}
-	groups := logsByTxHash(logs)
 	executorProcessed := 0
 	dvnProcessed := 0
-	for _, txLogs := range groups {
-		if containsTopic(txLogs, lzabi.ExecutorJobAssignedTopic()) {
-			didProcess, err := i.processExecutorSourceTx(ctx, txLogs)
-			if err != nil {
-				return executorProcessed, dvnProcessed, err
-			}
-			if didProcess {
-				executorProcessed++
-			}
+	for chunkFrom := from; chunkFrom <= to; {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
 		}
-		if containsTopic(txLogs, lzabi.DVNJobAssignedTopic()) {
-			didProcess, err := i.processDVNSourceTx(ctx, txLogs)
+		chunkTo := i.chunkToBlock(chunkFrom, to)
+		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
+			FromBlock: blockNumber(chunkFrom),
+			ToBlock:   blockNumber(chunkTo),
+			Addresses: i.sourceAddresses(),
+			Topics: [][]common.Hash{{
+				lzabi.PacketSentTopic(),
+				lzabi.ExecutorFeePaidTopic(),
+				lzabi.ExecutorJobAssignedTopic(),
+				lzabi.DVNFeePaidTopic(),
+				lzabi.DVNJobAssignedTopic(),
+			}},
+		})
+		if err != nil {
+			return executorProcessed, dvnProcessed, err
+		}
+		executor, dvn, err := i.processSourceLogs(ctx, logs)
+		if err != nil {
+			return executorProcessed, dvnProcessed, err
+		}
+		executorProcessed += executor
+		dvnProcessed += dvn
+		if chunkTo == to {
+			break
+		}
+		chunkFrom = chunkTo + 1
+	}
+	return executorProcessed, dvnProcessed, nil
+}
+
+func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log) (int, int, error) {
+	var current sourceTxLogs
+	executorProcessed := 0
+	dvnProcessed := 0
+	for _, log := range logs {
+		if err := ctx.Err(); err != nil {
+			return 0, 0, err
+		}
+		if len(current.logs) > 0 && current.txHash != log.TxHash {
+			executor, dvn, err := i.processSourceTxLogs(ctx, current)
 			if err != nil {
 				return executorProcessed, dvnProcessed, err
 			}
-			if didProcess {
-				dvnProcessed++
-			}
+			executorProcessed += executor
+			dvnProcessed += dvn
+			current.reset()
+		}
+		current.append(log)
+	}
+	if len(current.logs) == 0 {
+		return executorProcessed, dvnProcessed, nil
+	}
+	executor, dvn, err := i.processSourceTxLogs(ctx, current)
+	if err != nil {
+		return executorProcessed, dvnProcessed, err
+	}
+	return executorProcessed + executor, dvnProcessed + dvn, nil
+}
+
+func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs) (int, int, error) {
+	executorProcessed := 0
+	dvnProcessed := 0
+	// PacketSent and fee logs are decoder context; assignment logs anchor job processing.
+	if tx.hasExecutorAssignment {
+		didProcess, err := i.processExecutorSourceTx(ctx, tx.logs)
+		if err != nil {
+			return executorProcessed, dvnProcessed, err
+		}
+		if didProcess {
+			executorProcessed++
+		}
+	}
+	if tx.hasDVNAssignment {
+		didProcess, err := i.processDVNSourceTx(ctx, tx.logs)
+		if err != nil {
+			return executorProcessed, dvnProcessed, err
+		}
+		if didProcess {
+			dvnProcessed++
 		}
 	}
 	return executorProcessed, dvnProcessed, nil
 }
 
+type sourceTxLogs struct {
+	txHash                common.Hash
+	logs                  []gethtypes.Log
+	hasExecutorAssignment bool
+	hasDVNAssignment      bool
+}
+
+func (l *sourceTxLogs) append(log gethtypes.Log) {
+	if len(l.logs) == 0 {
+		l.txHash = log.TxHash
+	}
+	l.logs = append(l.logs, log)
+	if len(log.Topics) == 0 {
+		return
+	}
+	switch log.Topics[0] {
+	case lzabi.ExecutorJobAssignedTopic():
+		l.hasExecutorAssignment = true
+	case lzabi.DVNJobAssignedTopic():
+		l.hasDVNAssignment = true
+	}
+}
+
+func (l *sourceTxLogs) reset() {
+	l.logs = l.logs[:0]
+	l.hasExecutorAssignment = false
+	l.hasDVNAssignment = false
+}
+
+func (i *Indexer) chunkToBlock(from, limit uint64) uint64 {
+	if i.queryBlockRange == 0 {
+		return limit
+	}
+	to := from + i.queryBlockRange - 1
+	if to < from || to > limit {
+		return limit
+	}
+	return to
+}
+
 func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, err := ExecutorSourceTxRecordsFromLogs(txLogs, i.expectedExecutor)
+	records, ok, err := ExecutorSourceTxRecordsFromLogs(txLogs, i.expectedExecutor)
 	if err != nil {
 		return false, err
+	}
+	if !ok {
+		return false, nil
 	}
 	pathway, ok := i.sourcePathway(records.Packet)
 	if !ok || !pathway.Enabled {
@@ -244,9 +354,12 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 }
 
 func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, err := DVNSourceTxRecordsFromLogs(txLogs, i.expectedDVN)
+	records, ok, err := DVNSourceTxRecordsFromLogs(txLogs, i.expectedDVN)
 	if err != nil {
 		return false, err
+	}
+	if !ok {
+		return false, nil
 	}
 	pathway, ok := i.sourcePathway(records.Packet)
 	if !ok || !pathway.Enabled {
@@ -265,29 +378,39 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 }
 
 func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64) (int, error) {
-	logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
-		FromBlock: blockNumber(from),
-		ToBlock:   blockNumber(to),
-		Addresses: i.destinationAddresses(),
-		Topics: [][]common.Hash{{
-			lzabi.PacketVerifiedTopic(),
-			lzabi.PacketDeliveredTopic(),
-			lzabi.LzReceiveAlertTopic(),
-			lzabi.PayloadVerifiedTopic(),
-		}},
-	})
-	if err != nil {
-		return 0, err
+	applied := 0
+	for chunkFrom := from; chunkFrom <= to; {
+		chunkTo := i.chunkToBlock(chunkFrom, to)
+		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
+			FromBlock: blockNumber(chunkFrom),
+			ToBlock:   blockNumber(chunkTo),
+			Addresses: i.destinationAddresses(),
+			Topics: [][]common.Hash{{
+				lzabi.PacketVerifiedTopic(),
+				lzabi.PacketDeliveredTopic(),
+				lzabi.LzReceiveAlertTopic(),
+				lzabi.PayloadVerifiedTopic(),
+			}},
+		})
+		if err != nil {
+			return applied, err
+		}
+		executorApplied, err := ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
+		applied += executorApplied
+		if err != nil {
+			return applied, err
+		}
+		dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.expectedDVN, logs)
+		applied += dvnApplied
+		if err != nil {
+			return applied, err
+		}
+		if chunkTo == to {
+			break
+		}
+		chunkFrom = chunkTo + 1
 	}
-	executorApplied, err := ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
-	if err != nil {
-		return executorApplied, err
-	}
-	dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.expectedDVN, logs)
-	if err != nil {
-		return executorApplied, err
-	}
-	return executorApplied + dvnApplied, nil
+	return applied, nil
 }
 
 func (i *Indexer) runPollingLoop(ctx context.Context) error {
@@ -341,7 +464,7 @@ func drainLogs(logs <-chan gethtypes.Log) {
 	}
 }
 
-func (i *Indexer) liveQuery() ethereum.FilterQuery {
+func (i *Indexer) liveQuery(from uint64) ethereum.FilterQuery {
 	seen := make(map[common.Address]struct{})
 	for _, address := range i.sourceAddresses() {
 		seen[address] = struct{}{}
@@ -354,9 +477,10 @@ func (i *Indexer) liveQuery() ethereum.FilterQuery {
 		addresses = append(addresses, address)
 	}
 	sort.Slice(addresses, func(a, b int) bool {
-		return addresses[a].Hex() < addresses[b].Hex()
+		return hex.EncodeToString(addresses[a].Bytes()) < hex.EncodeToString(addresses[b].Bytes())
 	})
 	return ethereum.FilterQuery{
+		FromBlock: blockNumber(from),
 		Addresses: addresses,
 		Topics: [][]common.Hash{{
 			lzabi.PacketSentTopic(),
@@ -384,7 +508,7 @@ func (i *Indexer) destinationAddresses() []common.Address {
 		addresses = append(addresses, address)
 	}
 	sort.Slice(addresses, func(a, b int) bool {
-		return addresses[a].Hex() < addresses[b].Hex()
+		return hex.EncodeToString(addresses[a].Bytes()) < hex.EncodeToString(addresses[b].Bytes())
 	})
 	return addresses
 }
@@ -403,7 +527,7 @@ func (i *Indexer) sourceAddresses() []common.Address {
 		addresses = append(addresses, address)
 	}
 	sort.Slice(addresses, func(a, b int) bool {
-		return addresses[a].Hex() < addresses[b].Hex()
+		return hex.EncodeToString(addresses[a].Bytes()) < hex.EncodeToString(addresses[b].Bytes())
 	})
 	return addresses
 }
@@ -446,39 +570,4 @@ func (i *Indexer) cursorWindow(ctx context.Context, stream string, confirmedTo u
 
 func blockNumber(number uint64) *big.Int {
 	return new(big.Int).SetUint64(number)
-}
-
-func logsByTxHash(logs []gethtypes.Log) [][]gethtypes.Log {
-	ordered := make([]gethtypes.Log, len(logs))
-	copy(ordered, logs)
-	sort.SliceStable(ordered, func(a, b int) bool {
-		if ordered[a].BlockNumber != ordered[b].BlockNumber {
-			return ordered[a].BlockNumber < ordered[b].BlockNumber
-		}
-		if ordered[a].TxIndex != ordered[b].TxIndex {
-			return ordered[a].TxIndex < ordered[b].TxIndex
-		}
-		return ordered[a].Index < ordered[b].Index
-	})
-	groups := make([][]gethtypes.Log, 0)
-	byHash := make(map[common.Hash]int)
-	for _, log := range ordered {
-		idx, ok := byHash[log.TxHash]
-		if !ok {
-			byHash[log.TxHash] = len(groups)
-			groups = append(groups, []gethtypes.Log{log})
-			continue
-		}
-		groups[idx] = append(groups[idx], log)
-	}
-	return groups
-}
-
-func containsTopic(logs []gethtypes.Log, topic common.Hash) bool {
-	for _, log := range logs {
-		if len(log.Topics) > 0 && log.Topics[0] == topic {
-			return true
-		}
-	}
-	return false
 }

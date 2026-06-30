@@ -57,6 +57,30 @@ func (s *Store) UpsertExecutorJob(ctx context.Context, job ExecutorJobRecord) er
 	return err
 }
 
+// GetExecutorJob returns one executor job by packet GUID.
+func (s *Store) GetExecutorJob(ctx context.Context, guid common.Hash) (ExecutorJobRecord, error) {
+	if guid == (common.Hash{}) {
+		return ExecutorJobRecord{}, errors.New("executor job guid is required")
+	}
+	var job ExecutorJobRecord
+	var feeText *string
+	if err := s.pool.QueryRow(ctx, `
+		SELECT guid, assigned_fee::text, status, COALESCE(last_error, '')
+		FROM executor_jobs
+		WHERE guid = $1
+	`, guid.Bytes()).Scan(&job.GUID, &feeText, &job.Status, &job.LastError); err != nil {
+		return ExecutorJobRecord{}, err
+	}
+	if feeText != nil {
+		fee, ok := new(big.Int).SetString(*feeText, 10)
+		if !ok {
+			return ExecutorJobRecord{}, fmt.Errorf("executor assigned fee %q is invalid", *feeText)
+		}
+		job.AssignedFee = fee
+	}
+	return job, nil
+}
+
 // ListExecutorWork returns executor jobs in one durable status with the packet data needed to act.
 func (s *Store) ListExecutorWork(ctx context.Context, status string, limit int) ([]ExecutorWorkItem, error) {
 	if status == "" {

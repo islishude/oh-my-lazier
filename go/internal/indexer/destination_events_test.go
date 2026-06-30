@@ -106,6 +106,12 @@ func TestApplyExecutorDestinationLogsLooksUpAndAppliesKnownEvents(t *testing.T) 
 		byDestination: map[string]db.PacketRecord{
 			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
 		},
+		executorJobs: map[common.Hash]db.ExecutorJobRecord{
+			packet.GUID: {
+				GUID:   packet.GUID,
+				Status: string(packets.ExecutorCommitTxEnqueued),
+			},
+		},
 	}
 
 	applied, err := ApplyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []gethtypes.Log{
@@ -124,6 +130,28 @@ func TestApplyExecutorDestinationLogsLooksUpAndAppliesKnownEvents(t *testing.T) 
 	}
 	if store.failedGUID != packet.GUID {
 		t.Fatalf("failed guid = %s, want %s", store.failedGUID, packet.GUID)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsPacketsWithoutExecutorJob(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+	}
+
+	applied, err := ApplyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutorDestinationLogs() error = %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+	if store.committedGUID != (common.Hash{}) {
+		t.Fatalf("committed guid = %s, want zero", store.committedGUID)
 	}
 }
 
@@ -224,6 +252,7 @@ type fakeDestinationStore struct {
 	byGUID            map[common.Hash]db.PacketRecord
 	byDestination     map[string]db.PacketRecord
 	byVerification    map[string]db.PacketRecord
+	executorJobs      map[common.Hash]db.ExecutorJobRecord
 	dvnJobs           map[common.Hash]db.DVNJobRecord
 	dvnVerifiedGUID   common.Hash
 	dvnVerifiedTxHash common.Hash
@@ -235,6 +264,14 @@ func (s *fakeDestinationStore) GetPacket(_ context.Context, guid common.Hash) (d
 		return db.PacketRecord{}, pgx.ErrNoRows
 	}
 	return packet, nil
+}
+
+func (s *fakeDestinationStore) GetExecutorJob(_ context.Context, guid common.Hash) (db.ExecutorJobRecord, error) {
+	job, ok := s.executorJobs[guid]
+	if !ok {
+		return db.ExecutorJobRecord{}, pgx.ErrNoRows
+	}
+	return job, nil
 }
 
 func (s *fakeDestinationStore) GetPacketByDestination(_ context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error) {

@@ -286,6 +286,9 @@ pathways:
 	if staticConfig.Chains[0].StartBlockNumber != 0 {
 		t.Fatalf("LoadStatic() start_block_number = %d, want default 0", staticConfig.Chains[0].StartBlockNumber)
 	}
+	if staticConfig.Chains[0].IndexerQueryBlockRange != 500 {
+		t.Fatalf("LoadStatic() indexer_query_block_range = %d, want default 500", staticConfig.Chains[0].IndexerQueryBlockRange)
+	}
 	workerConfig, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -312,24 +315,26 @@ func validConfig() Config {
 		},
 		Chains: []ChainConfig{
 			{
-				EID:             40161,
-				Name:            "ethereum-sepolia",
-				ChainID:         11155111,
-				EndpointAddress: "0x1111111111111111111111111111111111111111",
-				Confirmations:   12,
-				RPCURLs:         []string{"http://localhost:8545"},
+				EID:                    40161,
+				Name:                   "ethereum-sepolia",
+				ChainID:                11155111,
+				EndpointAddress:        "0x1111111111111111111111111111111111111111",
+				Confirmations:          12,
+				IndexerQueryBlockRange: 500,
+				RPCURLs:                []string{"http://localhost:8545"},
 				Workers: WorkerContractsConfig{
 					OpenExecutor: "0x2222222222222222222222222222222222222222",
 					OpenDVN:      "0x3333333333333333333333333333333333333333",
 				},
 			},
 			{
-				EID:             40245,
-				Name:            "base-sepolia",
-				ChainID:         84532,
-				EndpointAddress: "0x4444444444444444444444444444444444444444",
-				Confirmations:   12,
-				RPCURLs:         []string{"http://localhost:8546"},
+				EID:                    40245,
+				Name:                   "base-sepolia",
+				ChainID:                84532,
+				EndpointAddress:        "0x4444444444444444444444444444444444444444",
+				Confirmations:          12,
+				IndexerQueryBlockRange: 500,
+				RPCURLs:                []string{"http://localhost:8546"},
 				Workers: WorkerContractsConfig{
 					OpenExecutor: "0x5555555555555555555555555555555555555555",
 					OpenDVN:      "0x6666666666666666666666666666666666666666",

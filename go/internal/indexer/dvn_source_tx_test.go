@@ -15,9 +15,12 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	logs := testDVNSourceLogs(t, expectedDVN, sendLib, big.NewInt(42))
 
-	records, err := DVNSourceTxRecordsFromLogs(logs, expectedDVN)
+	records, ok, err := DVNSourceTxRecordsFromLogs(logs, expectedDVN)
 	if err != nil {
 		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("DVNSourceTxRecordsFromLogs() ok = false, want true")
 	}
 	if records.Packet.SendLib != sendLib {
 		t.Fatalf("packet send lib = %s, want %s", records.Packet.SendLib, sendLib)
@@ -33,16 +36,36 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	}
 }
 
-func TestDVNSourceTxRecordsFromLogsRejectsUnexpectedDVN(t *testing.T) {
+func TestDVNSourceTxRecordsFromLogsFiltersUnexpectedDVN(t *testing.T) {
 	logs := testDVNSourceLogs(
 		t,
 		common.HexToAddress("0x3333333333333333333333333333333333333333"),
 		common.HexToAddress("0x9999999999999999999999999999999999999999"),
 		big.NewInt(42),
 	)
-	_, err := DVNSourceTxRecordsFromLogs(logs, common.HexToAddress("0x4444444444444444444444444444444444444444"))
-	if err == nil {
-		t.Fatal("DVNSourceTxRecordsFromLogs() error = nil, want dvn mismatch")
+	_, ok, err := DVNSourceTxRecordsFromLogs(logs, common.HexToAddress("0x4444444444444444444444444444444444444444"))
+	if err != nil {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v, want nil", err)
+	}
+	if ok {
+		t.Fatal("DVNSourceTxRecordsFromLogs() ok = true, want false")
+	}
+}
+
+func TestDVNSourceTxRecordsFromLogsFiltersUnexpectedDVNBeforeContextValidation(t *testing.T) {
+	otherDVN := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	logs := []gethtypes.Log{
+		testDVNJobAssignedLog(t, txHash, otherDVN, sendLib, big.NewInt(42), 0),
+	}
+
+	_, ok, err := DVNSourceTxRecordsFromLogs(logs, common.HexToAddress("0x4444444444444444444444444444444444444444"))
+	if err != nil {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v, want nil", err)
+	}
+	if ok {
+		t.Fatal("DVNSourceTxRecordsFromLogs() ok = true, want false")
 	}
 }
 

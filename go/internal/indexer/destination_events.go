@@ -24,6 +24,7 @@ type ExecutorReceiptStore interface {
 // ExecutorDestinationStore loads known packets and persists destination-chain executor outcomes.
 type ExecutorDestinationStore interface {
 	ExecutorReceiptStore
+	GetExecutorJob(ctx context.Context, guid common.Hash) (db.ExecutorJobRecord, error)
 	GetPacket(ctx context.Context, guid common.Hash) (db.PacketRecord, error)
 	GetPacketByDestination(ctx context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error)
 }
@@ -63,6 +64,11 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		}
 		if packet.DstEID != dstEID {
 			return applied, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+		}
+		if _, err := store.GetExecutorJob(ctx, packet.GUID); errors.Is(err, pgx.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return applied, err
 		}
 		didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, log)
 		if err != nil {

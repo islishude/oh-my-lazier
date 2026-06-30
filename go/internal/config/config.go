@@ -114,14 +114,15 @@ type KMSSignerConfig struct {
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
 type ChainConfig struct {
-	EID              uint32                `yaml:"eid"`
-	Name             string                `yaml:"name"`
-	ChainID          int64                 `yaml:"chain_id"`
-	EndpointAddress  string                `yaml:"endpoint_address"`
-	Confirmations    uint64                `yaml:"confirmations"`
-	StartBlockNumber uint64                `yaml:"start_block_number"`
-	RPCURLs          []string              `yaml:"rpc_urls"`
-	Workers          WorkerContractsConfig `yaml:"workers"`
+	EID                    uint32                `yaml:"eid"`
+	Name                   string                `yaml:"name"`
+	ChainID                int64                 `yaml:"chain_id"`
+	EndpointAddress        string                `yaml:"endpoint_address"`
+	Confirmations          uint64                `yaml:"confirmations"`
+	StartBlockNumber       uint64                `yaml:"start_block_number"`
+	IndexerQueryBlockRange uint64                `yaml:"indexer_query_block_range"`
+	RPCURLs                []string              `yaml:"rpc_urls"`
+	Workers                WorkerContractsConfig `yaml:"workers"`
 }
 
 // WorkerContractsConfig identifies the self-hosted worker contracts deployed on one chain.
@@ -188,6 +189,11 @@ func load(path string, applyEnv bool) (Config, error) {
 			cfg.Pricing.GasSpikeBps = 1_000
 		}
 	}
+	for idx := range cfg.Chains {
+		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
+			cfg.Chains[idx].IndexerQueryBlockRange = 500
+		}
+	}
 	return cfg, cfg.Validate()
 }
 
@@ -231,6 +237,9 @@ func (c Config) Validate() error {
 		}
 		if chain.Confirmations != 12 {
 			return fmt.Errorf("chain %s confirmations must be 12 in phase 1", chain.Name)
+		}
+		if chain.IndexerQueryBlockRange == 0 {
+			return fmt.Errorf("chain %s indexer_query_block_range is required", chain.Name)
 		}
 		if len(chain.RPCURLs) == 0 {
 			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)

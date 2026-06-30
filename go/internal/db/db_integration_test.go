@@ -406,6 +406,19 @@ func TestUpsertExecutorJobPersistsAssignment(t *testing.T) {
 	if status != string(packets.ExecutorAssigned) {
 		t.Fatalf("status = %q, want %q", status, packets.ExecutorAssigned)
 	}
+	job, err := store.GetExecutorJob(ctx, packet.GUID)
+	if err != nil {
+		t.Fatalf("GetExecutorJob() error = %v", err)
+	}
+	if job.GUID != packet.GUID {
+		t.Fatalf("GetExecutorJob() guid = %s, want %s", job.GUID, packet.GUID)
+	}
+	if job.AssignedFee == nil || job.AssignedFee.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("GetExecutorJob() assigned fee = %v, want 42", job.AssignedFee)
+	}
+	if job.Status != string(packets.ExecutorAssigned) {
+		t.Fatalf("GetExecutorJob() status = %q, want %q", job.Status, packets.ExecutorAssigned)
+	}
 }
 
 func TestIndexerCursorPersistsMonotonicProgress(t *testing.T) {
