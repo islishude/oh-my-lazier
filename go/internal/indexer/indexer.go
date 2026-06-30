@@ -43,12 +43,6 @@ type LogClient interface {
 	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error)
 }
 
-// SubscriptionLogClient reads historical logs and subscribes to live log notifications.
-type SubscriptionLogClient interface {
-	LogClient
-	SubscribeFilterLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- gethtypes.Log) (ethereum.Subscription, error)
-}
-
 // Indexer watches one chain for LayerZero and worker contract events.
 type Indexer struct {
 	chain               chain.Chain
@@ -105,24 +99,7 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 // Run starts the chain indexer loop until the context is canceled.
 func (i *Indexer) Run(ctx context.Context) error {
 	i.logger.Info("indexer loop started", "chain", i.chain.Name, "eid", i.chain.EID)
-	result, err := i.ProcessOnce(ctx)
-	if err != nil {
-		return err
-	}
-	subscriber, ok := i.client.(SubscriptionLogClient)
-	if !ok {
-		return i.runPollingLoop(ctx)
-	}
-	logs := make(chan gethtypes.Log, 256)
-	subscriptionFrom := i.liveSubscriptionFrom(result)
-	subscription, err := subscriber.SubscribeFilterLogs(ctx, i.liveQuery(subscriptionFrom), logs)
-	if err != nil {
-		i.logger.Warn("indexer live subscription unavailable; using polling", "chain", i.chain.Name, "error", err)
-		return i.runPollingLoop(ctx)
-	}
-	defer subscription.Unsubscribe()
-	i.logger.Info("indexer live subscription started", "chain", i.chain.Name, "eid", i.chain.EID)
-	return i.runLiveLoop(ctx, logs, subscription.Err())
+	return i.runPollingLoop(ctx)
 }
 
 // ProcessOnce backfills one confirmed log window for source and destination executor events.
@@ -172,13 +149,6 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 		result.DestinationLogs = destination
 	}
 	return result, nil
-}
-
-func (i *Indexer) liveSubscriptionFrom(result ProcessResult) uint64 {
-	if result.ObservedHeadBlock < i.chain.Confirmations {
-		return 0
-	}
-	return result.ConfirmedToBlock + 1
 }
 
 // ProcessResult summarizes one indexer polling pass.
@@ -414,85 +384,24 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64)
 }
 
 func (i *Indexer) runPollingLoop(ctx context.Context) error {
-	timer := time.NewTicker(0)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			if _, err := i.ProcessOnce(ctx); err != nil {
-				return err
-			}
-			timer.Reset(i.pollInterval)
-		}
+	if i.pollInterval <= 0 {
+		return errors.New("indexer poll interval must be positive")
 	}
-}
-
-func (i *Indexer) runLiveLoop(ctx context.Context, logs <-chan gethtypes.Log, subErr <-chan error) error {
-	ticker := time.NewTicker(i.pollInterval)
+	if _, err := i.ProcessOnce(ctx); err != nil {
+		return err
+	}
+	ticker := time.NewTimer(0)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case err := <-subErr:
-			if err != nil {
-				i.logger.Warn("indexer live subscription stopped; continuing with polling", "chain", i.chain.Name, "error", err)
-			}
-			return i.runPollingLoop(ctx)
-		case <-logs:
-			drainLogs(logs)
-			if _, err := i.ProcessOnce(ctx); err != nil {
-				return err
-			}
 		case <-ticker.C:
 			if _, err := i.ProcessOnce(ctx); err != nil {
 				return err
 			}
+			ticker.Reset(i.pollInterval)
 		}
-	}
-}
-
-func drainLogs(logs <-chan gethtypes.Log) {
-	for {
-		select {
-		case <-logs:
-		default:
-			return
-		}
-	}
-}
-
-func (i *Indexer) liveQuery(from uint64) ethereum.FilterQuery {
-	seen := make(map[common.Address]struct{})
-	for _, address := range i.sourceAddresses() {
-		seen[address] = struct{}{}
-	}
-	for _, address := range i.destinationAddresses() {
-		seen[address] = struct{}{}
-	}
-	addresses := make([]common.Address, 0, len(seen))
-	for address := range seen {
-		addresses = append(addresses, address)
-	}
-	sort.Slice(addresses, func(a, b int) bool {
-		return hex.EncodeToString(addresses[a].Bytes()) < hex.EncodeToString(addresses[b].Bytes())
-	})
-	return ethereum.FilterQuery{
-		FromBlock: blockNumber(from),
-		Addresses: addresses,
-		Topics: [][]common.Hash{{
-			lzabi.PacketSentTopic(),
-			lzabi.ExecutorFeePaidTopic(),
-			lzabi.ExecutorJobAssignedTopic(),
-			lzabi.DVNFeePaidTopic(),
-			lzabi.DVNJobAssignedTopic(),
-			lzabi.PacketVerifiedTopic(),
-			lzabi.PacketDeliveredTopic(),
-			lzabi.LzReceiveAlertTopic(),
-			lzabi.PayloadVerifiedTopic(),
-		}},
 	}
 }
 

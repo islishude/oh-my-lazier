@@ -24,7 +24,6 @@ var _ interface {
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
 	SendTransaction(context.Context, *gethtypes.Transaction) error
 	SuggestGasPrice(context.Context) (*big.Int, error)
-	SubscribeFilterLogs(context.Context, ethereum.FilterQuery, chan<- gethtypes.Log) (ethereum.Subscription, error)
 	TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error)
 } = (*Client)(nil)
 
@@ -349,23 +348,6 @@ func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, numb
 		return nil, err
 	}
 	return client.HeaderByNumber(ctx, number)
-}
-
-// SubscribeFilterLogs subscribes to live logs on the first currently healthy provider.
-func (c *Client) SubscribeFilterLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- gethtypes.Log) (ethereum.Subscription, error) {
-	index, err := c.firstHealthyProvider()
-	if err != nil {
-		return nil, err
-	}
-	client, err := c.providerClient(ctx, index)
-	if err != nil {
-		return nil, err
-	}
-	subscription, err := client.SubscribeFilterLogs(ctx, query, ch)
-	if err != nil {
-		return nil, err
-	}
-	return subscription, nil
 }
 
 func (c *Client) firstHealthyProvider() (int, error) {

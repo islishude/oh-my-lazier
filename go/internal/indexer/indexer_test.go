@@ -500,13 +500,13 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsConfirmed(t *testing.T) {
 	}
 }
 
-func TestIndexerRunUsesLiveSubscriptionWakeups(t *testing.T) {
+func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var blockCalls atomic.Int32
+	store := newFakeIndexerStore()
 	client := &fakeLogClient{
-		head:       200,
-		subscribed: make(chan struct{}),
+		head: 200,
 		onBlock: func() {
 			if blockCalls.Add(1) == 2 {
 				cancel()
@@ -516,11 +516,11 @@ func TestIndexerRunUsesLiveSubscriptionWakeups(t *testing.T) {
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
-		newFakeIndexerStore(),
+		store,
 		client,
 		discardLogger(),
 	)
-	indexer.pollInterval = time.Hour
+	indexer.pollInterval = time.Millisecond
 
 	done := make(chan error, 1)
 	go func() {
@@ -528,48 +528,43 @@ func TestIndexerRunUsesLiveSubscriptionWakeups(t *testing.T) {
 	}()
 
 	select {
-	case <-client.subscribed:
-	case <-time.After(time.Second):
-		t.Fatal("live subscription was not started")
-	}
-	client.liveSink <- gethtypes.Log{Topics: []common.Hash{lzabi.PacketVerifiedTopic()}}
-
-	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Run() error = %v, want context.Canceled", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Run() did not process live wakeup")
+		t.Fatal("Run() did not poll on interval")
 	}
-	if len(client.subscriptions) != 1 {
-		t.Fatalf("subscriptions = %d, want 1", len(client.subscriptions))
+	if got := blockCalls.Load(); got < 2 {
+		t.Fatalf("BlockNumber calls = %d, want at least 2", got)
 	}
-	if !queryHasTopic(client.subscriptions[0], lzabi.PacketDeliveredTopic()) {
-		t.Fatal("subscription query does not include destination topics")
-	}
-	if got, want := client.subscriptions[0].FromBlock.Uint64(), uint64(189); got != want {
-		t.Fatalf("subscription FromBlock = %d, want %d", got, want)
-	}
-	if client.subscriptions[0].ToBlock != nil {
-		t.Fatalf("subscription ToBlock = %s, want nil open-ended live stream", client.subscriptions[0].ToBlock)
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
 	}
 }
 
-func TestIndexerRunStartsLiveSubscriptionAfterImmatureHead(t *testing.T) {
+func TestIndexerRunContinuesPollingAfterImmatureHead(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	client := &fakeLogClient{
-		head:       5,
-		subscribed: make(chan struct{}),
+	defer cancel()
+	var blockCalls atomic.Int32
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 5}
+	client.onBlock = func() {
+		switch blockCalls.Add(1) {
+		case 2:
+			client.head = 200
+		case 3:
+			cancel()
+		}
 	}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
-		newFakeIndexerStore(),
+		store,
 		client,
 		discardLogger(),
 	)
-	indexer.pollInterval = time.Hour
+	indexer.pollInterval = time.Millisecond
 
 	done := make(chan error, 1)
 	go func() {
@@ -577,22 +572,18 @@ func TestIndexerRunStartsLiveSubscriptionAfterImmatureHead(t *testing.T) {
 	}()
 
 	select {
-	case <-client.subscribed:
-	case <-time.After(time.Second):
-		cancel()
-		t.Fatal("live subscription was not started")
-	}
-	cancel()
-	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Run() error = %v, want context.Canceled", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Run() did not stop after cancellation")
+		t.Fatal("Run() did not continue polling after immature head")
 	}
-	if got, want := client.subscriptions[0].FromBlock.Uint64(), uint64(0); got != want {
-		t.Fatalf("subscription FromBlock = %d, want %d", got, want)
+	if len(client.queries) == 0 {
+		t.Fatal("queries = 0, want polling to resume after the configured confirmations are available")
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
 	}
 }
 
@@ -601,9 +592,6 @@ type fakeLogClient struct {
 	sourceLogs      []gethtypes.Log
 	destinationLogs []gethtypes.Log
 	queries         []ethereum.FilterQuery
-	subscriptions   []ethereum.FilterQuery
-	subscribed      chan struct{}
-	liveSink        chan<- gethtypes.Log
 	onBlock         func()
 }
 
@@ -623,25 +611,6 @@ func (c *fakeLogClient) FilterLogs(_ context.Context, query ethereum.FilterQuery
 		return append([]gethtypes.Log(nil), c.destinationLogs...), nil
 	}
 	return nil, nil
-}
-
-func (c *fakeLogClient) SubscribeFilterLogs(_ context.Context, query ethereum.FilterQuery, ch chan<- gethtypes.Log) (ethereum.Subscription, error) {
-	c.subscriptions = append(c.subscriptions, query)
-	c.liveSink = ch
-	if c.subscribed != nil {
-		close(c.subscribed)
-	}
-	return &fakeSubscription{errCh: make(chan error)}, nil
-}
-
-type fakeSubscription struct {
-	errCh chan error
-}
-
-func (s *fakeSubscription) Unsubscribe() {}
-
-func (s *fakeSubscription) Err() <-chan error {
-	return s.errCh
 }
 
 type fakeIndexerStore struct {
