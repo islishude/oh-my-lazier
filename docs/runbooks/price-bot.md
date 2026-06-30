@@ -20,7 +20,7 @@ Run one price calculation and enqueue the resulting worker transactions:
 go run ./go/cmd/pricebot-once -config <worker.yaml>
 ```
 
-The command runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for both OpenExecutor and OpenDVN per configured pathway. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
+The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, ULN, OpenExecutor, and OpenDVN state before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for both OpenExecutor and OpenDVN per configured pathway. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
 
 ## Expected Outbox Effects
 

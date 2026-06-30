@@ -87,6 +87,8 @@ pathways:
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     enabled: true
     max_message_size: 10000
+    min_lz_receive_gas: 100000
+    max_lz_receive_gas: 300000
   - src_eid: 40245
     dst_eid: 40161
     src_oapp: "0x8888888888888888888888888888888888888888"
@@ -95,3 +97,5 @@ pathways:
     receive_lib: "0xcccccccccccccccccccccccccccccccccccccccc"
     enabled: true
     max_message_size: 10000
+    min_lz_receive_gas: 100000
+    max_lz_receive_gas: 300000

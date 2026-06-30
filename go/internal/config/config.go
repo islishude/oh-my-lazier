@@ -132,14 +132,16 @@ type WorkerContractsConfig struct {
 
 // PathwayConfig defines an allowed source-to-destination message pathway.
 type PathwayConfig struct {
-	SrcEID         uint32 `yaml:"src_eid"`
-	DstEID         uint32 `yaml:"dst_eid"`
-	SrcOApp        string `yaml:"src_oapp"`
-	DstOApp        string `yaml:"dst_oapp"`
-	SendLib        string `yaml:"send_lib"`
-	ReceiveLib     string `yaml:"receive_lib"`
-	Enabled        bool   `yaml:"enabled"`
-	MaxMessageSize uint64 `yaml:"max_message_size"`
+	SrcEID          uint32 `yaml:"src_eid"`
+	DstEID          uint32 `yaml:"dst_eid"`
+	SrcOApp         string `yaml:"src_oapp"`
+	DstOApp         string `yaml:"dst_oapp"`
+	SendLib         string `yaml:"send_lib"`
+	ReceiveLib      string `yaml:"receive_lib"`
+	Enabled         bool   `yaml:"enabled"`
+	MaxMessageSize  uint64 `yaml:"max_message_size"`
+	MinLzReceiveGas uint64 `yaml:"min_lz_receive_gas"`
+	MaxLzReceiveGas uint64 `yaml:"max_lz_receive_gas"`
 }
 
 // Load reads a YAML config file, applies environment overrides, and validates the result.
@@ -227,8 +229,8 @@ func (c Config) Validate() error {
 				return fmt.Errorf("chain %s %s must be a hex address", chain.Name, label)
 			}
 		}
-		if chain.Confirmations == 0 {
-			return fmt.Errorf("chain %s confirmations is required", chain.Name)
+		if chain.Confirmations != 12 {
+			return fmt.Errorf("chain %s confirmations must be 12 in phase 1", chain.Name)
 		}
 		if len(chain.RPCURLs) == 0 {
 			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
@@ -300,6 +302,12 @@ func (c Config) Validate() error {
 		}
 		if pathway.MaxMessageSize > math.MaxInt32 {
 			return fmt.Errorf("pathway %d -> %d max_message_size exceeds database integer limit", pathway.SrcEID, pathway.DstEID)
+		}
+		if pathway.MaxLzReceiveGas == 0 {
+			return fmt.Errorf("pathway %d -> %d max_lz_receive_gas is required", pathway.SrcEID, pathway.DstEID)
+		}
+		if pathway.MinLzReceiveGas > pathway.MaxLzReceiveGas {
+			return fmt.Errorf("pathway %d -> %d min_lz_receive_gas exceeds max_lz_receive_gas", pathway.SrcEID, pathway.DstEID)
 		}
 		key := fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, common.HexToAddress(pathway.SrcOApp), common.HexToAddress(pathway.DstOApp))
 		if _, ok := pathways[key]; ok {

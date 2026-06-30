@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
+	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/dvn"
 	"github.com/islishude/oh-my-lazier/go/internal/executor"
@@ -27,6 +28,10 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/signer/kms"
 	"github.com/islishude/oh-my-lazier/go/internal/txmgr"
 )
+
+var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (configcheck.Report, error) {
+	return configcheck.Check(ctx, registry)
+}
 
 // App owns the configured worker process and its durable service loops.
 type App struct {
@@ -41,6 +46,17 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 
 // Run connects dependencies and runs all worker loops until cancellation or a loop failure.
 func (a *App) Run(ctx context.Context) error {
+	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
+	if err != nil {
+		return err
+	}
+	defer registry.Close()
+	if report, err := checkOnChainConfig(ctx, registry); err != nil {
+		return err
+	} else if !report.OK {
+		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
+	}
+
 	store, err := db.Connect(ctx, a.cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -53,10 +69,6 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
-	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
-	if err != nil {
-		return err
-	}
 	if err := store.SyncConfig(ctx, registry); err != nil {
 		return err
 	}
@@ -119,6 +131,17 @@ func (a *App) RunPriceOnce(ctx context.Context) error {
 	if !a.cfg.Pricing.Enabled {
 		return errors.New("pricing is disabled")
 	}
+	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
+	if err != nil {
+		return err
+	}
+	defer registry.Close()
+	if report, err := checkOnChainConfig(ctx, registry); err != nil {
+		return err
+	} else if !report.OK {
+		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
+	}
+
 	store, err := db.Connect(ctx, a.cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -131,10 +154,6 @@ func (a *App) RunPriceOnce(ctx context.Context) error {
 		return err
 	}
 
-	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
-	if err != nil {
-		return err
-	}
 	if err := store.SyncConfig(ctx, registry); err != nil {
 		return err
 	}

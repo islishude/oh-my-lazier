@@ -1,0 +1,44 @@
+[
+  {
+    "name": "eid",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint32" }]
+  },
+  {
+    "name": "getSendLibrary",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_sender", "type": "address" },
+      { "name": "_eid", "type": "uint32" }
+    ],
+    "outputs": [{ "name": "lib", "type": "address" }]
+  },
+  {
+    "name": "getReceiveLibrary",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_eid", "type": "uint32" }
+    ],
+    "outputs": [
+      { "name": "lib", "type": "address" },
+      { "name": "isDefault", "type": "bool" }
+    ]
+  },
+  {
+    "name": "getConfig",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_oapp", "type": "address" },
+      { "name": "_lib", "type": "address" },
+      { "name": "_eid", "type": "uint32" },
+      { "name": "_configType", "type": "uint32" }
+    ],
+    "outputs": [{ "name": "config", "type": "bytes" }]
+  }
+]

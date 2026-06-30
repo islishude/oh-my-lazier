@@ -4,17 +4,17 @@ import (
 	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 //go:embed abis/open_executor.json
 var openExecutorABIJSON string
 
-var openExecutorABI = mustOpenExecutorABI()
+var openExecutorABI = abiutil.MustParse(openExecutorABIJSON)
 
 // OpenExecutorABI returns the pinned OpenExecutor ABI used by Go workers.
 func OpenExecutorABI() abi.ABI {
@@ -49,12 +49,4 @@ func DecodeExecutorJobAssigned(log gethtypes.Log) (ExecutorJobAssigned, error) {
 	event.Sender = common.BytesToAddress(log.Topics[2].Bytes()[12:])
 	event.SendLib = common.BytesToAddress(log.Topics[3].Bytes()[12:])
 	return event, nil
-}
-
-func mustOpenExecutorABI() abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(openExecutorABIJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }

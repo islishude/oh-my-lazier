@@ -4,17 +4,17 @@ import (
 	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 //go:embed abis/send_uln302.json
 var sendUln302ABIJSON string
 
-var sendUln302ABI = mustSendUln302ABI()
+var sendUln302ABI = abiutil.MustParse(sendUln302ABIJSON)
 
 // SendUln302ABI returns the pinned LayerZero SendUln302 ABI used by Go workers.
 func SendUln302ABI() abi.ABI {
@@ -66,12 +66,4 @@ func DecodeDVNFeePaid(log gethtypes.Log) (DVNFeePaid, error) {
 		return DVNFeePaid{}, err
 	}
 	return event, nil
-}
-
-func mustSendUln302ABI() abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(sendUln302ABIJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }

@@ -21,6 +21,34 @@ func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidPathwayGasBounds(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"missingMax": func(cfg *Config) {
+			cfg.Pathways[0].MaxLzReceiveGas = 0
+		},
+		"minExceedsMax": func(cfg *Config) {
+			cfg.Pathways[0].MinLzReceiveGas = 300000
+			cfg.Pathways[0].MaxLzReceiveGas = 200000
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want invalid pathway gas bounds error")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsNonPhaseOneConfirmations(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].Confirmations = 6
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want phase-1 confirmations error")
+	}
+}
+
 func TestValidateAcceptsSupportedRPCURLFormats(t *testing.T) {
 	for _, rpcURL := range []string{
 		"http://localhost:8545",
@@ -240,6 +268,8 @@ pathways:
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     enabled: true
     max_message_size: 10000
+    min_lz_receive_gas: 100000
+    max_lz_receive_gas: 300000
 `)
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
@@ -308,24 +338,28 @@ func validConfig() Config {
 		},
 		Pathways: []PathwayConfig{
 			{
-				SrcEID:         40161,
-				DstEID:         40245,
-				SrcOApp:        "0x7777777777777777777777777777777777777777",
-				DstOApp:        "0x8888888888888888888888888888888888888888",
-				SendLib:        "0x9999999999999999999999999999999999999999",
-				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				Enabled:        true,
-				MaxMessageSize: 10000,
+				SrcEID:          40161,
+				DstEID:          40245,
+				SrcOApp:         "0x7777777777777777777777777777777777777777",
+				DstOApp:         "0x8888888888888888888888888888888888888888",
+				SendLib:         "0x9999999999999999999999999999999999999999",
+				ReceiveLib:      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Enabled:         true,
+				MaxMessageSize:  10000,
+				MinLzReceiveGas: 100000,
+				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:         40245,
-				DstEID:         40161,
-				SrcOApp:        "0x8888888888888888888888888888888888888888",
-				DstOApp:        "0x7777777777777777777777777777777777777777",
-				SendLib:        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				ReceiveLib:     "0xcccccccccccccccccccccccccccccccccccccccc",
-				Enabled:        true,
-				MaxMessageSize: 10000,
+				SrcEID:          40245,
+				DstEID:          40161,
+				SrcOApp:         "0x8888888888888888888888888888888888888888",
+				DstOApp:         "0x7777777777777777777777777777777777777777",
+				SendLib:         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				ReceiveLib:      "0xcccccccccccccccccccccccccccccccccccccccc",
+				Enabled:         true,
+				MaxMessageSize:  10000,
+				MinLzReceiveGas: 100000,
+				MaxLzReceiveGas: 300000,
 			},
 		},
 	}

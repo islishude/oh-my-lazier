@@ -6,6 +6,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 
 - Validated worker config for the target environment.
 - `configdiff` output from the last approved config to the proposed config.
+- `configcheck` output proving the proposed worker config matches live chain state.
 - LayerZero address refresh output from `npm run check:lz-addresses`.
 - DB-backed readiness output from `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json`.
 - `inspect:lz-config` output for every configured direction.
@@ -32,18 +33,19 @@ This runbook is the final review index before any mainnet deployment proposal. P
 
 1. Run `make check`.
 2. Run `go run ./go/cmd/configdiff -from <approved.yaml> -to <proposed.yaml>`.
-3. Run `npm run inspect:lz-config` for each configured direction and archive output.
-4. Complete `docs/runbooks/key-management.md`.
-5. Complete `docs/runbooks/price-bot.md`.
-6. Complete `docs/runbooks/rate-limit.md`.
-7. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
-8. Run `npm run check:runbooks` and archive output.
-9. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
-10. Complete security review and resolve all critical findings.
-11. Confirm rollback steps for Executor and DVN config are documented with previous config values.
-12. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
-13. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
-14. Approve the migration ticket only after every artifact above is attached.
+3. Run `go run ./go/cmd/configcheck -config <proposed.yaml> -format json`.
+4. Run `npm run inspect:lz-config` for each configured direction and archive output.
+5. Complete `docs/runbooks/key-management.md`.
+6. Complete `docs/runbooks/price-bot.md`.
+7. Complete `docs/runbooks/rate-limit.md`.
+8. Confirm `docs/runbooks/monitoring.md` dashboard and alerts are active.
+9. Run `npm run check:runbooks` and archive output.
+10. Run `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json` and archive output.
+11. Complete security review and resolve all critical findings.
+12. Confirm rollback steps for Executor and DVN config are documented with previous config values.
+13. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
+14. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
+15. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
 
@@ -53,6 +55,7 @@ Required commands:
 go test ./...
 go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1
 go test ./go/internal/config ./go/internal/configdiff ./go/cmd/configdiff -count=1
+go test ./go/internal/configcheck ./go/cmd/configcheck -count=1
 go test ./go/internal/metrics ./go/internal/db ./go/internal/app -count=1
 go test ./go/internal/readiness ./go/cmd/readinesscheck -count=1
 npm run check:runbooks

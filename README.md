@@ -55,12 +55,14 @@ CI mirrors the local gates with contract/script/runbook/migration-evidence
 checks, Go tests and lint, Docker image build validation, and a dedicated
 `make security-check` job.
 
-The Go worker embeds compact LayerZero ABI JSON from `go/internal/lzabi/abis`.
+The Go worker embeds compact LayerZero ABI JSON from `go/internal/lzabi/abis`
+and on-chain config-check ABI JSON from `go/internal/configcheck/abis`.
 Regenerate those files with `make generate-lzabi` after changing local worker
-contracts or updating pinned LayerZero packages. The generator reads local
-Hardhat artifacts for `OpenDVN` and `OpenExecutor`, and pinned LayerZero package
-artifacts for EndpointV2, ReceiveUln302, and SendUln302 events. `make check`
-includes `make check-lzabi` so ABI drift is caught before handoff.
+contracts, config-check getters, or updating pinned LayerZero packages. The
+generator reads local Hardhat artifacts for `OpenDVN`, `OpenExecutor`, and
+`TestOFT`, and pinned LayerZero package artifacts for EndpointV2,
+ReceiveUln302, and SendUln302 events. `make check` includes `make check-lzabi`
+so ABI drift is caught before handoff.
 
 The Go pricing package also embeds compact ABI JSON from
 `go/internal/pricing/abis`. Regenerate it with `make generate-pricing-abi` after
@@ -93,6 +95,16 @@ make docker-smoke
 
 The image runs `/usr/local/bin/worker` and defaults to `/app/config/example.yaml`. CI builds and smoke-tests the local worker image. The release publishing path builds native amd64 and arm64 images on separate GitHub runners, pushes them by digest, and then creates a multi-arch manifest with `docker buildx imagetools`.
 
+Before starting durable loops or enqueuing price updates, the worker runs an
+on-chain config check against the configured RPC endpoints. The check confirms
+chain IDs, LayerZero endpoint IDs, deployed contract code, OApp peers, active
+send/receive libraries, ULN required DVNs, and OpenExecutor/OpenDVN pathway
+settings. Operators can run the same gate directly:
+
+```bash
+go run ./go/cmd/configcheck -config config/example.yaml
+```
+
 ## Current Scope
 
 The initial target is Ethereum Sepolia <-> Base Sepolia with:
@@ -124,3 +136,4 @@ The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJ
 - Failed `lzReceive` receipts or destination `LzReceiveAlert` logs move jobs to `LZ_RECEIVE_FAILED`, where they remain retryable. Failed `dvn_verify` receipts fail the outbox row and do not mark the DVN job verified.
 - Per-chain `start_block_number` is optional and defaults to `0`. It only seeds the first indexer backfill when no durable cursor exists; after a cursor is written, the database cursor is authoritative.
 - A non-cancellation error from any durable loop cancels the worker process so packet state does not advance with missing components.
+- Worker startup and one-shot price updates fail before database sync when on-chain config does not match the loaded YAML.

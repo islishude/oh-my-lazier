@@ -35,9 +35,22 @@ Review checklist:
 - Confirm both configs validate successfully.
 - Confirm chain `eid`, `chain_id`, endpoint, worker contract, and RPC changes are intentional.
 - Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, enablement, and max message size changes are intentional.
+- Confirm pathway `min_lz_receive_gas` and `max_lz_receive_gas` changes match the OpenExecutor/OpenDVN on-chain pathway settings.
 - Confirm signer changes are expected and do not point to unapproved keys.
 - Confirm pricing source, stale threshold, gas spike threshold, gas limit, and fee cap changes are expected.
 - For DVN migration, confirm the proposed config still uses `dvn.mode: shadow` until the explicit active-mode change is approved.
 - Keep the text output in the migration ticket and the JSON output as an immutable review artifact.
+
+After diff review, run the on-chain config check before worker restart or price
+updates:
+
+```bash
+go run ./go/cmd/configcheck -config config/proposed.yaml
+```
+
+The check compares the YAML with live chain state, including chain ID, Endpoint
+EID, deployed code, OApp peers, send/receive libraries, ULN required DVNs, and
+OpenExecutor/OpenDVN pathway configuration. Worker startup and `price-once` run
+the same check before database sync.
 
 The command compares chains by `eid`, pricing chains by `eid`, and pathways by `(src_eid, dst_eid, src_oapp, dst_oapp)` so list reordering does not create review noise.

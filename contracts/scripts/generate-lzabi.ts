@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 type AbiInput = {
@@ -30,7 +30,8 @@ type AbiSelection = {
 
 type AbiOutput = {
   path: string;
-  selections: AbiSelection[];
+  selections?: AbiSelection[];
+  entries?: AbiEntry[];
 };
 
 const outputs: AbiOutput[] = [
@@ -173,6 +174,110 @@ const outputs: AbiOutput[] = [
       },
     ],
   },
+  {
+    path: "go/internal/configcheck/abis/endpoint.json",
+    selections: [
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+        type: "function",
+        name: "eid",
+      },
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+        type: "function",
+        name: "getSendLibrary",
+      },
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+        type: "function",
+        name: "getReceiveLibrary",
+      },
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+        type: "function",
+        name: "getConfig",
+      },
+    ],
+  },
+  {
+    path: "go/internal/configcheck/abis/oapp.json",
+    selections: [
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
+        type: "function",
+        name: "endpoint",
+      },
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
+        type: "function",
+        name: "peers",
+      },
+    ],
+  },
+  {
+    path: "go/internal/configcheck/abis/worker.json",
+    selections: [
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+        type: "function",
+        name: "allowedSendLib",
+      },
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+        type: "function",
+        name: "pathwayConfig",
+      },
+    ],
+  },
+  {
+    path: "go/internal/configcheck/abis/config_decoder.json",
+    entries: [
+      {
+        type: "function",
+        name: "executorConfig",
+        stateMutability: "pure",
+        inputs: [],
+        outputs: [
+          {
+            name: "",
+            type: "tuple",
+            components: [
+              { name: "maxMessageSize", type: "uint32" },
+              { name: "executor", type: "address" },
+            ],
+          },
+        ],
+      },
+      {
+        type: "function",
+        name: "ulnConfig",
+        stateMutability: "pure",
+        inputs: [],
+        outputs: [
+          {
+            name: "",
+            type: "tuple",
+            components: [
+              { name: "confirmations", type: "uint64" },
+              { name: "requiredDVNCount", type: "uint8" },
+              { name: "optionalDVNCount", type: "uint8" },
+              { name: "optionalDVNThreshold", type: "uint8" },
+              { name: "requiredDVNs", type: "address[]" },
+              { name: "optionalDVNs", type: "address[]" },
+            ],
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 const repoRoot = process.cwd();
@@ -182,11 +287,13 @@ async function main() {
   const artifactCache = new Map<string, Artifact>();
 
   for (const output of outputs) {
-    const abi = await Promise.all(
-      output.selections.map((selection) =>
-        readSelectedEntry(selection, artifactCache),
-      ),
-    );
+    const abi =
+      output.entries ??
+      (await Promise.all(
+        (output.selections ?? []).map((selection) =>
+          readSelectedEntry(selection, artifactCache),
+        ),
+      ));
     const target = path.join(repoRoot, output.path);
     const formatted = formatABI(abi);
     if (checkOnly) {
@@ -195,6 +302,7 @@ async function main() {
         throw new Error(`${output.path} is not generated from pinned artifacts`);
       }
     } else {
+      await mkdir(path.dirname(target), { recursive: true });
       await writeFile(target, formatted);
     }
   }
@@ -241,14 +349,22 @@ async function readArtifact(
 }
 
 async function assertNoUnexpectedABIJSON() {
-  const abiDir = path.join(repoRoot, "go/internal/lzabi/abis");
-  const expected = new Set(outputs.map((output) => path.basename(output.path)));
-  const actual = await readdir(abiDir);
-  const unexpected = actual
-    .filter((entry) => entry.endsWith(".json") && !expected.has(entry))
-    .sort();
-  if (unexpected.length > 0) {
-    throw new Error(`unexpected ABI JSON files: ${unexpected.join(", ")}`);
+  const dirs = new Set(outputs.map((output) => path.dirname(output.path)));
+  for (const dir of dirs) {
+    const expected = new Set(
+      outputs
+        .filter((output) => path.dirname(output.path) === dir)
+        .map((output) => path.basename(output.path)),
+    );
+    const actual = await readdir(path.join(repoRoot, dir));
+    const unexpected = actual
+      .filter((entry) => entry.endsWith(".json") && !expected.has(entry))
+      .sort();
+    if (unexpected.length > 0) {
+      throw new Error(
+        `${dir}: unexpected ABI JSON files: ${unexpected.join(", ")}`,
+      );
+    }
   }
 }
 

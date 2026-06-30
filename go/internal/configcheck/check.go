@@ -1,0 +1,560 @@
+package configcheck
+
+import (
+	"context"
+	_ "embed"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/big"
+	"reflect"
+	"slices"
+	"sort"
+	"strings"
+
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
+)
+
+const (
+	configTypeExecutor = uint32(1)
+	configTypeULN      = uint32(2)
+	nilDVNCount        = uint8(255)
+)
+
+var (
+	endpointABI      = abiutil.MustParse(endpointABIJSON)
+	oappABI          = abiutil.MustParse(oappABIJSON)
+	workerABI        = abiutil.MustParse(workerABIJSON)
+	configDecoderABI = abiutil.MustParse(configDecoderABIJSON)
+)
+
+//go:embed abis/endpoint.json
+var endpointABIJSON string
+
+//go:embed abis/oapp.json
+var oappABIJSON string
+
+//go:embed abis/worker.json
+var workerABIJSON string
+
+//go:embed abis/config_decoder.json
+var configDecoderABIJSON string
+
+// ChainClient is the on-chain read surface required by the config checker.
+type ChainClient interface {
+	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
+	ChainID(context.Context) (*big.Int, error)
+	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
+}
+
+// Issue describes one config mismatch against on-chain state.
+type Issue struct {
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+// Report is the complete on-chain config check result.
+type Report struct {
+	OK     bool    `json:"ok"`
+	Issues []Issue `json:"issues"`
+}
+
+// RenderText renders a report for operator runbooks and startup errors.
+func RenderText(report Report) string {
+	if report.OK {
+		return "on-chain config check passed\n"
+	}
+	var out strings.Builder
+	out.WriteString("on-chain config check failed\n")
+	for _, issue := range report.Issues {
+		fmt.Fprintf(&out, "- %s: %s\n", issue.Path, issue.Message)
+	}
+	return out.String()
+}
+
+// Check validates a registry against the registry's configured RPC clients.
+func Check(ctx context.Context, registry *chain.Registry) (Report, error) {
+	clients := make(map[uint32]ChainClient)
+	for _, configured := range registry.All() {
+		clients[configured.EID] = configured.RPC
+	}
+	return CheckWithClients(ctx, registry, clients)
+}
+
+// CheckWithClients validates a registry against supplied chain clients.
+func CheckWithClients(ctx context.Context, registry *chain.Registry, clients map[uint32]ChainClient) (Report, error) {
+	if registry == nil {
+		return Report{}, errors.New("registry is required")
+	}
+	checker := checker{registry: registry, clients: clients}
+	if err := checker.run(ctx); err != nil {
+		return Report{}, err
+	}
+	return Report{OK: len(checker.issues) == 0, Issues: checker.issues}, nil
+}
+
+type checker struct {
+	registry *chain.Registry
+	clients  map[uint32]ChainClient
+	issues   []Issue
+}
+
+func (c *checker) run(ctx context.Context) error {
+	for _, configured := range c.registry.All() {
+		client, err := c.client(configured.EID)
+		if err != nil {
+			return err
+		}
+		if err := c.checkChain(ctx, client, configured); err != nil {
+			return err
+		}
+	}
+	for _, pathway := range c.registry.Pathways() {
+		if err := c.checkPathway(ctx, pathway); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *checker) checkChain(ctx context.Context, client ChainClient, configured chain.Chain) error {
+	actualChainID, err := client.ChainID(ctx)
+	if err != nil {
+		return fmt.Errorf("read chain %d chain_id: %w", configured.EID, err)
+	}
+	if actualChainID == nil || actualChainID.Cmp(configured.ChainID) != 0 {
+		c.add(fmt.Sprintf("chains[%d].chain_id", configured.EID), "on-chain chain_id %s does not match configured %s", bigString(actualChainID), configured.ChainID)
+	}
+	actualEID, err := callUint32(ctx, client, endpointABI, configured.EndpointAddress, "eid")
+	if err != nil {
+		return fmt.Errorf("read chain %d endpoint eid: %w", configured.EID, err)
+	}
+	if actualEID != configured.EID {
+		c.add(fmt.Sprintf("chains[%d].eid", configured.EID), "endpoint eid %d does not match configured %d", actualEID, configured.EID)
+	}
+	contracts := map[string]common.Address{
+		"endpoint_address":      configured.EndpointAddress,
+		"workers.open_executor": configured.Workers.OpenExecutor,
+		"workers.open_dvn":      configured.Workers.OpenDVN,
+	}
+	for label, address := range contracts {
+		code, err := client.CodeAt(ctx, address, nil)
+		if err != nil {
+			return fmt.Errorf("read chain %d code at %s: %w", configured.EID, address, err)
+		}
+		if len(code) == 0 {
+			c.add(fmt.Sprintf("chains[%d].%s", configured.EID, label), "no contract code at %s", address)
+		}
+	}
+	return nil
+}
+
+func (c *checker) checkPathway(ctx context.Context, pathway chain.Pathway) error {
+	srcChain, err := c.registry.Get(pathway.SrcEID)
+	if err != nil {
+		return err
+	}
+	dstChain, err := c.registry.Get(pathway.DstEID)
+	if err != nil {
+		return err
+	}
+	srcClient, err := c.client(pathway.SrcEID)
+	if err != nil {
+		return err
+	}
+	dstClient, err := c.client(pathway.DstEID)
+	if err != nil {
+		return err
+	}
+	base := fmt.Sprintf("pathways[%d:%d:%s:%s]", pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)
+	if err := c.checkOApp(ctx, srcClient, base+".src_oapp", pathway.SrcOApp, srcChain.EndpointAddress, pathway.DstEID, pathway.DstOApp); err != nil {
+		return err
+	}
+	if err := c.checkOApp(ctx, dstClient, base+".dst_oapp", pathway.DstOApp, dstChain.EndpointAddress, pathway.SrcEID, pathway.SrcOApp); err != nil {
+		return err
+	}
+	if err := c.checkLibraries(ctx, srcClient, dstClient, base, srcChain, dstChain, pathway); err != nil {
+		return err
+	}
+	if err := c.checkWorkers(ctx, srcClient, base, srcChain, pathway); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *checker) checkOApp(ctx context.Context, client ChainClient, path string, oapp, endpoint common.Address, remoteEID uint32, remoteOApp common.Address) error {
+	code, err := client.CodeAt(ctx, oapp, nil)
+	if err != nil {
+		return fmt.Errorf("read code at OApp %s: %w", oapp, err)
+	}
+	if len(code) == 0 {
+		c.add(path, "no contract code at %s", oapp)
+	}
+	actualEndpoint, err := callAddress(ctx, client, oappABI, oapp, "endpoint")
+	if err != nil {
+		return fmt.Errorf("read %s endpoint: %w", oapp, err)
+	}
+	if actualEndpoint != endpoint {
+		c.add(path+".endpoint", "oapp endpoint %s does not match configured endpoint %s", actualEndpoint, endpoint)
+	}
+	peer, err := callHash(ctx, client, oappABI, oapp, "peers", remoteEID)
+	if err != nil {
+		return fmt.Errorf("read %s peer %d: %w", oapp, remoteEID, err)
+	}
+	expectedPeer := common.BytesToHash(remoteOApp.Bytes())
+	if peer != expectedPeer {
+		c.add(path+".peers", "peer for eid %d is %s, want %s", remoteEID, peer, expectedPeer)
+	}
+	return nil
+}
+
+func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
+	if err := c.requireCode(ctx, srcClient, base+".send_lib", pathway.SrcEID, pathway.SendLib); err != nil {
+		return err
+	}
+	if err := c.requireCode(ctx, dstClient, base+".receive_lib", pathway.DstEID, pathway.ReceiveLib); err != nil {
+		return err
+	}
+	sendLib, err := callAddress(ctx, srcClient, endpointABI, srcChain.EndpointAddress, "getSendLibrary", pathway.SrcOApp, pathway.DstEID)
+	if err != nil {
+		return fmt.Errorf("read send library for %s: %w", base, err)
+	}
+	if sendLib != pathway.SendLib {
+		c.add(base+".send_lib", "endpoint send library %s does not match configured %s", sendLib, pathway.SendLib)
+	}
+	receiveValues, err := callValues(ctx, dstClient, endpointABI, dstChain.EndpointAddress, "getReceiveLibrary", pathway.DstOApp, pathway.SrcEID)
+	if err != nil {
+		return fmt.Errorf("read receive library for %s: %w", base, err)
+	}
+	receiveLib, ok := receiveValues[0].(common.Address)
+	if !ok {
+		return fmt.Errorf("getReceiveLibrary returned %T, want address", receiveValues[0])
+	}
+	if receiveLib != pathway.ReceiveLib {
+		c.add(base+".receive_lib", "endpoint receive library %s does not match configured %s", receiveLib, pathway.ReceiveLib)
+	}
+	executorConfigBytes, err := callBytes(ctx, srcClient, endpointABI, srcChain.EndpointAddress, "getConfig", pathway.SrcOApp, pathway.SendLib, pathway.DstEID, configTypeExecutor)
+	if err != nil {
+		return fmt.Errorf("read executor config for %s: %w", base, err)
+	}
+	executorConfig, err := decodeExecutorConfig(executorConfigBytes)
+	if err != nil {
+		return fmt.Errorf("decode executor config for %s: %w", base, err)
+	}
+	if executorConfig.Executor != srcChain.Workers.OpenExecutor {
+		c.add(base+".executor_config.executor", "executor config points to %s, want %s", executorConfig.Executor, srcChain.Workers.OpenExecutor)
+	}
+	if uint64(executorConfig.MaxMessageSize) != pathway.MaxMessageSize {
+		c.add(base+".executor_config.max_message_size", "executor max message size %d does not match configured %d", executorConfig.MaxMessageSize, pathway.MaxMessageSize)
+	}
+	sendULNConfig, err := c.readULNConfig(ctx, srcClient, srcChain.EndpointAddress, pathway.SrcOApp, pathway.SendLib, pathway.DstEID, base+".send_uln_config")
+	if err != nil {
+		return err
+	}
+	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain)
+	receiveULNConfig, err := c.readULNConfig(ctx, dstClient, dstChain.EndpointAddress, pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID, base+".receive_uln_config")
+	if err != nil {
+		return err
+	}
+	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain)
+	return nil
+}
+
+func (c *checker) checkWorkers(ctx context.Context, client ChainClient, base string, srcChain chain.Chain, pathway chain.Pathway) error {
+	for label, worker := range map[string]common.Address{
+		"open_executor": srcChain.Workers.OpenExecutor,
+		"open_dvn":      srcChain.Workers.OpenDVN,
+	} {
+		allowed, err := callBool(ctx, client, workerABI, worker, "allowedSendLib", pathway.SendLib)
+		if err != nil {
+			return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
+		}
+		if !allowed {
+			c.add(base+".workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
+		}
+		config, err := callPathwayConfig(ctx, client, worker, pathway.DstEID, pathway.SrcOApp)
+		if err != nil {
+			return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
+		}
+		if config.Enabled != pathway.Enabled {
+			c.add(base+".workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
+		}
+		if config.MaxMessageSize == nil || config.MaxMessageSize.Uint64() != pathway.MaxMessageSize {
+			c.add(base+".workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
+		}
+		if config.MinLzReceiveGas == nil || config.MinLzReceiveGas.Uint64() != pathway.MinLzReceiveGas {
+			c.add(base+".workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
+		}
+		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
+			c.add(base+".workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+		}
+	}
+	return nil
+}
+
+func (c *checker) readULNConfig(ctx context.Context, client ChainClient, endpoint, oapp, library common.Address, remoteEID uint32, path string) (ulnConfig, error) {
+	configBytes, err := callBytes(ctx, client, endpointABI, endpoint, "getConfig", oapp, library, remoteEID, configTypeULN)
+	if err != nil {
+		return ulnConfig{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	config, err := decodeULNConfig(configBytes)
+	if err != nil {
+		return ulnConfig{}, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return config, nil
+}
+
+func (c *checker) compareULNConfig(path string, config ulnConfig, configured chain.Chain) {
+	if config.Confirmations != configured.Confirmations {
+		c.add(path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, configured.Confirmations)
+	}
+	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
+		c.add(path+".required_dvn_count", "requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
+	}
+	if config.OptionalDVNCount != nilDVNCount {
+		c.add(path+".optional_dvn_count", "optionalDVNCount %d is not disabled", config.OptionalDVNCount)
+	}
+	if config.OptionalDVNThreshold != 0 {
+		c.add(path+".optional_dvn_threshold", "optionalDVNThreshold %d is not zero", config.OptionalDVNThreshold)
+	}
+	if len(config.OptionalDVNs) != 0 {
+		c.add(path+".optional_dvns", "optional DVNs are configured: %s", addressesString(config.OptionalDVNs))
+	}
+	if len(config.RequiredDVNs) < 2 {
+		c.add(path+".required_dvns", "required DVNs must include OpenDVN plus at least one independent DVN, got %s", addressesString(config.RequiredDVNs))
+	}
+	if !slices.Contains(config.RequiredDVNs, configured.Workers.OpenDVN) {
+		c.add(path+".required_dvns", "required DVNs %s do not include configured OpenDVN %s", addressesString(config.RequiredDVNs), configured.Workers.OpenDVN)
+	}
+}
+
+func (c *checker) requireCode(ctx context.Context, client ChainClient, path string, eid uint32, address common.Address) error {
+	code, err := client.CodeAt(ctx, address, nil)
+	if err != nil {
+		return fmt.Errorf("read chain %d code at %s: %w", eid, address, err)
+	}
+	if len(code) == 0 {
+		c.add(path, "no contract code at %s", address)
+	}
+	return nil
+}
+
+func (c *checker) client(eid uint32) (ChainClient, error) {
+	client := c.clients[eid]
+	if client == nil {
+		return nil, fmt.Errorf("chain %d client is required", eid)
+	}
+	return client, nil
+}
+
+func (c *checker) add(path, format string, args ...any) {
+	c.issues = append(c.issues, Issue{Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
+type executorConfig struct {
+	MaxMessageSize uint32
+	Executor       common.Address
+}
+
+type ulnConfig struct {
+	Confirmations        uint64
+	RequiredDVNCount     uint8
+	OptionalDVNCount     uint8
+	OptionalDVNThreshold uint8
+	RequiredDVNs         []common.Address
+	OptionalDVNs         []common.Address
+}
+
+type pathwayConfig struct {
+	Enabled         bool
+	MaxMessageSize  *big.Int
+	MinLzReceiveGas *big.Int
+	MaxLzReceiveGas *big.Int
+}
+
+func callPathwayConfig(ctx context.Context, caller ChainClient, to common.Address, dstEID uint32, sender common.Address) (pathwayConfig, error) {
+	values, err := callValues(ctx, caller, workerABI, to, "pathwayConfig", dstEID, sender)
+	if err != nil {
+		return pathwayConfig{}, err
+	}
+	if len(values) != 4 {
+		return pathwayConfig{}, fmt.Errorf("pathwayConfig returned %d values, want 4", len(values))
+	}
+	enabled, ok := values[0].(bool)
+	if !ok {
+		return pathwayConfig{}, fmt.Errorf("pathwayConfig enabled returned %T, want bool", values[0])
+	}
+	maxMessageSize, ok := values[1].(*big.Int)
+	if !ok {
+		return pathwayConfig{}, fmt.Errorf("pathwayConfig maxMessageSize returned %T, want *big.Int", values[1])
+	}
+	minGas, ok := values[2].(*big.Int)
+	if !ok {
+		return pathwayConfig{}, fmt.Errorf("pathwayConfig minLzReceiveGas returned %T, want *big.Int", values[2])
+	}
+	maxGas, ok := values[3].(*big.Int)
+	if !ok {
+		return pathwayConfig{}, fmt.Errorf("pathwayConfig maxLzReceiveGas returned %T, want *big.Int", values[3])
+	}
+	return pathwayConfig{
+		Enabled:         enabled,
+		MaxMessageSize:  maxMessageSize,
+		MinLzReceiveGas: minGas,
+		MaxLzReceiveGas: maxGas,
+	}, nil
+}
+
+func decodeExecutorConfig(data []byte) (executorConfig, error) {
+	values, err := configDecoderABI.Unpack("executorConfig", data)
+	if err != nil {
+		return executorConfig{}, err
+	}
+	if len(values) != 1 {
+		return executorConfig{}, fmt.Errorf("executor config returned %d values, want 1", len(values))
+	}
+	reflected := reflect.ValueOf(values[0])
+	if reflected.Kind() != reflect.Struct {
+		return executorConfig{}, fmt.Errorf("executor config returned %T, want tuple struct", values[0])
+	}
+	executor, ok := reflected.FieldByName("Executor").Interface().(common.Address)
+	if !ok {
+		return executorConfig{}, fmt.Errorf("executor config executor returned %T, want address", reflected.FieldByName("Executor").Interface())
+	}
+	return executorConfig{
+		MaxMessageSize: uint32(reflected.FieldByName("MaxMessageSize").Uint()),
+		Executor:       executor,
+	}, nil
+}
+
+func decodeULNConfig(data []byte) (ulnConfig, error) {
+	values, err := configDecoderABI.Unpack("ulnConfig", data)
+	if err != nil {
+		return ulnConfig{}, err
+	}
+	if len(values) != 1 {
+		return ulnConfig{}, fmt.Errorf("uln config returned %d values, want 1", len(values))
+	}
+	reflected := reflect.ValueOf(values[0])
+	if reflected.Kind() != reflect.Struct {
+		return ulnConfig{}, fmt.Errorf("uln config returned %T, want tuple struct", values[0])
+	}
+	requiredDVNs, ok := reflected.FieldByName("RequiredDVNs").Interface().([]common.Address)
+	if !ok {
+		return ulnConfig{}, fmt.Errorf("uln config requiredDVNs returned %T, want []common.Address", reflected.FieldByName("RequiredDVNs").Interface())
+	}
+	optionalDVNs, ok := reflected.FieldByName("OptionalDVNs").Interface().([]common.Address)
+	if !ok {
+		return ulnConfig{}, fmt.Errorf("uln config optionalDVNs returned %T, want []common.Address", reflected.FieldByName("OptionalDVNs").Interface())
+	}
+	return ulnConfig{
+		Confirmations:        reflected.FieldByName("Confirmations").Uint(),
+		RequiredDVNCount:     uint8(reflected.FieldByName("RequiredDVNCount").Uint()),
+		OptionalDVNCount:     uint8(reflected.FieldByName("OptionalDVNCount").Uint()),
+		OptionalDVNThreshold: uint8(reflected.FieldByName("OptionalDVNThreshold").Uint()),
+		RequiredDVNs:         append([]common.Address(nil), requiredDVNs...),
+		OptionalDVNs:         append([]common.Address(nil), optionalDVNs...),
+	}, nil
+}
+
+func callUint32(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) (uint32, error) {
+	values, err := callValues(ctx, caller, contractABI, to, method, args...)
+	if err != nil {
+		return 0, err
+	}
+	value, ok := values[0].(uint32)
+	if !ok {
+		return 0, fmt.Errorf("%s returned %T, want uint32", method, values[0])
+	}
+	return value, nil
+}
+
+func callAddress(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) (common.Address, error) {
+	values, err := callValues(ctx, caller, contractABI, to, method, args...)
+	if err != nil {
+		return common.Address{}, err
+	}
+	value, ok := values[0].(common.Address)
+	if !ok {
+		return common.Address{}, fmt.Errorf("%s returned %T, want address", method, values[0])
+	}
+	return value, nil
+}
+
+func callHash(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) (common.Hash, error) {
+	values, err := callValues(ctx, caller, contractABI, to, method, args...)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	value, ok := values[0].([32]byte)
+	if !ok {
+		return common.Hash{}, fmt.Errorf("%s returned %T, want bytes32", method, values[0])
+	}
+	return common.BytesToHash(value[:]), nil
+}
+
+func callBool(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) (bool, error) {
+	values, err := callValues(ctx, caller, contractABI, to, method, args...)
+	if err != nil {
+		return false, err
+	}
+	value, ok := values[0].(bool)
+	if !ok {
+		return false, fmt.Errorf("%s returned %T, want bool", method, values[0])
+	}
+	return value, nil
+}
+
+func callBytes(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) ([]byte, error) {
+	values, err := callValues(ctx, caller, contractABI, to, method, args...)
+	if err != nil {
+		return nil, err
+	}
+	value, ok := values[0].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("%s returned %T, want bytes", method, values[0])
+	}
+	return value, nil
+}
+
+func callValues(ctx context.Context, caller ChainClient, contractABI abi.ABI, to common.Address, method string, args ...any) ([]any, error) {
+	data, err := contractABI.Pack(method, args...)
+	if err != nil {
+		return nil, err
+	}
+	result, err := caller.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, nil)
+	if err != nil {
+		return nil, err
+	}
+	values, err := contractABI.Unpack(method, result)
+	if err != nil {
+		return nil, err
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("%s returned no values", method)
+	}
+	return values, nil
+}
+
+func addressesString(addresses []common.Address) string {
+	return "[" + strings.Join(sortedAddressHex(addresses), ",") + "]"
+}
+
+func sortedAddressHex(addresses []common.Address) []string {
+	out := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		out = append(out, hex.EncodeToString(address.Bytes()))
+	}
+	sort.Strings(out)
+	return out
+}
+
+func bigString(value *big.Int) string {
+	if value == nil {
+		return "<nil>"
+	}
+	return value.String()
+}

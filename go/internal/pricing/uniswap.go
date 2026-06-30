@@ -9,13 +9,14 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 var (
 	//go:embed abis/uniswap_v3_quoter.json
 	uniswapV3QuoterABIJSON string
 
-	uniswapV3QuoterABI = mustParseABI(uniswapV3QuoterABIJSON)
+	uniswapV3QuoterABI = abiutil.MustParse(uniswapV3QuoterABIJSON)
 )
 
 // CallContractReader reads EVM call results.

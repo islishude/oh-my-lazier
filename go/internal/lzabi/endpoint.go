@@ -4,17 +4,17 @@ import (
 	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 //go:embed abis/endpoint_v2.json
 var endpointV2ABIJSON string
 
-var endpointV2ABI = mustEndpointV2ABI()
+var endpointV2ABI = abiutil.MustParse(endpointV2ABIJSON)
 
 // EndpointV2ABI returns the pinned EndpointV2 ABI used by Go workers.
 func EndpointV2ABI() abi.ABI {
@@ -148,12 +148,4 @@ func DecodeLzReceiveAlert(log gethtypes.Log) (LzReceiveAlert, error) {
 		ExtraData: decoded.ExtraData,
 		Reason:    decoded.Reason,
 	}, nil
-}
-
-func mustEndpointV2ABI() abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(endpointV2ABIJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }

@@ -1,0 +1,38 @@
+[
+  {
+    "name": "executorConfig",
+    "type": "function",
+    "stateMutability": "pure",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "components": [
+          { "name": "maxMessageSize", "type": "uint32" },
+          { "name": "executor", "type": "address" }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "ulnConfig",
+    "type": "function",
+    "stateMutability": "pure",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "components": [
+          { "name": "confirmations", "type": "uint64" },
+          { "name": "requiredDVNCount", "type": "uint8" },
+          { "name": "optionalDVNCount", "type": "uint8" },
+          { "name": "optionalDVNThreshold", "type": "uint8" },
+          { "name": "requiredDVNs", "type": "address[]" },
+          { "name": "optionalDVNs", "type": "address[]" }
+        ]
+      }
+    ]
+  }
+]

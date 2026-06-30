@@ -8,11 +8,10 @@ import (
 	"log/slog"
 	"maps"
 	"math/big"
-	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
@@ -28,7 +27,7 @@ var (
 	//go:embed abis/price_config.json
 	priceConfigABIJSON string
 
-	priceConfigABI = mustParseABI(priceConfigABIJSON)
+	priceConfigABI = abiutil.MustParse(priceConfigABIJSON)
 )
 
 // Bot updates worker contract price configuration.
@@ -510,14 +509,6 @@ func (c PriceConfig) Validate() error {
 		return errors.New("price config stale_after is required")
 	}
 	return nil
-}
-
-func mustParseABI(definition string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(definition))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }
 
 func ceilRat(value *big.Rat) *big.Int {

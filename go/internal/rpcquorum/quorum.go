@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -16,7 +17,9 @@ import (
 var _ interface {
 	BlockNumber(context.Context) (uint64, error)
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
+	ChainID(context.Context) (*big.Int, error)
 	CheckHead(context.Context) (HeadResult, error)
+	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
 	SendTransaction(context.Context, *gethtypes.Transaction) error
@@ -41,11 +44,13 @@ const (
 type Provider struct {
 	URL    string
 	Status ProviderStatus
+	client *ethclient.Client
 }
 
 // Client coordinates multiple RPC providers for one chain.
 type Client struct {
 	chainName string
+	mu        sync.Mutex
 	providers []Provider
 }
 
@@ -117,9 +122,26 @@ func New(chainName string, urls []string) *Client {
 
 // Providers returns a copy of the configured provider statuses.
 func (c *Client) Providers() []Provider {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := make([]Provider, len(c.providers))
 	copy(out, c.providers)
+	for i := range out {
+		out[i].client = nil
+	}
 	return out
+}
+
+// Close releases cached RPC provider connections.
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.providers {
+		if c.providers[i].client != nil {
+			c.providers[i].client.Close()
+			c.providers[i].client = nil
+		}
+	}
 }
 
 // CheckHead verifies provider head agreement and returns the selected head.
@@ -129,11 +151,11 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	}
 	heads := make([]providerHead, 0, len(c.providers))
 	var transientErrs []error
-	for _, provider := range c.providers {
+	for index, provider := range c.snapshotProviders() {
 		if provider.Status == ProviderConflict {
 			continue
 		}
-		header, err := c.headerByNumberFromProvider(ctx, provider, nil)
+		header, err := c.headerByNumberFromProvider(ctx, index, nil)
 		if err != nil {
 			transientErrs = append(transientErrs, fmt.Errorf("%s: %w", provider.URL, err))
 			continue
@@ -158,85 +180,105 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 
 // CallContract performs an eth_call against the first currently healthy provider.
 func (c *Client) CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return nil, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
 	return client.CallContract(ctx, call, blockNumber)
 }
 
 // BlockNumber returns the latest block number from the first currently healthy provider.
 func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return 0, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
 	return client.BlockNumber(ctx)
+}
+
+// ChainID returns the first healthy provider's native EVM chain ID.
+func (c *Client) ChainID(ctx context.Context) (*big.Int, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	return client.ChainID(ctx)
+}
+
+// CodeAt returns contract code at the first healthy provider's selected block.
+func (c *Client) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	return client.CodeAt(ctx, account, blockNumber)
 }
 
 // FilterLogs returns logs from the first currently healthy provider for a bounded query.
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return nil, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
 	return client.FilterLogs(ctx, query)
 }
 
 // SuggestGasPrice returns the first healthy provider's legacy gas price estimate.
 func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return nil, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
 	return client.SuggestGasPrice(ctx)
 }
 
 // PendingNonceAt returns the first healthy provider's pending account nonce.
 func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return 0, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return 0, err
 	}
-	defer client.Close()
 	return client.PendingNonceAt(ctx, account)
 }
 
 // SendTransaction broadcasts a signed transaction through the first healthy provider.
 func (c *Client) SendTransaction(ctx context.Context, tx *gethtypes.Transaction) error {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
 	return client.SendTransaction(ctx, tx)
 }
 
@@ -246,11 +288,11 @@ func (c *Client) TransactionReceipt(ctx context.Context, txHash common.Hash) (*g
 	var canonicalFingerprint string
 	var transientErrs []error
 	var notFoundProviders []string
-	for _, provider := range c.providers {
+	for index, provider := range c.snapshotProviders() {
 		if provider.Status != ProviderHealthy {
 			continue
 		}
-		receipt, err := c.transactionReceiptFromProvider(ctx, provider, txHash)
+		receipt, err := c.transactionReceiptFromProvider(ctx, index, txHash)
 		if err != nil {
 			if errors.Is(err, ethereum.NotFound) {
 				notFoundProviders = append(notFoundProviders, provider.URL)
@@ -293,49 +335,85 @@ func (c *Client) TransactionReceipt(ctx context.Context, txHash common.Hash) (*g
 	return canonical, nil
 }
 
-func (c *Client) transactionReceiptFromProvider(ctx context.Context, provider Provider, txHash common.Hash) (*gethtypes.Receipt, error) {
-	client, err := ethclient.DialContext(ctx, provider.URL)
+func (c *Client) transactionReceiptFromProvider(ctx context.Context, index int, txHash common.Hash) (*gethtypes.Receipt, error) {
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
 	return client.TransactionReceipt(ctx, txHash)
 }
 
-func (c *Client) headerByNumberFromProvider(ctx context.Context, provider Provider, number *big.Int) (*gethtypes.Header, error) {
-	client, err := ethclient.DialContext(ctx, provider.URL)
+func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, number *big.Int) (*gethtypes.Header, error) {
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
 	return client.HeaderByNumber(ctx, number)
 }
 
 // SubscribeFilterLogs subscribes to live logs on the first currently healthy provider.
 func (c *Client) SubscribeFilterLogs(ctx context.Context, query ethereum.FilterQuery, ch chan<- gethtypes.Log) (ethereum.Subscription, error) {
-	provider, err := c.firstHealthyProvider()
+	index, err := c.firstHealthyProvider()
 	if err != nil {
 		return nil, err
 	}
-	client, err := ethclient.DialContext(ctx, provider.URL)
+	client, err := c.providerClient(ctx, index)
 	if err != nil {
 		return nil, err
 	}
 	subscription, err := client.SubscribeFilterLogs(ctx, query, ch)
 	if err != nil {
-		client.Close()
 		return nil, err
 	}
-	return &managedSubscription{Subscription: subscription, close: client.Close}, nil
+	return subscription, nil
 }
 
-func (c *Client) firstHealthyProvider() (Provider, error) {
-	for _, provider := range c.providers {
+func (c *Client) firstHealthyProvider() (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index, provider := range c.providers {
 		if provider.Status == ProviderHealthy {
-			return provider, nil
+			return index, nil
 		}
 	}
-	return Provider{}, errors.New("no healthy rpc providers configured")
+	return 0, errors.New("no healthy rpc providers configured")
+}
+
+func (c *Client) snapshotProviders() []Provider {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Provider, len(c.providers))
+	copy(out, c.providers)
+	return out
+}
+
+func (c *Client) providerClient(ctx context.Context, index int) (*ethclient.Client, error) {
+	c.mu.Lock()
+	if index < 0 || index >= len(c.providers) {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("provider index %d out of range", index)
+	}
+	if c.providers[index].client != nil {
+		client := c.providers[index].client
+		c.mu.Unlock()
+		return client, nil
+	}
+	url := c.providers[index].URL
+	c.mu.Unlock()
+
+	client, err := ethclient.DialContext(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.providers[index].client != nil {
+		client.Close()
+		return c.providers[index].client, nil
+	}
+	c.providers[index].client = client
+	return client, nil
 }
 
 func (c *Client) updateHeadProviderStatuses(heads []providerHead, canonical HeadResult) {
@@ -343,24 +421,14 @@ func (c *Client) updateHeadProviderStatuses(heads []providerHead, canonical Head
 		return
 	}
 	statusByURL := classifyHeadProviderStatuses(heads, canonical)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for index, provider := range c.providers {
 		status, ok := statusByURL[provider.URL]
 		if !ok {
 			continue
 		}
 		c.providers[index].Status = status
-	}
-}
-
-type managedSubscription struct {
-	ethereum.Subscription
-	close func()
-}
-
-func (s *managedSubscription) Unsubscribe() {
-	s.Subscription.Unsubscribe()
-	if s.close != nil {
-		s.close()
 	}
 }
 

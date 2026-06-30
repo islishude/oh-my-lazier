@@ -1,0 +1,24 @@
+[
+  {
+    "name": "allowedSendLib",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "name": "sendLib", "type": "address" }],
+    "outputs": [{ "name": "allowed", "type": "bool" }]
+  },
+  {
+    "name": "pathwayConfig",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "dstEid", "type": "uint32" },
+      { "name": "sender", "type": "address" }
+    ],
+    "outputs": [
+      { "name": "enabled", "type": "bool" },
+      { "name": "maxMessageSize", "type": "uint256" },
+      { "name": "minLzReceiveGas", "type": "uint128" },
+      { "name": "maxLzReceiveGas", "type": "uint128" }
+    ]
+  }
+]

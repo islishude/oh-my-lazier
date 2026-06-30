@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
+	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
 )
 
 func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
@@ -63,6 +65,31 @@ func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
 	}
 }
 
+func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
+	originalCheck := checkOnChainConfig
+	defer func() { checkOnChainConfig = originalCheck }()
+	checkOnChainConfig = func(_ context.Context, _ *chain.Registry) (configcheck.Report, error) {
+		return configcheck.Report{
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+		}, nil
+	}
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://invalid:invalid@127.0.0.1:1/db?sslmode=disable"
+	cfg.Pricing = testPricingConfig()
+	worker, err := New(cfg, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	err = worker.RunPriceOnce(t.Context())
+	if err == nil {
+		t.Fatal("RunPriceOnce() error = nil, want on-chain config error")
+	}
+	if !strings.Contains(err.Error(), "on-chain config check failed") {
+		t.Fatalf("RunPriceOnce() error = %v, want on-chain config error", err)
+	}
+}
+
 func testConfig(signerID, keystorePath string) config.Config {
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
@@ -106,15 +133,38 @@ func testConfig(signerID, keystorePath string) config.Config {
 		},
 		Pathways: []config.PathwayConfig{
 			{
-				SrcEID:         40161,
-				DstEID:         40245,
-				SrcOApp:        "0x7777777777777777777777777777777777777777",
-				DstOApp:        "0x8888888888888888888888888888888888888888",
-				SendLib:        "0x9999999999999999999999999999999999999999",
-				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				Enabled:        true,
-				MaxMessageSize: 10000,
+				SrcEID:          40161,
+				DstEID:          40245,
+				SrcOApp:         "0x7777777777777777777777777777777777777777",
+				DstOApp:         "0x8888888888888888888888888888888888888888",
+				SendLib:         "0x9999999999999999999999999999999999999999",
+				ReceiveLib:      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				Enabled:         true,
+				MaxMessageSize:  10000,
+				MinLzReceiveGas: 100000,
+				MaxLzReceiveGas: 300000,
 			},
+		},
+	}
+}
+
+func testPricingConfig() config.PricingConfig {
+	return config.PricingConfig{
+		Enabled:                 true,
+		Signer:                  "0x9999999999999999999999999999999999999999",
+		IntervalSeconds:         300,
+		BaseFeeWei:              "1000",
+		BufferBps:               100,
+		StaleAfterSeconds:       1800,
+		MaxDeviationBps:         500,
+		GasSpikeBps:             1000,
+		AllowUniswapFallback:    true,
+		TxGasLimit:              100000,
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+		Chains: []config.PricingChainConfig{
+			{EID: 40161, BinanceSymbol: "ETHUSDT"},
+			{EID: 40245, BinanceSymbol: "ETHUSDT"},
 		},
 	}
 }

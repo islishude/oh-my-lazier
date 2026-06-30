@@ -29,14 +29,16 @@ type WorkerContracts struct {
 
 // Pathway is one configured source-to-destination OApp pathway.
 type Pathway struct {
-	SrcEID         uint32
-	DstEID         uint32
-	SrcOApp        common.Address
-	DstOApp        common.Address
-	SendLib        common.Address
-	ReceiveLib     common.Address
-	Enabled        bool
-	MaxMessageSize uint64
+	SrcEID          uint32
+	DstEID          uint32
+	SrcOApp         common.Address
+	DstOApp         common.Address
+	SendLib         common.Address
+	ReceiveLib      common.Address
+	Enabled         bool
+	MaxMessageSize  uint64
+	MinLzReceiveGas uint64
+	MaxLzReceiveGas uint64
 }
 
 // Registry indexes configured chains by endpoint ID.
@@ -68,14 +70,16 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 	}
 	for _, cfg := range pathways {
 		pathway := Pathway{
-			SrcEID:         cfg.SrcEID,
-			DstEID:         cfg.DstEID,
-			SrcOApp:        common.HexToAddress(cfg.SrcOApp),
-			DstOApp:        common.HexToAddress(cfg.DstOApp),
-			SendLib:        common.HexToAddress(cfg.SendLib),
-			ReceiveLib:     common.HexToAddress(cfg.ReceiveLib),
-			Enabled:        cfg.Enabled,
-			MaxMessageSize: cfg.MaxMessageSize,
+			SrcEID:          cfg.SrcEID,
+			DstEID:          cfg.DstEID,
+			SrcOApp:         common.HexToAddress(cfg.SrcOApp),
+			DstOApp:         common.HexToAddress(cfg.DstOApp),
+			SendLib:         common.HexToAddress(cfg.SendLib),
+			ReceiveLib:      common.HexToAddress(cfg.ReceiveLib),
+			Enabled:         cfg.Enabled,
+			MaxMessageSize:  cfg.MaxMessageSize,
+			MinLzReceiveGas: cfg.MinLzReceiveGas,
+			MaxLzReceiveGas: cfg.MaxLzReceiveGas,
 		}
 		registry.pathways[pathwayKey(pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)] = pathway
 	}
@@ -98,6 +102,18 @@ func (r *Registry) All() []Chain {
 		chains = append(chains, chain)
 	}
 	return chains
+}
+
+// Close releases RPC clients owned by configured chains.
+func (r *Registry) Close() {
+	if r == nil {
+		return
+	}
+	for _, chain := range r.byEID {
+		if chain.RPC != nil {
+			chain.RPC.Close()
+		}
+	}
 }
 
 // Pathway returns the configured pathway for a source/destination OApp pair.

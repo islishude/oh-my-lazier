@@ -1,0 +1,16 @@
+[
+  {
+    "name": "endpoint",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address" }]
+  },
+  {
+    "name": "peers",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "name": "eid", "type": "uint32" }],
+    "outputs": [{ "name": "peer", "type": "bytes32" }]
+  }
+]

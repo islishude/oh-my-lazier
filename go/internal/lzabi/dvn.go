@@ -4,17 +4,17 @@ import (
 	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 //go:embed abis/open_dvn.json
 var openDVNABIJSON string
 
-var openDVNABI = mustOpenDVNABI()
+var openDVNABI = abiutil.MustParse(openDVNABIJSON)
 
 // OpenDVNABI returns the pinned OpenDVN ABI used by Go workers.
 func OpenDVNABI() abi.ABI {
@@ -49,12 +49,4 @@ func DecodeDVNJobAssigned(log gethtypes.Log) (DVNJobAssigned, error) {
 	event.DstEID = uint32(log.Topics[2].Big().Uint64())
 	event.Sender = common.BytesToAddress(log.Topics[3].Bytes()[12:])
 	return event, nil
-}
-
-func mustOpenDVNABI() abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(openDVNABIJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }

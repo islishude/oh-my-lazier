@@ -4,17 +4,17 @@ import (
 	_ "embed"
 	"errors"
 	"math/big"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 )
 
 //go:embed abis/receive_uln302.json
 var receiveUln302ABIJSON string
 
-var receiveUln302ABI = mustReceiveUln302ABI()
+var receiveUln302ABI = abiutil.MustParse(receiveUln302ABIJSON)
 
 // ReceiveUln302ABI returns the pinned ReceiveUln302 ABI used by Go workers.
 func ReceiveUln302ABI() abi.ABI {
@@ -54,12 +54,4 @@ func PackReceiveUln302CommitVerification(packetHeader []byte, payloadHash common
 // PackReceiveUln302Verify ABI-encodes ReceiveUln302.verify.
 func PackReceiveUln302Verify(packetHeader []byte, payloadHash common.Hash, confirmations uint64) ([]byte, error) {
 	return receiveUln302ABI.Pack("verify", packetHeader, payloadHash, confirmations)
-}
-
-func mustReceiveUln302ABI() abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(receiveUln302ABIJSON))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
 }
