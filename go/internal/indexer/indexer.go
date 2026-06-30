@@ -291,16 +291,17 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64)
 }
 
 func (i *Indexer) runPollingLoop(ctx context.Context) error {
+	timer := time.NewTicker(0)
+	defer timer.Stop()
 	for {
-		timer := time.NewTimer(i.pollInterval)
 		select {
 		case <-ctx.Done():
-			timer.Stop()
 			return ctx.Err()
 		case <-timer.C:
-		}
-		if _, err := i.ProcessOnce(ctx); err != nil {
-			return err
+			if _, err := i.ProcessOnce(ctx); err != nil {
+				return err
+			}
+			timer.Reset(i.pollInterval)
 		}
 	}
 }
