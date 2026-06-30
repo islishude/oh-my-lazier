@@ -1,11 +1,9 @@
 .git
 .github
 node_modules
-contracts/artifacts
-contracts/cache
+contracts/
 coverage
 tmp
-.tmp
 .env
 .env.*
 !.env.example

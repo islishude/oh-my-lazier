@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compose.integration.yml
-INTEGRATION_TMP_DIR = .tmp/integration
+INTEGRATION_TMP_DIR = tmp/integration
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 
@@ -54,7 +54,6 @@ integration-up:
 integration-down:
 	-$(INTEGRATION_COMPOSE) down -v --remove-orphans
 	rm -rf $(INTEGRATION_TMP_DIR)
-	-rmdir .tmp 2>/dev/null || true
 
 test-integration:
 	mkdir -p $(INTEGRATION_TMP_DIR)/postgres
@@ -62,7 +61,6 @@ test-integration:
 	cleanup() { \
 		$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
 		rm -rf $(INTEGRATION_TMP_DIR); \
-		rmdir .tmp 2>/dev/null || true; \
 	}; \
 	trap cleanup EXIT INT TERM; \
 	$(INTEGRATION_COMPOSE) up -d --wait; \
