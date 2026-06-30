@@ -390,7 +390,7 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 	if _, err := i.ProcessOnce(ctx); err != nil {
 		return err
 	}
-	ticker := time.NewTimer(0)
+	ticker := time.NewTicker(i.pollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -400,7 +400,6 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 			if _, err := i.ProcessOnce(ctx); err != nil {
 				return err
 			}
-			ticker.Reset(i.pollInterval)
 		}
 	}
 }
