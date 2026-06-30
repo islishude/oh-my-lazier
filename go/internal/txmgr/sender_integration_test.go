@@ -153,6 +153,9 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
+	if outboxTx.Nonce >= client.pendingNonce {
+		client.pendingNonce = outboxTx.Nonce + 1
+	}
 	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
 
 	processedID, err := manager.ProcessReceipts(t.Context(), Target{
@@ -224,6 +227,9 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 	outboxTx, err := store.GetOutboxTx(t.Context(), id)
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.Nonce >= client.pendingNonce {
+		client.pendingNonce = outboxTx.Nonce + 1
 	}
 	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
 
@@ -384,6 +390,205 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 	}
 	if job.Status != string(packets.DVNVerified) {
 		t.Fatalf("dvn job status = %q, want %q", job.Status, packets.DVNVerified)
+	}
+}
+
+func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 67,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+	packet := testExecutorPacket(t)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(t.Context(), db.DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNReadyToVerify),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	if _, err := store.EnqueueDVNVerifyTx(t.Context(), packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), db.TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              dvnVerifyPurpose,
+		GUID:                 packet.GUID.Bytes(),
+		To:                   packet.Receiver,
+		Calldata:             []byte{0x06, 0x07},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(120_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signer.Address().Hex(),
+	}, []byte(`{"status":"ready"}`)); err != nil {
+		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	failedTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() after receipt error = %v", err)
+	}
+	if failedTx.Status != db.TxStatusFailed {
+		t.Fatalf("tx status = %q, want %q", failedTx.Status, db.TxStatusFailed)
+	}
+	job, err := store.GetDVNJob(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetDVNJob() error = %v", err)
+	}
+	if job.Status != string(packets.DVNVerifyTxEnqueued) {
+		t.Fatalf("dvn status = %q, want %q", job.Status, packets.DVNVerifyTxEnqueued)
+	}
+}
+
+func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 77,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, nil)
+	packet := testExecutorPacket(t)
+	packet.Status = string(packets.ExecutorAssigned)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(t.Context(), db.DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNReadyToVerify),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+
+	if _, err := store.EnqueueDVNVerifyTx(t.Context(), packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), db.TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              dvnVerifyPurpose,
+		GUID:                 packet.GUID.Bytes(),
+		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata:             []byte{0x06, 0x07},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(120_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signer.Address().Hex(),
+	}, []byte(`{"status":"ready"}`)); err != nil {
+		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
+	}
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	job, err := store.GetDVNJob(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetDVNJob() error = %v", err)
+	}
+	if job.Status != string(packets.DVNVerified) {
+		t.Fatalf("dvn status = %q, want %q", job.Status, packets.DVNVerified)
+	}
+
+	if err := store.MarkExecutorWaitingDVNVerification(t.Context(), packet.GUID, string(packets.ExecutorAssigned)); err != nil {
+		t.Fatalf("MarkExecutorWaitingDVNVerification() error = %v", err)
+	}
+	if err := store.MarkExecutorVerifiable(t.Context(), packet.GUID, string(packets.ExecutorWaitingDVNVerification)); err != nil {
+		t.Fatalf("MarkExecutorVerifiable() error = %v", err)
+	}
+	if _, err := store.EnqueueExecutorTx(t.Context(), packet.GUID, string(packets.ExecutorVerifiable), string(packets.ExecutorCommitTxEnqueued), db.TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              executorCommitVerificationPurpose,
+		GUID:                 packet.GUID.Bytes(),
+		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata:             []byte{0x08, 0x09},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(150_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueExecutorTx(commit) error = %v", err)
+	}
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	committed, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket() after commit error = %v", err)
+	}
+	if committed.Status != string(packets.ExecutorCommitted) {
+		t.Fatalf("packet status = %q, want %q", committed.Status, packets.ExecutorCommitted)
+	}
+
+	if err := store.MarkExecutorExecutable(t.Context(), packet.GUID); err != nil {
+		t.Fatalf("MarkExecutorExecutable() error = %v", err)
+	}
+	if _, err := store.EnqueueExecutorTx(t.Context(), packet.GUID, string(packets.ExecutorExecutable), string(packets.ExecutorLzReceiveTxEnqueued), db.TxRequest{
+		ChainEID:             packet.DstEID,
+		Purpose:              executorLzReceivePurpose,
+		GUID:                 packet.GUID.Bytes(),
+		To:                   common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		Calldata:             []byte{0x0a, 0x0b},
+		Value:                big.NewInt(0),
+		GasLimit:             big.NewInt(150_000),
+		MaxFeePerGas:         big.NewInt(2_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		SignerID:             signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueExecutorTx(lzReceive) error = %v", err)
+	}
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	delivered, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket() after delivery error = %v", err)
+	}
+	if delivered.Status != string(packets.ExecutorDelivered) {
+		t.Fatalf("packet status = %q, want %q", delivered.Status, packets.ExecutorDelivered)
+	}
+}
+
+func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, client *fakeChainClient, signer *keystore.Signer, chainEID uint32, chainID *big.Int) {
+	t.Helper()
+	id, err := manager.ProcessNext(t.Context(), chainEID, chainID, signer, client)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.Nonce >= client.pendingNonce {
+		client.pendingNonce = outboxTx.Nonce + 1
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: chainEID,
+		ChainID:  chainID,
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
 }
 

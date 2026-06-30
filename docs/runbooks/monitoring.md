@@ -31,6 +31,13 @@ Required alerts:
 - `LazTxOutboxFailed`: `laz_tx_outbox_total{status="failed"} > 0`; ticket; page if failure count increases for active migration chains.
 - `LazIndexerCursorStalled`: missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window; page if the chain is actively used.
 
+Active worker status paths:
+
+- DVN active verification: `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`.
+- Executor delivery: `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`.
+- Shadow DVN verification stops at `WOULD_VERIFY`; it must not enqueue `dvn_verify` transactions.
+- `QUORUM_CONFLICT`, `REORG_DETECTED`, `MANUAL_REVIEW`, `LZ_RECEIVE_FAILED`, and `tx_outbox.status="failed"` are operator-action states, not healthy terminal states.
+
 Before any migration approval, run the DB-backed readiness gate and attach the JSON output:
 
 ```bash

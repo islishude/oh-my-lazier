@@ -768,6 +768,59 @@ func TestExecutorWorkEnqueueAdvancesStatusAtomically(t *testing.T) {
 	}
 }
 
+func TestExecutorReadinessTransitionsUpdatePacketAndJob(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE guid = $1", packet.GUID.Bytes()); err != nil {
+		t.Fatalf("delete tx_outbox: %v", err)
+	}
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+
+	if err := store.MarkExecutorWaitingDVNVerification(ctx, packet.GUID, string(packets.ExecutorAssigned)); err != nil {
+		t.Fatalf("MarkExecutorWaitingDVNVerification() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorWaitingDVNVerification))
+
+	if err := store.MarkExecutorVerifiable(ctx, packet.GUID, string(packets.ExecutorWaitingDVNVerification)); err != nil {
+		t.Fatalf("MarkExecutorVerifiable() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorVerifiable))
+}
+
 func TestExecutorReceiptTransitionsPersistTxHashes(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -1073,6 +1126,25 @@ func cleanPacketRows(ctx context.Context, t *testing.T, store *Store, guid commo
 	}
 	if _, err := store.pool.Exec(ctx, "DELETE FROM packets WHERE guid = $1", guid.Bytes()); err != nil {
 		t.Fatalf("delete packet: %v", err)
+	}
+}
+
+func assertPacketAndExecutorStatus(ctx context.Context, t *testing.T, store *Store, guid common.Hash, want string) {
+	t.Helper()
+	var packetStatus, jobStatus string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT p.status, ej.status
+		FROM packets p
+		JOIN executor_jobs ej ON ej.guid = p.guid
+		WHERE p.guid = $1
+	`, guid.Bytes()).Scan(&packetStatus, &jobStatus); err != nil {
+		t.Fatalf("select packet/executor status: %v", err)
+	}
+	if packetStatus != want {
+		t.Fatalf("packet status = %q, want %q", packetStatus, want)
+	}
+	if jobStatus != want {
+		t.Fatalf("executor job status = %q, want %q", jobStatus, want)
 	}
 }
 

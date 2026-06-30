@@ -17,6 +17,9 @@ const loopInterval = 5 * time.Second
 // Store is the durable executor state required by the worker.
 type Store interface {
 	ListExecutorWork(ctx context.Context, status string, limit int) ([]db.ExecutorWorkItem, error)
+	MarkExecutorWaitingDVNVerification(ctx context.Context, guid common.Hash, expectedStatus string) error
+	MarkExecutorVerifiable(ctx context.Context, guid common.Hash, expectedStatus string) error
+	MarkExecutorExecutable(ctx context.Context, guid common.Hash) error
 	EnqueueExecutorTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest) (int64, error)
 }
 
@@ -63,6 +66,12 @@ func (w *Worker) RunDeliverer(ctx context.Context) error {
 
 // ProcessCommitterOnce enqueues one commitVerification transaction for a verifiable packet.
 func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
+	if processed, err := w.processCommitReadinessStatus(ctx, string(packets.ExecutorAssigned)); err != nil || processed {
+		return processed, err
+	}
+	if processed, err := w.processCommitReadinessStatus(ctx, string(packets.ExecutorWaitingDVNVerification)); err != nil || processed {
+		return processed, err
+	}
 	work, err := w.store.ListExecutorWork(ctx, string(packets.ExecutorVerifiable), 1)
 	if err != nil {
 		return false, err
@@ -101,12 +110,77 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string) (bool, error) {
+	work, err := w.store.ListExecutorWork(ctx, status, 1)
+	if err != nil || len(work) == 0 {
+		return false, err
+	}
+	item := work[0]
+	pathway, err := w.registry.Pathway(item.Packet.SrcEID, item.Packet.DstEID, item.Packet.Sender, item.Packet.Receiver)
+	if err != nil {
+		return false, err
+	}
+	if !pathway.Enabled {
+		return false, nil
+	}
+	dstChain, err := w.registry.Get(item.Packet.DstEID)
+	if err != nil {
+		return false, err
+	}
+	ready, err := IsCommitVerifiable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
+	if err != nil {
+		return false, err
+	}
+	if ready {
+		if err := w.store.MarkExecutorVerifiable(ctx, item.Packet.GUID, status); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor job became commit-verifiable", "guid", item.Packet.GUID)
+		return true, nil
+	}
+	if status == string(packets.ExecutorAssigned) {
+		if err := w.store.MarkExecutorWaitingDVNVerification(ctx, item.Packet.GUID, status); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor job waiting for dvn verification", "guid", item.Packet.GUID)
+		return true, nil
+	}
+	return false, nil
+}
+
 // ProcessDelivererOnce enqueues one lzReceive transaction for an executable packet.
 func (w *Worker) ProcessDelivererOnce(ctx context.Context) (bool, error) {
+	if processed, err := w.processExecutableReadiness(ctx); err != nil || processed {
+		return processed, err
+	}
 	if processed, err := w.processDelivererStatus(ctx, string(packets.ExecutorExecutable)); err != nil || processed {
 		return processed, err
 	}
 	return w.processDelivererStatus(ctx, string(packets.ExecutorLzReceiveFailed))
+}
+
+func (w *Worker) processExecutableReadiness(ctx context.Context) (bool, error) {
+	work, err := w.store.ListExecutorWork(ctx, string(packets.ExecutorCommitted), 1)
+	if err != nil || len(work) == 0 {
+		return false, err
+	}
+	item := work[0]
+	dstChain, err := w.registry.Get(item.Packet.DstEID)
+	if err != nil {
+		return false, err
+	}
+	ready, err := IsLzReceiveExecutable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
+	if err != nil {
+		return false, err
+	}
+	if !ready {
+		return false, nil
+	}
+	if err := w.store.MarkExecutorExecutable(ctx, item.Packet.GUID); err != nil {
+		return false, err
+	}
+	w.logger.Info("executor job became lzReceive-executable", "guid", item.Packet.GUID)
+	return true, nil
 }
 
 func (w *Worker) processDelivererStatus(ctx context.Context, status string) (bool, error) {

@@ -204,6 +204,24 @@ func (s *Store) EnqueueExecutorTx(ctx context.Context, guid common.Hash, expecte
 	return id, nil
 }
 
+// MarkExecutorWaitingDVNVerification records that a job is assigned but not yet commit-verifiable.
+func (s *Store) MarkExecutorWaitingDVNVerification(ctx context.Context, guid common.Hash, expectedStatus string) error {
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.ExecutorWaitingDVNVerification),
+	})
+}
+
+// MarkExecutorVerifiable records that destination ULN state allows commitVerification.
+func (s *Store) MarkExecutorVerifiable(ctx context.Context, guid common.Hash, expectedStatus string) error {
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.ExecutorVerifiable),
+	})
+}
+
 // MarkExecutorCommitted records a successful commitVerification receipt.
 func (s *Store) MarkExecutorCommitted(ctx context.Context, guid, txHash common.Hash) error {
 	if txHash == (common.Hash{}) {

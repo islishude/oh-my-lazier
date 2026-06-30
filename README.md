@@ -118,6 +118,9 @@ The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJ
 ## Worker Behavior Notes
 
 - Config is loaded once at startup. Runtime config changes require a process restart.
-- The worker skeleton starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context.
+- The worker starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context.
+- In active DVN mode, the DVN flow is `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`. The verifier enqueues `ReceiveUln302.verify`; tx manager is the only component that signs and broadcasts it.
+- The executor flow is `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`. The worker polls destination readiness before commit and delivery, and tx receipts or destination logs persist the final outcomes.
+- Failed `lzReceive` receipts or destination `LzReceiveAlert` logs move jobs to `LZ_RECEIVE_FAILED`, where they remain retryable. Failed `dvn_verify` receipts fail the outbox row and do not mark the DVN job verified.
 - Per-chain `start_block_number` is optional and defaults to `0`. It only seeds the first indexer backfill when no durable cursor exists; after a cursor is written, the database cursor is authoritative.
 - A non-cancellation error from any durable loop cancels the worker process so packet state does not advance with missing components.

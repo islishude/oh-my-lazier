@@ -53,6 +53,105 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 	}
 }
 
+func TestProcessCommitterOnceMarksAssignedWaitingWhenNotVerifiable(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorAssigned): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorAssigned)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeCommitNotReadyCaller{}},
+		"0x9999999999999999999999999999999999999999",
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessCommitterOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessCommitterOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorAssigned) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorAssigned)
+	}
+	if store.nextStatus != string(packets.ExecutorWaitingDVNVerification) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorWaitingDVNVerification)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
+	}
+}
+
+func TestProcessCommitterOnceMarksAssignedVerifiable(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorAssigned): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorAssigned)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
+		"0x9999999999999999999999999999999999999999",
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessCommitterOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessCommitterOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorAssigned) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorAssigned)
+	}
+	if store.nextStatus != string(packets.ExecutorVerifiable) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorVerifiable)
+	}
+}
+
+func TestProcessCommitterOnceMarksWaitingVerifiable(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorWaitingDVNVerification)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorWaitingDVNVerification): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorWaitingDVNVerification)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
+		"0x9999999999999999999999999999999999999999",
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessCommitterOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessCommitterOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorWaitingDVNVerification) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorWaitingDVNVerification)
+	}
+	if store.nextStatus != string(packets.ExecutorVerifiable) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorVerifiable)
+	}
+}
+
 func TestIsCommitVerifiableRejectsEmptyPayloadHash(t *testing.T) {
 	packet := testPacketRecord()
 	packet.PayloadHash = common.Hash{}
@@ -69,6 +168,41 @@ func TestIsCommitVerifiableRejectsEmptyPayloadHash(t *testing.T) {
 	}
 	if ready {
 		t.Fatal("ready = true, want false")
+	}
+}
+
+func TestProcessDelivererOnceMarksCommittedExecutable(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorCommitted)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorCommitted): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorCommitted)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
+		"0x9999999999999999999999999999999999999999",
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessDelivererOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessDelivererOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorCommitted) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorCommitted)
+	}
+	if store.nextStatus != string(packets.ExecutorExecutable) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorExecutable)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
 	}
 }
 
@@ -187,7 +321,34 @@ func (s *fakeStore) ListExecutorWork(_ context.Context, status string, _ int) ([
 	if s.workByStatus != nil {
 		return s.workByStatus[status], nil
 	}
-	return s.work, nil
+	var out []db.ExecutorWorkItem
+	for _, item := range s.work {
+		if item.Job.Status == status {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+func (s *fakeStore) MarkExecutorWaitingDVNVerification(_ context.Context, guid common.Hash, expectedStatus string) error {
+	s.guid = guid
+	s.expectedStatus = expectedStatus
+	s.nextStatus = string(packets.ExecutorWaitingDVNVerification)
+	return nil
+}
+
+func (s *fakeStore) MarkExecutorVerifiable(_ context.Context, guid common.Hash, expectedStatus string) error {
+	s.guid = guid
+	s.expectedStatus = expectedStatus
+	s.nextStatus = string(packets.ExecutorVerifiable)
+	return nil
+}
+
+func (s *fakeStore) MarkExecutorExecutable(_ context.Context, guid common.Hash) error {
+	s.guid = guid
+	s.expectedStatus = string(packets.ExecutorCommitted)
+	s.nextStatus = string(packets.ExecutorExecutable)
+	return nil
 }
 
 func (s *fakeStore) EnqueueExecutorTx(_ context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest) (int64, error) {
@@ -222,6 +383,23 @@ func (fakeCommitReadyCaller) CallContract(_ context.Context, call ethereum.CallM
 			OptionalDVNThreshold: 0,
 			RequiredDVNs:         []common.Address{common.HexToAddress("0x3333333333333333333333333333333333333333")},
 		})
+	default:
+		return nil, fmt.Errorf("unexpected method %s", method.Name)
+	}
+}
+
+type fakeCommitNotReadyCaller struct{}
+
+func (fakeCommitNotReadyCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	method, err := methodBySelector(call.Data)
+	if err != nil {
+		return nil, err
+	}
+	switch method.Name {
+	case "isValidReceiveLibrary":
+		return method.Outputs.Pack(true)
+	case "verifiable":
+		return method.Outputs.Pack(false)
 	default:
 		return nil, fmt.Errorf("unexpected method %s", method.Name)
 	}

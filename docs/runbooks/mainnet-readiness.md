@@ -66,6 +66,8 @@ Required runtime checks:
 - `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics.
 - No chain or pathway is paused before the migration begins.
 - No tx outbox row is stuck in `failed` for active chains.
+- No DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
+- No executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
 - Every enabled pathway has advanced `executor_source` and `executor_destination` indexer cursors on the relevant active chains.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
