@@ -43,6 +43,9 @@ type App struct {
 
 // New builds an App from already-validated configuration.
 func New(cfg config.Config, logger *slog.Logger) (*App, error) {
+	if logger == nil {
+		return nil, errors.New("app logger is required")
+	}
 	return &App{cfg: cfg, logger: logger}, nil
 }
 
@@ -120,16 +123,16 @@ func superviseLoop(ctx context.Context, name string, restartDelay time.Duration,
 	for {
 		err := run(ctx)
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-			logLoopInfo(logger, "loop stopped", "name", name)
+			logger.Info("loop stopped", "name", name)
 			return
 		}
 		if err != nil {
-			logLoopError(logger, "loop failed; restarting", "name", name, "error", err)
+			logger.Error("loop failed; restarting", "name", name, "error", err)
 		} else {
-			logLoopWarn(logger, "loop stopped unexpectedly; restarting", "name", name)
+			logger.Warn("loop stopped unexpectedly; restarting", "name", name)
 		}
 		if !waitLoopRestart(ctx, restartDelay) {
-			logLoopInfo(logger, "loop stopped", "name", name)
+			logger.Info("loop stopped", "name", name)
 			return
 		}
 	}
@@ -151,24 +154,6 @@ func waitLoopRestart(ctx context.Context, delay time.Duration) bool {
 		return false
 	case <-timer.C:
 		return true
-	}
-}
-
-func logLoopInfo(logger *slog.Logger, msg string, args ...any) {
-	if logger != nil {
-		logger.Info(msg, args...)
-	}
-}
-
-func logLoopWarn(logger *slog.Logger, msg string, args ...any) {
-	if logger != nil {
-		logger.Warn(msg, args...)
-	}
-}
-
-func logLoopError(logger *slog.Logger, msg string, args ...any) {
-	if logger != nil {
-		logger.Error(msg, args...)
 	}
 }
 

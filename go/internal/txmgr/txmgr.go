@@ -53,7 +53,7 @@ func NewWithTargets(store *db.Store, targets []Target, logger *slog.Logger) *Man
 
 // Run starts the transaction manager loop until the context is canceled.
 func (m *Manager) Run(ctx context.Context) error {
-	m.logInfo("tx manager loop started", "targets", len(m.targets))
+	m.logger.Info("tx manager loop started", "targets", len(m.targets))
 	for {
 		processed, err := m.processOnce(ctx)
 		if err != nil {
@@ -82,7 +82,7 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			return processed, err
 		} else {
 			processed = true
-			m.logInfo("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 			continue
 		}
 		id, err = m.processNext(ctx, target)
@@ -93,7 +93,7 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			return processed, err
 		}
 		processed = true
-		m.logInfo("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 	}
 	return processed, nil
 }
@@ -104,10 +104,4 @@ func (m *Manager) processTarget(ctx context.Context, target Target) (int64, erro
 
 func (m *Manager) processTargetReceipt(ctx context.Context, target Target) (int64, error) {
 	return m.ProcessReceipts(ctx, target, 1)
-}
-
-func (m *Manager) logInfo(msg string, args ...any) {
-	if m.logger != nil {
-		m.logger.Info(msg, args...)
-	}
 }

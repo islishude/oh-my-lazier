@@ -24,7 +24,7 @@ func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
 	client := &fakeChainClient{pendingNonce: 10}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID:             40161,
@@ -78,7 +78,7 @@ func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
 	client := &fakeChainClient{pendingNonce: 21}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID:             40161,
@@ -129,7 +129,7 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 		pendingNonce: 33,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID:             40161,
@@ -186,7 +186,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 		pendingNonce: 44,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 	packet := testExecutorPacket(t)
 	packet.Status = string(packets.ExecutorExecutable)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {
@@ -257,7 +257,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 		pendingNonce: 55,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 	packet := testExecutorPacket(t)
 	packet.Status = string(packets.ExecutorExecutable)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {
@@ -332,7 +332,7 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 		pendingNonce: 66,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 	packet := testExecutorPacket(t)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
@@ -400,7 +400,7 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 		pendingNonce: 67,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 	packet := testExecutorPacket(t)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
@@ -468,7 +468,7 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 		pendingNonce: 77,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, nil)
+	manager := New(store, discardLogger())
 	packet := testExecutorPacket(t)
 	packet.Status = string(packets.ExecutorAssigned)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {

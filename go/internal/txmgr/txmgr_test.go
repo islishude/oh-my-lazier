@@ -3,6 +3,8 @@ package txmgr
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"math/big"
 	"testing"
 	"time"
@@ -13,7 +15,7 @@ import (
 
 func TestRunProcessesTargetsUntilQueueIsEmpty(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, nil)
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Hour
 	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
 	calls := 0
@@ -37,7 +39,7 @@ func TestRunProcessesTargetsUntilQueueIsEmpty(t *testing.T) {
 
 func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, nil)
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Millisecond
 	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
 	calls := 0
@@ -58,7 +60,7 @@ func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 
 func TestRunReturnsProcessingError(t *testing.T) {
 	wantErr := errors.New("broadcast failed")
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, nil)
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
 	manager.processNext = func(context.Context, Target) (int64, error) {
 		return 0, wantErr
@@ -86,4 +88,8 @@ func (fakeSigner) SignTx(context.Context, *types.Transaction, *big.Int) (*types.
 
 func (fakeSigner) Type() string {
 	return "fake"
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }

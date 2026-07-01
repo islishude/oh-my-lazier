@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,7 +30,7 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
-	worker, err := New(cfg, nil)
+	worker, err := New(cfg, discardLogger())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -53,8 +55,18 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 	}
 }
 
+func TestNewRejectsNilLogger(t *testing.T) {
+	_, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), nil)
+	if err == nil {
+		t.Fatal("New() error = nil, want logger error")
+	}
+	if !strings.Contains(err.Error(), "logger is required") {
+		t.Fatalf("New() error = %v, want logger error", err)
+	}
+}
+
 func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
-	worker, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), nil)
+	worker, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -79,7 +91,7 @@ func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
 	cfg.DatabaseURL = "postgres://invalid:invalid@127.0.0.1:1/db?sslmode=disable"
 	cfg.Pricing = testPricingConfig()
-	worker, err := New(cfg, nil)
+	worker, err := New(cfg, discardLogger())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -101,7 +113,7 @@ func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 	go func() {
 		defer close(done)
 		attempts := 0
-		superviseLoop(ctx, "test", 0, nil, func(context.Context) error {
+		superviseLoop(ctx, "test", 0, discardLogger(), func(context.Context) error {
 			attempts++
 			calls <- attempts
 			if attempts == 2 {
@@ -127,6 +139,10 @@ func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("superviseLoop did not stop after context cancellation")
 	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func testConfig(signerID, keystorePath string) config.Config {
