@@ -29,6 +29,16 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if ethereum.IndexerQueryBlockRange != 250 {
 		t.Fatalf("IndexerQueryBlockRange = %d, want 250", ethereum.IndexerQueryBlockRange)
 	}
+	if ethereum.TxType != config.TxTypeDynamicFee {
+		t.Fatalf("TxType = %q, want %q", ethereum.TxType, config.TxTypeDynamicFee)
+	}
+	base, err := registry.Get(40245)
+	if err != nil {
+		t.Fatalf("Get(40245) error = %v", err)
+	}
+	if base.TxType != config.TxTypeLegacy {
+		t.Fatalf("base TxType = %q, want %q", base.TxType, config.TxTypeLegacy)
+	}
 
 	pathway, err := registry.Pathway(
 		40161,
@@ -83,6 +93,7 @@ func testChains() []config.ChainConfig {
 			EID:             40245,
 			Name:            "base-sepolia",
 			ChainID:         84532,
+			TxType:          config.TxTypeLegacy,
 			EndpointAddress: "0x4444444444444444444444444444444444444444",
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},

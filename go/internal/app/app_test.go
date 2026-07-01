@@ -42,6 +42,7 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want one per chain", len(targets))
 	}
+	wantTxTypes := map[uint32]string{40161: config.TxTypeDynamicFee, 40245: config.TxTypeLegacy}
 	for _, target := range targets {
 		if target.Signer.Address() != account.Address {
 			t.Fatalf("target signer = %s, want %s", target.Signer.Address(), account.Address)
@@ -51,6 +52,9 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 		}
 		if target.Client == nil {
 			t.Fatal("target client is nil")
+		}
+		if target.TxType != wantTxTypes[target.ChainEID] {
+			t.Fatalf("target tx type for chain %d = %q, want %q", target.ChainEID, target.TxType, wantTxTypes[target.ChainEID])
 		}
 	}
 }
@@ -177,6 +181,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 				EID:             40245,
 				Name:            "base-sepolia",
 				ChainID:         84532,
+				TxType:          config.TxTypeLegacy,
 				EndpointAddress: "0x4444444444444444444444444444444444444444",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},

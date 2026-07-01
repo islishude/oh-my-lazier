@@ -38,7 +38,7 @@ Implementation evidence:
 - `go/internal/app.App.txTargets` loads configured signers and creates one tx manager target per required signer per chain.
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
 - `go/internal/signer/kms.Signer.SignHash` parses DER signatures, normalizes low-S, and recovers the configured Ethereum address.
-- `go/internal/signer/kms.Signer.SignTx` signs EIP-1559 transactions through the same address-recovery boundary.
+- `go/internal/signer/kms.Signer.SignTx` signs configured dynamic-fee and legacy transactions through the same address-recovery boundary.
 
 ## Local Keystore Requirements
 

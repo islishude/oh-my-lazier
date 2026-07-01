@@ -17,6 +17,7 @@ const defaultPollInterval = 5 * time.Second
 type Target struct {
 	ChainEID uint32
 	ChainID  *big.Int
+	TxType   string
 	Signer   signer.Signer
 	Client   ChainClient
 }
@@ -99,7 +100,7 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 }
 
 func (m *Manager) processTarget(ctx context.Context, target Target) (int64, error) {
-	return m.ProcessNext(ctx, target.ChainEID, target.ChainID, target.Signer, target.Client)
+	return m.ProcessNext(ctx, target.ChainEID, target.ChainID, target.TxType, target.Signer, target.Client)
 }
 
 func (m *Manager) processTargetReceipt(ctx context.Context, target Target) (int64, error) {

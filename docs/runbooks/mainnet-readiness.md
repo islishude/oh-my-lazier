@@ -107,7 +107,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
-- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row. For `tx_type: legacy`, replacement re-signs with a fresh RPC-suggested gas price and does not persist or guarantee a local gas-price bump.
 
 ## Rejection Criteria
 

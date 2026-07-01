@@ -204,11 +204,12 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	if err != nil {
 		return nil, err
 	}
-	maxFeePerGas, err := parseBigInt(a.cfg.Pricing.MaxFeePerGasWei)
+	dynamicFeeCapsRequired := a.requiresDynamicFeeCaps()
+	maxFeePerGas, err := parseOptionalBigInt(a.cfg.Pricing.MaxFeePerGasWei, dynamicFeeCapsRequired)
 	if err != nil {
 		return nil, err
 	}
-	maxPriorityFeePerGas, err := parseBigInt(a.cfg.Pricing.MaxPriorityFeePerGasWei)
+	maxPriorityFeePerGas, err := parseOptionalBigInt(a.cfg.Pricing.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -300,11 +301,12 @@ func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker,
 	if a.cfg.DVN.Mode != string(dvn.ModeActive) {
 		return dvn.New(a.cfg.DVN.Mode, store, registry, a.logger), nil
 	}
-	maxFeePerGas, err := parseBigInt(a.cfg.DVN.MaxFeePerGasWei)
+	dynamicFeeCapsRequired := a.requiresDynamicFeeCaps()
+	maxFeePerGas, err := parseOptionalBigInt(a.cfg.DVN.MaxFeePerGasWei, dynamicFeeCapsRequired)
 	if err != nil {
 		return nil, err
 	}
-	maxPriorityFeePerGas, err := parseBigInt(a.cfg.DVN.MaxPriorityFeePerGasWei)
+	maxPriorityFeePerGas, err := parseOptionalBigInt(a.cfg.DVN.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +343,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			targets = append(targets, txmgr.Target{
 				ChainEID: configuredChain.EID,
 				ChainID:  new(big.Int).Set(configuredChain.ChainID),
+				TxType:   configuredChain.TxType,
 				Signer:   configuredSigner,
 				Client:   configuredChain.RPC,
 			})
@@ -402,6 +405,15 @@ func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error)
 	return signers, nil
 }
 
+func (a *App) requiresDynamicFeeCaps() bool {
+	for _, chain := range a.cfg.Chains {
+		if config.NormalizeTxType(chain.TxType) == config.TxTypeDynamicFee {
+			return true
+		}
+	}
+	return false
+}
+
 func envValue(name string) (string, error) {
 	value := os.Getenv(name)
 	if value == "" {
@@ -416,4 +428,11 @@ func parseBigInt(value string) (*big.Int, error) {
 		return nil, errors.New("invalid integer")
 	}
 	return parsed, nil
+}
+
+func parseOptionalBigInt(value string, required bool) (*big.Int, error) {
+	if value == "" && !required {
+		return nil, nil
+	}
+	return parseBigInt(value)
 }

@@ -49,6 +49,33 @@ func TestValidateRejectsNonPhaseOneConfirmations(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsSupportedChainTxTypes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		txType string
+	}{
+		{name: "default empty", txType: ""},
+		{name: "dynamic fee", txType: TxTypeDynamicFee},
+		{name: "legacy", txType: TxTypeLegacy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].TxType = tt.txType
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalidChainTxType(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].TxType = "blob"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want invalid tx_type error")
+	}
+}
+
 func TestValidateAcceptsSupportedRPCURLFormats(t *testing.T) {
 	for _, rpcURL := range []string{
 		"http://localhost:8545",
@@ -128,6 +155,19 @@ func TestValidateRejectsActiveDVNWithoutFees(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsLegacyActiveDVNWithoutDynamicFeeCaps(t *testing.T) {
+	cfg := validConfig()
+	for i := range cfg.Chains {
+		cfg.Chains[i].TxType = TxTypeLegacy
+	}
+	cfg.DVN = validActiveDVNConfig()
+	cfg.DVN.MaxFeePerGasWei = ""
+	cfg.DVN.MaxPriorityFeePerGasWei = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
 	cfg := validConfig()
 	cfg.Signers[0].Keystore.PasswordEnv = ""
@@ -176,6 +216,19 @@ func TestValidateRejectsIncompletePricingChains(t *testing.T) {
 	cfg.Pricing.Chains = cfg.Pricing.Chains[:1]
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want incomplete pricing chains error")
+	}
+}
+
+func TestValidateAcceptsLegacyPricingWithoutDynamicFeeCaps(t *testing.T) {
+	cfg := validConfig()
+	for i := range cfg.Chains {
+		cfg.Chains[i].TxType = TxTypeLegacy
+	}
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.MaxFeePerGasWei = ""
+	cfg.Pricing.MaxPriorityFeePerGasWei = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -288,6 +341,9 @@ pathways:
 	}
 	if staticConfig.Chains[0].IndexerQueryBlockRange != 500 {
 		t.Fatalf("LoadStatic() indexer_query_block_range = %d, want default 500", staticConfig.Chains[0].IndexerQueryBlockRange)
+	}
+	if staticConfig.Chains[0].TxType != TxTypeDynamicFee {
+		t.Fatalf("LoadStatic() tx_type = %q, want %q", staticConfig.Chains[0].TxType, TxTypeDynamicFee)
 	}
 	workerConfig, err := Load(path)
 	if err != nil {

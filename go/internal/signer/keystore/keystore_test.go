@@ -87,3 +87,43 @@ func TestSignerSignsEIP1559Transaction(t *testing.T) {
 		t.Fatalf("sender = %s, want %s", from, signer.Address())
 	}
 }
+
+func TestSignerSignsLegacyTransaction(t *testing.T) {
+	dir := t.TempDir()
+	const password = "test-password"
+	account, err := gethkeystore.StoreKey(dir, password, gethkeystore.StandardScryptN, gethkeystore.StandardScryptP)
+	if err != nil {
+		t.Fatalf("StoreKey() error = %v", err)
+	}
+
+	signer, err := LoadWithPasswordSource(account.URL.Path, PasswordSource{Value: password})
+	if err != nil {
+		t.Fatalf("LoadWithPasswordSource() error = %v", err)
+	}
+
+	chainID := big.NewInt(11155111)
+	to := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tx := types.NewTx(&types.LegacyTx{
+		Nonce:    7,
+		GasPrice: big.NewInt(2_000_000_000),
+		Gas:      100_000,
+		To:       &to,
+		Value:    big.NewInt(123),
+		Data:     []byte{0x01, 0x02, 0x03},
+	})
+
+	signed, err := signer.SignTx(t.Context(), tx, chainID)
+	if err != nil {
+		t.Fatalf("SignTx() error = %v", err)
+	}
+	if signed.Type() != types.LegacyTxType {
+		t.Fatalf("signed tx type = %d, want %d", signed.Type(), types.LegacyTxType)
+	}
+	from, err := types.Sender(types.LatestSignerForChainID(chainID), signed)
+	if err != nil {
+		t.Fatalf("Sender() error = %v", err)
+	}
+	if from != signer.Address() {
+		t.Fatalf("sender = %s, want %s", from, signer.Address())
+	}
+}

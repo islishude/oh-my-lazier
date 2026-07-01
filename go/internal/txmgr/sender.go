@@ -19,11 +19,15 @@ const (
 	executorCommitVerificationPurpose = "executor_commit_verification"
 	executorLzReceivePurpose          = "executor_lz_receive"
 	dvnVerifyPurpose                  = "dvn_verify"
+
+	txTypeDynamicFee = "dynamic_fee"
+	txTypeLegacy     = "legacy"
 )
 
 // ChainClient is the tx manager's RPC boundary for nonce reads and broadcasts.
 type ChainClient interface {
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
+	SuggestGasPrice(ctx context.Context) (*big.Int, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
 }
@@ -35,7 +39,7 @@ var ErrNoQueuedTx = errors.New("no queued tx")
 var ErrNoReceiptUpdate = errors.New("no receipt update")
 
 // ProcessNext signs and broadcasts one queued outbox transaction for a signer.
-func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big.Int, signer signer.Signer, client ChainClient) (int64, error) {
+func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big.Int, txType string, signer signer.Signer, client ChainClient) (int64, error) {
 	if chainID == nil || chainID.Sign() <= 0 {
 		return 0, errors.New("chain id is required")
 	}
@@ -54,7 +58,7 @@ func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big
 	if err != nil {
 		return 0, err
 	}
-	signed, err := signOutboxTx(ctx, outboxTx, chainID, signer)
+	signed, err := signOutboxTx(ctx, outboxTx, chainID, normalizeTxType(txType), signer, client)
 	if err != nil {
 		_ = m.store.MarkTxFailed(ctx, outboxTx.ID, err)
 		return 0, err
@@ -195,28 +199,57 @@ func (m *Manager) dvnStatusMatches(ctx context.Context, guid common.Hash, status
 	return false
 }
 
-func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, signer signer.Signer) (*types.Transaction, error) {
+func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, txType string, signer signer.Signer, client ChainClient) (*types.Transaction, error) {
 	if outboxTx.Status != db.TxStatusNonceAssigned {
 		return nil, fmt.Errorf("outbox tx %d status %q is not signable", outboxTx.ID, outboxTx.Status)
 	}
 	if outboxTx.GasLimit == 0 {
 		return nil, fmt.Errorf("outbox tx %d gas limit is required", outboxTx.ID)
 	}
-	if outboxTx.MaxFeePerGas == nil || outboxTx.MaxFeePerGas.Sign() <= 0 {
-		return nil, fmt.Errorf("outbox tx %d max fee per gas is required", outboxTx.ID)
+	var tx *types.Transaction
+	switch txType {
+	case txTypeDynamicFee:
+		if outboxTx.MaxFeePerGas == nil || outboxTx.MaxFeePerGas.Sign() <= 0 {
+			return nil, fmt.Errorf("outbox tx %d max fee per gas is required", outboxTx.ID)
+		}
+		if outboxTx.MaxPriorityFeePerGas == nil || outboxTx.MaxPriorityFeePerGas.Sign() <= 0 {
+			return nil, fmt.Errorf("outbox tx %d max priority fee per gas is required", outboxTx.ID)
+		}
+		tx = types.NewTx(&types.DynamicFeeTx{
+			ChainID:   chainID,
+			Nonce:     outboxTx.Nonce,
+			GasTipCap: outboxTx.MaxPriorityFeePerGas,
+			GasFeeCap: outboxTx.MaxFeePerGas,
+			Gas:       outboxTx.GasLimit,
+			To:        &outboxTx.To,
+			Value:     outboxTx.Value,
+			Data:      outboxTx.Calldata,
+		})
+	case txTypeLegacy:
+		gasPrice, err := client.SuggestGasPrice(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if gasPrice == nil || gasPrice.Sign() <= 0 {
+			return nil, fmt.Errorf("outbox tx %d legacy gas price is required", outboxTx.ID)
+		}
+		tx = types.NewTx(&types.LegacyTx{
+			Nonce:    outboxTx.Nonce,
+			GasPrice: gasPrice,
+			Gas:      outboxTx.GasLimit,
+			To:       &outboxTx.To,
+			Value:    outboxTx.Value,
+			Data:     outboxTx.Calldata,
+		})
+	default:
+		return nil, fmt.Errorf("unsupported tx type %q", txType)
 	}
-	if outboxTx.MaxPriorityFeePerGas == nil || outboxTx.MaxPriorityFeePerGas.Sign() <= 0 {
-		return nil, fmt.Errorf("outbox tx %d max priority fee per gas is required", outboxTx.ID)
-	}
-	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID:   chainID,
-		Nonce:     outboxTx.Nonce,
-		GasTipCap: outboxTx.MaxPriorityFeePerGas,
-		GasFeeCap: outboxTx.MaxFeePerGas,
-		Gas:       outboxTx.GasLimit,
-		To:        &outboxTx.To,
-		Value:     outboxTx.Value,
-		Data:      outboxTx.Calldata,
-	})
 	return signer.SignTx(ctx, tx, chainID)
+}
+
+func normalizeTxType(txType string) string {
+	if txType == "" {
+		return txTypeDynamicFee
+	}
+	return txType
 }

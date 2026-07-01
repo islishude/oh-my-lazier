@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	// TxStatusQueued means a transaction request is waiting for nonce assignment.
+	// TxStatusQueued means a transaction request is waiting for nonce assignment or re-signing.
 	TxStatusQueued = "queued"
 	// TxStatusNonceAssigned means the tx manager has reserved a nonce for signing.
 	TxStatusNonceAssigned = "nonce_assigned"
@@ -27,6 +27,7 @@ const (
 )
 
 var pendingNonceStatuses = []string{
+	TxStatusQueued,
 	TxStatusNonceAssigned,
 	TxStatusSigned,
 	TxStatusBroadcast,
@@ -105,7 +106,8 @@ func (s *Store) EnqueueTx(ctx context.Context, request TxRequest) (int64, error)
 // ClaimNextNonce reserves the next nonce for one queued outbox row.
 //
 // The transaction-scoped advisory lock serializes nonce assignment per
-// (chain_eid, signer_id). The assigned nonce is max(rpcPendingNonce,
+// (chain_eid, signer_id). If a queued replacement already has a nonce, that
+// nonce is preserved; otherwise the assigned nonce is max(rpcPendingNonce,
 // highest locally pending nonce + 1).
 func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
 	if chainEID == 0 {
@@ -126,14 +128,15 @@ func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID st
 	}
 
 	var id int64
+	var assignedNonce *int64
 	err = tx.QueryRow(ctx, `
-		SELECT id
+		SELECT id, nonce
 		FROM tx_outbox
 		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
 		ORDER BY id
 		FOR UPDATE SKIP LOCKED
 		LIMIT 1
-	`, chainEID, signerID, TxStatusQueued).Scan(&id)
+	`, chainEID, signerID, TxStatusQueued).Scan(&id, &assignedNonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ClaimedTx{}, pgx.ErrNoRows
 	}
@@ -141,9 +144,17 @@ func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID st
 		return ClaimedTx{}, err
 	}
 
-	nextNonce, err := s.nextNonce(ctx, tx, chainEID, signerID, rpcPendingNonce)
-	if err != nil {
-		return ClaimedTx{}, err
+	var nextNonce uint64
+	if assignedNonce != nil {
+		if *assignedNonce < 0 {
+			return ClaimedTx{}, fmt.Errorf("negative nonce for chain %d signer %s", chainEID, signerID)
+		}
+		nextNonce = uint64(*assignedNonce)
+	} else {
+		nextNonce, err = s.nextNonce(ctx, tx, chainEID, signerID, rpcPendingNonce)
+		if err != nil {
+			return ClaimedTx{}, err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
@@ -275,7 +286,7 @@ func (s *Store) MarkTxFailed(ctx context.Context, id int64, failure error) error
 	return s.updateTxStatus(ctx, id, TxStatusFailed, common.Hash{}, message)
 }
 
-// PrepareReplacementTx bumps fees on a nonce-assigned transaction while preserving its nonce.
+// PrepareReplacementTx bumps fees on a transaction while preserving its nonce for re-signing.
 func (s *Store) PrepareReplacementTx(ctx context.Context, id int64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
 	if maxFeePerGas == nil || maxFeePerGas.Sign() <= 0 {
 		return errors.New("replacement max fee per gas is required")
@@ -294,7 +305,28 @@ func (s *Store) PrepareReplacementTx(ctx context.Context, id int64, maxFeePerGas
 			last_error = NULL,
 			updated_at = now()
 		WHERE id = $4 AND nonce IS NOT NULL
-	`, maxFeePerGas.String(), maxPriorityFeePerGas.String(), TxStatusNonceAssigned, id)
+	`, maxFeePerGas.String(), maxPriorityFeePerGas.String(), TxStatusQueued, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d is not replaceable", id)
+	}
+	return nil
+}
+
+// PrepareLegacyReplacementTx resets a transaction for re-signing with a fresh legacy gas price while preserving its nonce.
+func (s *Store) PrepareLegacyReplacementTx(ctx context.Context, id int64) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			tx_hash = NULL,
+			attempts = attempts + 1,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $2 AND nonce IS NOT NULL
+	`, TxStatusQueued, id)
 	if err != nil {
 		return err
 	}

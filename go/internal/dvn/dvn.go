@@ -63,7 +63,7 @@ type ReceiptReader interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*gethtypes.Receipt, error)
 }
 
-// TxFees carries optional EIP-1559 transaction fee settings for active verify requests.
+// TxFees carries optional dynamic-fee transaction fee caps for active verify requests.
 type TxFees struct {
 	GasLimit             *big.Int
 	MaxFeePerGas         *big.Int

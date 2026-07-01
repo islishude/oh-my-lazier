@@ -14,6 +14,7 @@ type Chain struct {
 	EID                    uint32
 	Name                   string
 	ChainID                *big.Int
+	TxType                 string
 	EndpointAddress        common.Address
 	Confirmations          uint64
 	StartBlockNumber       uint64
@@ -59,6 +60,7 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			EID:                    cfg.EID,
 			Name:                   cfg.Name,
 			ChainID:                big.NewInt(cfg.ChainID),
+			TxType:                 config.NormalizeTxType(cfg.TxType),
 			EndpointAddress:        common.HexToAddress(cfg.EndpointAddress),
 			Confirmations:          cfg.Confirmations,
 			StartBlockNumber:       cfg.StartBlockNumber,

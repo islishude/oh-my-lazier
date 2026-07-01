@@ -14,6 +14,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// TxTypeDynamicFee selects EIP-1559 dynamic-fee transaction signing.
+	TxTypeDynamicFee = "dynamic_fee"
+	// TxTypeLegacy selects legacy gas-price transaction signing.
+	TxTypeLegacy = "legacy"
+)
+
 // Config is the startup configuration for the single-process worker.
 type Config struct {
 	DatabaseURL string          `yaml:"database_url"`
@@ -117,6 +124,7 @@ type ChainConfig struct {
 	EID                    uint32                `yaml:"eid"`
 	Name                   string                `yaml:"name"`
 	ChainID                int64                 `yaml:"chain_id"`
+	TxType                 string                `yaml:"tx_type"`
 	EndpointAddress        string                `yaml:"endpoint_address"`
 	Confirmations          uint64                `yaml:"confirmations"`
 	StartBlockNumber       uint64                `yaml:"start_block_number"`
@@ -193,8 +201,17 @@ func load(path string, applyEnv bool) (Config, error) {
 		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
 			cfg.Chains[idx].IndexerQueryBlockRange = 500
 		}
+		cfg.Chains[idx].TxType = NormalizeTxType(cfg.Chains[idx].TxType)
 	}
 	return cfg, cfg.Validate()
+}
+
+// NormalizeTxType applies the worker's default transaction type.
+func NormalizeTxType(txType string) string {
+	if txType == "" {
+		return TxTypeDynamicFee
+	}
+	return txType
 }
 
 // Validate checks that required chains, pathways, and mode settings are internally consistent.
@@ -216,6 +233,7 @@ func (c Config) Validate() error {
 		return errors.New("executor signer must reference a configured signer")
 	}
 	seen := make(map[uint32]struct{}, len(c.Chains))
+	dynamicFeeCapsRequired := false
 	for _, chain := range c.Chains {
 		if chain.EID == 0 {
 			return errors.New("chain eid is required")
@@ -225,6 +243,14 @@ func (c Config) Validate() error {
 		}
 		if chain.ChainID <= 0 {
 			return fmt.Errorf("chain %s chain_id is required", chain.Name)
+		}
+		switch NormalizeTxType(chain.TxType) {
+		case TxTypeDynamicFee, TxTypeLegacy:
+		default:
+			return fmt.Errorf("chain %s tx_type must be %q or %q", chain.Name, TxTypeDynamicFee, TxTypeLegacy)
+		}
+		if NormalizeTxType(chain.TxType) == TxTypeDynamicFee {
+			dynamicFeeCapsRequired = true
 		}
 		for label, value := range map[string]string{
 			"endpoint_address":      chain.EndpointAddress,
@@ -274,7 +300,10 @@ func (c Config) Validate() error {
 			"max_priority_fee_per_gas_wei": c.DVN.MaxPriorityFeePerGasWei,
 		} {
 			if value == "" {
-				return fmt.Errorf("dvn %s is required in active mode", label)
+				if dynamicFeeCapsRequired {
+					return fmt.Errorf("dvn %s is required in active mode when a dynamic_fee chain is configured", label)
+				}
+				continue
 			}
 			parsed, ok := new(big.Int).SetString(value, 10)
 			if !ok || parsed.Sign() <= 0 {
@@ -282,7 +311,7 @@ func (c Config) Validate() error {
 			}
 		}
 	}
-	if err := c.validatePricing(seen, signers); err != nil {
+	if err := c.validatePricing(seen, signers, dynamicFeeCapsRequired); err != nil {
 		return err
 	}
 	pathways := make(map[string]struct{}, len(c.Pathways))
@@ -405,7 +434,7 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 	return seen, nil
 }
 
-func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]struct{}) error {
+func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]struct{}, dynamicFeeCapsRequired bool) error {
 	if !c.Pricing.Enabled {
 		return nil
 	}
@@ -430,13 +459,22 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.BufferBps > 10_000 {
 		return errors.New("pricing buffer_bps exceeds 10000")
 	}
+	if c.Pricing.BaseFeeWei == "" {
+		return errors.New("pricing base_fee_wei is required")
+	}
+	baseFee, ok := new(big.Int).SetString(c.Pricing.BaseFeeWei, 10)
+	if !ok || baseFee.Sign() < 0 {
+		return errors.New("pricing base_fee_wei must be a non-negative integer")
+	}
 	for label, value := range map[string]string{
-		"base_fee_wei":                 c.Pricing.BaseFeeWei,
 		"max_fee_per_gas_wei":          c.Pricing.MaxFeePerGasWei,
 		"max_priority_fee_per_gas_wei": c.Pricing.MaxPriorityFeePerGasWei,
 	} {
 		if value == "" {
-			return fmt.Errorf("pricing %s is required", label)
+			if dynamicFeeCapsRequired {
+				return fmt.Errorf("pricing %s is required when a dynamic_fee chain is configured", label)
+			}
+			continue
 		}
 		parsed, ok := new(big.Int).SetString(value, 10)
 		if !ok || parsed.Sign() < 0 {

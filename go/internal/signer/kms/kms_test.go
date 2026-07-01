@@ -132,6 +132,40 @@ func TestSignTxSignsDynamicFeeTransaction(t *testing.T) {
 	}
 }
 
+func TestSignTxSignsLegacyTransaction(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	address := crypto.PubkeyToAddress(key.PublicKey)
+	signer := New(&fakeClient{keySpec: kmstypes.KeySpecEccSecgP256k1, key: key}, "test-key", address)
+	chainID := big.NewInt(11155111)
+	to := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	tx := gethtypes.NewTx(&gethtypes.LegacyTx{
+		Nonce:    3,
+		GasPrice: big.NewInt(2_000_000_000),
+		Gas:      100_000,
+		To:       &to,
+		Value:    big.NewInt(1),
+		Data:     []byte{0x01, 0x02},
+	})
+
+	signed, err := signer.SignTx(t.Context(), tx, chainID)
+	if err != nil {
+		t.Fatalf("SignTx() error = %v", err)
+	}
+	if signed.Type() != gethtypes.LegacyTxType {
+		t.Fatalf("signed tx type = %d, want %d", signed.Type(), gethtypes.LegacyTxType)
+	}
+	from, err := gethtypes.Sender(gethtypes.LatestSignerForChainID(chainID), signed)
+	if err != nil {
+		t.Fatalf("Sender() error = %v", err)
+	}
+	if from != address {
+		t.Fatalf("sender = %s, want %s", from, address)
+	}
+}
+
 type fakeClient struct {
 	keySpec    kmstypes.KeySpec
 	key        *ecdsa.PrivateKey

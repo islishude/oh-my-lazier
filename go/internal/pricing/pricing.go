@@ -442,7 +442,7 @@ func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
 	}, nil
 }
 
-// TxFees carries optional EIP-1559 transaction fee settings for an outbox request.
+// TxFees carries optional dynamic-fee transaction fee caps for an outbox request.
 type TxFees struct {
 	GasLimit             *big.Int
 	MaxFeePerGas         *big.Int
