@@ -18,7 +18,7 @@ For each deployment environment, record:
 
 The configured signer address must match the expected address in worker config and migration tickets. Never infer approval from a successful transaction alone.
 
-Worker config keeps a top-level `signers` inventory. `executor.signer` and `pricing.signer` must reference one of those signer IDs, and signer IDs are the Ethereum addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. KMS entries may reference only credential environment variable names, never raw access keys.
+Worker config keeps a top-level `signers` inventory. `executor.signer` and `pricing.signer` must reference one of those signer IDs, and signer IDs are the Ethereum addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. KMS entries configure key ID, region, address, and optional AWS-compatible endpoint only; AWS credentials are not part of worker YAML and are resolved by the AWS SDK default configuration chain.
 
 ## AWS KMS Requirements
 
@@ -36,6 +36,7 @@ Implementation evidence:
 
 - `go/internal/config.Config.Validate` rejects unknown executor/pricing signer references.
 - `go/internal/app.App.txTargets` loads configured signers and creates one tx manager target per required signer per chain.
+- `go/internal/app.loadKMSAWSConfig` uses the AWS SDK `config.LoadDefaultConfig` path with the configured region.
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
 - `go/internal/signer/kms.Signer.SignHash` parses DER signatures, normalizes low-S, and recovers the configured Ethereum address.
 - `go/internal/signer/kms.Signer.SignTx` signs configured dynamic-fee and legacy transactions through the same address-recovery boundary.

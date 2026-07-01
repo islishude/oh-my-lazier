@@ -110,13 +110,10 @@ type KeystoreSignerConfig struct {
 
 // KMSSignerConfig points at an AWS-compatible KMS signing key.
 type KMSSignerConfig struct {
-	KeyID              string `yaml:"key_id"`
-	Region             string `yaml:"region"`
-	Address            string `yaml:"address"`
-	Endpoint           string `yaml:"endpoint"`
-	AccessKeyIDEnv     string `yaml:"access_key_id_env"`
-	SecretAccessKeyEnv string `yaml:"secret_access_key_env"`
-	SessionTokenEnv    string `yaml:"session_token_env"`
+	KeyID    string `yaml:"key_id"`
+	Region   string `yaml:"region"`
+	Address  string `yaml:"address"`
+	Endpoint string `yaml:"endpoint"`
 }
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
@@ -422,9 +419,6 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 			}
 			if signer.KMS.Region == "" {
 				return nil, fmt.Errorf("signer %s kms.region is required", id)
-			}
-			if signer.KMS.AccessKeyIDEnv == "" || signer.KMS.SecretAccessKeyEnv == "" {
-				return nil, fmt.Errorf("signer %s kms access key env names are required", id)
 			}
 		default:
 			return nil, fmt.Errorf("unsupported signer type %q", signer.Type)

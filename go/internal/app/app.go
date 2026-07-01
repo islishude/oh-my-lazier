@@ -7,12 +7,11 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
@@ -394,24 +393,9 @@ func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error)
 			}
 			signers[id] = loaded
 		case "kms":
-			accessKeyID, err := envValue(cfg.KMS.AccessKeyIDEnv)
+			awsConfig, err := loadKMSAWSConfig(ctx, cfg.KMS)
 			if err != nil {
 				return nil, err
-			}
-			secretAccessKey, err := envValue(cfg.KMS.SecretAccessKeyEnv)
-			if err != nil {
-				return nil, err
-			}
-			sessionToken := ""
-			if cfg.KMS.SessionTokenEnv != "" {
-				sessionToken, err = envValue(cfg.KMS.SessionTokenEnv)
-				if err != nil {
-					return nil, err
-				}
-			}
-			awsConfig := aws.Config{
-				Region:      cfg.KMS.Region,
-				Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, sessionToken),
 			}
 			client := kms.NewSDKClient(awsConfig)
 			if cfg.KMS.Endpoint != "" {
@@ -429,6 +413,10 @@ func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error)
 	return signers, nil
 }
 
+func loadKMSAWSConfig(ctx context.Context, cfg config.KMSSignerConfig) (aws.Config, error) {
+	return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
+}
+
 func (a *App) requiresDynamicFeeCaps() bool {
 	for _, chain := range a.cfg.Chains {
 		if config.NormalizeTxType(chain.TxType) == config.TxTypeDynamicFee {
@@ -436,14 +424,6 @@ func (a *App) requiresDynamicFeeCaps() bool {
 		}
 	}
 	return false
-}
-
-func envValue(name string) (string, error) {
-	value := os.Getenv(name)
-	if value == "" {
-		return "", fmt.Errorf("required environment variable %s is empty", name)
-	}
-	return value, nil
 }
 
 func parseBigInt(value string) (*big.Int, error) {

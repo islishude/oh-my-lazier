@@ -109,6 +109,35 @@ func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	}
 }
 
+func TestLoadKMSAWSConfigUsesDefaultCredentialChain(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Setenv("AWS_SESSION_TOKEN", "test-session-token")
+
+	awsConfig, err := loadKMSAWSConfig(t.Context(), config.KMSSignerConfig{
+		Region: "us-west-2",
+	})
+	if err != nil {
+		t.Fatalf("loadKMSAWSConfig() error = %v", err)
+	}
+	if awsConfig.Region != "us-west-2" {
+		t.Fatalf("Region = %q, want us-west-2", awsConfig.Region)
+	}
+	credentials, err := awsConfig.Credentials.Retrieve(t.Context())
+	if err != nil {
+		t.Fatalf("Credentials.Retrieve() error = %v", err)
+	}
+	if credentials.AccessKeyID != "test-access-key" {
+		t.Fatal("AccessKeyID did not match default credential chain env value")
+	}
+	if credentials.SecretAccessKey != "test-secret-key" {
+		t.Fatal("SecretAccessKey did not match default credential chain env value")
+	}
+	if credentials.SessionToken != "test-session-token" {
+		t.Fatal("SessionToken did not match default credential chain env value")
+	}
+}
+
 func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

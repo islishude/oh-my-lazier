@@ -182,11 +182,9 @@ func TestValidateRejectsMismatchedKMSSignerAddress(t *testing.T) {
 		ID:   "0x9999999999999999999999999999999999999999",
 		Type: "kms",
 		KMS: KMSSignerConfig{
-			KeyID:              "test-key",
-			Region:             "us-east-1",
-			Address:            "0x1111111111111111111111111111111111111111",
-			AccessKeyIDEnv:     "AWS_ACCESS_KEY_ID",
-			SecretAccessKeyEnv: "AWS_SECRET_ACCESS_KEY",
+			KeyID:   "test-key",
+			Region:  "us-east-1",
+			Address: "0x1111111111111111111111111111111111111111",
 		},
 	}
 	if err := cfg.Validate(); err == nil {
