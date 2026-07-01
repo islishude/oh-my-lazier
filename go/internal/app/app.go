@@ -321,7 +321,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 }
 
 func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker, error) {
-	if a.cfg.DVN.Mode != string(dvn.ModeActive) {
+	if a.cfg.DVN.Mode != config.DVNModeActive {
 		return dvn.New(a.cfg.DVN.Mode, store, registry, a.logger), nil
 	}
 	dynamicFeeCapsRequired := a.requiresDynamicFeeCaps()
@@ -350,7 +350,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		return nil, err
 	}
 	required := map[string]struct{}{common.HexToAddress(a.cfg.Executor.Signer).Hex(): {}}
-	if a.cfg.DVN.Mode == string(dvn.ModeActive) {
+	if a.cfg.DVN.Mode == config.DVNModeActive {
 		required[common.HexToAddress(a.cfg.DVN.Signer).Hex()] = struct{}{}
 	}
 	if a.cfg.Pricing.Enabled {

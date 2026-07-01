@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
@@ -28,16 +29,6 @@ const loopInterval = 5 * time.Second
 const (
 	// TxPurposeVerify identifies ReceiveUln302.verify outbox requests.
 	TxPurposeVerify = "dvn_verify"
-)
-
-// Mode selects whether the DVN verifier only reports or also submits verification transactions.
-type Mode string
-
-const (
-	// ModeShadow verifies and reports what the DVN would submit without sending transactions.
-	ModeShadow Mode = "shadow"
-	// ModeActive verifies and enqueues active DVN verification transactions.
-	ModeActive Mode = "active"
 )
 
 // Store is the durable DVN state required by the worker.
@@ -79,7 +70,7 @@ type Settings struct {
 
 // Worker runs the DVN verification workflow.
 type Worker struct {
-	mode     Mode
+	mode     config.DVNMode
 	store    Store
 	registry *chain.Registry
 	settings Settings
@@ -89,12 +80,12 @@ type Worker struct {
 }
 
 // New creates a DVN worker for the configured mode.
-func New(mode string, store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
+func New(mode config.DVNMode, store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
 	return NewWithSettings(mode, store, registry, Settings{}, logger)
 }
 
 // NewWithSettings creates a DVN worker with explicit active-mode transaction settings.
-func NewWithSettings(mode string, store Store, registry *chain.Registry, settings Settings, logger *slog.Logger) *Worker {
+func NewWithSettings(mode config.DVNMode, store Store, registry *chain.Registry, settings Settings, logger *slog.Logger) *Worker {
 	heads := make(map[uint32]HeadReader)
 	receipts := make(map[uint32]ReceiptReader)
 	if registry != nil {
@@ -109,22 +100,22 @@ func NewWithSettings(mode string, store Store, registry *chain.Registry, setting
 }
 
 // NewWithHeads creates a DVN worker with explicit head readers for tests.
-func NewWithHeads(mode string, store Store, heads map[uint32]HeadReader, logger *slog.Logger) *Worker {
+func NewWithHeads(mode config.DVNMode, store Store, heads map[uint32]HeadReader, logger *slog.Logger) *Worker {
 	return NewWithClients(mode, store, heads, nil, logger)
 }
 
 // NewWithClients creates a DVN worker with explicit source-chain clients for tests.
-func NewWithClients(mode string, store Store, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
+func NewWithClients(mode config.DVNMode, store Store, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
 	return NewWithClientsAndSettings(mode, store, nil, Settings{}, heads, receipts, logger)
 }
 
 // NewWithClientsAndSettings creates a DVN worker with explicit clients and active-mode settings for tests.
-func NewWithClientsAndSettings(mode string, store Store, registry *chain.Registry, settings Settings, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
+func NewWithClientsAndSettings(mode config.DVNMode, store Store, registry *chain.Registry, settings Settings, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
 	copiedHeads := make(map[uint32]HeadReader, len(heads))
 	maps.Copy(copiedHeads, heads)
 	copiedReceipts := make(map[uint32]ReceiptReader, len(receipts))
 	maps.Copy(copiedReceipts, receipts)
-	return &Worker{mode: Mode(mode), store: store, registry: registry, settings: settings, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
+	return &Worker{mode: mode, store: store, registry: registry, settings: settings, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
 }
 
 // Run starts the DVN verifier loop until the context is canceled.
@@ -267,12 +258,12 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("dvn job %s ready to verify without quorum result", item.Packet.GUID)
 	}
 	switch w.mode {
-	case ModeShadow:
+	case config.DVNModeShadow:
 		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
 			return false, err
 		}
 		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
-	case ModeActive:
+	case config.DVNModeActive:
 		request, err := w.buildVerifyTx(item.Packet, item.Job.ConfirmationsRequired)
 		if err != nil {
 			return false, err

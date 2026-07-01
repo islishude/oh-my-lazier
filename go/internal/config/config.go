@@ -21,6 +21,16 @@ const (
 	TxTypeLegacy = "legacy"
 )
 
+// DVNMode selects whether the DVN verifier only reports or also submits verification transactions.
+type DVNMode string
+
+const (
+	// DVNModeShadow verifies and reports what the DVN would submit without sending transactions.
+	DVNModeShadow DVNMode = "shadow"
+	// DVNModeActive verifies and enqueues active DVN verification transactions.
+	DVNModeActive DVNMode = "active"
+)
+
 // Config is the startup configuration for the single-process worker.
 type Config struct {
 	DatabaseURL string          `yaml:"database_url"`
@@ -45,11 +55,11 @@ type ExecutorConfig struct {
 
 // DVNConfig controls whether the DVN workflow runs in shadow or active mode.
 type DVNConfig struct {
-	Mode                    string `yaml:"mode"`
-	Signer                  string `yaml:"signer"`
-	TxGasLimit              uint64 `yaml:"tx_gas_limit"`
-	MaxFeePerGasWei         string `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	Mode                    DVNMode `yaml:"mode"`
+	Signer                  string  `yaml:"signer"`
+	TxGasLimit              uint64  `yaml:"tx_gas_limit"`
+	MaxFeePerGasWei         string  `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string  `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // PricingConfig controls optional price update generation.
@@ -278,11 +288,11 @@ func (c Config) Validate() error {
 		seen[chain.EID] = struct{}{}
 	}
 	switch c.DVN.Mode {
-	case "shadow", "active":
+	case DVNModeShadow, DVNModeActive:
 	default:
 		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
 	}
-	if c.DVN.Mode == "active" {
+	if c.DVN.Mode == DVNModeActive {
 		if !common.IsHexAddress(c.DVN.Signer) {
 			return errors.New("dvn signer must be a hex address in active mode")
 		}
