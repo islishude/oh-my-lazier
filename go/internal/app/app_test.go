@@ -2,9 +2,11 @@ package app
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
@@ -87,6 +89,43 @@ func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "on-chain config check failed") {
 		t.Fatalf("RunPriceOnce() error = %v, want on-chain config error", err)
+	}
+}
+
+func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := make(chan int, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		attempts := 0
+		superviseLoop(ctx, "test", 0, nil, func(context.Context) error {
+			attempts++
+			calls <- attempts
+			if attempts == 2 {
+				cancel()
+				return context.Canceled
+			}
+			return errors.New("temporary loop error")
+		})
+	}()
+
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("attempt = %d, want %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("attempt %d did not run", want)
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("superviseLoop did not stop after context cancellation")
 	}
 }
 

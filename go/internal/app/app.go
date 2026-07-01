@@ -33,6 +33,8 @@ var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (co
 	return configcheck.Check(ctx, registry)
 }
 
+const loopRestartDelay = 5 * time.Second
+
 // App owns the configured worker process and its durable service loops.
 type App struct {
 	cfg    config.Config
@@ -44,7 +46,7 @@ func New(cfg config.Config, logger *slog.Logger) (*App, error) {
 	return &App{cfg: cfg, logger: logger}, nil
 }
 
-// Run connects dependencies and runs all worker loops until cancellation or a loop failure.
+// Run connects dependencies and runs all worker loops until cancellation.
 func (a *App) Run(ctx context.Context) error {
 	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
 	if err != nil {
@@ -93,16 +95,9 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
-	errCh := make(chan error, 8+len(a.cfg.Chains))
 	start := func(name string, run func(context.Context) error) {
 		wg.Go(func() {
-			// Any durable loop failure cancels the whole worker; partial worker operation can
-			// otherwise advance packet state with missing indexers or senders.
-			if err := run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				errCh <- err
-				cancel()
-			}
-			a.logger.Info("loop stopped", "name", name)
+			superviseLoop(ctx, name, loopRestartDelay, a.logger, run)
 		})
 	}
 
@@ -116,15 +111,65 @@ func (a *App) Run(ctx context.Context) error {
 	start("dvn", dvnWorker.Run)
 	start("pricing", priceBot.Run)
 
-	select {
-	case <-ctx.Done():
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
-		return err
-	}
+	<-ctx.Done()
 	wg.Wait()
 	return nil
+}
+
+func superviseLoop(ctx context.Context, name string, restartDelay time.Duration, logger *slog.Logger, run func(context.Context) error) {
+	for {
+		err := run(ctx)
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			logLoopInfo(logger, "loop stopped", "name", name)
+			return
+		}
+		if err != nil {
+			logLoopError(logger, "loop failed; restarting", "name", name, "error", err)
+		} else {
+			logLoopWarn(logger, "loop stopped unexpectedly; restarting", "name", name)
+		}
+		if !waitLoopRestart(ctx, restartDelay) {
+			logLoopInfo(logger, "loop stopped", "name", name)
+			return
+		}
+	}
+}
+
+func waitLoopRestart(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+			return true
+		}
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func logLoopInfo(logger *slog.Logger, msg string, args ...any) {
+	if logger != nil {
+		logger.Info(msg, args...)
+	}
+}
+
+func logLoopWarn(logger *slog.Logger, msg string, args ...any) {
+	if logger != nil {
+		logger.Warn(msg, args...)
+	}
+}
+
+func logLoopError(logger *slog.Logger, msg string, args ...any) {
+	if logger != nil {
+		logger.Error(msg, args...)
+	}
 }
 
 // RunPriceOnce computes current price configs and enqueues one update batch.
