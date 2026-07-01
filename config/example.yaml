@@ -1,15 +1,6 @@
 database_url: postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable
 metrics:
   listen_address: :9090
-executor:
-  signer: "0x9999999999999999999999999999999999999999"
-dvn:
-  mode: shadow
-  # Active mode submits ReceiveUln302.verify after quorum checks pass.
-  # signer: "0x9999999999999999999999999999999999999999"
-  # tx_gas_limit: 120000
-  # max_fee_per_gas_wei: "2000000000"
-  # max_priority_fee_per_gas_wei: "1000000000"
 signers:
   - id: "0x9999999999999999999999999999999999999999"
     type: keystore
@@ -67,9 +58,14 @@ chains:
     # Supports http(s), ws(s), and absolute IPC socket paths.
     rpc_urls:
       - http://localhost:8545
-    workers:
-      open_executor: "0x2222222222222222222222222222222222222222"
-      open_dvn: "0x3333333333333333333333333333333333333333"
+    tx_roles:
+      executor:
+        signer: "0x9999999999999999999999999999999999999999"
+      dvn:
+        signer: "0x9999999999999999999999999999999999999999"
+        tx_gas_limit: 120000
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
     name: base-sepolia
     chain_id: 84532
@@ -80,9 +76,14 @@ chains:
     indexer_query_block_range: 500
     rpc_urls:
       - http://localhost:8546
-    workers:
-      open_executor: "0x5555555555555555555555555555555555555555"
-      open_dvn: "0x6666666666666666666666666666666666666666"
+    tx_roles:
+      executor:
+        signer: "0x9999999999999999999999999999999999999999"
+      dvn:
+        signer: "0x9999999999999999999999999999999999999999"
+        tx_gas_limit: 120000
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
 pathways:
   - src_eid: 40161
     dst_eid: 40245
@@ -90,6 +91,11 @@ pathways:
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    source_workers:
+      open_executor: "0x2222222222222222222222222222222222222222"
+      open_dvn: "0x3333333333333333333333333333333333333333"
+    dvn:
+      mode: shadow
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000
@@ -100,6 +106,11 @@ pathways:
     dst_oapp: "0x7777777777777777777777777777777777777777"
     send_lib: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     receive_lib: "0xcccccccccccccccccccccccccccccccccccccccc"
+    source_workers:
+      open_executor: "0x5555555555555555555555555555555555555555"
+      open_dvn: "0x6666666666666666666666666666666666666666"
+    dvn:
+      mode: shadow
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000

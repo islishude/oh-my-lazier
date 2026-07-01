@@ -2,6 +2,7 @@ package rpcquorum
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +32,32 @@ func TestIsReceiptConflict(t *testing.T) {
 	err := &ReceiptConflictError{TxHash: common.HexToHash("0x1234")}
 	if !IsReceiptConflict(err) {
 		t.Fatal("IsReceiptConflict() = false, want true")
+	}
+}
+
+func TestValidateProviderChainIDsAcceptsAllExpected(t *testing.T) {
+	err := validateProviderChainIDs("testnet", big.NewInt(11155111), []providerChainID{
+		{URL: "provider-a", ChainID: big.NewInt(11155111)},
+		{URL: "provider-b", ChainID: big.NewInt(11155111)},
+	})
+	if err != nil {
+		t.Fatalf("validateProviderChainIDs() error = %v", err)
+	}
+}
+
+func TestValidateProviderChainIDsRejectsUnexpectedProviderChainID(t *testing.T) {
+	err := validateProviderChainIDs("testnet", big.NewInt(11155111), []providerChainID{
+		{URL: "provider-a", ChainID: big.NewInt(11155111)},
+		{URL: "provider-b", ChainID: big.NewInt(84532)},
+	})
+	if err == nil {
+		t.Fatal("validateProviderChainIDs() error = nil, want mismatch")
+	}
+	if !IsChainIDMismatch(err) {
+		t.Fatalf("IsChainIDMismatch() = false for %T", err)
+	}
+	if !strings.Contains(err.Error(), "provider provider-b returned 84532") {
+		t.Fatalf("error = %q, want provider detail", err)
 	}
 }
 

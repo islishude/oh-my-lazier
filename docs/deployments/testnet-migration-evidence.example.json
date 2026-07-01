@@ -43,6 +43,10 @@
       "label": "Ethereum Sepolia to Base Sepolia",
       "srcEid": 40161,
       "dstEid": 40245,
+      "sourceWorkers": {
+        "openExecutor": "0x2222222222222222222222222222222222222222",
+        "openDVN": "0x3333333333333333333333333333333333333333"
+      },
       "configDiff": {
         "ref": "artifacts/configdiff-eth-sepolia-to-base-sepolia.json"
       },
@@ -118,6 +122,10 @@
       "label": "Base Sepolia to Ethereum Sepolia",
       "srcEid": 40245,
       "dstEid": 40161,
+      "sourceWorkers": {
+        "openExecutor": "0x5555555555555555555555555555555555555555",
+        "openDVN": "0x6666666666666666666666666666666666666666"
+      },
       "configDiff": {
         "ref": "artifacts/configdiff-base-sepolia-to-eth-sepolia.json"
       },

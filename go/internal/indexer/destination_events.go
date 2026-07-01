@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
@@ -81,16 +82,13 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 	return applied, nil
 }
 
-// ApplyDVNDestinationLogs applies ReceiveUln302 PayloadVerified logs for the configured OpenDVN.
-func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dstEID uint32, expectedDVN common.Address, logs []gethtypes.Log) (int, error) {
+// ApplyDVNDestinationLogs applies ReceiveUln302 PayloadVerified logs for configured pathway OpenDVNs.
+func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dstEID uint32, pathways []chain.Pathway, logs []gethtypes.Log) (int, error) {
 	if store == nil {
 		return 0, fmt.Errorf("dvn destination store is required")
 	}
 	if dstEID == 0 {
 		return 0, fmt.Errorf("destination eid is required")
-	}
-	if expectedDVN == (common.Address{}) {
-		return 0, fmt.Errorf("expected dvn is required")
 	}
 	applied := 0
 	for _, log := range logs {
@@ -101,9 +99,6 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		if err != nil {
 			return applied, err
 		}
-		if event.DVN != expectedDVN {
-			continue
-		}
 		packet, err := store.GetPacketByVerification(ctx, dstEID, event.Header, event.ProofHash)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue
@@ -113,6 +108,13 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		}
 		if packet.DstEID != dstEID {
 			return applied, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+		}
+		pathway, ok := pathwayForPacket(pathways, packet)
+		if !ok {
+			continue
+		}
+		if event.DVN != pathway.SourceWorkers.OpenDVN {
+			continue
 		}
 		if err := validatePayloadVerified(packet, event); err != nil {
 			return applied, err
@@ -133,6 +135,18 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		applied++
 	}
 	return applied, nil
+}
+
+func pathwayForPacket(pathways []chain.Pathway, packet db.PacketRecord) (chain.Pathway, bool) {
+	for _, pathway := range pathways {
+		if pathway.SrcEID == packet.SrcEID &&
+			pathway.DstEID == packet.DstEID &&
+			pathway.SrcOApp == packet.Sender &&
+			pathway.DstOApp == packet.Receiver {
+			return pathway, true
+		}
+	}
+	return chain.Pathway{}, false
 }
 
 // ApplyExecutorDestinationLog applies one validated destination EndpointV2 log to executor state.

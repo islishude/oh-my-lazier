@@ -218,8 +218,6 @@ func (r *recordingLoopRetries) RecordLoopRetry(name string) {
 func testConfig(signerID, keystorePath string) config.Config {
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
-		Executor:    config.ExecutorConfig{Signer: signerID},
-		DVN:         config.DVNConfig{Mode: "shadow"},
 		Signers: []config.SignerConfig{
 			{
 				ID:   signerID,
@@ -238,9 +236,8 @@ func testConfig(signerID, keystorePath string) config.Config {
 				EndpointAddress: "0x1111111111111111111111111111111111111111",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: signerID},
 				},
 			},
 			{
@@ -251,20 +248,24 @@ func testConfig(signerID, keystorePath string) config.Config {
 				EndpointAddress: "0x4444444444444444444444444444444444444444",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: signerID},
 				},
 			},
 		},
 		Pathways: []config.PathwayConfig{
 			{
-				SrcEID:          40161,
-				DstEID:          40245,
-				SrcOApp:         "0x7777777777777777777777777777777777777777",
-				DstOApp:         "0x8888888888888888888888888888888888888888",
-				SendLib:         "0x9999999999999999999999999999999999999999",
-				ReceiveLib:      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcEID:     40161,
+				DstEID:     40245,
+				SrcOApp:    "0x7777777777777777777777777777777777777777",
+				DstOApp:    "0x8888888888888888888888888888888888888888",
+				SendLib:    "0x9999999999999999999999999999999999999999",
+				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceWorkers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,

@@ -35,8 +35,6 @@ const (
 type Config struct {
 	DatabaseURL string          `yaml:"database_url"`
 	Metrics     MetricsConfig   `yaml:"metrics"`
-	Executor    ExecutorConfig  `yaml:"executor"`
-	DVN         DVNConfig       `yaml:"dvn"`
 	Pricing     PricingConfig   `yaml:"pricing"`
 	Signers     []SignerConfig  `yaml:"signers"`
 	Chains      []ChainConfig   `yaml:"chains"`
@@ -48,18 +46,23 @@ type MetricsConfig struct {
 	ListenAddress string `yaml:"listen_address"`
 }
 
-// ExecutorConfig controls executor transaction submission.
-type ExecutorConfig struct {
+// ExecutorTxRoleConfig controls executor transaction submission on one chain.
+type ExecutorTxRoleConfig struct {
 	Signer string `yaml:"signer"`
 }
 
-// DVNConfig controls whether the DVN workflow runs in shadow or active mode.
-type DVNConfig struct {
-	Mode                    DVNMode `yaml:"mode"`
-	Signer                  string  `yaml:"signer"`
-	TxGasLimit              uint64  `yaml:"tx_gas_limit"`
-	MaxFeePerGasWei         string  `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string  `yaml:"max_priority_fee_per_gas_wei"`
+// DVNTxRoleConfig controls active DVN verification transaction submission on one chain.
+type DVNTxRoleConfig struct {
+	Signer                  string `yaml:"signer"`
+	TxGasLimit              uint64 `yaml:"tx_gas_limit"`
+	MaxFeePerGasWei         string `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+}
+
+// ChainTxRolesConfig configures local transaction roles for one chain.
+type ChainTxRolesConfig struct {
+	Executor ExecutorTxRoleConfig `yaml:"executor"`
+	DVN      DVNTxRoleConfig      `yaml:"dvn"`
 }
 
 // PricingConfig controls optional price update generation.
@@ -128,36 +131,43 @@ type KMSSignerConfig struct {
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
 type ChainConfig struct {
-	EID                    uint32                `yaml:"eid"`
-	Name                   string                `yaml:"name"`
-	ChainID                int64                 `yaml:"chain_id"`
-	TxType                 string                `yaml:"tx_type"`
-	EndpointAddress        string                `yaml:"endpoint_address"`
-	Confirmations          uint64                `yaml:"confirmations"`
-	StartBlockNumber       uint64                `yaml:"start_block_number"`
-	IndexerQueryBlockRange uint64                `yaml:"indexer_query_block_range"`
-	RPCURLs                []string              `yaml:"rpc_urls"`
-	Workers                WorkerContractsConfig `yaml:"workers"`
+	EID                    uint32             `yaml:"eid"`
+	Name                   string             `yaml:"name"`
+	ChainID                int64              `yaml:"chain_id"`
+	TxType                 string             `yaml:"tx_type"`
+	EndpointAddress        string             `yaml:"endpoint_address"`
+	Confirmations          uint64             `yaml:"confirmations"`
+	StartBlockNumber       uint64             `yaml:"start_block_number"`
+	IndexerQueryBlockRange uint64             `yaml:"indexer_query_block_range"`
+	RPCURLs                []string           `yaml:"rpc_urls"`
+	TxRoles                ChainTxRolesConfig `yaml:"tx_roles"`
 }
 
-// WorkerContractsConfig identifies the self-hosted worker contracts deployed on one chain.
+// WorkerContractsConfig identifies the self-hosted worker contracts selected for one source pathway.
 type WorkerContractsConfig struct {
 	OpenExecutor string `yaml:"open_executor"`
 	OpenDVN      string `yaml:"open_dvn"`
 }
 
+// PathwayDVNConfig controls DVN behavior for one source-to-destination pathway.
+type PathwayDVNConfig struct {
+	Mode DVNMode `yaml:"mode"`
+}
+
 // PathwayConfig defines an allowed source-to-destination message pathway.
 type PathwayConfig struct {
-	SrcEID          uint32 `yaml:"src_eid"`
-	DstEID          uint32 `yaml:"dst_eid"`
-	SrcOApp         string `yaml:"src_oapp"`
-	DstOApp         string `yaml:"dst_oapp"`
-	SendLib         string `yaml:"send_lib"`
-	ReceiveLib      string `yaml:"receive_lib"`
-	Enabled         bool   `yaml:"enabled"`
-	MaxMessageSize  uint64 `yaml:"max_message_size"`
-	MinLzReceiveGas uint64 `yaml:"min_lz_receive_gas"`
-	MaxLzReceiveGas uint64 `yaml:"max_lz_receive_gas"`
+	SrcEID          uint32                `yaml:"src_eid"`
+	DstEID          uint32                `yaml:"dst_eid"`
+	SrcOApp         string                `yaml:"src_oapp"`
+	DstOApp         string                `yaml:"dst_oapp"`
+	SendLib         string                `yaml:"send_lib"`
+	ReceiveLib      string                `yaml:"receive_lib"`
+	SourceWorkers   WorkerContractsConfig `yaml:"source_workers"`
+	DVN             PathwayDVNConfig      `yaml:"dvn"`
+	Enabled         bool                  `yaml:"enabled"`
+	MaxMessageSize  uint64                `yaml:"max_message_size"`
+	MinLzReceiveGas uint64                `yaml:"min_lz_receive_gas"`
+	MaxLzReceiveGas uint64                `yaml:"max_lz_receive_gas"`
 }
 
 // Load reads a YAML config file, applies environment overrides, and validates the result.
@@ -187,9 +197,6 @@ func load(path string, applyEnv bool) (Config, error) {
 	if cfg.Metrics.ListenAddress == "" {
 		cfg.Metrics.ListenAddress = ":9090"
 	}
-	if cfg.DVN.Mode == "" {
-		cfg.DVN.Mode = "shadow"
-	}
 	if cfg.Pricing.Enabled {
 		if cfg.Pricing.IntervalSeconds == 0 {
 			cfg.Pricing.IntervalSeconds = 300
@@ -210,6 +217,11 @@ func load(path string, applyEnv bool) (Config, error) {
 		}
 		cfg.Chains[idx].TxType = NormalizeTxType(cfg.Chains[idx].TxType)
 	}
+	for idx := range cfg.Pathways {
+		if cfg.Pathways[idx].DVN.Mode == "" {
+			cfg.Pathways[idx].DVN.Mode = DVNModeShadow
+		}
+	}
 	return cfg, cfg.Validate()
 }
 
@@ -229,17 +241,13 @@ func (c Config) Validate() error {
 	if len(c.Chains) == 0 {
 		return errors.New("at least one chain is required")
 	}
-	if !common.IsHexAddress(c.Executor.Signer) {
-		return errors.New("executor signer must be a hex address")
-	}
 	signers, err := c.validateSigners()
 	if err != nil {
 		return err
 	}
-	if _, ok := signers[common.HexToAddress(c.Executor.Signer).Hex()]; !ok {
-		return errors.New("executor signer must reference a configured signer")
-	}
 	seen := make(map[uint32]struct{}, len(c.Chains))
+	chains := make(map[uint32]ChainConfig, len(c.Chains))
+	dynamicFeeChains := make(map[uint32]bool, len(c.Chains))
 	dynamicFeeCapsRequired := false
 	for _, chain := range c.Chains {
 		if chain.EID == 0 {
@@ -254,18 +262,22 @@ func (c Config) Validate() error {
 		switch NormalizeTxType(chain.TxType) {
 		case TxTypeDynamicFee:
 			dynamicFeeCapsRequired = true
+			dynamicFeeChains[chain.EID] = true
 		case TxTypeLegacy:
 		default:
 			return fmt.Errorf("chain %s tx_type must be %q or %q", chain.Name, TxTypeDynamicFee, TxTypeLegacy)
 		}
-		for label, value := range map[string]string{
-			"endpoint_address":      chain.EndpointAddress,
-			"workers.open_executor": chain.Workers.OpenExecutor,
-			"workers.open_dvn":      chain.Workers.OpenDVN,
-		} {
-			if !common.IsHexAddress(value) {
-				return fmt.Errorf("chain %s %s must be a hex address", chain.Name, label)
-			}
+		if !common.IsHexAddress(chain.EndpointAddress) {
+			return fmt.Errorf("chain %s endpoint_address must be a hex address", chain.Name)
+		}
+		if !common.IsHexAddress(chain.TxRoles.Executor.Signer) {
+			return fmt.Errorf("chain %s tx_roles.executor.signer must be a hex address", chain.Name)
+		}
+		if _, ok := signers[common.HexToAddress(chain.TxRoles.Executor.Signer).Hex()]; !ok {
+			return fmt.Errorf("chain %s tx_roles.executor.signer must reference a configured signer", chain.Name)
+		}
+		if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
+			return err
 		}
 		if chain.Confirmations != 12 {
 			return fmt.Errorf("chain %s confirmations must be 12 in phase 1", chain.Name)
@@ -285,41 +297,13 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate chain eid %d", chain.EID)
 		}
 		seen[chain.EID] = struct{}{}
-	}
-	switch c.DVN.Mode {
-	case DVNModeActive:
-		if !common.IsHexAddress(c.DVN.Signer) {
-			return errors.New("dvn signer must be a hex address in active mode")
-		}
-		if _, ok := signers[common.HexToAddress(c.DVN.Signer).Hex()]; !ok {
-			return errors.New("dvn signer must reference a configured signer")
-		}
-		if c.DVN.TxGasLimit == 0 {
-			return errors.New("dvn tx_gas_limit is required in active mode")
-		}
-		for label, value := range map[string]string{
-			"max_fee_per_gas_wei":          c.DVN.MaxFeePerGasWei,
-			"max_priority_fee_per_gas_wei": c.DVN.MaxPriorityFeePerGasWei,
-		} {
-			if value == "" {
-				if dynamicFeeCapsRequired {
-					return fmt.Errorf("dvn %s is required in active mode when a dynamic_fee chain is configured", label)
-				}
-				continue
-			}
-			parsed, ok := new(big.Int).SetString(value, 10)
-			if !ok || parsed.Sign() <= 0 {
-				return fmt.Errorf("dvn %s must be a positive integer", label)
-			}
-		}
-	case DVNModeShadow:
-	default:
-		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
+		chains[chain.EID] = chain
 	}
 	if err := c.validatePricing(seen, signers, dynamicFeeCapsRequired); err != nil {
 		return err
 	}
 	pathways := make(map[string]struct{}, len(c.Pathways))
+	activeDVNDestinations := make(map[uint32]struct{})
 	for _, pathway := range c.Pathways {
 		if _, ok := seen[pathway.SrcEID]; !ok {
 			return fmt.Errorf("pathway source eid %d is not configured", pathway.SrcEID)
@@ -331,14 +315,23 @@ func (c Config) Validate() error {
 			return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
 		}
 		for label, value := range map[string]string{
-			"src_oapp":    pathway.SrcOApp,
-			"dst_oapp":    pathway.DstOApp,
-			"send_lib":    pathway.SendLib,
-			"receive_lib": pathway.ReceiveLib,
+			"src_oapp":                     pathway.SrcOApp,
+			"dst_oapp":                     pathway.DstOApp,
+			"send_lib":                     pathway.SendLib,
+			"receive_lib":                  pathway.ReceiveLib,
+			"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
+			"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
 		} {
 			if !common.IsHexAddress(value) {
 				return fmt.Errorf("pathway %d -> %d %s must be a hex address", pathway.SrcEID, pathway.DstEID, label)
 			}
+		}
+		switch pathway.DVN.Mode {
+		case DVNModeShadow:
+		case DVNModeActive:
+			activeDVNDestinations[pathway.DstEID] = struct{}{}
+		default:
+			return fmt.Errorf("pathway %d -> %d unsupported dvn mode %q", pathway.SrcEID, pathway.DstEID, pathway.DVN.Mode)
 		}
 		if pathway.MaxMessageSize == 0 {
 			return fmt.Errorf("pathway %d -> %d max_message_size is required", pathway.SrcEID, pathway.DstEID)
@@ -357,6 +350,59 @@ func (c Config) Validate() error {
 			return fmt.Errorf("duplicate pathway %s", key)
 		}
 		pathways[key] = struct{}{}
+	}
+	for eid := range activeDVNDestinations {
+		chain := chains[eid]
+		if err := validateRequiredDVNTxRole(chain.Name, chain.TxRoles.DVN, signers, dynamicFeeChains[eid]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
+	if role.Signer != "" && !common.IsHexAddress(role.Signer) {
+		return fmt.Errorf("chain %s tx_roles.dvn.signer must be a hex address", chainName)
+	}
+	for label, value := range map[string]string{
+		"max_fee_per_gas_wei":          role.MaxFeePerGasWei,
+		"max_priority_fee_per_gas_wei": role.MaxPriorityFeePerGasWei,
+	} {
+		if value == "" {
+			continue
+		}
+		parsed, ok := new(big.Int).SetString(value, 10)
+		if !ok || parsed.Sign() <= 0 {
+			return fmt.Errorf("chain %s tx_roles.dvn.%s must be a positive integer", chainName, label)
+		}
+	}
+	return nil
+}
+
+func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers map[string]struct{}, dynamicFeeCapsRequired bool) error {
+	if !common.IsHexAddress(role.Signer) {
+		return fmt.Errorf("chain %s tx_roles.dvn.signer must be a hex address for active dvn pathways", chainName)
+	}
+	if _, ok := signers[common.HexToAddress(role.Signer).Hex()]; !ok {
+		return fmt.Errorf("chain %s tx_roles.dvn.signer must reference a configured signer", chainName)
+	}
+	if role.TxGasLimit == 0 {
+		return fmt.Errorf("chain %s tx_roles.dvn.tx_gas_limit is required for active dvn pathways", chainName)
+	}
+	for label, value := range map[string]string{
+		"max_fee_per_gas_wei":          role.MaxFeePerGasWei,
+		"max_priority_fee_per_gas_wei": role.MaxPriorityFeePerGasWei,
+	} {
+		if value == "" {
+			if dynamicFeeCapsRequired {
+				return fmt.Errorf("chain %s tx_roles.dvn.%s is required for active dvn pathways on dynamic_fee chains", chainName, label)
+			}
+			continue
+		}
+		parsed, ok := new(big.Int).SetString(value, 10)
+		if !ok || parsed.Sign() <= 0 {
+			return fmt.Errorf("chain %s tx_roles.dvn.%s must be a positive integer", chainName, label)
+		}
 	}
 	return nil
 }

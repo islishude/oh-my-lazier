@@ -89,8 +89,8 @@ Required state:
 - OFT peers are configured in both directions.
 - OpenExecutor and OpenDVN allow only intended SendLib addresses.
 - Worker pathway config is enabled only for approved OApps.
-- `ExecutorConfig.executor` points to OpenExecutor only after the executor migration step.
-- ULN config has required DVNs `[OpenDVN, LayerZero Labs DVN]` only during the DVN join step.
+- Endpoint executor config points to each pathway's configured `source_workers.open_executor` only after the executor migration step.
+- ULN config includes each pathway's configured `source_workers.open_dvn` plus an independent LayerZero Labs DVN only during the DVN join step.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
 - OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence.
 

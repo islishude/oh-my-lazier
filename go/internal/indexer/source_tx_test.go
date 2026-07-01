@@ -15,7 +15,7 @@ func TestExecutorSourceTxRecordsFromLogs(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	logs := testExecutorSourceLogs(t, expectedExecutor, sendLib, big.NewInt(42))
 
-	records, ok, err := ExecutorSourceTxRecordsFromLogs(logs, expectedExecutor)
+	records, ok, err := ExecutorSourceTxRecordsFromLogs(logs)
 	if err != nil {
 		t.Fatalf("ExecutorSourceTxRecordsFromLogs() error = %v", err)
 	}
@@ -25,6 +25,9 @@ func TestExecutorSourceTxRecordsFromLogs(t *testing.T) {
 	if records.Packet.SendLib != sendLib {
 		t.Fatalf("packet send lib = %s, want %s", records.Packet.SendLib, sendLib)
 	}
+	if records.Executor != expectedExecutor {
+		t.Fatalf("executor = %s, want %s", records.Executor, expectedExecutor)
+	}
 	if records.ExecutorJob.GUID != records.Packet.GUID {
 		t.Fatalf("job guid = %s, want packet guid %s", records.ExecutorJob.GUID, records.Packet.GUID)
 	}
@@ -33,39 +36,6 @@ func TestExecutorSourceTxRecordsFromLogs(t *testing.T) {
 	}
 	if records.ExecutorJob.AssignedFee.Cmp(big.NewInt(42)) != 0 {
 		t.Fatalf("assigned fee = %s, want 42", records.ExecutorJob.AssignedFee)
-	}
-}
-
-func TestExecutorSourceTxRecordsFromLogsFiltersUnexpectedExecutor(t *testing.T) {
-	logs := testExecutorSourceLogs(
-		t,
-		common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		common.HexToAddress("0x9999999999999999999999999999999999999999"),
-		big.NewInt(42),
-	)
-	_, ok, err := ExecutorSourceTxRecordsFromLogs(logs, common.HexToAddress("0x3333333333333333333333333333333333333333"))
-	if err != nil {
-		t.Fatalf("ExecutorSourceTxRecordsFromLogs() error = %v, want nil", err)
-	}
-	if ok {
-		t.Fatal("ExecutorSourceTxRecordsFromLogs() ok = true, want false")
-	}
-}
-
-func TestExecutorSourceTxRecordsFromLogsFiltersUnexpectedExecutorBeforeContextValidation(t *testing.T) {
-	otherExecutor := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
-	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	logs := []gethtypes.Log{
-		testExecutorJobAssignedLogWithOptions(t, txHash, otherExecutor, sendLib, big.NewInt(42), validExecutorOptions(), 0),
-	}
-
-	_, ok, err := ExecutorSourceTxRecordsFromLogs(logs, common.HexToAddress("0x3333333333333333333333333333333333333333"))
-	if err != nil {
-		t.Fatalf("ExecutorSourceTxRecordsFromLogs() error = %v, want nil", err)
-	}
-	if ok {
-		t.Fatal("ExecutorSourceTxRecordsFromLogs() ok = true, want false")
 	}
 }
 

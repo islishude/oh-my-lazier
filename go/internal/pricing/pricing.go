@@ -171,7 +171,7 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 		b.now = time.Now
 	}
 	for _, pathway := range b.uniquePathways() {
-		if _, err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID); err != nil {
+		if _, err := b.enqueuePathway(ctx, pathway); err != nil {
 			return err
 		}
 	}
@@ -187,7 +187,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
 	for _, pathway := range b.uniquePathways() {
-		key := pathwayKey(pathway.SrcEID, pathway.DstEID)
+		key := pathwayKey(pathway)
 		current, err := b.currentDstGasPrice(ctx, pathway.DstEID)
 		if err != nil {
 			return err
@@ -200,7 +200,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
 			continue
 		}
-		enqueuedGas, err := b.enqueuePathway(ctx, pathway.SrcEID, pathway.DstEID)
+		enqueuedGas, err := b.enqueuePathway(ctx, pathway)
 		if err != nil {
 			return err
 		}
@@ -210,24 +210,31 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) (*big.Int, error) {
-	srcChain, err := b.registry.Get(srcEID)
+type pricedPathway struct {
+	SrcEID       uint32
+	DstEID       uint32
+	OpenExecutor common.Address
+	OpenDVN      common.Address
+}
+
+func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.Int, error) {
+	srcChain, err := b.registry.Get(pathway.SrcEID)
 	if err != nil {
 		return nil, err
 	}
-	dstChain, err := b.registry.Get(dstEID)
+	dstChain, err := b.registry.Get(pathway.DstEID)
 	if err != nil {
 		return nil, err
 	}
-	srcPrice, err := b.chainPrice(ctx, srcEID)
+	srcPrice, err := b.chainPrice(ctx, pathway.SrcEID)
 	if err != nil {
 		return nil, err
 	}
-	dstPrice, err := b.chainPrice(ctx, dstEID)
+	dstPrice, err := b.chainPrice(ctx, pathway.DstEID)
 	if err != nil {
 		return nil, err
 	}
-	dstGasPrice, err := b.currentDstGasPrice(ctx, dstEID)
+	dstGasPrice, err := b.currentDstGasPrice(ctx, pathway.DstEID)
 	if err != nil {
 		return nil, err
 	}
@@ -247,8 +254,8 @@ func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) (*big.I
 		worker  common.Address
 		purpose string
 	}{
-		{worker: srcChain.Workers.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig},
-		{worker: srcChain.Workers.OpenDVN, purpose: TxPurposeSetDVNPriceConfig},
+		{worker: pathway.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig},
+		{worker: pathway.OpenDVN, purpose: TxPurposeSetDVNPriceConfig},
 	} {
 		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config, b.settings.TxFees)
 		if err != nil {
@@ -258,7 +265,7 @@ func (b *Bot) enqueuePathway(ctx context.Context, srcEID, dstEID uint32) (*big.I
 			return nil, err
 		}
 	}
-	key := pathwayKey(srcEID, dstEID)
+	key := pathwayKey(pathway)
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
@@ -306,25 +313,31 @@ func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, 
 	return dstGasPrice, nil
 }
 
-func (b *Bot) uniquePathways() []struct{ SrcEID, DstEID uint32 } {
+func (b *Bot) uniquePathways() []pricedPathway {
 	if b == nil || b.registry == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
-	pathways := make([]struct{ SrcEID, DstEID uint32 }, 0)
+	pathways := make([]pricedPathway, 0)
 	for _, pathway := range b.registry.Pathways() {
-		key := pathwayKey(pathway.SrcEID, pathway.DstEID)
+		item := pricedPathway{
+			SrcEID:       pathway.SrcEID,
+			DstEID:       pathway.DstEID,
+			OpenExecutor: pathway.SourceWorkers.OpenExecutor,
+			OpenDVN:      pathway.SourceWorkers.OpenDVN,
+		}
+		key := pathwayKey(item)
 		if _, ok := seen[key]; ok {
 			continue
 		}
 		seen[key] = struct{}{}
-		pathways = append(pathways, struct{ SrcEID, DstEID uint32 }{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID})
+		pathways = append(pathways, item)
 	}
 	return pathways
 }
 
-func pathwayKey(srcEID, dstEID uint32) string {
-	return fmt.Sprintf("%d:%d", srcEID, dstEID)
+func pathwayKey(pathway pricedPathway) string {
+	return fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, pathway.OpenExecutor, pathway.OpenDVN)
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.

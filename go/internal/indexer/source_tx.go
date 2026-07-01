@@ -14,14 +14,11 @@ import (
 type ExecutorSourceTxRecords struct {
 	Packet      db.PacketRecord
 	ExecutorJob db.ExecutorJobRecord
+	Executor    common.Address
 }
 
 // ExecutorSourceTxRecordsFromLogs decodes and cross-checks source-chain executor logs from one transaction.
-func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedExecutor common.Address) (ExecutorSourceTxRecords, bool, error) {
-	if expectedExecutor == (common.Address{}) {
-		return ExecutorSourceTxRecords{}, false, errors.New("expected executor address is required")
-	}
-
+func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log) (ExecutorSourceTxRecords, bool, error) {
 	var packet *db.PacketRecord
 	var feePaid *lzabi.ExecutorFeePaid
 	var feeLogAddress common.Address
@@ -65,17 +62,14 @@ func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedExecutor comm
 	if assignment == nil {
 		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing ExecutorJobAssigned log")
 	}
-	if assignmentLogAddress != expectedExecutor {
-		return ExecutorSourceTxRecords{}, false, nil
-	}
 	if packet == nil {
 		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing PacketSent log")
 	}
 	if feePaid == nil {
 		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing ExecutorFeePaid log")
 	}
-	if feePaid.Executor != expectedExecutor {
-		return ExecutorSourceTxRecords{}, false, nil
+	if feePaid.Executor != assignmentLogAddress {
+		return ExecutorSourceTxRecords{}, false, fmt.Errorf("executor fee paid executor %s does not match assignment log address %s", feePaid.Executor, assignmentLogAddress)
 	}
 	if packet.SendLib != feeLogAddress {
 		return ExecutorSourceTxRecords{}, false, fmt.Errorf("PacketSent send lib %s does not match ExecutorFeePaid log address %s", packet.SendLib, feeLogAddress)
@@ -88,5 +82,5 @@ func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedExecutor comm
 	if err != nil {
 		return ExecutorSourceTxRecords{}, false, err
 	}
-	return ExecutorSourceTxRecords{Packet: *packet, ExecutorJob: job}, true, nil
+	return ExecutorSourceTxRecords{Packet: *packet, ExecutorJob: job, Executor: assignmentLogAddress}, true, nil
 }

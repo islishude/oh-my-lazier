@@ -28,7 +28,6 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -51,6 +50,9 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 	if store.request.To != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
 		t.Fatalf("to = %s, want receive lib", store.request.To)
 	}
+	if store.request.SignerID != "0x8888888888888888888888888888888888888888" {
+		t.Fatalf("signer = %q, want destination executor signer", store.request.SignerID)
+	}
 }
 
 func TestProcessCommitterOnceMarksAssignedWaitingWhenNotVerifiable(t *testing.T) {
@@ -66,7 +68,6 @@ func TestProcessCommitterOnceMarksAssignedWaitingWhenNotVerifiable(t *testing.T)
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeCommitNotReadyCaller{}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -101,7 +102,6 @@ func TestProcessCommitterOnceMarksAssignedVerifiable(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -133,7 +133,6 @@ func TestProcessCommitterOnceMarksWaitingVerifiable(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -184,7 +183,6 @@ func TestProcessDelivererOnceMarksCommittedExecutable(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -219,7 +217,6 @@ func TestProcessDelivererOnceEnqueuesLzReceiveTx(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -242,6 +239,9 @@ func TestProcessDelivererOnceEnqueuesLzReceiveTx(t *testing.T) {
 	if store.request.To != common.HexToAddress("0x4444444444444444444444444444444444444444") {
 		t.Fatalf("to = %s, want destination endpoint", store.request.To)
 	}
+	if store.request.SignerID != "0x8888888888888888888888888888888888888888" {
+		t.Fatalf("signer = %q, want destination executor signer", store.request.SignerID)
+	}
 }
 
 func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
@@ -257,7 +257,6 @@ func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -292,7 +291,6 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 6}},
-		"0x9999999999999999999999999999999999999999",
 		slog.Default(),
 	)
 
@@ -461,9 +459,14 @@ func testRegistry(t *testing.T) *chain.Registry {
 			EndpointAddress: "0x1111111111111111111111111111111111111111",
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
-			Workers: config.WorkerContractsConfig{
-				OpenExecutor: "0x2222222222222222222222222222222222222222",
-				OpenDVN:      "0x3333333333333333333333333333333333333333",
+			TxRoles: config.ChainTxRolesConfig{
+				Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+				DVN: config.DVNTxRoleConfig{
+					Signer:                  "0x9999999999999999999999999999999999999999",
+					TxGasLimit:              120000,
+					MaxFeePerGasWei:         "2000000000",
+					MaxPriorityFeePerGasWei: "1000000000",
+				},
 			},
 		},
 		{
@@ -473,19 +476,29 @@ func testRegistry(t *testing.T) *chain.Registry {
 			EndpointAddress: "0x4444444444444444444444444444444444444444",
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
-			Workers: config.WorkerContractsConfig{
-				OpenExecutor: "0x5555555555555555555555555555555555555555",
-				OpenDVN:      "0x6666666666666666666666666666666666666666",
+			TxRoles: config.ChainTxRolesConfig{
+				Executor: config.ExecutorTxRoleConfig{Signer: "0x8888888888888888888888888888888888888888"},
+				DVN: config.DVNTxRoleConfig{
+					Signer:                  "0x8888888888888888888888888888888888888888",
+					TxGasLimit:              120000,
+					MaxFeePerGasWei:         "2000000000",
+					MaxPriorityFeePerGasWei: "1000000000",
+				},
 			},
 		},
 	}, []config.PathwayConfig{
 		{
-			SrcEID:         40161,
-			DstEID:         40245,
-			SrcOApp:        "0x1111111111111111111111111111111111111111",
-			DstOApp:        "0x2222222222222222222222222222222222222222",
-			SendLib:        "0x9999999999999999999999999999999999999999",
-			ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SrcEID:     40161,
+			DstEID:     40245,
+			SrcOApp:    "0x1111111111111111111111111111111111111111",
+			DstOApp:    "0x2222222222222222222222222222222222222222",
+			SendLib:    "0x9999999999999999999999999999999999999999",
+			ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SourceWorkers: config.WorkerContractsConfig{
+				OpenExecutor: "0x2222222222222222222222222222222222222222",
+				OpenDVN:      "0x3333333333333333333333333333333333333333",
+			},
+			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 			Enabled:        true,
 			MaxMessageSize: 10000,
 		},

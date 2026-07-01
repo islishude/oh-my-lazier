@@ -16,13 +16,11 @@ import (
 type DVNSourceTxRecords struct {
 	Packet db.PacketRecord
 	DVNJob db.DVNJobRecord
+	DVN    common.Address
 }
 
 // DVNSourceTxRecordsFromLogs decodes and cross-checks source-chain DVN logs from one transaction.
-func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedDVN common.Address) (DVNSourceTxRecords, bool, error) {
-	if expectedDVN == (common.Address{}) {
-		return DVNSourceTxRecords{}, false, errors.New("expected dvn address is required")
-	}
+func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) (DVNSourceTxRecords, bool, error) {
 	var packet *db.PacketRecord
 	var feePaid *lzabi.DVNFeePaid
 	var assignment *lzabi.DVNJobAssigned
@@ -63,9 +61,6 @@ func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedDVN common.Address
 	if assignment == nil {
 		return DVNSourceTxRecords{}, false, errors.New("source tx missing DVNJobAssigned log")
 	}
-	if assignmentLogAddress != expectedDVN {
-		return DVNSourceTxRecords{}, false, nil
-	}
 	if packet == nil {
 		return DVNSourceTxRecords{}, false, errors.New("source tx missing PacketSent log")
 	}
@@ -81,8 +76,8 @@ func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedDVN common.Address
 	if assignment.SendLib != packet.SendLib {
 		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn assignment send lib %s does not match packet send lib %s", assignment.SendLib, packet.SendLib)
 	}
-	if !dvnFeeMatches(*feePaid, expectedDVN, assignment.Fee) {
-		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn fee paid does not include expected dvn %s fee %s", expectedDVN, assignment.Fee)
+	if !dvnFeeMatches(*feePaid, assignmentLogAddress, assignment.Fee) {
+		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn fee paid does not include assigned dvn %s fee %s", assignmentLogAddress, assignment.Fee)
 	}
 	return DVNSourceTxRecords{
 		Packet: *packet,
@@ -91,6 +86,7 @@ func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log, expectedDVN common.Address
 			ConfirmationsRequired: assignment.Confirmations,
 			Status:                string(packets.DVNAssigned),
 		},
+		DVN: assignmentLogAddress,
 	}, true, nil
 }
 

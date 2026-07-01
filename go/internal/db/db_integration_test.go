@@ -54,6 +54,20 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	if pathways != 1 {
 		t.Fatalf("pathways = %d, want 1", pathways)
 	}
+	var openExecutor, openDVN []byte
+	if err := store.pool.QueryRow(ctx, `
+		SELECT open_executor, open_dvn
+		FROM pathways
+		WHERE src_eid = 40161 AND dst_eid = 40245
+	`).Scan(&openExecutor, &openDVN); err != nil {
+		t.Fatalf("select pathway workers: %v", err)
+	}
+	if got := common.BytesToAddress(openExecutor); got != common.HexToAddress("0x2222222222222222222222222222222222222222") {
+		t.Fatalf("open_executor = %s", got)
+	}
+	if got := common.BytesToAddress(openDVN); got != common.HexToAddress("0x3333333333333333333333333333333333333333") {
+		t.Fatalf("open_dvn = %s", got)
+	}
 }
 
 func TestPausePathwayForPacketAndChain(t *testing.T) {
@@ -1085,9 +1099,8 @@ func testChains() []config.ChainConfig {
 			EndpointAddress: "0x1111111111111111111111111111111111111111",
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
-			Workers: config.WorkerContractsConfig{
-				OpenExecutor: "0x2222222222222222222222222222222222222222",
-				OpenDVN:      "0x3333333333333333333333333333333333333333",
+			TxRoles: config.ChainTxRolesConfig{
+				Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 			},
 		},
 		{
@@ -1097,9 +1110,8 @@ func testChains() []config.ChainConfig {
 			EndpointAddress: "0x4444444444444444444444444444444444444444",
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
-			Workers: config.WorkerContractsConfig{
-				OpenExecutor: "0x5555555555555555555555555555555555555555",
-				OpenDVN:      "0x6666666666666666666666666666666666666666",
+			TxRoles: config.ChainTxRolesConfig{
+				Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 			},
 		},
 	}
@@ -1172,9 +1184,8 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 				EndpointAddress: "0x1111111111111111111111111111111111111111",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 				},
 			},
 			{
@@ -1184,20 +1195,24 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 				EndpointAddress: "0x4444444444444444444444444444444444444444",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 				},
 			},
 		},
 		[]config.PathwayConfig{
 			{
-				SrcEID:         packet.SrcEID,
-				DstEID:         packet.DstEID,
-				SrcOApp:        packet.Sender.Hex(),
-				DstOApp:        packet.Receiver.Hex(),
-				SendLib:        packet.SendLib.Hex(),
-				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcEID:     packet.SrcEID,
+				DstEID:     packet.DstEID,
+				SrcOApp:    packet.Sender.Hex(),
+				DstOApp:    packet.Receiver.Hex(),
+				SendLib:    packet.SendLib.Hex(),
+				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceWorkers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+				DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:        true,
 				MaxMessageSize: 10000,
 			},
@@ -1245,12 +1260,17 @@ func cleanPathwayRows(ctx context.Context, t *testing.T, store *Store, srcEID, d
 func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
-			SrcEID:         40161,
-			DstEID:         40245,
-			SrcOApp:        "0x7777777777777777777777777777777777777777",
-			DstOApp:        "0x8888888888888888888888888888888888888888",
-			SendLib:        "0x9999999999999999999999999999999999999999",
-			ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SrcEID:     40161,
+			DstEID:     40245,
+			SrcOApp:    "0x7777777777777777777777777777777777777777",
+			DstOApp:    "0x8888888888888888888888888888888888888888",
+			SendLib:    "0x9999999999999999999999999999999999999999",
+			ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			SourceWorkers: config.WorkerContractsConfig{
+				OpenExecutor: "0x2222222222222222222222222222222222222222",
+				OpenDVN:      "0x3333333333333333333333333333333333333333",
+			},
+			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 			Enabled:        true,
 			MaxMessageSize: 10000,
 		},

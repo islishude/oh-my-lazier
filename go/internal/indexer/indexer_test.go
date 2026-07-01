@@ -249,11 +249,9 @@ func TestIndexerProcessOnceBackfillsDVNAssignment(t *testing.T) {
 }
 
 func TestIndexerProcessOnceFiltersUnexpectedDVNWorker(t *testing.T) {
-	configuredDVN := common.HexToAddress("0x3333333333333333333333333333333333333333")
 	otherDVN := common.HexToAddress("0x3434343434343434343434343434343434343434")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
-	configuredChain.Workers.OpenDVN = configuredDVN
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
 		head:       200,
@@ -863,21 +861,25 @@ func testIndexerChain(eid uint32, name string, executor common.Address) chain.Ch
 		Name:            name,
 		EndpointAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"),
 		Confirmations:   12,
-		Workers: chain.WorkerContracts{
-			OpenExecutor: executor,
-			OpenDVN:      common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		TxRoles: chain.TxRoles{
+			Executor: chain.ExecutorTxRole{SignerID: executor.Hex()},
 		},
 	}
 }
 
 func testIndexerPathway() chain.Pathway {
 	return chain.Pathway{
-		SrcEID:         40161,
-		DstEID:         40245,
-		SrcOApp:        common.HexToAddress("0x7777777777777777777777777777777777777777"),
-		DstOApp:        common.HexToAddress("0x8888888888888888888888888888888888888888"),
-		SendLib:        common.HexToAddress("0x9999999999999999999999999999999999999999"),
-		ReceiveLib:     common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		SrcEID:     40161,
+		DstEID:     40245,
+		SrcOApp:    common.HexToAddress("0x7777777777777777777777777777777777777777"),
+		DstOApp:    common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		SendLib:    common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		ReceiveLib: common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		SourceWorkers: chain.WorkerContracts{
+			OpenExecutor: common.HexToAddress("0x2222222222222222222222222222222222222222"),
+			OpenDVN:      common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		},
+		DVNMode:        "shadow",
 		Enabled:        true,
 		MaxMessageSize: 10000,
 	}

@@ -8,7 +8,7 @@ The first implementation pass includes:
 - Fixed LayerZero and OpenZeppelin package versions in `package-lock.json`.
 - `TestOFT` with burn/mint OFT behavior, per-pathway send/receive pause, and outbound token-bucket rate limits.
 - `OpenExecutor` and `OpenDVN` contracts with allowed SendLib checks, pathway gating, stale price rejection, message-size limits, option validation, and assignment events.
-- Go worker packages with config loading, chain registry, Postgres connection, metrics health endpoint, tx manager loop, indexer loop, executor committer/deliverer loop, DVN mode wiring, signer interfaces, and state enums.
+- Go worker packages with config loading, chain registry, Postgres connection, metrics health endpoint, tx manager loop, indexer loop, executor committer/deliverer loop, pathway DVN mode wiring, signer interfaces, and state enums.
 - Docker Compose for Postgres plus the worker process.
 
 ## Repository Layout
@@ -97,9 +97,11 @@ The image runs `/usr/local/bin/worker` and defaults to `/app/config/example.yaml
 
 Before starting durable loops or enqueuing price updates, the worker runs an
 on-chain config check against the configured RPC endpoints. The check confirms
-chain IDs, LayerZero endpoint IDs, deployed contract code, OApp peers, active
-send/receive libraries, ULN required DVNs, and OpenExecutor/OpenDVN pathway
-settings. Operators can run the same gate directly:
+every configured RPC URL reports the configured EVM chain ID, then confirms
+LayerZero endpoint IDs, deployed contract code, OApp peers, active
+send/receive libraries, ULN required DVNs, and pathway-level
+OpenExecutor/OpenDVN source worker settings. Operators can run the same gate
+directly:
 
 ```bash
 go run ./go/cmd/configcheck -config config/example.yaml
@@ -131,8 +133,9 @@ The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJ
 
 - Config is loaded once at startup. Runtime config changes require a process restart.
 - Each chain may set `tx_type: dynamic_fee` or `tx_type: legacy`; omitted `tx_type` defaults to `dynamic_fee`. Legacy transactions use the RPC `SuggestGasPrice` result when the tx manager signs the outbox row.
+- `chains[].tx_roles` defines local transaction signers and fee policy for each destination chain. `pathways[].source_workers` defines the OpenExecutor/OpenDVN contracts selected by the source pathway.
 - The worker starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context. Retryable loop errors are logged, counted in process-local metrics, and restarted with backoff; non-retryable loop errors stop `App.Run`.
-- In active DVN mode, the DVN flow is `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`. The verifier enqueues `ReceiveUln302.verify`; tx manager is the only component that signs and broadcasts it.
+- In a pathway's active DVN mode, the DVN flow is `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`. The verifier enqueues `ReceiveUln302.verify` with the destination chain's `tx_roles.dvn`; tx manager is the only component that signs and broadcasts it.
 - The executor flow is `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`. The worker polls destination readiness before commit and delivery, and tx receipts or destination logs persist the final outcomes.
 - Failed `lzReceive` receipts or destination `LzReceiveAlert` logs move jobs to `LZ_RECEIVE_FAILED`, where they remain retryable. Failed `dvn_verify` receipts fail the outbox row and do not mark the DVN job verified.
 - Per-chain `start_block_number` is optional and defaults to `0`. It only seeds the first indexer backfill when no durable cursor exists; after a cursor is written, the database cursor is authoritative. Per-chain `indexer_query_block_range` defaults to `500` and caps each indexer `FilterLogs` request. Indexers poll confirmed block windows and persist progress through durable cursors.

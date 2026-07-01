@@ -110,6 +110,34 @@ func IsReceiptConflict(err error) bool {
 	return errors.As(err, &conflict)
 }
 
+// ChainIDMismatchError reports configured RPC providers that do not match the expected EVM chain ID.
+type ChainIDMismatchError struct {
+	ChainName string
+	Expected  *big.Int
+	Details   []string
+}
+
+// Error returns provider chain ID mismatch details.
+func (e *ChainIDMismatchError) Error() string {
+	if e == nil {
+		return "rpc chain_id mismatch"
+	}
+	expected := "<unknown>"
+	if e.Expected != nil {
+		expected = e.Expected.String()
+	}
+	if len(e.Details) == 0 {
+		return fmt.Sprintf("rpc chain_id mismatch for chain %s, expected %s", e.ChainName, expected)
+	}
+	return fmt.Sprintf("rpc chain_id mismatch for chain %s, expected %s: %s", e.ChainName, expected, strings.Join(e.Details, "; "))
+}
+
+// IsChainIDMismatch reports whether err is a provider chain ID mismatch.
+func IsChainIDMismatch(err error) bool {
+	var mismatch *ChainIDMismatchError
+	return errors.As(err, &mismatch)
+}
+
 // New constructs a quorum client from configured RPC URLs.
 func New(chainName string, urls []string) *Client {
 	providers := make([]Provider, 0, len(urls))
@@ -214,6 +242,31 @@ func (c *Client) ChainID(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	return client.ChainID(ctx)
+}
+
+// ValidateChainID verifies every configured provider reports the expected EVM chain ID.
+func (c *Client) ValidateChainID(ctx context.Context, expected *big.Int) error {
+	if expected == nil {
+		return errors.New("expected chain id is required")
+	}
+	providers := c.snapshotProviders()
+	if len(providers) == 0 {
+		return errors.New("no rpc providers configured")
+	}
+	ids := make([]providerChainID, 0, len(providers))
+	var providerErrs []error
+	for index, provider := range providers {
+		chainID, err := c.chainIDFromProvider(ctx, index)
+		if err != nil {
+			providerErrs = append(providerErrs, fmt.Errorf("%s: %w", provider.URL, err))
+			continue
+		}
+		ids = append(ids, providerChainID{URL: provider.URL, ChainID: chainID})
+	}
+	if len(providerErrs) > 0 {
+		return errors.Join(providerErrs...)
+	}
+	return validateProviderChainIDs(c.chainName, expected, ids)
 }
 
 // CodeAt returns contract code at the first healthy provider's selected block.
@@ -342,6 +395,14 @@ func (c *Client) transactionReceiptFromProvider(ctx context.Context, index int, 
 	return client.TransactionReceipt(ctx, txHash)
 }
 
+func (c *Client) chainIDFromProvider(ctx context.Context, index int) (*big.Int, error) {
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	return client.ChainID(ctx)
+}
+
 func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, number *big.Int) (*gethtypes.Header, error) {
 	client, err := c.providerClient(ctx, index)
 	if err != nil {
@@ -459,6 +520,37 @@ type providerHead struct {
 	URL    string
 	Number *big.Int
 	Hash   common.Hash
+}
+
+type providerChainID struct {
+	URL     string
+	ChainID *big.Int
+}
+
+func validateProviderChainIDs(chainName string, expected *big.Int, ids []providerChainID) error {
+	if expected == nil {
+		return errors.New("expected chain id is required")
+	}
+	if len(ids) == 0 {
+		return errors.New("no rpc providers configured")
+	}
+	var details []string
+	for _, item := range ids {
+		switch {
+		case item.ChainID == nil:
+			details = append(details, fmt.Sprintf("provider %s returned <nil>", item.URL))
+		case item.ChainID.Cmp(expected) != 0:
+			details = append(details, fmt.Sprintf("provider %s returned %s", item.URL, item.ChainID))
+		}
+	}
+	if len(details) > 0 {
+		return &ChainIDMismatchError{
+			ChainName: chainName,
+			Expected:  new(big.Int).Set(expected),
+			Details:   details,
+		}
+	}
+	return nil
 }
 
 func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, error) {

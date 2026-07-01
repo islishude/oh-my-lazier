@@ -70,22 +70,21 @@ type Settings struct {
 
 // Worker runs the DVN verification workflow.
 type Worker struct {
-	mode     config.DVNMode
 	store    Store
 	registry *chain.Registry
-	settings Settings
+	settings map[uint32]Settings
 	heads    map[uint32]HeadReader
 	receipts map[uint32]ReceiptReader
 	logger   *slog.Logger
 }
 
-// New creates a DVN worker for the configured mode.
-func New(mode config.DVNMode, store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
-	return NewWithSettings(mode, store, registry, Settings{}, logger)
+// New creates a DVN worker.
+func New(store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
+	return NewWithSettings(store, registry, nil, logger)
 }
 
-// NewWithSettings creates a DVN worker with explicit active-mode transaction settings.
-func NewWithSettings(mode config.DVNMode, store Store, registry *chain.Registry, settings Settings, logger *slog.Logger) *Worker {
+// NewWithSettings creates a DVN worker with explicit active-mode transaction settings by destination EID.
+func NewWithSettings(store Store, registry *chain.Registry, settings map[uint32]Settings, logger *slog.Logger) *Worker {
 	heads := make(map[uint32]HeadReader)
 	receipts := make(map[uint32]ReceiptReader)
 	if registry != nil {
@@ -96,31 +95,33 @@ func NewWithSettings(mode config.DVNMode, store Store, registry *chain.Registry,
 			}
 		}
 	}
-	return NewWithClientsAndSettings(mode, store, registry, settings, heads, receipts, logger)
+	return NewWithClientsAndSettings(store, registry, settings, heads, receipts, logger)
 }
 
 // NewWithHeads creates a DVN worker with explicit head readers for tests.
-func NewWithHeads(mode config.DVNMode, store Store, heads map[uint32]HeadReader, logger *slog.Logger) *Worker {
-	return NewWithClients(mode, store, heads, nil, logger)
+func NewWithHeads(store Store, heads map[uint32]HeadReader, logger *slog.Logger) *Worker {
+	return NewWithClients(store, heads, nil, logger)
 }
 
 // NewWithClients creates a DVN worker with explicit source-chain clients for tests.
-func NewWithClients(mode config.DVNMode, store Store, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
-	return NewWithClientsAndSettings(mode, store, nil, Settings{}, heads, receipts, logger)
+func NewWithClients(store Store, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
+	return NewWithClientsAndSettings(store, nil, nil, heads, receipts, logger)
 }
 
 // NewWithClientsAndSettings creates a DVN worker with explicit clients and active-mode settings for tests.
-func NewWithClientsAndSettings(mode config.DVNMode, store Store, registry *chain.Registry, settings Settings, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
+func NewWithClientsAndSettings(store Store, registry *chain.Registry, settings map[uint32]Settings, heads map[uint32]HeadReader, receipts map[uint32]ReceiptReader, logger *slog.Logger) *Worker {
 	copiedHeads := make(map[uint32]HeadReader, len(heads))
 	maps.Copy(copiedHeads, heads)
 	copiedReceipts := make(map[uint32]ReceiptReader, len(receipts))
 	maps.Copy(copiedReceipts, receipts)
-	return &Worker{mode: mode, store: store, registry: registry, settings: settings, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
+	copiedSettings := make(map[uint32]Settings, len(settings))
+	maps.Copy(copiedSettings, settings)
+	return &Worker{store: store, registry: registry, settings: copiedSettings, heads: copiedHeads, receipts: copiedReceipts, logger: logger}
 }
 
 // Run starts the DVN verifier loop until the context is canceled.
 func (w *Worker) Run(ctx context.Context) error {
-	w.logger.Info("dvn verifier loop started", "mode", w.mode)
+	w.logger.Info("dvn verifier loop started")
 	for {
 		processed, err := w.ProcessConfirmationsOnce(ctx)
 		if err != nil {
@@ -257,14 +258,21 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 	if len(item.Job.QuorumResult) == 0 {
 		return false, fmt.Errorf("dvn job %s ready to verify without quorum result", item.Packet.GUID)
 	}
-	switch w.mode {
+	if w.registry == nil {
+		return false, workerloop.Fatal(errors.New("dvn verifier requires chain registry"))
+	}
+	pathway, err := w.registry.Pathway(item.Packet.SrcEID, item.Packet.DstEID, item.Packet.Sender, item.Packet.Receiver)
+	if err != nil {
+		return false, err
+	}
+	switch pathway.DVNMode {
 	case config.DVNModeShadow:
 		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
 			return false, err
 		}
 		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
 	case config.DVNModeActive:
-		request, err := w.buildVerifyTx(item.Packet, item.Job.ConfirmationsRequired)
+		request, err := w.buildVerifyTx(item.Packet, pathway, item.Job.ConfirmationsRequired)
 		if err != nil {
 			return false, err
 		}
@@ -274,23 +282,23 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		}
 		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
 	default:
-		return false, workerloop.Fatal(fmt.Errorf("unsupported dvn mode %q", w.mode))
+		return false, workerloop.Fatal(fmt.Errorf("unsupported dvn mode %q", pathway.DVNMode))
 	}
 	return true, nil
 }
 
-func (w *Worker) buildVerifyTx(packet db.PacketRecord, confirmations uint64) (db.TxRequest, error) {
+func (w *Worker) buildVerifyTx(packet db.PacketRecord, pathway chain.Pathway, confirmations uint64) (db.TxRequest, error) {
 	if w.registry == nil {
 		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires chain registry"))
 	}
-	if w.settings.SignerID == "" {
+	settings, ok := w.settings[packet.DstEID]
+	if !ok {
+		return db.TxRequest{}, workerloop.Fatal(fmt.Errorf("dvn active mode requires tx settings for destination eid %d", packet.DstEID))
+	}
+	if settings.SignerID == "" {
 		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires signer id"))
 	}
-	pathway, err := w.registry.Pathway(packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver)
-	if err != nil {
-		return db.TxRequest{}, err
-	}
-	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, w.settings.SignerID, w.settings.TxFees)
+	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, settings.SignerID, settings.TxFees)
 }
 
 func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord, err error) error {

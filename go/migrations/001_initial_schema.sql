@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS pathways (
   dst_oapp BYTEA NOT NULL,
   send_lib BYTEA NOT NULL,
   receive_lib BYTEA NOT NULL,
+  open_executor BYTEA NOT NULL,
+  open_dvn BYTEA NOT NULL,
   max_message_size INTEGER NOT NULL,
   enabled BOOLEAN NOT NULL DEFAULT true,
   paused BOOLEAN NOT NULL DEFAULT false,

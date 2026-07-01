@@ -88,7 +88,7 @@ func (a *App) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
+	executorWorker := executor.New(store, registry, a.logger)
 	dvnWorker, err := a.dvnWorker(store, registry)
 	if err != nil {
 		return err
@@ -321,27 +321,37 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 }
 
 func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker, error) {
-	if a.cfg.DVN.Mode != config.DVNModeActive {
-		return dvn.New(a.cfg.DVN.Mode, store, registry, a.logger), nil
+	settings := make(map[uint32]dvn.Settings)
+	for _, pathway := range registry.Pathways() {
+		if pathway.DVNMode != config.DVNModeActive {
+			continue
+		}
+		if _, ok := settings[pathway.DstEID]; ok {
+			continue
+		}
+		dstChain, err := registry.Get(pathway.DstEID)
+		if err != nil {
+			return nil, err
+		}
+		dynamicFeeCapsRequired := dstChain.TxType == config.TxTypeDynamicFee
+		maxFeePerGas, err := parseOptionalBigInt(dstChain.TxRoles.DVN.MaxFeePerGasWei, dynamicFeeCapsRequired)
+		if err != nil {
+			return nil, err
+		}
+		maxPriorityFeePerGas, err := parseOptionalBigInt(dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
+		if err != nil {
+			return nil, err
+		}
+		settings[pathway.DstEID] = dvn.Settings{
+			SignerID: dstChain.TxRoles.DVN.SignerID,
+			TxFees: dvn.TxFees{
+				GasLimit:             new(big.Int).SetUint64(dstChain.TxRoles.DVN.TxGasLimit),
+				MaxFeePerGas:         maxFeePerGas,
+				MaxPriorityFeePerGas: maxPriorityFeePerGas,
+			},
+		}
 	}
-	dynamicFeeCapsRequired := a.requiresDynamicFeeCaps()
-	maxFeePerGas, err := parseOptionalBigInt(a.cfg.DVN.MaxFeePerGasWei, dynamicFeeCapsRequired)
-	if err != nil {
-		return nil, err
-	}
-	maxPriorityFeePerGas, err := parseOptionalBigInt(a.cfg.DVN.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
-	if err != nil {
-		return nil, err
-	}
-	settings := dvn.Settings{
-		SignerID: a.cfg.DVN.Signer,
-		TxFees: dvn.TxFees{
-			GasLimit:             new(big.Int).SetUint64(a.cfg.DVN.TxGasLimit),
-			MaxFeePerGas:         maxFeePerGas,
-			MaxPriorityFeePerGas: maxPriorityFeePerGas,
-		},
-	}
-	return dvn.NewWithSettings(a.cfg.DVN.Mode, store, registry, settings, a.logger), nil
+	return dvn.NewWithSettings(store, registry, settings, a.logger), nil
 }
 
 func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.Target, error) {
@@ -349,28 +359,44 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 	if err != nil {
 		return nil, err
 	}
-	required := map[string]struct{}{common.HexToAddress(a.cfg.Executor.Signer).Hex(): {}}
-	if a.cfg.DVN.Mode == config.DVNModeActive {
-		required[common.HexToAddress(a.cfg.DVN.Signer).Hex()] = struct{}{}
+	type targetKey struct {
+		chainEID uint32
+		signerID string
 	}
-	if a.cfg.Pricing.Enabled {
-		required[common.HexToAddress(a.cfg.Pricing.Signer).Hex()] = struct{}{}
-	}
-	targets := make([]txmgr.Target, 0, len(required)*len(a.cfg.Chains))
+	required := make(map[targetKey]struct{})
 	for _, configuredChain := range registry.All() {
-		for signerID := range required {
-			configuredSigner, ok := signers[signerID]
-			if !ok {
-				return nil, errors.New("configured signer was not loaded")
-			}
-			targets = append(targets, txmgr.Target{
-				ChainEID: configuredChain.EID,
-				ChainID:  new(big.Int).Set(configuredChain.ChainID),
-				TxType:   configuredChain.TxType,
-				Signer:   configuredSigner,
-				Client:   configuredChain.RPC,
-			})
+		required[targetKey{chainEID: configuredChain.EID, signerID: configuredChain.TxRoles.Executor.SignerID}] = struct{}{}
+		if a.cfg.Pricing.Enabled {
+			required[targetKey{chainEID: configuredChain.EID, signerID: common.HexToAddress(a.cfg.Pricing.Signer).Hex()}] = struct{}{}
 		}
+	}
+	for _, pathway := range registry.Pathways() {
+		if pathway.DVNMode != config.DVNModeActive {
+			continue
+		}
+		dstChain, err := registry.Get(pathway.DstEID)
+		if err != nil {
+			return nil, err
+		}
+		required[targetKey{chainEID: dstChain.EID, signerID: dstChain.TxRoles.DVN.SignerID}] = struct{}{}
+	}
+	targets := make([]txmgr.Target, 0, len(required))
+	for key := range required {
+		configuredChain, err := registry.Get(key.chainEID)
+		if err != nil {
+			return nil, err
+		}
+		configuredSigner, ok := signers[key.signerID]
+		if !ok {
+			return nil, errors.New("configured signer was not loaded")
+		}
+		targets = append(targets, txmgr.Target{
+			ChainEID: configuredChain.EID,
+			ChainID:  new(big.Int).Set(configuredChain.ChainID),
+			TxType:   configuredChain.TxType,
+			Signer:   configuredSigner,
+			Client:   configuredChain.RPC,
+		})
 	}
 	return targets, nil
 }

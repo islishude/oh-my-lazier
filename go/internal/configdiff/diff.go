@@ -22,8 +22,6 @@ func Diff(before, after config.Config) []Change {
 	var changes []Change
 	compare(&changes, "database_url", before.DatabaseURL, after.DatabaseURL)
 	compare(&changes, "metrics", before.Metrics, after.Metrics)
-	compare(&changes, "executor", before.Executor, after.Executor)
-	compare(&changes, "dvn", before.DVN, after.DVN)
 	compare(&changes, "pricing", pricingGlobal(before.Pricing), pricingGlobal(after.Pricing))
 	diffMaps(&changes, "pricing.chains", pricingChains(before.Pricing.Chains), pricingChains(after.Pricing.Chains))
 	diffMaps(&changes, "chains", chains(before.Chains), chains(after.Chains))

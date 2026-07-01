@@ -28,12 +28,11 @@ type Worker struct {
 	store    Store
 	registry *chain.Registry
 	callers  map[uint32]ContractCaller
-	signerID string
 	logger   *slog.Logger
 }
 
 // New creates an executor worker.
-func New(store Store, registry *chain.Registry, signerID string, logger *slog.Logger) *Worker {
+func New(store Store, registry *chain.Registry, logger *slog.Logger) *Worker {
 	callers := make(map[uint32]ContractCaller)
 	if registry != nil {
 		for _, configuredChain := range registry.All() {
@@ -42,14 +41,14 @@ func New(store Store, registry *chain.Registry, signerID string, logger *slog.Lo
 			}
 		}
 	}
-	return NewWithCallers(store, registry, callers, signerID, logger)
+	return NewWithCallers(store, registry, callers, logger)
 }
 
 // NewWithCallers creates an executor worker with explicit chain call clients.
-func NewWithCallers(store Store, registry *chain.Registry, callers map[uint32]ContractCaller, signerID string, logger *slog.Logger) *Worker {
+func NewWithCallers(store Store, registry *chain.Registry, callers map[uint32]ContractCaller, logger *slog.Logger) *Worker {
 	copiedCallers := make(map[uint32]ContractCaller, len(callers))
 	maps.Copy(copiedCallers, callers)
-	return &Worker{store: store, registry: registry, callers: copiedCallers, signerID: signerID, logger: logger}
+	return &Worker{store: store, registry: registry, callers: copiedCallers, logger: logger}
 }
 
 // RunCommitter starts the commitVerification enqueue loop.
@@ -98,7 +97,7 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	if !ready {
 		return false, nil
 	}
-	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, w.signerID, TxFees{})
+	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID, TxFees{})
 	if err != nil {
 		return false, err
 	}
@@ -200,7 +199,7 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	if !ready {
 		return false, nil
 	}
-	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, w.signerID, TxFees{})
+	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID, TxFees{})
 	if err != nil {
 		return false, err
 	}

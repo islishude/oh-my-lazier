@@ -36,7 +36,7 @@ func TestProcessConfirmationsOnceWaitsForSourceConfirmations(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads("shadow", store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 10}}, discardLogger())
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 10}}, discardLogger())
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -62,7 +62,7 @@ func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads("shadow", store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 11}}, discardLogger())
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 11}}, discardLogger())
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -88,7 +88,7 @@ func TestProcessConfirmationsOncePausesChainOnHeadConflict(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads("shadow", store, map[uint32]HeadReader{packet.SrcEID: fakeHeadConflict{eid: packet.SrcEID}}, discardLogger())
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHeadConflict{eid: packet.SrcEID}}, discardLogger())
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -114,7 +114,7 @@ func TestProcessConfirmationsOnceRollsReorgBackToWaiting(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads("shadow", store, nil, discardLogger())
+	worker := NewWithHeads(store, nil, discardLogger())
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -144,7 +144,6 @@ func TestProcessQuorumOnceMarksReadyToVerify(t *testing.T) {
 		}},
 	}
 	worker := NewWithClients(
-		"shadow",
 		store,
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptReader{receipt: testSourceReceipt(t, packet)}},
@@ -193,7 +192,7 @@ func TestProcessReadyToVerifyOnceMarksWouldVerify(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithClients("shadow", store, nil, nil, discardLogger())
+	worker := NewWithSettings(store, testRegistry(t, packet, config.DVNModeShadow), nil, discardLogger())
 
 	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
 	if err != nil {
@@ -224,17 +223,18 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 			},
 		}},
 	}
-	registry := testRegistry(t, packet)
+	registry := testRegistry(t, packet, config.DVNModeActive)
 	worker := NewWithClientsAndSettings(
-		"active",
 		store,
 		registry,
-		Settings{
-			SignerID: "0x9999999999999999999999999999999999999999",
-			TxFees: TxFees{
-				GasLimit:             big.NewInt(120000),
-				MaxFeePerGas:         big.NewInt(2_000_000_000),
-				MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		map[uint32]Settings{
+			packet.DstEID: {
+				SignerID: "0x8888888888888888888888888888888888888888",
+				TxFees: TxFees{
+					GasLimit:             big.NewInt(120000),
+					MaxFeePerGas:         big.NewInt(2_000_000_000),
+					MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+				},
 			},
 		},
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
@@ -260,6 +260,9 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	}
 	if store.verifyRequest.To != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
 		t.Fatalf("verify target = %s", store.verifyRequest.To)
+	}
+	if store.verifyRequest.SignerID != "0x8888888888888888888888888888888888888888" {
+		t.Fatalf("verify signer = %q, want destination dvn signer", store.verifyRequest.SignerID)
 	}
 	receiveUlnABI := lzabi.ReceiveUln302ABI()
 	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnABI.Methods["verify"].ID) {
@@ -293,7 +296,6 @@ func TestProcessQuorumOnceMarksConflictOnMismatchedReceipt(t *testing.T) {
 		}},
 	}
 	worker := NewWithClients(
-		"shadow",
 		store,
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptReader{receipt: receipt}},
@@ -331,7 +333,6 @@ func TestProcessQuorumOnceMarksConflictOnRPCDisagreement(t *testing.T) {
 		}},
 	}
 	worker := NewWithClients(
-		"shadow",
 		store,
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptConflictReader{txHash: packet.SrcTxHash}},
@@ -369,7 +370,6 @@ func TestProcessQuorumOnceMarksReorgWhenReceiptDisappears(t *testing.T) {
 		}},
 	}
 	worker := NewWithClients(
-		"shadow",
 		store,
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptNotFoundReader{}},
@@ -468,7 +468,7 @@ func (s *fakeStore) MarkDVNReorgDetected(_ context.Context, guid common.Hash, _,
 	return nil
 }
 
-func testRegistry(t *testing.T, packet db.PacketRecord) *chain.Registry {
+func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *chain.Registry {
 	t.Helper()
 	registry, err := chain.NewRegistry(
 		[]config.ChainConfig{
@@ -479,9 +479,14 @@ func testRegistry(t *testing.T, packet db.PacketRecord) *chain.Registry {
 				EndpointAddress: "0x1111111111111111111111111111111111111111",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					DVN: config.DVNTxRoleConfig{
+						Signer:                  "0x9999999999999999999999999999999999999999",
+						TxGasLimit:              120000,
+						MaxFeePerGasWei:         "2000000000",
+						MaxPriorityFeePerGasWei: "1000000000",
+					},
 				},
 			},
 			{
@@ -491,20 +496,30 @@ func testRegistry(t *testing.T, packet db.PacketRecord) *chain.Registry {
 				EndpointAddress: "0x4444444444444444444444444444444444444444",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x8888888888888888888888888888888888888888"},
+					DVN: config.DVNTxRoleConfig{
+						Signer:                  "0x8888888888888888888888888888888888888888",
+						TxGasLimit:              120000,
+						MaxFeePerGasWei:         "2000000000",
+						MaxPriorityFeePerGasWei: "1000000000",
+					},
 				},
 			},
 		},
 		[]config.PathwayConfig{
 			{
-				SrcEID:         packet.SrcEID,
-				DstEID:         packet.DstEID,
-				SrcOApp:        packet.Sender.Hex(),
-				DstOApp:        packet.Receiver.Hex(),
-				SendLib:        packet.SendLib.Hex(),
-				ReceiveLib:     "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcEID:     packet.SrcEID,
+				DstEID:     packet.DstEID,
+				SrcOApp:    packet.Sender.Hex(),
+				DstOApp:    packet.Receiver.Hex(),
+				SendLib:    packet.SendLib.Hex(),
+				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceWorkers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+				DVN:            config.PathwayDVNConfig{Mode: mode},
 				Enabled:        true,
 				MaxMessageSize: 10000,
 			},

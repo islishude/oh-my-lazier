@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
 
 const (
@@ -49,6 +50,10 @@ type ChainClient interface {
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	ChainID(context.Context) (*big.Int, error)
 	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
+}
+
+type chainIDValidator interface {
+	ValidateChainID(context.Context, *big.Int) error
 }
 
 // Issue describes one config mismatch against on-chain state.
@@ -98,12 +103,14 @@ func CheckWithClients(ctx context.Context, registry *chain.Registry, clients map
 }
 
 type checker struct {
-	registry *chain.Registry
-	clients  map[uint32]ChainClient
-	issues   []Issue
+	registry      *chain.Registry
+	clients       map[uint32]ChainClient
+	invalidChains map[uint32]struct{}
+	issues        []Issue
 }
 
 func (c *checker) run(ctx context.Context) error {
+	c.invalidChains = make(map[uint32]struct{})
 	for _, configured := range c.registry.All() {
 		client, err := c.client(configured.EID)
 		if err != nil {
@@ -114,6 +121,9 @@ func (c *checker) run(ctx context.Context) error {
 		}
 	}
 	for _, pathway := range c.registry.Pathways() {
+		if c.chainInvalid(pathway.SrcEID) || c.chainInvalid(pathway.DstEID) {
+			continue
+		}
 		if err := c.checkPathway(ctx, pathway); err != nil {
 			return err
 		}
@@ -122,12 +132,24 @@ func (c *checker) run(ctx context.Context) error {
 }
 
 func (c *checker) checkChain(ctx context.Context, client ChainClient, configured chain.Chain) error {
+	if validator, ok := client.(chainIDValidator); ok {
+		if err := validator.ValidateChainID(ctx, configured.ChainID); err != nil {
+			if rpcquorum.IsChainIDMismatch(err) {
+				c.add(fmt.Sprintf("chains[%d].rpc_urls", configured.EID), "%s", err)
+				c.markChainInvalid(configured.EID)
+				return nil
+			}
+			return fmt.Errorf("validate chain %d rpc chain_id: %w", configured.EID, err)
+		}
+	}
 	actualChainID, err := client.ChainID(ctx)
 	if err != nil {
 		return fmt.Errorf("read chain %d chain_id: %w", configured.EID, err)
 	}
 	if actualChainID == nil || actualChainID.Cmp(configured.ChainID) != 0 {
 		c.add(fmt.Sprintf("chains[%d].chain_id", configured.EID), "on-chain chain_id %s does not match configured %s", bigString(actualChainID), configured.ChainID)
+		c.markChainInvalid(configured.EID)
+		return nil
 	}
 	actualEID, err := callUint32(ctx, client, endpointABI, configured.EndpointAddress, "eid")
 	if err != nil {
@@ -137,9 +159,7 @@ func (c *checker) checkChain(ctx context.Context, client ChainClient, configured
 		c.add(fmt.Sprintf("chains[%d].eid", configured.EID), "endpoint eid %d does not match configured %d", actualEID, configured.EID)
 	}
 	contracts := map[string]common.Address{
-		"endpoint_address":      configured.EndpointAddress,
-		"workers.open_executor": configured.Workers.OpenExecutor,
-		"workers.open_dvn":      configured.Workers.OpenDVN,
+		"endpoint_address": configured.EndpointAddress,
 	}
 	for label, address := range contracts {
 		code, err := client.CodeAt(ctx, address, nil)
@@ -245,8 +265,8 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	if err != nil {
 		return fmt.Errorf("decode executor config for %s: %w", base, err)
 	}
-	if executorConfig.Executor != srcChain.Workers.OpenExecutor {
-		c.add(base+".executor_config.executor", "executor config points to %s, want %s", executorConfig.Executor, srcChain.Workers.OpenExecutor)
+	if executorConfig.Executor != pathway.SourceWorkers.OpenExecutor {
+		c.add(base+".executor_config.executor", "executor config points to %s, want %s", executorConfig.Executor, pathway.SourceWorkers.OpenExecutor)
 	}
 	if uint64(executorConfig.MaxMessageSize) != pathway.MaxMessageSize {
 		c.add(base+".executor_config.max_message_size", "executor max message size %d does not match configured %d", executorConfig.MaxMessageSize, pathway.MaxMessageSize)
@@ -255,42 +275,45 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain)
+	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain.Confirmations, pathway.SourceWorkers.OpenDVN)
 	receiveULNConfig, err := c.readULNConfig(ctx, dstClient, dstChain.EndpointAddress, pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID, base+".receive_uln_config")
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain)
+	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.SourceWorkers.OpenDVN)
 	return nil
 }
 
 func (c *checker) checkWorkers(ctx context.Context, client ChainClient, base string, srcChain chain.Chain, pathway chain.Pathway) error {
 	for label, worker := range map[string]common.Address{
-		"open_executor": srcChain.Workers.OpenExecutor,
-		"open_dvn":      srcChain.Workers.OpenDVN,
+		"open_executor": pathway.SourceWorkers.OpenExecutor,
+		"open_dvn":      pathway.SourceWorkers.OpenDVN,
 	} {
+		if err := c.requireCode(ctx, client, base+".source_workers."+label, srcChain.EID, worker); err != nil {
+			return err
+		}
 		allowed, err := callBool(ctx, client, workerABI, worker, "allowedSendLib", pathway.SendLib)
 		if err != nil {
 			return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
 		}
 		if !allowed {
-			c.add(base+".workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
+			c.add(base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
 		}
 		config, err := callPathwayConfig(ctx, client, worker, pathway.DstEID, pathway.SrcOApp)
 		if err != nil {
 			return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
 		}
 		if config.Enabled != pathway.Enabled {
-			c.add(base+".workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
+			c.add(base+".source_workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
 		}
 		if config.MaxMessageSize == nil || config.MaxMessageSize.Uint64() != pathway.MaxMessageSize {
-			c.add(base+".workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
+			c.add(base+".source_workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
 		}
 		if config.MinLzReceiveGas == nil || config.MinLzReceiveGas.Uint64() != pathway.MinLzReceiveGas {
-			c.add(base+".workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
+			c.add(base+".source_workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
 		}
 		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
-			c.add(base+".workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+			c.add(base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
 		}
 	}
 	return nil
@@ -308,9 +331,9 @@ func (c *checker) readULNConfig(ctx context.Context, client ChainClient, endpoin
 	return config, nil
 }
 
-func (c *checker) compareULNConfig(path string, config ulnConfig, configured chain.Chain) {
-	if config.Confirmations != configured.Confirmations {
-		c.add(path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, configured.Confirmations)
+func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations uint64, openDVN common.Address) {
+	if config.Confirmations != confirmations {
+		c.add(path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, confirmations)
 	}
 	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
 		c.add(path+".required_dvn_count", "requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
@@ -327,8 +350,8 @@ func (c *checker) compareULNConfig(path string, config ulnConfig, configured cha
 	if len(config.RequiredDVNs) < 2 {
 		c.add(path+".required_dvns", "required DVNs must include OpenDVN plus at least one independent DVN, got %s", addressesString(config.RequiredDVNs))
 	}
-	if !slices.Contains(config.RequiredDVNs, configured.Workers.OpenDVN) {
-		c.add(path+".required_dvns", "required DVNs %s do not include configured OpenDVN %s", addressesString(config.RequiredDVNs), configured.Workers.OpenDVN)
+	if !slices.Contains(config.RequiredDVNs, openDVN) {
+		c.add(path+".required_dvns", "required DVNs %s do not include configured OpenDVN %s", addressesString(config.RequiredDVNs), openDVN)
 	}
 }
 
@@ -353,6 +376,18 @@ func (c *checker) client(eid uint32) (ChainClient, error) {
 
 func (c *checker) add(path, format string, args ...any) {
 	c.issues = append(c.issues, Issue{Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
+func (c *checker) markChainInvalid(eid uint32) {
+	if c.invalidChains == nil {
+		c.invalidChains = make(map[uint32]struct{})
+	}
+	c.invalidChains[eid] = struct{}{}
+}
+
+func (c *checker) chainInvalid(eid uint32) bool {
+	_, ok := c.invalidChains[eid]
+	return ok
 }
 
 type executorConfig struct {

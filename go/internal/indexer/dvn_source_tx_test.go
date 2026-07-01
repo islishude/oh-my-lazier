@@ -15,7 +15,7 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	logs := testDVNSourceLogs(t, expectedDVN, sendLib, big.NewInt(42))
 
-	records, ok, err := DVNSourceTxRecordsFromLogs(logs, expectedDVN)
+	records, ok, err := DVNSourceTxRecordsFromLogs(logs)
 	if err != nil {
 		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v", err)
 	}
@@ -25,6 +25,9 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	if records.Packet.SendLib != sendLib {
 		t.Fatalf("packet send lib = %s, want %s", records.Packet.SendLib, sendLib)
 	}
+	if records.DVN != expectedDVN {
+		t.Fatalf("dvn = %s, want %s", records.DVN, expectedDVN)
+	}
 	if records.DVNJob.GUID != records.Packet.GUID {
 		t.Fatalf("dvn job guid = %s, want packet guid %s", records.DVNJob.GUID, records.Packet.GUID)
 	}
@@ -33,39 +36,6 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	}
 	if records.DVNJob.Status != string(packets.DVNAssigned) {
 		t.Fatalf("status = %q, want %q", records.DVNJob.Status, packets.DVNAssigned)
-	}
-}
-
-func TestDVNSourceTxRecordsFromLogsFiltersUnexpectedDVN(t *testing.T) {
-	logs := testDVNSourceLogs(
-		t,
-		common.HexToAddress("0x3333333333333333333333333333333333333333"),
-		common.HexToAddress("0x9999999999999999999999999999999999999999"),
-		big.NewInt(42),
-	)
-	_, ok, err := DVNSourceTxRecordsFromLogs(logs, common.HexToAddress("0x4444444444444444444444444444444444444444"))
-	if err != nil {
-		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v, want nil", err)
-	}
-	if ok {
-		t.Fatal("DVNSourceTxRecordsFromLogs() ok = true, want false")
-	}
-}
-
-func TestDVNSourceTxRecordsFromLogsFiltersUnexpectedDVNBeforeContextValidation(t *testing.T) {
-	otherDVN := common.HexToAddress("0x3333333333333333333333333333333333333333")
-	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
-	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
-	logs := []gethtypes.Log{
-		testDVNJobAssignedLog(t, txHash, otherDVN, sendLib, big.NewInt(42), 0),
-	}
-
-	_, ok, err := DVNSourceTxRecordsFromLogs(logs, common.HexToAddress("0x4444444444444444444444444444444444444444"))
-	if err != nil {
-		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v, want nil", err)
-	}
-	if ok {
-		t.Fatal("DVNSourceTxRecordsFromLogs() ok = true, want false")
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
@@ -186,7 +187,7 @@ func TestApplyDVNDestinationLogsMarksVerified(t *testing.T) {
 		},
 	}
 
-	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, common.HexToAddress("0x3333333333333333333333333333333333333333"), []gethtypes.Log{log})
+	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{log})
 	if err != nil {
 		t.Fatalf("ApplyDVNDestinationLogs() error = %v", err)
 	}
@@ -203,9 +204,20 @@ func TestApplyDVNDestinationLogsMarksVerified(t *testing.T) {
 
 func TestApplyDVNDestinationLogsSkipsOtherDVN(t *testing.T) {
 	packet := testDestinationPacketRecord()
-	store := &fakeDestinationStore{}
+	store := &fakeDestinationStore{
+		byVerification: map[string]db.PacketRecord{
+			verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,
+		},
+		dvnJobs: map[common.Hash]db.DVNJobRecord{
+			packet.GUID: {
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNVerifyTxEnqueued),
+			},
+		},
+	}
 
-	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, common.HexToAddress("0x3333333333333333333333333333333333333333"), []gethtypes.Log{
+	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
 		testPayloadVerifiedLog(t, packet, common.HexToAddress("0x4444444444444444444444444444444444444444")),
 	})
 	if err != nil {

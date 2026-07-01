@@ -13,6 +13,7 @@ export type MigrationDirectionEvidence = {
   label: string;
   srcEid: number;
   dstEid: number;
+  sourceWorkers: SourceWorkersEvidence;
   configDiff: EvidenceRef;
   deploymentPreflight: EvidenceRef;
   lzConfigBefore: EvidenceRef;
@@ -24,6 +25,11 @@ export type MigrationDirectionEvidence = {
   canary: CanaryEvidence;
   dvnJoin: DVNJoinEvidence;
   dvnVerificationReceipt: DVNVerificationEvidence;
+};
+
+export type SourceWorkersEvidence = {
+  openExecutor: string;
+  openDVN: string;
 };
 
 export type CanaryEvidence = {
@@ -146,6 +152,7 @@ function validateDirections(
     if (direction.srcEid === direction.dstEid) {
       errors.push(`${prefix}.srcEid and ${prefix}.dstEid must differ`);
     }
+    validateSourceWorkers(errors, direction.sourceWorkers, `${prefix}.sourceWorkers`);
     const key = `${direction.srcEid}->${direction.dstEid}`;
     if (seen.has(key)) {
       errors.push(`${prefix} duplicates direction ${key}`);
@@ -210,6 +217,19 @@ function validateDirections(
       errors.push(`directions missing phase-1 direction ${expectedKey}`);
     }
   }
+}
+
+function validateSourceWorkers(
+  errors: string[],
+  workers: SourceWorkersEvidence,
+  field: string,
+): void {
+  if (!isRecord(workers)) {
+    errors.push(`${field} is required`);
+    return;
+  }
+  requireEVMAddress(errors, workers.openExecutor, `${field}.openExecutor`);
+  requireEVMAddress(errors, workers.openDVN, `${field}.openDVN`);
 }
 
 function validatePriceConfigEvidence(

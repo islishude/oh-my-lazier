@@ -62,7 +62,7 @@ const requiredDocs: RequiredDoc[] = [
       "go run ./go/cmd/configdiff",
       "-fail-on-diff",
       "Confirm signer changes are expected and do not point to unapproved keys.",
-      "For DVN migration, confirm the proposed config still uses `dvn.mode: shadow` until the explicit active-mode change is approved.",
+      "For DVN migration, confirm each proposed pathway still uses `pathways[].dvn.mode: shadow` until the explicit active-mode change is approved.",
     ],
   },
   {
@@ -81,6 +81,7 @@ const requiredDocs: RequiredDoc[] = [
     anchors: [
       "go run ./go/cmd/pricebot-once -config <worker.yaml>",
       "npm run check:price-config",
+      "For each unique source/destination/source-worker pair",
       "`updatedAt` is recent",
       "`staleAfter` matches the approved config",
       "If the newly submitted price config is wrong:",
@@ -105,6 +106,7 @@ const requiredDocs: RequiredDoc[] = [
       '"runbookReview"',
       '"ownerAccount"',
       '"signerAccount"',
+      '"sourceWorkers"',
       '"canary"',
       '"dvnJoin"',
       '"rollback"',

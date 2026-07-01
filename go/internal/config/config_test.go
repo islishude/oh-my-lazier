@@ -15,7 +15,7 @@ func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 
 func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
 	cfg := validConfig()
-	cfg.Chains[0].Workers.OpenDVN = ""
+	cfg.Pathways[0].SourceWorkers.OpenDVN = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing worker contract error")
 	}
@@ -115,7 +115,7 @@ func TestValidateRejectsInvalidRPCURLFormats(t *testing.T) {
 
 func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 	cfg := validConfig()
-	cfg.Executor.Signer = ""
+	cfg.Chains[0].TxRoles.Executor.Signer = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing executor signer error")
 	}
@@ -123,7 +123,7 @@ func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 
 func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
 	cfg := validConfig()
-	cfg.Executor.Signer = "0x1111111111111111111111111111111111111111"
+	cfg.Chains[0].TxRoles.Executor.Signer = "0x1111111111111111111111111111111111111111"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want unknown executor signer error")
 	}
@@ -131,7 +131,7 @@ func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
 
 func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
 	cfg := validConfig()
-	cfg.DVN = validActiveDVNConfig()
+	cfg.Pathways[0].DVN.Mode = DVNModeActive
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -139,8 +139,8 @@ func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
 
 func TestValidateRejectsActiveDVNWithoutSigner(t *testing.T) {
 	cfg := validConfig()
-	cfg.DVN = validActiveDVNConfig()
-	cfg.DVN.Signer = ""
+	cfg.Pathways[0].DVN.Mode = DVNModeActive
+	cfg.Chains[1].TxRoles.DVN.Signer = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing active dvn signer error")
 	}
@@ -148,8 +148,8 @@ func TestValidateRejectsActiveDVNWithoutSigner(t *testing.T) {
 
 func TestValidateRejectsActiveDVNWithoutFees(t *testing.T) {
 	cfg := validConfig()
-	cfg.DVN = validActiveDVNConfig()
-	cfg.DVN.MaxFeePerGasWei = ""
+	cfg.Pathways[0].DVN.Mode = DVNModeActive
+	cfg.Chains[1].TxRoles.DVN.MaxFeePerGasWei = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing active dvn fee error")
 	}
@@ -160,9 +160,9 @@ func TestValidateAcceptsLegacyActiveDVNWithoutDynamicFeeCaps(t *testing.T) {
 	for i := range cfg.Chains {
 		cfg.Chains[i].TxType = TxTypeLegacy
 	}
-	cfg.DVN = validActiveDVNConfig()
-	cfg.DVN.MaxFeePerGasWei = ""
-	cfg.DVN.MaxPriorityFeePerGasWei = ""
+	cfg.Pathways[0].DVN.Mode = DVNModeActive
+	cfg.Chains[1].TxRoles.DVN.MaxFeePerGasWei = ""
+	cfg.Chains[1].TxRoles.DVN.MaxPriorityFeePerGasWei = ""
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -279,10 +279,6 @@ func TestValidateAcceptsCoinGeckoPrimaryPricing(t *testing.T) {
 func TestLoadStaticIgnoresDatabaseURLEnvOverride(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	body := []byte(`database_url: postgres://file:file@localhost:5432/file?sslmode=disable
-executor:
-  signer: "0x9999999999999999999999999999999999999999"
-dvn:
-  mode: shadow
 signers:
   - id: "0x9999999999999999999999999999999999999999"
     type: keystore
@@ -297,9 +293,14 @@ chains:
     confirmations: 12
     rpc_urls:
       - http://localhost:8545
-    workers:
-      open_executor: "0x2222222222222222222222222222222222222222"
-      open_dvn: "0x3333333333333333333333333333333333333333"
+    tx_roles:
+      executor:
+        signer: "0x9999999999999999999999999999999999999999"
+      dvn:
+        signer: "0x9999999999999999999999999999999999999999"
+        tx_gas_limit: 120000
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
     name: base-sepolia
     chain_id: 84532
@@ -307,9 +308,14 @@ chains:
     confirmations: 12
     rpc_urls:
       - http://localhost:8546
-    workers:
-      open_executor: "0x5555555555555555555555555555555555555555"
-      open_dvn: "0x6666666666666666666666666666666666666666"
+    tx_roles:
+      executor:
+        signer: "0x9999999999999999999999999999999999999999"
+      dvn:
+        signer: "0x9999999999999999999999999999999999999999"
+        tx_gas_limit: 120000
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
 pathways:
   - src_eid: 40161
     dst_eid: 40245
@@ -317,6 +323,9 @@ pathways:
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    source_workers:
+      open_executor: "0x2222222222222222222222222222222222222222"
+      open_dvn: "0x3333333333333333333333333333333333333333"
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000
@@ -343,6 +352,9 @@ pathways:
 	if staticConfig.Chains[0].TxType != TxTypeDynamicFee {
 		t.Fatalf("LoadStatic() tx_type = %q, want %q", staticConfig.Chains[0].TxType, TxTypeDynamicFee)
 	}
+	if staticConfig.Pathways[0].DVN.Mode != DVNModeShadow {
+		t.Fatalf("LoadStatic() pathway dvn mode = %q, want %q", staticConfig.Pathways[0].DVN.Mode, DVNModeShadow)
+	}
 	workerConfig, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -355,8 +367,6 @@ pathways:
 func validConfig() Config {
 	return Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
-		Executor:    ExecutorConfig{Signer: "0x9999999999999999999999999999999999999999"},
-		DVN:         DVNConfig{Mode: "shadow"},
 		Signers: []SignerConfig{
 			{
 				ID:   "0x9999999999999999999999999999999999999999",
@@ -376,9 +386,9 @@ func validConfig() Config {
 				Confirmations:          12,
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8545"},
-				Workers: WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				TxRoles: ChainTxRolesConfig{
+					Executor: ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					DVN:      validDVNTxRoleConfig(),
 				},
 			},
 			{
@@ -389,32 +399,42 @@ func validConfig() Config {
 				Confirmations:          12,
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8546"},
-				Workers: WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				TxRoles: ChainTxRolesConfig{
+					Executor: ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					DVN:      validDVNTxRoleConfig(),
 				},
 			},
 		},
 		Pathways: []PathwayConfig{
 			{
-				SrcEID:          40161,
-				DstEID:          40245,
-				SrcOApp:         "0x7777777777777777777777777777777777777777",
-				DstOApp:         "0x8888888888888888888888888888888888888888",
-				SendLib:         "0x9999999999999999999999999999999999999999",
-				ReceiveLib:      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcEID:     40161,
+				DstEID:     40245,
+				SrcOApp:    "0x7777777777777777777777777777777777777777",
+				DstOApp:    "0x8888888888888888888888888888888888888888",
+				SendLib:    "0x9999999999999999999999999999999999999999",
+				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceWorkers: WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:          40245,
-				DstEID:          40161,
-				SrcOApp:         "0x8888888888888888888888888888888888888888",
-				DstOApp:         "0x7777777777777777777777777777777777777777",
-				SendLib:         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				ReceiveLib:      "0xcccccccccccccccccccccccccccccccccccccccc",
+				SrcEID:     40245,
+				DstEID:     40161,
+				SrcOApp:    "0x8888888888888888888888888888888888888888",
+				DstOApp:    "0x7777777777777777777777777777777777777777",
+				SendLib:    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				ReceiveLib: "0xcccccccccccccccccccccccccccccccccccccccc",
+				SourceWorkers: WorkerContractsConfig{
+					OpenExecutor: "0x5555555555555555555555555555555555555555",
+					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				},
+				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
@@ -424,9 +444,8 @@ func validConfig() Config {
 	}
 }
 
-func validActiveDVNConfig() DVNConfig {
-	return DVNConfig{
-		Mode:                    "active",
+func validDVNTxRoleConfig() DVNTxRoleConfig {
+	return DVNTxRoleConfig{
 		Signer:                  "0x9999999999999999999999999999999999999999",
 		TxGasLimit:              120000,
 		MaxFeePerGasWei:         "2000000000",

@@ -19,11 +19,30 @@ type Chain struct {
 	Confirmations          uint64
 	StartBlockNumber       uint64
 	IndexerQueryBlockRange uint64
-	Workers                WorkerContracts
+	TxRoles                TxRoles
 	RPC                    *rpcquorum.Client
 }
 
-// WorkerContracts identifies the self-hosted worker contracts deployed on one chain.
+// TxRoles identifies local transaction signers and fee caps for one chain.
+type TxRoles struct {
+	Executor ExecutorTxRole
+	DVN      DVNTxRole
+}
+
+// ExecutorTxRole identifies the executor transaction signer for one chain.
+type ExecutorTxRole struct {
+	SignerID string
+}
+
+// DVNTxRole identifies active DVN transaction settings for one chain.
+type DVNTxRole struct {
+	SignerID                string
+	TxGasLimit              uint64
+	MaxFeePerGasWei         string
+	MaxPriorityFeePerGasWei string
+}
+
+// WorkerContracts identifies the self-hosted worker contracts selected for one source pathway.
 type WorkerContracts struct {
 	OpenExecutor common.Address
 	OpenDVN      common.Address
@@ -37,6 +56,8 @@ type Pathway struct {
 	DstOApp         common.Address
 	SendLib         common.Address
 	ReceiveLib      common.Address
+	SourceWorkers   WorkerContracts
+	DVNMode         config.DVNMode
 	Enabled         bool
 	MaxMessageSize  uint64
 	MinLzReceiveGas uint64
@@ -65,21 +86,31 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			Confirmations:          cfg.Confirmations,
 			StartBlockNumber:       cfg.StartBlockNumber,
 			IndexerQueryBlockRange: cfg.IndexerQueryBlockRange,
-			Workers: WorkerContracts{
-				OpenExecutor: common.HexToAddress(cfg.Workers.OpenExecutor),
-				OpenDVN:      common.HexToAddress(cfg.Workers.OpenDVN),
+			TxRoles: TxRoles{
+				Executor: ExecutorTxRole{SignerID: canonicalSignerID(cfg.TxRoles.Executor.Signer)},
+				DVN: DVNTxRole{
+					SignerID:                canonicalSignerID(cfg.TxRoles.DVN.Signer),
+					TxGasLimit:              cfg.TxRoles.DVN.TxGasLimit,
+					MaxFeePerGasWei:         cfg.TxRoles.DVN.MaxFeePerGasWei,
+					MaxPriorityFeePerGasWei: cfg.TxRoles.DVN.MaxPriorityFeePerGasWei,
+				},
 			},
 			RPC: rpcquorum.New(cfg.Name, cfg.RPCURLs),
 		}
 	}
 	for _, cfg := range pathways {
 		pathway := Pathway{
-			SrcEID:          cfg.SrcEID,
-			DstEID:          cfg.DstEID,
-			SrcOApp:         common.HexToAddress(cfg.SrcOApp),
-			DstOApp:         common.HexToAddress(cfg.DstOApp),
-			SendLib:         common.HexToAddress(cfg.SendLib),
-			ReceiveLib:      common.HexToAddress(cfg.ReceiveLib),
+			SrcEID:     cfg.SrcEID,
+			DstEID:     cfg.DstEID,
+			SrcOApp:    common.HexToAddress(cfg.SrcOApp),
+			DstOApp:    common.HexToAddress(cfg.DstOApp),
+			SendLib:    common.HexToAddress(cfg.SendLib),
+			ReceiveLib: common.HexToAddress(cfg.ReceiveLib),
+			SourceWorkers: WorkerContracts{
+				OpenExecutor: common.HexToAddress(cfg.SourceWorkers.OpenExecutor),
+				OpenDVN:      common.HexToAddress(cfg.SourceWorkers.OpenDVN),
+			},
+			DVNMode:         cfg.DVN.Mode,
 			Enabled:         cfg.Enabled,
 			MaxMessageSize:  cfg.MaxMessageSize,
 			MinLzReceiveGas: cfg.MinLzReceiveGas,
@@ -140,4 +171,11 @@ func (r *Registry) Pathways() []Pathway {
 
 func pathwayKey(srcEID, dstEID uint32, srcOApp, dstOApp common.Address) string {
 	return fmt.Sprintf("%d:%d:%s:%s", srcEID, dstEID, srcOApp, dstOApp)
+}
+
+func canonicalSignerID(value string) string {
+	if value == "" {
+		return ""
+	}
+	return common.HexToAddress(value).Hex()
 }

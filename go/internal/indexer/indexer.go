@@ -60,8 +60,6 @@ type Indexer struct {
 	pollInterval        time.Duration
 	backfillRange       uint64
 	queryBlockRange     uint64
-	expectedExecutor    common.Address
-	expectedDVN         common.Address
 	logger              *slog.Logger
 	metrics             MetricsRecorder
 }
@@ -97,8 +95,6 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		pollInterval:        defaultPollInterval,
 		backfillRange:       defaultBackfillRange,
 		queryBlockRange:     queryBlockRange,
-		expectedExecutor:    configuredChain.Workers.OpenExecutor,
-		expectedDVN:         configuredChain.Workers.OpenDVN,
 		logger:              logger,
 	}
 }
@@ -312,7 +308,7 @@ func (i *Indexer) chunkToBlock(from, limit uint64) uint64 {
 }
 
 func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, ok, err := ExecutorSourceTxRecordsFromLogs(txLogs, i.expectedExecutor)
+	records, ok, err := ExecutorSourceTxRecordsFromLogs(txLogs)
 	if err != nil {
 		return false, err
 	}
@@ -321,6 +317,9 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 	}
 	pathway, ok := i.sourcePathway(records.Packet)
 	if !ok || !pathway.Enabled {
+		return false, nil
+	}
+	if records.Executor != pathway.SourceWorkers.OpenExecutor {
 		return false, nil
 	}
 	if records.Packet.SendLib != pathway.SendLib {
@@ -337,7 +336,7 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 }
 
 func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, ok, err := DVNSourceTxRecordsFromLogs(txLogs, i.expectedDVN)
+	records, ok, err := DVNSourceTxRecordsFromLogs(txLogs)
 	if err != nil {
 		return false, err
 	}
@@ -346,6 +345,9 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 	}
 	pathway, ok := i.sourcePathway(records.Packet)
 	if !ok || !pathway.Enabled {
+		return false, nil
+	}
+	if records.DVN != pathway.SourceWorkers.OpenDVN {
 		return false, nil
 	}
 	if records.Packet.SendLib != pathway.SendLib {
@@ -383,7 +385,7 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64)
 		if err != nil {
 			return applied, err
 		}
-		dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.expectedDVN, logs)
+		dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs)
 		applied += dvnApplied
 		if err != nil {
 			return applied, err
@@ -469,12 +471,12 @@ func (i *Indexer) destinationAddresses() []common.Address {
 
 func (i *Indexer) sourceAddresses() []common.Address {
 	seen := map[common.Address]struct{}{
-		i.chain.EndpointAddress:      {},
-		i.chain.Workers.OpenExecutor: {},
-		i.chain.Workers.OpenDVN:      {},
+		i.chain.EndpointAddress: {},
 	}
 	for _, pathway := range i.sourcePathways {
 		seen[pathway.SendLib] = struct{}{}
+		seen[pathway.SourceWorkers.OpenExecutor] = struct{}{}
+		seen[pathway.SourceWorkers.OpenDVN] = struct{}{}
 	}
 	addresses := make([]common.Address, 0, len(seen))
 	for address := range seen {

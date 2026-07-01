@@ -10,6 +10,7 @@
 
 - This repository is still in active code development. Do not preserve backward compatibility for retired repo-local config, schema, state, APIs, generated artifacts, fixtures, or test expectations.
 - When behavior changes, update callers, docs, tests, and examples in lockstep; delete obsolete fallback paths, dual-decode paths, migration shims, and legacy compatibility tests unless explicitly requested.
+- Do not add data migrations for repo-local schema changes unless explicitly requested; update the single maintained initial schema migration file instead.
 
 ## Phase-1 Scope
 

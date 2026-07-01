@@ -94,17 +94,19 @@ func (s *Store) SyncConfig(ctx context.Context, registry *chain.Registry) error 
 	}
 	for _, pathway := range registry.Pathways() {
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO pathways (
-				src_eid, dst_eid, src_oapp, dst_oapp, send_lib, receive_lib,
-				max_message_size, enabled
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			ON CONFLICT (src_eid, dst_eid, src_oapp, dst_oapp) DO UPDATE SET
-				send_lib = EXCLUDED.send_lib,
-				receive_lib = EXCLUDED.receive_lib,
-				max_message_size = EXCLUDED.max_message_size,
-				enabled = EXCLUDED.enabled
-		`, pathway.SrcEID, pathway.DstEID, addressBytes(pathway.SrcOApp), addressBytes(pathway.DstOApp), addressBytes(pathway.SendLib), addressBytes(pathway.ReceiveLib), pathway.MaxMessageSize, pathway.Enabled); err != nil {
+				INSERT INTO pathways (
+					src_eid, dst_eid, src_oapp, dst_oapp, send_lib, receive_lib,
+					open_executor, open_dvn, max_message_size, enabled
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				ON CONFLICT (src_eid, dst_eid, src_oapp, dst_oapp) DO UPDATE SET
+					send_lib = EXCLUDED.send_lib,
+					receive_lib = EXCLUDED.receive_lib,
+					open_executor = EXCLUDED.open_executor,
+					open_dvn = EXCLUDED.open_dvn,
+					max_message_size = EXCLUDED.max_message_size,
+					enabled = EXCLUDED.enabled
+			`, pathway.SrcEID, pathway.DstEID, addressBytes(pathway.SrcOApp), addressBytes(pathway.DstOApp), addressBytes(pathway.SendLib), addressBytes(pathway.ReceiveLib), addressBytes(pathway.SourceWorkers.OpenExecutor), addressBytes(pathway.SourceWorkers.OpenDVN), pathway.MaxMessageSize, pathway.Enabled); err != nil {
 			return err
 		}
 	}

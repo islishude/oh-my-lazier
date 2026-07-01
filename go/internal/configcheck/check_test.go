@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
+	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
 
 func TestCheckWithClientsAcceptsMatchingOnChainState(t *testing.T) {
@@ -68,6 +69,36 @@ func TestCheckWithClientsReportsMismatches(t *testing.T) {
 	}
 }
 
+func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
+	registry, clients := testRegistryAndClients(t)
+	genericClients := chainClients(clients)
+	genericClients[40161] = validatingChainClient{
+		ChainClient: clients[40161],
+		err: &rpcquorum.ChainIDMismatchError{
+			ChainName: "ethereum-sepolia",
+			Expected:  big.NewInt(11155111),
+			Details:   []string{"provider http://wrong returned 84532"},
+		},
+	}
+
+	report, err := CheckWithClients(t.Context(), registry, genericClients)
+	if err != nil {
+		t.Fatalf("CheckWithClients() error = %v", err)
+	}
+	if report.OK {
+		t.Fatal("CheckWithClients() ok = true, want mismatch")
+	}
+	if len(report.Issues) != 1 {
+		t.Fatalf("issues = %+v, want one rpc_urls issue", report.Issues)
+	}
+	if report.Issues[0].Path != "chains[40161].rpc_urls" {
+		t.Fatalf("issue path = %q", report.Issues[0].Path)
+	}
+	if !strings.Contains(report.Issues[0].Message, "provider http://wrong returned 84532") {
+		t.Fatalf("issue message = %q", report.Issues[0].Message)
+	}
+}
+
 func TestRenderTextIncludesIssuePaths(t *testing.T) {
 	output := RenderText(Report{
 		Issues: []Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
@@ -90,13 +121,7 @@ func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChai
 	}
 	for _, configured := range registry.All() {
 		client := clients[configured.EID]
-		for _, address := range []common.Address{
-			configured.EndpointAddress,
-			configured.Workers.OpenExecutor,
-			configured.Workers.OpenDVN,
-		} {
-			client.code[address] = true
-		}
+		client.code[configured.EndpointAddress] = true
 	}
 	for _, pathway := range registry.Pathways() {
 		srcChain, _ := registry.Get(pathway.SrcEID)
@@ -111,11 +136,12 @@ func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChai
 		dst.receiveLibraries[pathKey(pathway.DstOApp, pathway.SrcEID)] = pathway.ReceiveLib
 		src.executorConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = executorConfig{
 			MaxMessageSize: uint32(pathway.MaxMessageSize),
-			Executor:       srcChain.Workers.OpenExecutor,
+			Executor:       pathway.SourceWorkers.OpenExecutor,
 		}
-		src.ulnConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = expectedULNConfig(srcChain)
-		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain)
-		for _, worker := range []common.Address{srcChain.Workers.OpenExecutor, srcChain.Workers.OpenDVN} {
+		src.ulnConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = expectedULNConfig(srcChain, pathway.SourceWorkers.OpenDVN)
+		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain, pathway.SourceWorkers.OpenDVN)
+		for _, worker := range []common.Address{pathway.SourceWorkers.OpenExecutor, pathway.SourceWorkers.OpenDVN} {
+			src.code[worker] = true
 			src.allowedSendLibs[workerSendLibKey(worker, pathway.SendLib)] = true
 			src.workerPathways[workerPathwayKey(worker, pathway.DstEID, pathway.SrcOApp)] = pathwayConfig{
 				Enabled:         pathway.Enabled,
@@ -133,6 +159,15 @@ func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChai
 		t.Fatalf("baseline CheckWithClients() issues = %+v", report.Issues)
 	}
 	return registry, clients
+}
+
+type validatingChainClient struct {
+	ChainClient
+	err error
+}
+
+func (v validatingChainClient) ValidateChainID(context.Context, *big.Int) error {
+	return v.err
 }
 
 type fakeChainClient struct {
@@ -271,13 +306,13 @@ func (f *fakeChainClient) addOApp(oapp, endpoint common.Address, remoteEID uint3
 	f.peers[oapp][remoteEID] = common.BytesToHash(remoteOApp.Bytes())
 }
 
-func expectedULNConfig(configured chain.Chain) ulnConfig {
+func expectedULNConfig(configured chain.Chain, openDVN common.Address) ulnConfig {
 	return ulnConfig{
 		Confirmations:        configured.Confirmations,
 		RequiredDVNCount:     2,
 		OptionalDVNCount:     nilDVNCount,
 		OptionalDVNThreshold: 0,
-		RequiredDVNs:         []common.Address{configured.Workers.OpenDVN, externalDVN(configured.EID)},
+		RequiredDVNs:         []common.Address{openDVN, externalDVN(configured.EID)},
 	}
 }
 
@@ -302,9 +337,8 @@ func testConfig() config.Config {
 				EndpointAddress: "0x1111111111111111111111111111111111111111",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 				},
 			},
 			{
@@ -314,32 +348,41 @@ func testConfig() config.Config {
 				EndpointAddress: "0x4444444444444444444444444444444444444444",
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
-				Workers: config.WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				TxRoles: config.ChainTxRolesConfig{
+					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
 				},
 			},
 		},
 		Pathways: []config.PathwayConfig{
 			{
-				SrcEID:          40161,
-				DstEID:          40245,
-				SrcOApp:         "0x7777777777777777777777777777777777777777",
-				DstOApp:         "0x8888888888888888888888888888888888888888",
-				SendLib:         "0x9999999999999999999999999999999999999999",
-				ReceiveLib:      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcEID:     40161,
+				DstEID:     40245,
+				SrcOApp:    "0x7777777777777777777777777777777777777777",
+				DstOApp:    "0x8888888888888888888888888888888888888888",
+				SendLib:    "0x9999999999999999999999999999999999999999",
+				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SourceWorkers: config.WorkerContractsConfig{
+					OpenExecutor: "0x2222222222222222222222222222222222222222",
+					OpenDVN:      "0x3333333333333333333333333333333333333333",
+				},
+				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:          40245,
-				DstEID:          40161,
-				SrcOApp:         "0x8888888888888888888888888888888888888888",
-				DstOApp:         "0x7777777777777777777777777777777777777777",
-				SendLib:         "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				ReceiveLib:      "0xcccccccccccccccccccccccccccccccccccccccc",
+				SrcEID:     40245,
+				DstEID:     40161,
+				SrcOApp:    "0x8888888888888888888888888888888888888888",
+				DstOApp:    "0x7777777777777777777777777777777777777777",
+				SendLib:    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+				ReceiveLib: "0xcccccccccccccccccccccccccccccccccccccccc",
+				SourceWorkers: config.WorkerContractsConfig{
+					OpenExecutor: "0x5555555555555555555555555555555555555555",
+					OpenDVN:      "0x6666666666666666666666666666666666666666",
+				},
+				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
