@@ -24,6 +24,20 @@ test("runbook review rejects missing required alert rules", () => {
   ]);
 });
 
+test("runbook review rejects missing indexer poll alert", () => {
+  const documents = currentDocuments();
+  const alerts = documents.get("docs/monitoring/prometheus-alerts.yml");
+  assert.ok(alerts);
+  documents.set(
+    "docs/monitoring/prometheus-alerts.yml",
+    alerts.replace("alert: LazIndexerPollFailing", "alert: MissingRule"),
+  );
+
+  assert.deepEqual(validateRunbookDocuments(documents), [
+    "docs/monitoring/prometheus-alerts.yml: missing alert LazIndexerPollFailing",
+  ]);
+});
+
 test("runbook review rejects missing runbook anchors", () => {
   const documents = currentDocuments();
   const monitoring = documents.get("docs/runbooks/monitoring.md");

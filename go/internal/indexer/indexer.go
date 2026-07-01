@@ -43,6 +43,11 @@ type LogClient interface {
 	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error)
 }
 
+// MetricsRecorder records process-local indexer polling outcomes.
+type MetricsRecorder interface {
+	RecordIndexerPoll(chainEID uint32, chainName string, observedHeadBlock uint64, confirmedToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error)
+}
+
 // Indexer watches one chain for LayerZero and worker contract events.
 type Indexer struct {
 	chain               chain.Chain
@@ -57,6 +62,7 @@ type Indexer struct {
 	expectedExecutor    common.Address
 	expectedDVN         common.Address
 	logger              *slog.Logger
+	metrics             MetricsRecorder
 }
 
 // New creates an indexer for one configured chain.
@@ -94,6 +100,12 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		expectedDVN:         configuredChain.Workers.OpenDVN,
 		logger:              logger,
 	}
+}
+
+// WithMetrics records process-local indexer polling metrics.
+func (i *Indexer) WithMetrics(metrics MetricsRecorder) *Indexer {
+	i.metrics = metrics
+	return i
 }
 
 // Run starts the chain indexer loop until the context is canceled.
@@ -387,7 +399,13 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 	if i.pollInterval <= 0 {
 		return errors.New("indexer poll interval must be positive")
 	}
-	if _, err := i.ProcessOnce(ctx); err != nil {
+	if i.store == nil {
+		return errors.New("indexer store is required")
+	}
+	if i.client == nil {
+		return errors.New("indexer log client is required")
+	}
+	if err := i.pollOnce(ctx); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(i.pollInterval)
@@ -397,11 +415,38 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := i.ProcessOnce(ctx); err != nil {
+			if err := i.pollOnce(ctx); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+func (i *Indexer) pollOnce(ctx context.Context) error {
+	start := time.Now()
+	result, err := i.ProcessOnce(ctx)
+	duration := time.Since(start)
+	if i.metrics != nil {
+		i.metrics.RecordIndexerPoll(
+			i.chain.EID,
+			i.chain.Name,
+			result.ObservedHeadBlock,
+			result.ConfirmedToBlock,
+			result.SourceTransactions,
+			result.DVNTransactions,
+			result.DestinationLogs,
+			duration,
+			err,
+		)
+	}
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	i.logger.Warn("indexer poll failed; retrying on next interval", "chain", i.chain.Name, "eid", i.chain.EID, "error", err)
+	return nil
 }
 
 func (i *Indexer) destinationAddresses() []common.Address {

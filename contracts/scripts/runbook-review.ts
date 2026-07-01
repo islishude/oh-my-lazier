@@ -47,9 +47,11 @@ const requiredDocs: RequiredDoc[] = [
       "LazExecutorReceiveFailed",
       "LazWorkerManualReview",
       "LazTxOutboxFailed",
+      "LazIndexerPollFailing",
       "LazIndexerCursorStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
+      "laz_indexer_poll_success",
       "laz_indexer_cursor_last_block",
       "go run ./go/cmd/readinesscheck -config <worker.yaml> -format json",
     ],
@@ -162,6 +164,10 @@ const requiredAlertRules: RequiredAlertRule[] = [
   {
     alert: "LazTxOutboxFailed",
     anchors: ['laz_tx_outbox_total{status="failed"} > 0', "severity: ticket"],
+  },
+  {
+    alert: "LazIndexerPollFailing",
+    anchors: ["laz_indexer_poll_success == 0", "severity: page"],
   },
   {
     alert: "LazIndexerCursorStalled",

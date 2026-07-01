@@ -73,6 +73,22 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
+	runtimeMetrics := metrics.NewRegistry()
+	pathways := registry.Pathways()
+	txTargets, err := a.txTargets(ctx, registry)
+	if err != nil {
+		return err
+	}
+	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
+	dvnWorker, err := a.dvnWorker(store, registry)
+	if err != nil {
+		return err
+	}
+	priceBot, err := a.priceBot(store, registry)
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -90,29 +106,14 @@ func (a *App) Run(ctx context.Context) error {
 		})
 	}
 
-	start("metrics", metrics.New(a.cfg.Metrics.ListenAddress, store, a.logger).Run)
-	pathways := registry.Pathways()
+	start("metrics", metrics.New(a.cfg.Metrics.ListenAddress, store, a.logger, runtimeMetrics).Run)
 	for _, c := range registry.All() {
-		start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).Run)
-	}
-	txTargets, err := a.txTargets(ctx, registry)
-	if err != nil {
-		return err
+		start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).WithMetrics(runtimeMetrics).Run)
 	}
 	start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
-
-	executorWorker := executor.New(store, registry, a.cfg.Executor.Signer, a.logger)
 	start("executor.committer", executorWorker.RunCommitter)
 	start("executor.deliverer", executorWorker.RunDeliverer)
-	dvnWorker, err := a.dvnWorker(store, registry)
-	if err != nil {
-		return err
-	}
 	start("dvn", dvnWorker.Run)
-	priceBot, err := a.priceBot(store, registry)
-	if err != nil {
-		return err
-	}
 	start("pricing", priceBot.Run)
 
 	select {

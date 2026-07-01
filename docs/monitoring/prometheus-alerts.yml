@@ -82,6 +82,15 @@ groups:
           summary: Transaction outbox has failed rows
           runbook: docs/runbooks/monitoring.md
 
+      - alert: LazIndexerPollFailing
+        expr: laz_indexer_poll_success == 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Worker indexer polling is failing
+          runbook: docs/runbooks/monitoring.md
+
       - alert: LazIndexerCursorStalled
         expr: changes(laz_indexer_cursor_last_block[10m]) == 0
         for: 10m

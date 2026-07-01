@@ -6,7 +6,7 @@ Endpoints:
 
 - `/healthz`: process liveness only. It returns `200` without touching Postgres.
 - `/readyz`: readiness check. It returns `200` only when the worker can read the DB stats snapshot and the DB-backed readiness rules pass.
-- `/metrics`: Prometheus text metrics derived from durable Postgres state.
+- `/metrics`: Prometheus text metrics derived from durable Postgres state plus process-local indexer polling status.
 
 Required scrape target:
 
@@ -29,6 +29,7 @@ Required alerts:
 - `LazExecutorReceiveFailed`: `laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} > 0`; ticket and inspect destination `LzReceiveAlert` logs.
 - `LazWorkerManualReview`: `laz_executor_jobs_total{status="MANUAL_REVIEW"} > 0` or `laz_dvn_jobs_total{status="MANUAL_REVIEW"} > 0`; ticket and block migration approval until reviewed.
 - `LazTxOutboxFailed`: `laz_tx_outbox_total{status="failed"} > 0`; ticket; page if failure count increases for active migration chains.
+- `LazIndexerPollFailing`: `laz_indexer_poll_success == 0` for a configured indexer; page after the failure persists across polling intervals.
 - `LazIndexerCursorStalled`: missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window; page if the chain is actively used.
 
 Active worker status paths:
@@ -55,9 +56,11 @@ Migration dashboard panels:
 - DVN job count by status.
 - Tx outbox count by chain and status.
 - Indexer cursor last block by chain and stream.
+- Indexer poll success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain.
 
 Operational assumptions:
 
-- Metrics are derived from committed DB state, not in-memory counters, so a worker restart should not reset packet/job/outbox visibility.
+- Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status metrics are process-local and reset on restart.
+- If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.

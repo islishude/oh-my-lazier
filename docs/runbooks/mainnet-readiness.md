@@ -66,7 +66,7 @@ Required runtime checks:
 
 - `/healthz` returns `200`.
 - `/readyz` returns `200`.
-- `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, and indexer cursor metrics.
+- `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, indexer cursor, and indexer polling metrics.
 - No chain or pathway is paused before the migration begins.
 - No tx outbox row is stuck in `failed` for active chains.
 - No DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.

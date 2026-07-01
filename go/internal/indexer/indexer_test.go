@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -500,6 +501,25 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsConfirmed(t *testing.T) {
 	}
 }
 
+func TestIndexerProcessOnceFailureDoesNotAdvanceCursor(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 200, filterErr: errors.New("filter unavailable")}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	if _, err := indexer.ProcessOnce(context.Background()); err == nil {
+		t.Fatal("ProcessOnce() error = nil, want filter error")
+	}
+	if len(store.cursors) != 0 {
+		t.Fatalf("cursors = %d, want none after failed poll", len(store.cursors))
+	}
+}
+
 func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -540,6 +560,52 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	}
 	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
 		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	}
+}
+
+func TestIndexerRunRetriesAfterPollError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var blockCalls atomic.Int32
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 200}
+	client.onBlock = func() {
+		switch blockCalls.Add(1) {
+		case 1:
+			client.blockErr = errors.New("rpc unavailable")
+		case 2:
+			client.blockErr = nil
+		case 3:
+			cancel()
+		}
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+	indexer.pollInterval = time.Millisecond
+
+	done := make(chan error, 1)
+	go func() {
+		done <- indexer.Run(ctx)
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not continue after the first poll error")
+	}
+	if got := blockCalls.Load(); got < 3 {
+		t.Fatalf("BlockNumber calls = %d, want at least 3", got)
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want retry to advance to 188", store.cursors[cursorKey(40161, executorSourceStream)])
 	}
 }
 
@@ -587,8 +653,67 @@ func TestIndexerRunContinuesPollingAfterImmatureHead(t *testing.T) {
 	}
 }
 
+func TestIndexerRunFailsFastForLocalSetupErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		indexer   *Indexer
+		wantError string
+	}{
+		{
+			name: "poll interval",
+			indexer: func() *Indexer {
+				indexer := NewWithClient(
+					testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+					[]chain.Pathway{testIndexerPathway()},
+					newFakeIndexerStore(),
+					&fakeLogClient{head: 200},
+					discardLogger(),
+				)
+				indexer.pollInterval = 0
+				return indexer
+			}(),
+			wantError: "poll interval",
+		},
+		{
+			name: "store",
+			indexer: NewWithClient(
+				testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+				[]chain.Pathway{testIndexerPathway()},
+				nil,
+				&fakeLogClient{head: 200},
+				discardLogger(),
+			),
+			wantError: "store is required",
+		},
+		{
+			name: "log client",
+			indexer: NewWithClient(
+				testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+				[]chain.Pathway{testIndexerPathway()},
+				newFakeIndexerStore(),
+				nil,
+				discardLogger(),
+			),
+			wantError: "log client is required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.indexer.Run(context.Background())
+			if err == nil {
+				t.Fatal("Run() error = nil, want setup error")
+			}
+			if !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("Run() error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 type fakeLogClient struct {
 	head            uint64
+	blockErr        error
+	filterErr       error
 	sourceLogs      []gethtypes.Log
 	destinationLogs []gethtypes.Log
 	queries         []ethereum.FilterQuery
@@ -599,10 +724,16 @@ func (c *fakeLogClient) BlockNumber(context.Context) (uint64, error) {
 	if c.onBlock != nil {
 		c.onBlock()
 	}
+	if c.blockErr != nil {
+		return 0, c.blockErr
+	}
 	return c.head, nil
 }
 
 func (c *fakeLogClient) FilterLogs(_ context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
+	if c.filterErr != nil {
+		return nil, c.filterErr
+	}
 	c.queries = append(c.queries, query)
 	if queryHasTopic(query, lzabi.PacketSentTopic()) {
 		return append([]gethtypes.Log(nil), c.sourceLogs...), nil
