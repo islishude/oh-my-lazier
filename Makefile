@@ -9,6 +9,8 @@ INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 
 all: check
 
+ci: check
+
 check: compile typecheck check-lzabi check-pricing-abi test-solidity test-scripts test-go runbook-check migration-evidence-check lint-go fmt-check
 
 compile:
