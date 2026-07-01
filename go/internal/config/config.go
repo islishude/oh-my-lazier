@@ -105,7 +105,7 @@ type UniswapPricingConfig struct {
 
 // SignerConfig configures one local signing backend without embedding raw secret material.
 type SignerConfig struct {
-	ID       string               `yaml:"id"`
+	ID       string               `yaml:"id"` // hex address with checksum of the signer
 	Type     string               `yaml:"type"`
 	Keystore KeystoreSignerConfig `yaml:"keystore"`
 	KMS      KMSSignerConfig      `yaml:"kms"`
@@ -252,12 +252,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("chain %s chain_id is required", chain.Name)
 		}
 		switch NormalizeTxType(chain.TxType) {
-		case TxTypeDynamicFee, TxTypeLegacy:
+		case TxTypeDynamicFee:
+			dynamicFeeCapsRequired = true
+		case TxTypeLegacy:
 		default:
 			return fmt.Errorf("chain %s tx_type must be %q or %q", chain.Name, TxTypeDynamicFee, TxTypeLegacy)
-		}
-		if NormalizeTxType(chain.TxType) == TxTypeDynamicFee {
-			dynamicFeeCapsRequired = true
 		}
 		for label, value := range map[string]string{
 			"endpoint_address":      chain.EndpointAddress,
@@ -288,11 +287,7 @@ func (c Config) Validate() error {
 		seen[chain.EID] = struct{}{}
 	}
 	switch c.DVN.Mode {
-	case DVNModeShadow, DVNModeActive:
-	default:
-		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
-	}
-	if c.DVN.Mode == DVNModeActive {
+	case DVNModeActive:
 		if !common.IsHexAddress(c.DVN.Signer) {
 			return errors.New("dvn signer must be a hex address in active mode")
 		}
@@ -317,6 +312,9 @@ func (c Config) Validate() error {
 				return fmt.Errorf("dvn %s must be a positive integer", label)
 			}
 		}
+	case DVNModeShadow:
+	default:
+		return fmt.Errorf("unsupported dvn mode %q", c.DVN.Mode)
 	}
 	if err := c.validatePricing(seen, signers, dynamicFeeCapsRequired); err != nil {
 		return err
