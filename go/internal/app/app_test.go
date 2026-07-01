@@ -14,6 +14,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
@@ -114,10 +115,12 @@ func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 
 	calls := make(chan int, 2)
 	done := make(chan struct{})
+	errCh := make(chan error, 1)
+	retries := &recordingLoopRetries{}
 	go func() {
 		defer close(done)
 		attempts := 0
-		superviseLoop(ctx, "test", 0, discardLogger(), func(context.Context) error {
+		errCh <- superviseLoop(ctx, "test", 0, discardLogger(), retries, func(context.Context) error {
 			attempts++
 			calls <- attempts
 			if attempts == 2 {
@@ -143,10 +146,44 @@ func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("superviseLoop did not stop after context cancellation")
 	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("superviseLoop() error = %v, want nil", err)
+	}
+	if len(retries.names) != 1 || retries.names[0] != "test" {
+		t.Fatalf("retry metrics = %#v, want one test retry", retries.names)
+	}
+}
+
+func TestSuperviseLoopReturnsFatalErrorWithoutRetry(t *testing.T) {
+	wantErr := errors.New("bad loop configuration")
+	retries := &recordingLoopRetries{}
+	calls := 0
+
+	err := superviseLoop(context.Background(), "test", 0, discardLogger(), retries, func(context.Context) error {
+		calls++
+		return workerloop.Fatal(wantErr)
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("superviseLoop() error = %v, want %v", err, wantErr)
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
+	}
+	if len(retries.names) != 0 {
+		t.Fatalf("retry metrics = %#v, want none", retries.names)
+	}
 }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+type recordingLoopRetries struct {
+	names []string
+}
+
+func (r *recordingLoopRetries) RecordLoopRetry(name string) {
+	r.names = append(r.names, name)
 }
 
 func testConfig(signerID, keystorePath string) config.Config {

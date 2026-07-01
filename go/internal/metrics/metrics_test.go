@@ -121,6 +121,12 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 200, 188, 2, 1, 3, 1500*time.Millisecond, nil)
 	registry.now = func() time.Time { return time.Unix(1_700_000_030, 0) }
 	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 0, 0, 0, 0, 0, 250*time.Millisecond, errors.New("rpc unavailable"))
+	registry.now = func() time.Time { return time.Unix(1_700_000_040, 0) }
+	registry.RecordLoopRetry("txmgr")
+	registry.now = func() time.Time { return time.Unix(1_700_000_050, 0) }
+	registry.RecordLoopRetry("txmgr")
+	registry.now = func() time.Time { return time.Unix(1_700_000_060, 0) }
+	registry.RecordLoopRetry("pricing")
 	handler := Handler(fakeProvider{err: errors.New("database down")}, registry)
 	recorder := httptest.NewRecorder()
 
@@ -133,6 +139,10 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	for _, want := range []string{
 		`laz_worker_info 1`,
 		`laz_metrics_db_snapshot_available 0`,
+		`laz_worker_loop_retries_total{name="pricing"} 1`,
+		`laz_worker_loop_retries_total{name="txmgr"} 2`,
+		`laz_worker_loop_last_retry_timestamp_seconds{name="pricing"} 1700000060`,
+		`laz_worker_loop_last_retry_timestamp_seconds{name="txmgr"} 1700000050`,
 		`laz_indexer_poll_success{chain_eid="40161",name="ethereum-sepolia"} 0`,
 		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="success"} 1`,
 		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="error"} 1`,

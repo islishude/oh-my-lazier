@@ -6,7 +6,7 @@ Endpoints:
 
 - `/healthz`: process liveness only. It returns `200` without touching Postgres.
 - `/readyz`: readiness check. It returns `200` only when the worker can read the DB stats snapshot and the DB-backed readiness rules pass.
-- `/metrics`: Prometheus text metrics derived from durable Postgres state plus process-local indexer polling status.
+- `/metrics`: Prometheus text metrics derived from durable Postgres state plus process-local indexer polling and worker-loop retry status.
 
 Required scrape target:
 
@@ -57,10 +57,11 @@ Migration dashboard panels:
 - Tx outbox count by chain and status.
 - Indexer cursor last block by chain and stream.
 - Indexer poll success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain.
+- Worker loop retry count and last retry timestamp by loop name.
 
 Operational assumptions:
 
-- Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status metrics are process-local and reset on restart.
-- If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
+- Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status and worker loop retry metrics are process-local and reset on restart.
+- If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.

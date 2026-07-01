@@ -16,6 +16,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -397,13 +398,13 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64)
 
 func (i *Indexer) runPollingLoop(ctx context.Context) error {
 	if i.pollInterval <= 0 {
-		return errors.New("indexer poll interval must be positive")
+		return workerloop.Fatal(errors.New("indexer poll interval must be positive"))
 	}
 	if i.store == nil {
-		return errors.New("indexer store is required")
+		return workerloop.Fatal(errors.New("indexer store is required"))
 	}
 	if i.client == nil {
-		return errors.New("indexer log client is required")
+		return workerloop.Fatal(errors.New("indexer log client is required"))
 	}
 	if err := i.pollOnce(ctx); err != nil {
 		return err

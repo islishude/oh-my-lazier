@@ -14,6 +14,7 @@ import (
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/readiness"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 // StatsProvider supplies read-only worker state for metrics rendering.
@@ -28,7 +29,8 @@ type RuntimeProvider interface {
 
 // RuntimeSnapshot is a process-local worker metrics snapshot.
 type RuntimeSnapshot struct {
-	Indexers []IndexerRuntimeStat
+	Indexers    []IndexerRuntimeStat
+	LoopRetries []LoopRetryRuntimeStat
 }
 
 // IndexerRuntimeStat summarizes one in-process indexer loop.
@@ -48,11 +50,19 @@ type IndexerRuntimeStat struct {
 	DestinationLogs         uint64
 }
 
+// LoopRetryRuntimeStat summarizes supervisor retry attempts for one worker loop.
+type LoopRetryRuntimeStat struct {
+	Name          string
+	Retries       uint64
+	LastRetryUnix int64
+}
+
 // Registry records process-local worker metrics.
 type Registry struct {
-	mu       sync.Mutex
-	indexers map[indexerKey]*IndexerRuntimeStat
-	now      func() time.Time
+	mu          sync.Mutex
+	indexers    map[indexerKey]*IndexerRuntimeStat
+	loopRetries map[string]*LoopRetryRuntimeStat
+	now         func() time.Time
 }
 
 type indexerKey struct {
@@ -63,8 +73,9 @@ type indexerKey struct {
 // NewRegistry creates an empty process-local metrics registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		indexers: make(map[indexerKey]*IndexerRuntimeStat),
-		now:      time.Now,
+		indexers:    make(map[indexerKey]*IndexerRuntimeStat),
+		loopRetries: make(map[string]*LoopRetryRuntimeStat),
+		now:         time.Now,
 	}
 }
 
@@ -100,6 +111,23 @@ func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, observed
 	stat.DestinationLogs += uint64(destinationLogs)
 }
 
+// RecordLoopRetry records one supervisor retry after a worker loop returned an error.
+func (r *Registry) RecordLoopRetry(name string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	stat := r.loopRetries[name]
+	if stat == nil {
+		stat = &LoopRetryRuntimeStat{Name: name}
+		r.loopRetries[name] = stat
+	}
+	stat.Retries++
+	stat.LastRetryUnix = r.now().Unix()
+}
+
 // RuntimeSnapshot returns a stable copy of process-local metrics.
 func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	if r == nil {
@@ -108,15 +136,24 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	snapshot := RuntimeSnapshot{Indexers: make([]IndexerRuntimeStat, 0, len(r.indexers))}
+	snapshot := RuntimeSnapshot{
+		Indexers:    make([]IndexerRuntimeStat, 0, len(r.indexers)),
+		LoopRetries: make([]LoopRetryRuntimeStat, 0, len(r.loopRetries)),
+	}
 	for _, stat := range r.indexers {
 		snapshot.Indexers = append(snapshot.Indexers, *stat)
+	}
+	for _, stat := range r.loopRetries {
+		snapshot.LoopRetries = append(snapshot.LoopRetries, *stat)
 	}
 	sort.Slice(snapshot.Indexers, func(a, b int) bool {
 		if snapshot.Indexers[a].ChainEID != snapshot.Indexers[b].ChainEID {
 			return snapshot.Indexers[a].ChainEID < snapshot.Indexers[b].ChainEID
 		}
 		return snapshot.Indexers[a].ChainName < snapshot.Indexers[b].ChainName
+	})
+	sort.Slice(snapshot.LoopRetries, func(a, b int) bool {
+		return snapshot.LoopRetries[a].Name < snapshot.LoopRetries[b].Name
 	})
 	return snapshot
 }
@@ -232,6 +269,16 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 }
 
 func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
+	output.WriteString("# HELP laz_worker_loop_retries_total Worker loop restart attempts after returned errors.\n")
+	output.WriteString("# TYPE laz_worker_loop_retries_total counter\n")
+	for _, stat := range snapshot.LoopRetries {
+		fmt.Fprintf(output, "laz_worker_loop_retries_total{name=%s} %d\n", label(stat.Name), stat.Retries)
+	}
+	output.WriteString("# HELP laz_worker_loop_last_retry_timestamp_seconds Unix timestamp for the most recent worker loop retry.\n")
+	output.WriteString("# TYPE laz_worker_loop_last_retry_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.LoopRetries {
+		fmt.Fprintf(output, "laz_worker_loop_last_retry_timestamp_seconds{name=%s} %d\n", label(stat.Name), stat.LastRetryUnix)
+	}
 	output.WriteString("# HELP laz_indexer_poll_success Whether the most recent indexer poll succeeded.\n")
 	output.WriteString("# TYPE laz_indexer_poll_success gauge\n")
 	for _, stat := range snapshot.Indexers {
@@ -300,7 +347,7 @@ func (s *Server) Run(ctx context.Context) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		return err
+		return workerloop.Fatal(err)
 	}
 }
 

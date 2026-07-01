@@ -20,6 +20,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 const loopInterval = 5 * time.Second
@@ -282,17 +283,17 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		}
 		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
 	default:
-		return false, fmt.Errorf("unsupported dvn mode %q", w.mode)
+		return false, workerloop.Fatal(fmt.Errorf("unsupported dvn mode %q", w.mode))
 	}
 	return true, nil
 }
 
 func (w *Worker) buildVerifyTx(packet db.PacketRecord, confirmations uint64) (db.TxRequest, error) {
 	if w.registry == nil {
-		return db.TxRequest{}, errors.New("dvn active mode requires chain registry")
+		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires chain registry"))
 	}
 	if w.settings.SignerID == "" {
-		return db.TxRequest{}, errors.New("dvn active mode requires signer id")
+		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires signer id"))
 	}
 	pathway, err := w.registry.Pathway(packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver)
 	if err != nil {

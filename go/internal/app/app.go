@@ -27,6 +27,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/kms"
 	"github.com/islishude/oh-my-lazier/go/internal/txmgr"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (configcheck.Report, error) {
@@ -34,6 +35,10 @@ var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (co
 }
 
 const loopRestartDelay = 5 * time.Second
+
+type loopRetryRecorder interface {
+	RecordLoopRetry(name string)
+}
 
 // App owns the configured worker process and its durable service loops.
 type App struct {
@@ -98,9 +103,15 @@ func (a *App) Run(ctx context.Context) error {
 	defer cancel()
 
 	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
 	start := func(name string, run func(context.Context) error) {
 		wg.Go(func() {
-			superviseLoop(ctx, name, loopRestartDelay, a.logger, run)
+			if err := superviseLoop(ctx, name, loopRestartDelay, a.logger, runtimeMetrics, run); err != nil {
+				select {
+				case errCh <- fmt.Errorf("%s loop failed fatally: %w", name, err):
+				default:
+				}
+			}
 		})
 	}
 
@@ -114,26 +125,39 @@ func (a *App) Run(ctx context.Context) error {
 	start("dvn", dvnWorker.Run)
 	start("pricing", priceBot.Run)
 
-	<-ctx.Done()
-	wg.Wait()
-	return nil
+	select {
+	case <-ctx.Done():
+		wg.Wait()
+		return nil
+	case err := <-errCh:
+		cancel()
+		wg.Wait()
+		return err
+	}
 }
 
-func superviseLoop(ctx context.Context, name string, restartDelay time.Duration, logger *slog.Logger, run func(context.Context) error) {
+func superviseLoop(ctx context.Context, name string, restartDelay time.Duration, logger *slog.Logger, retryMetrics loopRetryRecorder, run func(context.Context) error) error {
 	for {
 		err := run(ctx)
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			logger.Info("loop stopped", "name", name)
-			return
+			return nil
+		}
+		if workerloop.IsFatal(err) {
+			logger.Error("loop failed fatally", "name", name, "error", err)
+			return err
 		}
 		if err != nil {
 			logger.Error("loop failed; restarting", "name", name, "error", err)
+			if retryMetrics != nil {
+				retryMetrics.RecordLoopRetry(name)
+			}
 		} else {
 			logger.Warn("loop stopped unexpectedly; restarting", "name", name)
 		}
 		if !waitLoopRestart(ctx, restartDelay) {
 			logger.Info("loop stopped", "name", name)
-			return
+			return nil
 		}
 	}
 }
