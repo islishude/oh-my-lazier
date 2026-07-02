@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"errors"
 	"math/big"
 
@@ -41,7 +42,7 @@ func BuildLzReceiveCalldata(packet db.PacketRecord, extraData []byte) ([]byte, e
 		),
 		Nonce: packet.Nonce.Uint64(),
 	}
-	return endpointABI.Pack("lzReceive", origin, packet.Receiver, packet.GUID, packet.Message, cloneBytes(extraData))
+	return endpointABI.Pack("lzReceive", origin, packet.Receiver, packet.GUID, packet.Message, bytes.Clone(extraData))
 }
 
 // BuildCommitVerificationTx creates the outbox request for ReceiveUln302.commitVerification.
@@ -97,13 +98,4 @@ type endpointOrigin struct {
 	SrcEID uint32      `abi:"srcEid"`
 	Sender common.Hash `abi:"sender"`
 	Nonce  uint64      `abi:"nonce"`
-}
-
-func cloneBytes(value []byte) []byte {
-	if len(value) == 0 {
-		return nil
-	}
-	copied := make([]byte, len(value))
-	copy(copied, value)
-	return copied
 }

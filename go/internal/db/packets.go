@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -59,7 +60,7 @@ func (s *Store) UpsertPacket(ctx context.Context, packet PacketRecord) error {
 			options = EXCLUDED.options,
 			status = EXCLUDED.status,
 			updated_at = now()
-	`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, cloneBytes(packet.EncodedPacket), cloneBytes(packet.PacketHeader), cloneBytes(packet.Message), packet.PayloadHash.Bytes(), cloneBytes(packet.Options), packet.Status)
+	`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, bytes.Clone(packet.EncodedPacket), bytes.Clone(packet.PacketHeader), bytes.Clone(packet.Message), packet.PayloadHash.Bytes(), bytes.Clone(packet.Options), packet.Status)
 	return err
 }
 
@@ -117,7 +118,7 @@ func (s *Store) GetPacketByVerification(ctx context.Context, dstEID uint32, pack
 			packet_header, message, payload_hash, options, status
 		FROM packets
 		WHERE dst_eid = $1 AND packet_header = $2 AND payload_hash = $3
-	`, dstEID, cloneBytes(packetHeader), payloadHash.Bytes())
+	`, dstEID, bytes.Clone(packetHeader), payloadHash.Bytes())
 }
 
 // Validate checks packet persistence invariants before writing to Postgres.
@@ -243,11 +244,11 @@ func (r packetRow) toPacketRecord() (PacketRecord, error) {
 		SrcTxHash:      common.BytesToHash(r.SrcTxHash),
 		SrcBlockNumber: r.SrcBlockNumber,
 		SrcLogIndex:    r.SrcLogIndex,
-		EncodedPacket:  cloneBytes(r.EncodedPacket),
-		PacketHeader:   cloneBytes(r.PacketHeader),
-		Message:        cloneBytes(r.Message),
+		EncodedPacket:  bytes.Clone(r.EncodedPacket),
+		PacketHeader:   bytes.Clone(r.PacketHeader),
+		Message:        bytes.Clone(r.Message),
 		PayloadHash:    common.BytesToHash(r.PayloadHash),
-		Options:        cloneBytes(r.Options),
+		Options:        bytes.Clone(r.Options),
 		Status:         r.Status,
 	}, nil
 }

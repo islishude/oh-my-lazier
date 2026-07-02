@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -413,11 +414,11 @@ func (r executorWorkRow) toExecutorWorkItem() (ExecutorWorkItem, error) {
 		SrcTxHash:      common.BytesToHash(r.SrcTxHash),
 		SrcBlockNumber: r.SrcBlockNumber,
 		SrcLogIndex:    r.SrcLogIndex,
-		EncodedPacket:  cloneBytes(r.EncodedPacket),
-		PacketHeader:   cloneBytes(r.PacketHeader),
-		Message:        cloneBytes(r.Message),
+		EncodedPacket:  bytes.Clone(r.EncodedPacket),
+		PacketHeader:   bytes.Clone(r.PacketHeader),
+		Message:        bytes.Clone(r.Message),
 		PayloadHash:    common.BytesToHash(r.PayloadHash),
-		Options:        cloneBytes(r.Options),
+		Options:        bytes.Clone(r.Options),
 		Status:         r.PacketStatus,
 	}
 	return ExecutorWorkItem{

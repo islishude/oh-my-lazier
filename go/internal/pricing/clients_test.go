@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"net/http"
@@ -146,7 +147,7 @@ type fakeCaller struct {
 
 func (c *fakeCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 	c.to = call.To
-	c.data = append([]byte(nil), call.Data...)
+	c.data = bytes.Clone(call.Data)
 	return c.response, nil
 }
 

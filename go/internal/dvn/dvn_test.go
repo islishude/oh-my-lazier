@@ -432,34 +432,34 @@ func (s *fakeStore) MarkDVNQuorumChecking(_ context.Context, guid common.Hash, _
 
 func (s *fakeStore) MarkDVNReadyToVerify(_ context.Context, guid common.Hash, _ string, quorumResult []byte) error {
 	s.readyGUID = guid
-	s.quorumResult = append([]byte(nil), quorumResult...)
+	s.quorumResult = bytes.Clone(quorumResult)
 	return nil
 }
 
 func (s *fakeStore) MarkDVNWouldVerify(_ context.Context, guid common.Hash, _ string, quorumResult []byte) error {
 	s.wouldVerifyGUID = guid
-	s.quorumResult = append([]byte(nil), quorumResult...)
+	s.quorumResult = bytes.Clone(quorumResult)
 	return nil
 }
 
 func (s *fakeStore) EnqueueDVNVerifyTx(_ context.Context, guid common.Hash, _, _ string, request db.TxRequest, quorumResult []byte) (int64, error) {
 	s.verifyGUID = guid
 	s.verifyRequest = request
-	s.quorumResult = append([]byte(nil), quorumResult...)
+	s.quorumResult = bytes.Clone(quorumResult)
 	return 42, nil
 }
 
 func (s *fakeStore) MarkDVNQuorumConflict(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
 	s.conflictGUID = guid
 	s.conflictReason = reason
-	s.quorumResult = append([]byte(nil), quorumResult...)
+	s.quorumResult = bytes.Clone(quorumResult)
 	return nil
 }
 
 func (s *fakeStore) MarkDVNReorgDetected(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
 	s.reorgGUID = guid
 	s.reorgReason = reason
-	s.quorumResult = append([]byte(nil), quorumResult...)
+	s.quorumResult = bytes.Clone(quorumResult)
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -725,7 +726,7 @@ func (r outboxTxRow) toQueuedOutboxTx() (QueuedOutboxTx, error) {
 		Purpose:              r.Purpose,
 		GUID:                 cloneOptionalBytes(r.GUID),
 		To:                   common.BytesToAddress(r.ToAddress),
-		Calldata:             cloneBytes(r.Calldata),
+		Calldata:             bytes.Clone(r.Calldata),
 		Value:                value,
 		GasLimit:             gasLimit,
 		MaxFeePerGas:         maxFeePerGas,
@@ -763,18 +764,9 @@ func parseUint64(field string, value *string) (uint64, error) {
 	return parsed, nil
 }
 
-func cloneBytes(value []byte) []byte {
-	if len(value) == 0 {
-		return nil
-	}
-	copied := make([]byte, len(value))
-	copy(copied, value)
-	return copied
-}
-
 func cloneOptionalBytes(value *[]byte) []byte {
 	if value == nil {
 		return nil
 	}
-	return cloneBytes(*value)
+	return bytes.Clone(*value)
 }
