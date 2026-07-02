@@ -76,6 +76,7 @@ Contract authority:
 LayerZero phase-1 boundary:
 
 - Phase 1 remains EVM-only and scoped to Ethereum Sepolia <-> Base Sepolia.
+- Worker chain configs must declare `family: evm`; other chain families are rejected in phase 1.
 - `composeMsg`, `lzCompose`, native drop, ordered execution, and non-EVM chains
   remain out of scope.
 - Self-only DVN is rejected; required DVNs must include OpenDVN and an

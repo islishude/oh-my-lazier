@@ -12,7 +12,6 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
@@ -238,7 +237,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	}
 	settings := pricing.Settings{
 		Enabled:       true,
-		SignerID:      a.cfg.Pricing.Signer,
+		SignerID:      a.cfg.Pricing.Signer.Hex(),
 		Interval:      time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
 		BaseFee:       baseFee,
 		BufferBps:     a.cfg.Pricing.BufferBps,
@@ -299,9 +298,9 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			return nil, err
 		}
 		sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, pricing.UniswapV3Config{
-			QuoterAddress:    common.HexToAddress(cfg.Uniswap.QuoterAddress),
-			TokenIn:          common.HexToAddress(cfg.Uniswap.TokenIn),
-			TokenOut:         common.HexToAddress(cfg.Uniswap.TokenOut),
+			QuoterAddress:    cfg.Uniswap.QuoterAddress.Common(),
+			TokenIn:          cfg.Uniswap.TokenIn.Common(),
+			TokenOut:         cfg.Uniswap.TokenOut.Common(),
 			Fee:              cfg.Uniswap.Fee,
 			AmountIn:         amountIn,
 			TokenOutDecimals: cfg.Uniswap.TokenOutDecimals,
@@ -367,7 +366,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 	for _, configuredChain := range registry.All() {
 		required[targetKey{chainEID: configuredChain.EID, signerID: configuredChain.TxRoles.Executor.SignerID}] = struct{}{}
 		if a.cfg.Pricing.Enabled {
-			required[targetKey{chainEID: configuredChain.EID, signerID: common.HexToAddress(a.cfg.Pricing.Signer).Hex()}] = struct{}{}
+			required[targetKey{chainEID: configuredChain.EID, signerID: a.cfg.Pricing.Signer.Hex()}] = struct{}{}
 		}
 	}
 	for _, pathway := range registry.Pathways() {
@@ -404,7 +403,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error) {
 	signers := make(map[string]signer.Signer, len(a.cfg.Signers))
 	for _, cfg := range a.cfg.Signers {
-		id := common.HexToAddress(cfg.ID).Hex()
+		id := cfg.ID.Hex()
 		switch cfg.Type {
 		case "keystore":
 			loaded, err := keystore.LoadWithPasswordSource(cfg.Keystore.Path, keystore.PasswordSource{
@@ -427,7 +426,7 @@ func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error)
 			if cfg.KMS.Endpoint != "" {
 				client = kms.NewSDKClientWithEndpoint(awsConfig, cfg.KMS.Endpoint)
 			}
-			loaded := kms.New(client, cfg.KMS.KeyID, common.HexToAddress(cfg.KMS.Address))
+			loaded := kms.New(client, cfg.KMS.KeyID, cfg.KMS.Address.Common())
 			if err := loaded.ValidateKey(ctx); err != nil {
 				return nil, err
 			}

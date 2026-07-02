@@ -82,14 +82,14 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			Name:                   cfg.Name,
 			ChainID:                new(big.Int).SetUint64(cfg.ChainID),
 			TxType:                 config.NormalizeTxType(cfg.TxType),
-			EndpointAddress:        common.HexToAddress(cfg.EndpointAddress),
+			EndpointAddress:        cfg.EndpointAddress.Common(),
 			Confirmations:          cfg.Confirmations,
 			StartBlockNumber:       cfg.StartBlockNumber,
 			IndexerQueryBlockRange: cfg.IndexerQueryBlockRange,
 			TxRoles: TxRoles{
-				Executor: ExecutorTxRole{SignerID: canonicalSignerID(cfg.TxRoles.Executor.Signer)},
+				Executor: ExecutorTxRole{SignerID: cfg.TxRoles.Executor.Signer.Hex()},
 				DVN: DVNTxRole{
-					SignerID:                canonicalSignerID(cfg.TxRoles.DVN.Signer),
+					SignerID:                optionalSignerID(cfg.TxRoles.DVN.Signer),
 					TxGasLimit:              cfg.TxRoles.DVN.TxGasLimit,
 					MaxFeePerGasWei:         cfg.TxRoles.DVN.MaxFeePerGasWei,
 					MaxPriorityFeePerGasWei: cfg.TxRoles.DVN.MaxPriorityFeePerGasWei,
@@ -102,13 +102,13 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 		pathway := Pathway{
 			SrcEID:     cfg.SrcEID,
 			DstEID:     cfg.DstEID,
-			SrcOApp:    common.HexToAddress(cfg.SrcOApp),
-			DstOApp:    common.HexToAddress(cfg.DstOApp),
-			SendLib:    common.HexToAddress(cfg.SendLib),
-			ReceiveLib: common.HexToAddress(cfg.ReceiveLib),
+			SrcOApp:    cfg.SrcOApp.Common(),
+			DstOApp:    cfg.DstOApp.Common(),
+			SendLib:    cfg.SendLib.Common(),
+			ReceiveLib: cfg.ReceiveLib.Common(),
 			SourceWorkers: WorkerContracts{
-				OpenExecutor: common.HexToAddress(cfg.SourceWorkers.OpenExecutor),
-				OpenDVN:      common.HexToAddress(cfg.SourceWorkers.OpenDVN),
+				OpenExecutor: cfg.SourceWorkers.OpenExecutor.Common(),
+				OpenDVN:      cfg.SourceWorkers.OpenDVN.Common(),
 			},
 			DVNMode:         cfg.DVN.Mode,
 			Enabled:         cfg.Enabled,
@@ -173,9 +173,9 @@ func pathwayKey(srcEID, dstEID uint32, srcOApp, dstOApp common.Address) string {
 	return fmt.Sprintf("%d:%d:%s:%s", srcEID, dstEID, srcOApp, dstOApp)
 }
 
-func canonicalSignerID(value string) string {
-	if value == "" {
+func optionalSignerID(value config.EVMAddress) string {
+	if value.IsZero() {
 		return ""
 	}
-	return common.HexToAddress(value).Hex()
+	return value.Hex()
 }

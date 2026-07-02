@@ -25,6 +25,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - No native drop.
 - No ordered execution.
 - No non-EVM chain support.
+- Worker chain configs must declare `family: evm`.
 - No self-only DVN.
 - Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.
 - Confirmations must be 12 unless the maintained scope documentation is explicitly updated.

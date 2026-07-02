@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
 )
 
@@ -19,6 +18,14 @@ const (
 	TxTypeDynamicFee = "dynamic_fee"
 	// TxTypeLegacy selects legacy gas-price transaction signing.
 	TxTypeLegacy = "legacy"
+)
+
+// ChainFamily identifies the chain runtime family for a configured LayerZero endpoint.
+type ChainFamily string
+
+const (
+	// ChainFamilyEVM selects the phase-1 EVM runtime.
+	ChainFamilyEVM ChainFamily = "evm"
 )
 
 // DVNMode selects whether the DVN verifier only reports or also submits verification transactions.
@@ -48,15 +55,15 @@ type MetricsConfig struct {
 
 // ExecutorTxRoleConfig controls executor transaction submission on one chain.
 type ExecutorTxRoleConfig struct {
-	Signer string `yaml:"signer"`
+	Signer EVMAddress `yaml:"signer"`
 }
 
 // DVNTxRoleConfig controls active DVN verification transaction submission on one chain.
 type DVNTxRoleConfig struct {
-	Signer                  string `yaml:"signer"`
-	TxGasLimit              uint64 `yaml:"tx_gas_limit"`
-	MaxFeePerGasWei         string `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	Signer                  EVMAddress `yaml:"signer"`
+	TxGasLimit              uint64     `yaml:"tx_gas_limit"`
+	MaxFeePerGasWei         string     `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string     `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // ChainTxRolesConfig configures local transaction roles for one chain.
@@ -68,7 +75,7 @@ type ChainTxRolesConfig struct {
 // PricingConfig controls optional price update generation.
 type PricingConfig struct {
 	Enabled                 bool                 `yaml:"enabled"`
-	Signer                  string               `yaml:"signer"`
+	Signer                  EVMAddress           `yaml:"signer"`
 	IntervalSeconds         uint64               `yaml:"interval_seconds"`
 	BaseFeeWei              string               `yaml:"base_fee_wei"`
 	BufferBps               uint16               `yaml:"buffer_bps"`
@@ -98,17 +105,17 @@ type PricingChainConfig struct {
 
 // UniswapPricingConfig configures one V3 quoter sanity route.
 type UniswapPricingConfig struct {
-	QuoterAddress    string `yaml:"quoter_address"`
-	TokenIn          string `yaml:"token_in"`
-	TokenOut         string `yaml:"token_out"`
-	Fee              uint32 `yaml:"fee"`
-	AmountInWei      string `yaml:"amount_in_wei"`
-	TokenOutDecimals uint8  `yaml:"token_out_decimals"`
+	QuoterAddress    EVMAddress `yaml:"quoter_address"`
+	TokenIn          EVMAddress `yaml:"token_in"`
+	TokenOut         EVMAddress `yaml:"token_out"`
+	Fee              uint32     `yaml:"fee"`
+	AmountInWei      string     `yaml:"amount_in_wei"`
+	TokenOutDecimals uint8      `yaml:"token_out_decimals"`
 }
 
 // SignerConfig configures one local signing backend without embedding raw secret material.
 type SignerConfig struct {
-	ID       string               `yaml:"id"` // hex address with checksum of the signer
+	ID       EVMAddress           `yaml:"id"`
 	Type     string               `yaml:"type"`
 	Keystore KeystoreSignerConfig `yaml:"keystore"`
 	KMS      KMSSignerConfig      `yaml:"kms"`
@@ -123,19 +130,20 @@ type KeystoreSignerConfig struct {
 
 // KMSSignerConfig points at an AWS-compatible KMS signing key.
 type KMSSignerConfig struct {
-	KeyID    string `yaml:"key_id"`
-	Region   string `yaml:"region"`
-	Address  string `yaml:"address"`
-	Endpoint string `yaml:"endpoint"`
+	KeyID    string     `yaml:"key_id"`
+	Region   string     `yaml:"region"`
+	Address  EVMAddress `yaml:"address"`
+	Endpoint string     `yaml:"endpoint"`
 }
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
 type ChainConfig struct {
 	EID                    uint32             `yaml:"eid"`
 	Name                   string             `yaml:"name"`
+	Family                 ChainFamily        `yaml:"family"`
 	ChainID                uint64             `yaml:"chain_id"`
 	TxType                 string             `yaml:"tx_type"`
-	EndpointAddress        string             `yaml:"endpoint_address"`
+	EndpointAddress        EVMAddress         `yaml:"endpoint_address"`
 	Confirmations          uint64             `yaml:"confirmations"`
 	StartBlockNumber       uint64             `yaml:"start_block_number"`
 	IndexerQueryBlockRange uint64             `yaml:"indexer_query_block_range"`
@@ -145,8 +153,8 @@ type ChainConfig struct {
 
 // WorkerContractsConfig identifies the self-hosted worker contracts selected for one source pathway.
 type WorkerContractsConfig struct {
-	OpenExecutor string `yaml:"open_executor"`
-	OpenDVN      string `yaml:"open_dvn"`
+	OpenExecutor EVMAddress `yaml:"open_executor"`
+	OpenDVN      EVMAddress `yaml:"open_dvn"`
 }
 
 // PathwayDVNConfig controls DVN behavior for one source-to-destination pathway.
@@ -158,10 +166,10 @@ type PathwayDVNConfig struct {
 type PathwayConfig struct {
 	SrcEID          uint32                `yaml:"src_eid"`
 	DstEID          uint32                `yaml:"dst_eid"`
-	SrcOApp         string                `yaml:"src_oapp"`
-	DstOApp         string                `yaml:"dst_oapp"`
-	SendLib         string                `yaml:"send_lib"`
-	ReceiveLib      string                `yaml:"receive_lib"`
+	SrcOApp         EVMAddress            `yaml:"src_oapp"`
+	DstOApp         EVMAddress            `yaml:"dst_oapp"`
+	SendLib         EVMAddress            `yaml:"send_lib"`
+	ReceiveLib      EVMAddress            `yaml:"receive_lib"`
 	SourceWorkers   WorkerContractsConfig `yaml:"source_workers"`
 	DVN             PathwayDVNConfig      `yaml:"dvn"`
 	Enabled         bool                  `yaml:"enabled"`
@@ -256,6 +264,13 @@ func (c Config) Validate() error {
 		if chain.Name == "" {
 			return fmt.Errorf("chain %d name is required", chain.EID)
 		}
+		switch chain.Family {
+		case ChainFamilyEVM:
+		case "":
+			return fmt.Errorf("chain %s family is required", chain.Name)
+		default:
+			return fmt.Errorf("chain %s family must be %q in phase 1", chain.Name, ChainFamilyEVM)
+		}
 		if chain.ChainID <= 0 {
 			return fmt.Errorf("chain %s chain_id is required", chain.Name)
 		}
@@ -267,13 +282,13 @@ func (c Config) Validate() error {
 		default:
 			return fmt.Errorf("chain %s tx_type must be %q or %q", chain.Name, TxTypeDynamicFee, TxTypeLegacy)
 		}
-		if !common.IsHexAddress(chain.EndpointAddress) {
-			return fmt.Errorf("chain %s endpoint_address must be a hex address", chain.Name)
+		if chain.EndpointAddress.IsZero() {
+			return fmt.Errorf("chain %s endpoint_address is required", chain.Name)
 		}
-		if !common.IsHexAddress(chain.TxRoles.Executor.Signer) {
-			return fmt.Errorf("chain %s tx_roles.executor.signer must be a hex address", chain.Name)
+		if chain.TxRoles.Executor.Signer.IsZero() {
+			return fmt.Errorf("chain %s tx_roles.executor.signer is required", chain.Name)
 		}
-		if _, ok := signers[common.HexToAddress(chain.TxRoles.Executor.Signer).Hex()]; !ok {
+		if _, ok := signers[chain.TxRoles.Executor.Signer.Hex()]; !ok {
 			return fmt.Errorf("chain %s tx_roles.executor.signer must reference a configured signer", chain.Name)
 		}
 		if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
@@ -314,7 +329,7 @@ func (c Config) Validate() error {
 		if pathway.SrcEID == pathway.DstEID {
 			return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
 		}
-		for label, value := range map[string]string{
+		for label, value := range map[string]EVMAddress{
 			"src_oapp":                     pathway.SrcOApp,
 			"dst_oapp":                     pathway.DstOApp,
 			"send_lib":                     pathway.SendLib,
@@ -322,8 +337,8 @@ func (c Config) Validate() error {
 			"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
 			"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
 		} {
-			if !common.IsHexAddress(value) {
-				return fmt.Errorf("pathway %d -> %d %s must be a hex address", pathway.SrcEID, pathway.DstEID, label)
+			if value.IsZero() {
+				return fmt.Errorf("pathway %d -> %d %s is required", pathway.SrcEID, pathway.DstEID, label)
 			}
 		}
 		switch pathway.DVN.Mode {
@@ -345,7 +360,7 @@ func (c Config) Validate() error {
 		if pathway.MinLzReceiveGas > pathway.MaxLzReceiveGas {
 			return fmt.Errorf("pathway %d -> %d min_lz_receive_gas exceeds max_lz_receive_gas", pathway.SrcEID, pathway.DstEID)
 		}
-		key := fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, common.HexToAddress(pathway.SrcOApp), common.HexToAddress(pathway.DstOApp))
+		key := fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)
 		if _, ok := pathways[key]; ok {
 			return fmt.Errorf("duplicate pathway %s", key)
 		}
@@ -361,9 +376,6 @@ func (c Config) Validate() error {
 }
 
 func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
-	if role.Signer != "" && !common.IsHexAddress(role.Signer) {
-		return fmt.Errorf("chain %s tx_roles.dvn.signer must be a hex address", chainName)
-	}
 	for label, value := range map[string]string{
 		"max_fee_per_gas_wei":          role.MaxFeePerGasWei,
 		"max_priority_fee_per_gas_wei": role.MaxPriorityFeePerGasWei,
@@ -380,10 +392,10 @@ func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
 }
 
 func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers map[string]struct{}, dynamicFeeCapsRequired bool) error {
-	if !common.IsHexAddress(role.Signer) {
-		return fmt.Errorf("chain %s tx_roles.dvn.signer must be a hex address for active dvn pathways", chainName)
+	if role.Signer.IsZero() {
+		return fmt.Errorf("chain %s tx_roles.dvn.signer is required for active dvn pathways", chainName)
 	}
-	if _, ok := signers[common.HexToAddress(role.Signer).Hex()]; !ok {
+	if _, ok := signers[role.Signer.Hex()]; !ok {
 		return fmt.Errorf("chain %s tx_roles.dvn.signer must reference a configured signer", chainName)
 	}
 	if role.TxGasLimit == 0 {
@@ -440,10 +452,10 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 	}
 	seen := make(map[string]struct{}, len(c.Signers))
 	for _, signer := range c.Signers {
-		if !common.IsHexAddress(signer.ID) {
-			return nil, errors.New("signer id must be a hex address")
+		if signer.ID.IsZero() {
+			return nil, errors.New("signer id is required")
 		}
-		id := common.HexToAddress(signer.ID).Hex()
+		id := signer.ID.Hex()
 		if _, ok := seen[id]; ok {
 			return nil, fmt.Errorf("duplicate signer id %s", id)
 		}
@@ -462,10 +474,10 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 				return nil, fmt.Errorf("signer %s must configure exactly one keystore password source", id)
 			}
 		case "kms":
-			if !common.IsHexAddress(signer.KMS.Address) {
-				return nil, fmt.Errorf("signer %s kms.address must be a hex address", id)
+			if signer.KMS.Address.IsZero() {
+				return nil, fmt.Errorf("signer %s kms.address is required", id)
 			}
-			if common.HexToAddress(signer.KMS.Address).Hex() != id {
+			if signer.KMS.Address.Hex() != id {
 				return nil, fmt.Errorf("signer %s kms.address must match id", id)
 			}
 			if signer.KMS.KeyID == "" {
@@ -486,10 +498,10 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if !c.Pricing.Enabled {
 		return nil
 	}
-	if !common.IsHexAddress(c.Pricing.Signer) {
-		return errors.New("pricing signer must be a hex address")
+	if c.Pricing.Signer.IsZero() {
+		return errors.New("pricing signer is required")
 	}
-	if _, ok := signers[common.HexToAddress(c.Pricing.Signer).Hex()]; !ok {
+	if _, ok := signers[c.Pricing.Signer.Hex()]; !ok {
 		return errors.New("pricing signer must reference a configured signer")
 	}
 	if c.Pricing.IntervalSeconds == 0 {
@@ -570,13 +582,13 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 				return fmt.Errorf("pricing chain %d coingecko_id is required", chain.EID)
 			}
 		}
-		for label, value := range map[string]string{
+		for label, value := range map[string]EVMAddress{
 			"uniswap.quoter_address": chain.Uniswap.QuoterAddress,
 			"uniswap.token_in":       chain.Uniswap.TokenIn,
 			"uniswap.token_out":      chain.Uniswap.TokenOut,
 		} {
-			if !common.IsHexAddress(value) {
-				return fmt.Errorf("pricing chain %d %s must be a hex address", chain.EID, label)
+			if value.IsZero() {
+				return fmt.Errorf("pricing chain %d %s is required", chain.EID, label)
 			}
 		}
 		if chain.Uniswap.Fee > (1<<24)-1 {

@@ -132,8 +132,9 @@ The installed LayerZero `ILayerZeroExecutor` interface has a nonpayable `assignJ
 ## Worker Behavior Notes
 
 - Config is loaded once at startup. Runtime config changes require a process restart.
+- Each chain must set `family: evm` in phase 1. Non-EVM chain families are rejected until the maintained scope documentation is updated.
 - Each chain may set `tx_type: dynamic_fee` or `tx_type: legacy`; omitted `tx_type` defaults to `dynamic_fee`. Legacy transactions use the RPC `SuggestGasPrice` result when the tx manager signs the outbox row.
-- `chains[].tx_roles` defines local transaction signers and fee policy for each destination chain. `pathways[].source_workers` defines the OpenExecutor/OpenDVN contracts selected by the source pathway.
+- Address fields in worker config are parsed as EVM 20-byte hex addresses at load time. `chains[].tx_roles` defines local transaction signers and fee policy for each destination chain. `pathways[].source_workers` defines the OpenExecutor/OpenDVN contracts selected by the source pathway.
 - The worker starts metrics, per-chain indexers, tx manager, executor committer/deliverer, DVN verifier, and price bot loops under one cancellation context. Retryable loop errors are logged, counted in process-local metrics, and restarted with backoff; non-retryable loop errors stop `App.Run`.
 - In a pathway's active DVN mode, the DVN flow is `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`. The verifier enqueues `ReceiveUln302.verify` with the destination chain's `tx_roles.dvn`; tx manager is the only component that signs and broadcasts it.
 - The executor flow is `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`. The worker polls destination readiness before commit and delivery, and tx receipts or destination logs persist the final outcomes.

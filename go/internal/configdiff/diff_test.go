@@ -10,7 +10,7 @@ import (
 func TestDiffUsesSemanticKeysForLists(t *testing.T) {
 	before := validConfig()
 	after := validConfig()
-	after.Pathways[1].SourceWorkers.OpenExecutor = "0x7777777777777777777777777777777777777777"
+	after.Pathways[1].SourceWorkers.OpenExecutor = config.MustEVMAddress("0x7777777777777777777777777777777777777777")
 	after.Pathways[0].MaxMessageSize = 20000
 	after.Pricing = validPricingConfig()
 	after.Pricing.Chains[1].Uniswap.Fee = 3000
@@ -59,7 +59,7 @@ func validConfig() config.Config {
 		Metrics:     config.MetricsConfig{ListenAddress: ":9090"},
 		Pricing: config.PricingConfig{
 			Enabled:                 true,
-			Signer:                  "0x9999999999999999999999999999999999999999",
+			Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 			IntervalSeconds:         300,
 			BaseFeeWei:              "1000",
 			BufferBps:               100,
@@ -75,9 +75,9 @@ func validConfig() config.Config {
 					EID:           40161,
 					BinanceSymbol: "ETHUSDT",
 					Uniswap: config.UniswapPricingConfig{
-						QuoterAddress:    "0x1111111111111111111111111111111111111111",
-						TokenIn:          "0x2222222222222222222222222222222222222222",
-						TokenOut:         "0x3333333333333333333333333333333333333333",
+						QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
+						TokenIn:          config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+						TokenOut:         config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 						Fee:              500,
 						AmountInWei:      "1000000000000000000",
 						TokenOutDecimals: 6,
@@ -87,9 +87,9 @@ func validConfig() config.Config {
 					EID:           40245,
 					BinanceSymbol: "ETHUSDT",
 					Uniswap: config.UniswapPricingConfig{
-						QuoterAddress:    "0x4444444444444444444444444444444444444444",
-						TokenIn:          "0x5555555555555555555555555555555555555555",
-						TokenOut:         "0x6666666666666666666666666666666666666666",
+						QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
+						TokenIn:          config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
+						TokenOut:         config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 						Fee:              500,
 						AmountInWei:      "1000000000000000000",
 						TokenOutDecimals: 6,
@@ -101,23 +101,25 @@ func validConfig() config.Config {
 			{
 				EID:             40161,
 				Name:            "ethereum-sepolia",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         11155111,
-				EndpointAddress: "0x1111111111111111111111111111111111111111",
+				EndpointAddress: config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
 				},
 			},
 			{
 				EID:             40245,
 				Name:            "base-sepolia",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         84532,
-				EndpointAddress: "0x4444444444444444444444444444444444444444",
+				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
 				},
 			},
 		},
@@ -125,13 +127,13 @@ func validConfig() config.Config {
 			{
 				SrcEID:     40161,
 				DstEID:     40245,
-				SrcOApp:    "0x7777777777777777777777777777777777777777",
-				DstOApp:    "0x8888888888888888888888888888888888888888",
-				SendLib:    "0x9999999999999999999999999999999999999999",
-				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+				ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 				SourceWorkers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:        true,
@@ -140,13 +142,13 @@ func validConfig() config.Config {
 			{
 				SrcEID:     40245,
 				DstEID:     40161,
-				SrcOApp:    "0x8888888888888888888888888888888888888888",
-				DstOApp:    "0x7777777777777777777777777777777777777777",
-				SendLib:    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				ReceiveLib: "0xcccccccccccccccccccccccccccccccccccccccc",
+				SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				SendLib:    config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+				ReceiveLib: config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
 				SourceWorkers: config.WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+					OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
+					OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:        true,

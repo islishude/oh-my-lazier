@@ -126,7 +126,7 @@ type pricingConfigGlobal struct {
 func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 	return pricingConfigGlobal{
 		Enabled:                 pricing.Enabled,
-		Signer:                  pricing.Signer,
+		Signer:                  pricing.Signer.Hex(),
 		IntervalSeconds:         pricing.IntervalSeconds,
 		BaseFeeWei:              pricing.BaseFeeWei,
 		BufferBps:               pricing.BufferBps,

@@ -216,11 +216,12 @@ func (r *recordingLoopRetries) RecordLoopRetry(name string) {
 }
 
 func testConfig(signerID, keystorePath string) config.Config {
+	signerAddress := config.MustEVMAddress(signerID)
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		Signers: []config.SignerConfig{
 			{
-				ID:   signerID,
+				ID:   signerAddress,
 				Type: "keystore",
 				Keystore: config.KeystoreSignerConfig{
 					Path:        keystorePath,
@@ -232,24 +233,26 @@ func testConfig(signerID, keystorePath string) config.Config {
 			{
 				EID:             40161,
 				Name:            "ethereum-sepolia",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         11155111,
-				EndpointAddress: "0x1111111111111111111111111111111111111111",
+				EndpointAddress: config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: signerID},
+					Executor: config.ExecutorTxRoleConfig{Signer: signerAddress},
 				},
 			},
 			{
 				EID:             40245,
 				Name:            "base-sepolia",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         84532,
 				TxType:          config.TxTypeLegacy,
-				EndpointAddress: "0x4444444444444444444444444444444444444444",
+				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: signerID},
+					Executor: config.ExecutorTxRoleConfig{Signer: signerAddress},
 				},
 			},
 		},
@@ -257,13 +260,13 @@ func testConfig(signerID, keystorePath string) config.Config {
 			{
 				SrcEID:     40161,
 				DstEID:     40245,
-				SrcOApp:    "0x7777777777777777777777777777777777777777",
-				DstOApp:    "0x8888888888888888888888888888888888888888",
-				SendLib:    "0x9999999999999999999999999999999999999999",
-				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+				ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 				SourceWorkers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
@@ -278,7 +281,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 func testPricingConfig() config.PricingConfig {
 	return config.PricingConfig{
 		Enabled:                 true,
-		Signer:                  "0x9999999999999999999999999999999999999999",
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		IntervalSeconds:         300,
 		BaseFeeWei:              "1000",
 		BufferBps:               100,

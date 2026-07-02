@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidateAcceptsSepoliaPathways(t *testing.T) {
@@ -15,9 +17,41 @@ func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 
 func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
 	cfg := validConfig()
-	cfg.Pathways[0].SourceWorkers.OpenDVN = ""
+	cfg.Pathways[0].SourceWorkers.OpenDVN = EVMAddress{}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing worker contract error")
+	}
+}
+
+func TestValidateRejectsUnsupportedChainFamilies(t *testing.T) {
+	for name, family := range map[string]ChainFamily{
+		"missing": "",
+		"solana":  "solana",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].Family = family
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want unsupported chain family error")
+			}
+		})
+	}
+}
+
+func TestEVMAddressUnmarshalRejectsInvalidValues(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":    `address: ""`,
+		"invalid":  `address: not-an-address`,
+		"sequence": `address: []`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var target struct {
+				Address EVMAddress `yaml:"address"`
+			}
+			if err := yaml.Unmarshal([]byte(body), &target); err == nil {
+				t.Fatal("Unmarshal() error = nil, want invalid evm address error")
+			}
+		})
 	}
 }
 
@@ -115,7 +149,7 @@ func TestValidateRejectsInvalidRPCURLFormats(t *testing.T) {
 
 func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 	cfg := validConfig()
-	cfg.Chains[0].TxRoles.Executor.Signer = ""
+	cfg.Chains[0].TxRoles.Executor.Signer = EVMAddress{}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing executor signer error")
 	}
@@ -123,7 +157,7 @@ func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 
 func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
 	cfg := validConfig()
-	cfg.Chains[0].TxRoles.Executor.Signer = "0x1111111111111111111111111111111111111111"
+	cfg.Chains[0].TxRoles.Executor.Signer = MustEVMAddress("0x1111111111111111111111111111111111111111")
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want unknown executor signer error")
 	}
@@ -137,10 +171,20 @@ func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsShadowDVNWithoutSigner(t *testing.T) {
+	cfg := validConfig()
+	for i := range cfg.Chains {
+		cfg.Chains[i].TxRoles.DVN.Signer = EVMAddress{}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateRejectsActiveDVNWithoutSigner(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pathways[0].DVN.Mode = DVNModeActive
-	cfg.Chains[1].TxRoles.DVN.Signer = ""
+	cfg.Chains[1].TxRoles.DVN.Signer = EVMAddress{}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing active dvn signer error")
 	}
@@ -179,12 +223,12 @@ func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
 func TestValidateRejectsMismatchedKMSSignerAddress(t *testing.T) {
 	cfg := validConfig()
 	cfg.Signers[0] = SignerConfig{
-		ID:   "0x9999999999999999999999999999999999999999",
+		ID:   MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		Type: "kms",
 		KMS: KMSSignerConfig{
 			KeyID:   "test-key",
 			Region:  "us-east-1",
-			Address: "0x1111111111111111111111111111111111111111",
+			Address: MustEVMAddress("0x1111111111111111111111111111111111111111"),
 		},
 	}
 	if err := cfg.Validate(); err == nil {
@@ -288,6 +332,7 @@ signers:
 chains:
   - eid: 40161
     name: ethereum-sepolia
+    family: evm
     chain_id: 11155111
     endpoint_address: "0x1111111111111111111111111111111111111111"
     confirmations: 12
@@ -303,6 +348,7 @@ chains:
         max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
     name: base-sepolia
+    family: evm
     chain_id: 84532
     endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
@@ -369,7 +415,7 @@ func validConfig() Config {
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		Signers: []SignerConfig{
 			{
-				ID:   "0x9999999999999999999999999999999999999999",
+				ID:   MustEVMAddress("0x9999999999999999999999999999999999999999"),
 				Type: "keystore",
 				Keystore: KeystoreSignerConfig{
 					Path:        "/run/secrets/executor-keystore.json",
@@ -381,26 +427,28 @@ func validConfig() Config {
 			{
 				EID:                    40161,
 				Name:                   "ethereum-sepolia",
+				Family:                 ChainFamilyEVM,
 				ChainID:                11155111,
-				EndpointAddress:        "0x1111111111111111111111111111111111111111",
+				EndpointAddress:        MustEVMAddress("0x1111111111111111111111111111111111111111"),
 				Confirmations:          12,
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8545"},
 				TxRoles: ChainTxRolesConfig{
-					Executor: ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					Executor: ExecutorTxRoleConfig{Signer: MustEVMAddress("0x9999999999999999999999999999999999999999")},
 					DVN:      validDVNTxRoleConfig(),
 				},
 			},
 			{
 				EID:                    40245,
 				Name:                   "base-sepolia",
+				Family:                 ChainFamilyEVM,
 				ChainID:                84532,
-				EndpointAddress:        "0x4444444444444444444444444444444444444444",
+				EndpointAddress:        MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:          12,
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8546"},
 				TxRoles: ChainTxRolesConfig{
-					Executor: ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					Executor: ExecutorTxRoleConfig{Signer: MustEVMAddress("0x9999999999999999999999999999999999999999")},
 					DVN:      validDVNTxRoleConfig(),
 				},
 			},
@@ -409,13 +457,13 @@ func validConfig() Config {
 			{
 				SrcEID:     40161,
 				DstEID:     40245,
-				SrcOApp:    "0x7777777777777777777777777777777777777777",
-				DstOApp:    "0x8888888888888888888888888888888888888888",
-				SendLib:    "0x9999999999999999999999999999999999999999",
-				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				DstOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				SendLib:    MustEVMAddress("0x9999999999999999999999999999999999999999"),
+				ReceiveLib: MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 				SourceWorkers: WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+					OpenExecutor: MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					OpenDVN:      MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,
@@ -426,13 +474,13 @@ func validConfig() Config {
 			{
 				SrcEID:     40245,
 				DstEID:     40161,
-				SrcOApp:    "0x8888888888888888888888888888888888888888",
-				DstOApp:    "0x7777777777777777777777777777777777777777",
-				SendLib:    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-				ReceiveLib: "0xcccccccccccccccccccccccccccccccccccccccc",
+				SrcOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				DstOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				SendLib:    MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+				ReceiveLib: MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
 				SourceWorkers: WorkerContractsConfig{
-					OpenExecutor: "0x5555555555555555555555555555555555555555",
-					OpenDVN:      "0x6666666666666666666666666666666666666666",
+					OpenExecutor: MustEVMAddress("0x5555555555555555555555555555555555555555"),
+					OpenDVN:      MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,
@@ -446,7 +494,7 @@ func validConfig() Config {
 
 func validDVNTxRoleConfig() DVNTxRoleConfig {
 	return DVNTxRoleConfig{
-		Signer:                  "0x9999999999999999999999999999999999999999",
+		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		TxGasLimit:              120000,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
@@ -456,7 +504,7 @@ func validDVNTxRoleConfig() DVNTxRoleConfig {
 func validPricingConfig() PricingConfig {
 	return PricingConfig{
 		Enabled:                 true,
-		Signer:                  "0x9999999999999999999999999999999999999999",
+		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		IntervalSeconds:         300,
 		BaseFeeWei:              "1000",
 		BufferBps:               100,
@@ -472,9 +520,9 @@ func validPricingConfig() PricingConfig {
 				EID:           40161,
 				BinanceSymbol: "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
-					QuoterAddress:    "0x1111111111111111111111111111111111111111",
-					TokenIn:          "0x2222222222222222222222222222222222222222",
-					TokenOut:         "0x3333333333333333333333333333333333333333",
+					QuoterAddress:    MustEVMAddress("0x1111111111111111111111111111111111111111"),
+					TokenIn:          MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					TokenOut:         MustEVMAddress("0x3333333333333333333333333333333333333333"),
 					Fee:              500,
 					AmountInWei:      "1000000000000000000",
 					TokenOutDecimals: 6,
@@ -484,9 +532,9 @@ func validPricingConfig() PricingConfig {
 				EID:           40245,
 				BinanceSymbol: "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
-					QuoterAddress:    "0x4444444444444444444444444444444444444444",
-					TokenIn:          "0x5555555555555555555555555555555555555555",
-					TokenOut:         "0x6666666666666666666666666666666666666666",
+					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),
+					TokenIn:          MustEVMAddress("0x5555555555555555555555555555555555555555"),
+					TokenOut:         MustEVMAddress("0x6666666666666666666666666666666666666666"),
 					Fee:              500,
 					AmountInWei:      "1000000000000000000",
 					TokenOutDecimals: 6,

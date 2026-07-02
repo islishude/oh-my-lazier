@@ -48,6 +48,7 @@ pricing:
 chains:
   - eid: 40161
     name: ethereum-sepolia
+    family: evm
     chain_id: 11155111
     # tx_type defaults to dynamic_fee. Use legacy for RPCs/chains that require legacy gas-price transactions.
     tx_type: dynamic_fee
@@ -68,6 +69,7 @@ chains:
         max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
     name: base-sepolia
+    family: evm
     chain_id: 84532
     tx_type: dynamic_fee
     endpoint_address: "0x4444444444444444444444444444444444444444"

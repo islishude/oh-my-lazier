@@ -475,14 +475,15 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 			{
 				EID:             packet.SrcEID,
 				Name:            "source",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         11155111,
-				EndpointAddress: "0x1111111111111111111111111111111111111111",
+				EndpointAddress: config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: "0x9999999999999999999999999999999999999999"},
+					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
 					DVN: config.DVNTxRoleConfig{
-						Signer:                  "0x9999999999999999999999999999999999999999",
+						Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 						TxGasLimit:              120000,
 						MaxFeePerGasWei:         "2000000000",
 						MaxPriorityFeePerGasWei: "1000000000",
@@ -492,14 +493,15 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 			{
 				EID:             packet.DstEID,
 				Name:            "destination",
+				Family:          config.ChainFamilyEVM,
 				ChainID:         84532,
-				EndpointAddress: "0x4444444444444444444444444444444444444444",
+				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: "0x8888888888888888888888888888888888888888"},
+					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x8888888888888888888888888888888888888888")},
 					DVN: config.DVNTxRoleConfig{
-						Signer:                  "0x8888888888888888888888888888888888888888",
+						Signer:                  config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 						TxGasLimit:              120000,
 						MaxFeePerGasWei:         "2000000000",
 						MaxPriorityFeePerGasWei: "1000000000",
@@ -511,13 +513,13 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 			{
 				SrcEID:     packet.SrcEID,
 				DstEID:     packet.DstEID,
-				SrcOApp:    packet.Sender.Hex(),
-				DstOApp:    packet.Receiver.Hex(),
-				SendLib:    packet.SendLib.Hex(),
-				ReceiveLib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				SrcOApp:    config.EVMAddressFromCommon(packet.Sender),
+				DstOApp:    config.EVMAddressFromCommon(packet.Receiver),
+				SendLib:    config.EVMAddressFromCommon(packet.SendLib),
+				ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 				SourceWorkers: config.WorkerContractsConfig{
-					OpenExecutor: "0x2222222222222222222222222222222222222222",
-					OpenDVN:      "0x3333333333333333333333333333333333333333",
+					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: mode},
 				Enabled:        true,
