@@ -58,10 +58,12 @@ func main() {
 
 	switch *action {
 	case "retry-failed":
-		if err := store.RetryFailedTx(ctx, *id); err != nil {
+		afterID, err := store.RetryFailedTx(ctx, *id)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "retry failed tx: %v\n", err)
 			os.Exit(1)
 		}
+		*id = afterID
 	case "replace":
 		if err := store.PrepareReplacementTx(ctx, *id); err != nil {
 			fmt.Fprintf(os.Stderr, "prepare replacement tx: %v\n", err)

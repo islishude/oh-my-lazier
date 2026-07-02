@@ -167,6 +167,9 @@ func TestClaimNextNonceAvoidsCollisions(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
 		t.Fatalf("delete test rows: %v", err)
 	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_nonce_cursors WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test cursor: %v", err)
+	}
 	for range 5 {
 		if _, err := store.EnqueueTx(ctx, TxRequest{
 			ChainEID: 40161,
@@ -179,13 +182,20 @@ func TestClaimNextNonceAvoidsCollisions(t *testing.T) {
 			t.Fatalf("EnqueueTx() error = %v", err)
 		}
 	}
+	inserted, err := store.BootstrapTxNonceCursor(ctx, 40161, signerID, 42)
+	if err != nil {
+		t.Fatalf("BootstrapTxNonceCursor() error = %v", err)
+	}
+	if !inserted {
+		t.Fatal("BootstrapTxNonceCursor() inserted = false, want true")
+	}
 
 	nonces := make(chan uint64, 5)
 	errs := make(chan error, 5)
 	var wg sync.WaitGroup
 	for range 5 {
 		wg.Go(func() {
-			claimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 42)
+			claimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
 			if err != nil {
 				errs <- err
 				return
@@ -211,7 +221,118 @@ func TestClaimNextNonceAvoidsCollisions(t *testing.T) {
 	}
 }
 
-func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
+func TestBootstrapTxNonceCursorIsInsertOnlyAndUsesLocalMax(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	const signerID = "0x7777777777777777777777777777777777777777"
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test rows: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_nonce_cursors WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test cursor: %v", err)
+	}
+	usedID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40161,
+		Purpose:  "used-nonce",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(used) error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET nonce = 10, status = $1
+		WHERE id = $2
+	`, TxStatusConfirmed, usedID); err != nil {
+		t.Fatalf("mark used nonce: %v", err)
+	}
+	firstQueuedID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40161,
+		Purpose:  "first-queued",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x02},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(first queued) error = %v", err)
+	}
+
+	inserted, err := store.BootstrapTxNonceCursor(ctx, 40161, signerID, 5)
+	if err != nil {
+		t.Fatalf("BootstrapTxNonceCursor() error = %v", err)
+	}
+	if !inserted {
+		t.Fatal("BootstrapTxNonceCursor() inserted = false, want true")
+	}
+	claimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
+	if err != nil {
+		t.Fatalf("ClaimNextNonce() error = %v", err)
+	}
+	if claimed.ID != firstQueuedID {
+		t.Fatalf("claimed id = %d, want %d", claimed.ID, firstQueuedID)
+	}
+	if claimed.Nonce != 11 {
+		t.Fatalf("claimed nonce = %d, want 11", claimed.Nonce)
+	}
+
+	inserted, err = store.BootstrapTxNonceCursor(ctx, 40161, signerID, 99)
+	if err != nil {
+		t.Fatalf("BootstrapTxNonceCursor(existing) error = %v", err)
+	}
+	if inserted {
+		t.Fatal("BootstrapTxNonceCursor(existing) inserted = true, want false")
+	}
+	secondQueuedID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40161,
+		Purpose:  "second-queued",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x03},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(second queued) error = %v", err)
+	}
+	claimed, err = store.ClaimNextNonce(ctx, 40161, signerID)
+	if err != nil {
+		t.Fatalf("ClaimNextNonce() after existing bootstrap error = %v", err)
+	}
+	if claimed.ID != secondQueuedID {
+		t.Fatalf("claimed id = %d, want %d", claimed.ID, secondQueuedID)
+	}
+	if claimed.Nonce != 12 {
+		t.Fatalf("claimed nonce = %d, want 12", claimed.Nonce)
+	}
+}
+
+func TestRetryFailedTxClonesAssignedNonceAndFreshRetryUsesCursor(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_POSTGRES_URL is not set")
@@ -241,6 +362,14 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
 		t.Fatalf("delete test rows: %v", err)
 	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_nonce_cursors WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test cursor: %v", err)
+	}
+	if inserted, err := store.BootstrapTxNonceCursor(ctx, 40161, signerID, 42); err != nil {
+		t.Fatalf("BootstrapTxNonceCursor() error = %v", err)
+	} else if !inserted {
+		t.Fatal("BootstrapTxNonceCursor() inserted = false, want true")
+	}
 	id, err := store.EnqueueTx(ctx, TxRequest{
 		ChainEID: 40161,
 		Purpose:  "retry-test",
@@ -252,7 +381,7 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
-	claimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 42)
+	claimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
 	if err != nil {
 		t.Fatalf("ClaimNextNonce() error = %v", err)
 	}
@@ -270,20 +399,57 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 		t.Fatalf("MarkTxFailed() error = %v", err)
 	}
 
-	if err := store.RetryFailedTx(ctx, id); err != nil {
+	retryID, err := store.RetryFailedTx(ctx, id)
+	if err != nil {
 		t.Fatalf("RetryFailedTx() error = %v", err)
 	}
-	reclaimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 43)
+	if retryID == id {
+		t.Fatalf("retry id = %d, want cloned row", retryID)
+	}
+	originalTx, err := store.GetOutboxTx(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(original) error = %v", err)
+	}
+	if originalTx.Status != TxStatusFailed {
+		t.Fatalf("original status = %q, want %q", originalTx.Status, TxStatusFailed)
+	}
+	if originalTx.Nonce != 42 {
+		t.Fatalf("original nonce = %d, want 42", originalTx.Nonce)
+	}
+	if originalTx.TxHash != txHash {
+		t.Fatalf("original tx hash = %s, want %s", originalTx.TxHash, txHash)
+	}
+	retryTx, err := store.GetOutboxTx(ctx, retryID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(retry) error = %v", err)
+	}
+	if retryTx.Status != TxStatusQueued {
+		t.Fatalf("retry status = %q, want %q", retryTx.Status, TxStatusQueued)
+	}
+	if retryTx.Nonce != 0 {
+		t.Fatalf("retry nonce = %d, want unassigned zero value", retryTx.Nonce)
+	}
+	if retryTx.TxHash != (common.Hash{}) {
+		t.Fatalf("retry tx hash = %s, want zero hash", retryTx.TxHash)
+	}
+	if retryTx.MaxFeePerGas != nil || retryTx.MaxPriorityFeePerGas != nil {
+		t.Fatalf("retry fees = %v/%v, want nil", retryTx.MaxFeePerGas, retryTx.MaxPriorityFeePerGas)
+	}
+	if retryTx.Attempts != 1 {
+		t.Fatalf("retry attempts = %d, want 1", retryTx.Attempts)
+	}
+
+	reclaimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
 	if err != nil {
 		t.Fatalf("ClaimNextNonce() after retry error = %v", err)
 	}
-	if reclaimed.ID != id {
-		t.Fatalf("reclaimed id = %d, want %d", reclaimed.ID, id)
+	if reclaimed.ID != retryID {
+		t.Fatalf("reclaimed id = %d, want %d", reclaimed.ID, retryID)
 	}
 	if reclaimed.Nonce != 43 {
 		t.Fatalf("retry nonce = %d, want 43", reclaimed.Nonce)
 	}
-	retryTx, err := store.GetOutboxTx(ctx, id)
+	retryTx, err = store.GetOutboxTx(ctx, retryID)
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
@@ -296,11 +462,72 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 	if retryTx.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
 	}
-	if retryTx.MaxFeePerGas.Cmp(big.NewInt(2_000_000_000)) != 0 {
-		t.Fatalf("max fee = %s, want previous recorded fee", retryTx.MaxFeePerGas)
+}
+
+func TestRetryFailedTxRequeuesNoNonceRowInPlace(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
 	}
-	if retryTx.MaxPriorityFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
-		t.Fatalf("priority fee = %s, want previous recorded priority fee", retryTx.MaxPriorityFeePerGas)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	const signerID = "0x6666666666666666666666666666666666666666"
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test rows: %v", err)
+	}
+	id, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40161,
+		Purpose:  "no-nonce-retry",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	if err := store.MarkTxFailed(ctx, id, errors.New("estimate gas reverted")); err != nil {
+		t.Fatalf("MarkTxFailed() error = %v", err)
+	}
+
+	retryID, err := store.RetryFailedTx(ctx, id)
+	if err != nil {
+		t.Fatalf("RetryFailedTx() error = %v", err)
+	}
+	if retryID != id {
+		t.Fatalf("retry id = %d, want original id %d", retryID, id)
+	}
+	retryTx, err := store.GetOutboxTx(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if retryTx.Status != TxStatusQueued {
+		t.Fatalf("status = %q, want %q", retryTx.Status, TxStatusQueued)
+	}
+	if retryTx.Nonce != 0 {
+		t.Fatalf("nonce = %d, want unassigned zero value", retryTx.Nonce)
+	}
+	if retryTx.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
 	}
 }
 

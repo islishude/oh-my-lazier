@@ -27,7 +27,7 @@ const (
 	replacementBumpDenominator = int64(100)
 )
 
-// ChainClient is the tx manager's RPC boundary for nonce reads and broadcasts.
+// ChainClient is the tx manager's RPC boundary for first-use nonce bootstrap, fee reads, and broadcasts.
 type ChainClient interface {
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
@@ -94,11 +94,17 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 		}
 		return 0, fmt.Errorf("%w: estimate gas for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
 	}
-	rpcNonce, err := target.Client.PendingNonceAt(ctx, target.Signer.Address())
-	if err != nil {
-		return 0, err
+	claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
+	if errors.Is(err, db.ErrNonceCursorMissing) {
+		rpcNonce, nonceErr := target.Client.PendingNonceAt(ctx, target.Signer.Address())
+		if nonceErr != nil {
+			return 0, nonceErr
+		}
+		if _, nonceErr := m.store.BootstrapTxNonceCursor(ctx, target.ChainEID, signerID, rpcNonce); nonceErr != nil {
+			return 0, nonceErr
+		}
+		claimed, err = m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
 	}
-	claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID, rpcNonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNoQueuedTx
 	}

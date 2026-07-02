@@ -36,6 +36,7 @@ Implementation evidence:
 
 - `go/internal/config.Config.Validate` rejects unknown executor, active DVN, and pricing signer references.
 - `go/internal/app.App.txTargets` loads configured signers and creates one tx manager target per required signer per chain, with per-purpose fee policy so executor, DVN, and pricing caps do not overwrite each other when they share a signer.
+- `go/internal/db` stores per-chain signer nonce cursors in Postgres. The tx manager initializes a missing cursor from RPC pending nonce on first use, then increments only the local cursor. After bootstrap, do not use the same signer account from another broadcaster.
 - `go/internal/app.loadKMSAWSConfig` uses the AWS SDK `config.LoadDefaultConfig` path with the configured region.
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
 - `go/internal/signer/kms.Signer.SignHash` parses DER signatures, normalizes low-S, and recovers the configured Ethereum address.

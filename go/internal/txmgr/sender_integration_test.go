@@ -19,6 +19,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
+	signeriface "github.com/islishude/oh-my-lazier/go/internal/signer"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
 )
 
@@ -52,6 +53,9 @@ func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
 	}
 	if sent.Nonce() != 10 {
 		t.Fatalf("sent nonce = %d, want 10", sent.Nonce())
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
 	}
 	if sent.Gas() != 123_456 {
 		t.Fatalf("sent gas = %d, want estimated gas", sent.Gas())
@@ -129,6 +133,12 @@ func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 	if sent.Type() != types.LegacyTxType {
 		t.Fatalf("sent tx type = %d, want legacy", sent.Type())
 	}
+	if sent.Nonce() != 12 {
+		t.Fatalf("sent nonce = %d, want 12", sent.Nonce())
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
+	}
 	if sent.GasPrice().Cmp(big.NewInt(7_000_000_000)) != 0 {
 		t.Fatalf("sent gas price = %s, want 7000000000", sent.GasPrice())
 	}
@@ -155,6 +165,44 @@ func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 	}
 	if from != signer.Address() {
 		t.Fatalf("sender = %s, want %s", from, signer.Address())
+	}
+}
+
+func TestProcessNextUsesExistingCursorWithoutPendingNonceAt(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{pendingNonce: 99, estimatedGas: 123_456, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(1_000_000_000)}
+	manager := New(store, discardLogger())
+
+	inserted, err := store.BootstrapTxNonceCursor(t.Context(), 40161, signer.Address().Hex(), 7)
+	if err != nil {
+		t.Fatalf("BootstrapTxNonceCursor() error = %v", err)
+	}
+	if !inserted {
+		t.Fatal("BootstrapTxNonceCursor() inserted = false, want true")
+	}
+	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	if client.pendingNonceCalls != 0 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent tx count = %d, want 1", len(client.sent))
+	}
+	if client.sent[0].Nonce() != 7 {
+		t.Fatalf("sent nonce = %d, want 7", client.sent[0].Nonce())
 	}
 }
 
@@ -394,6 +442,134 @@ func TestProcessNextLegacyGasPriceFailuresLeaveOutboxQueued(t *testing.T) {
 	}
 }
 
+func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       31,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+		sendErr:            errors.New("broadcast timeout"),
+	}
+	manager := New(store, discardLogger())
+
+	firstID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(first) error = %v", err)
+	}
+
+	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
+		t.Fatal("ProcessNext() error = nil, want send error")
+	}
+	failedTx, err := store.GetOutboxTx(t.Context(), firstID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(first) error = %v", err)
+	}
+	if failedTx.Status != db.TxStatusFailed {
+		t.Fatalf("failed status = %q, want %q", failedTx.Status, db.TxStatusFailed)
+	}
+	if failedTx.Nonce != 31 {
+		t.Fatalf("failed nonce = %d, want 31", failedTx.Nonce)
+	}
+	if failedTx.TxHash == (common.Hash{}) {
+		t.Fatal("failed tx hash = zero, want signed hash retained")
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent tx count = %d, want 1", len(client.sent))
+	}
+
+	client.sendErr = nil
+	secondID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x04, 0x05, 0x06},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(second) error = %v", err)
+	}
+	processedID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext(second) error = %v", err)
+	}
+	if processedID != secondID {
+		t.Fatalf("processed id = %d, want %d", processedID, secondID)
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 2 {
+		t.Fatalf("sent tx count = %d, want 2", len(client.sent))
+	}
+	if client.sent[1].Nonce() != 32 {
+		t.Fatalf("second sent nonce = %d, want 32", client.sent[1].Nonce())
+	}
+}
+
+func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
+	store := openTestStore(t)
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey() error = %v", err)
+	}
+	signer := failingSigner{address: crypto.PubkeyToAddress(key.PublicKey)}
+	client := &fakeChainClient{
+		pendingNonce:       41,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
+		t.Fatal("ProcessNext() error = nil, want sign error")
+	}
+	failedTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if failedTx.Status != db.TxStatusFailed {
+		t.Fatalf("status = %q, want %q", failedTx.Status, db.TxStatusFailed)
+	}
+	if failedTx.Nonce != 41 {
+		t.Fatalf("nonce = %d, want 41", failedTx.Nonce)
+	}
+	if failedTx.TxHash != (common.Hash{}) {
+		t.Fatalf("tx hash = %s, want zero hash", failedTx.TxHash)
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 0 {
+		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
+	}
+}
+
 func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
@@ -447,6 +623,9 @@ func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	}
 	if len(client.sent) != 2 {
 		t.Fatalf("sent tx count = %d, want 2", len(client.sent))
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
 	}
 	replacementTx := client.sent[1]
 	if replacementTx.Nonce() != 21 {
@@ -515,6 +694,9 @@ func TestPrepareReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing.T) {
 	}
 	if len(client.sent) != 2 {
 		t.Fatalf("sent tx count = %d, want 2", len(client.sent))
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
 	}
 	replacementTx := client.sent[1]
 	if replacementTx.Type() != types.LegacyTxType {
@@ -1087,6 +1269,7 @@ type fakeChainClient struct {
 	suggestedGasTipCap    *big.Int
 	suggestGasTipCapErr   error
 	suggestGasTipCapCalls int
+	sendErr               error
 	sent                  []*types.Transaction
 	receipts              map[common.Hash]*types.Receipt
 }
@@ -1142,6 +1325,9 @@ func (f *fakeChainClient) SuggestGasTipCap(context.Context) (*big.Int, error) {
 
 func (f *fakeChainClient) SendTransaction(_ context.Context, tx *types.Transaction) error {
 	f.sent = append(f.sent, tx)
+	if f.sendErr != nil {
+		return f.sendErr
+	}
 	return nil
 }
 
@@ -1151,6 +1337,26 @@ func (f *fakeChainClient) TransactionReceipt(_ context.Context, txHash common.Ha
 		return nil, ethereum.NotFound
 	}
 	return receipt, nil
+}
+
+type failingSigner struct {
+	address common.Address
+}
+
+func (s failingSigner) Address() common.Address {
+	return s.address
+}
+
+func (s failingSigner) SignHash(context.Context, common.Hash) ([]byte, error) {
+	return nil, errors.New("sign hash failed")
+}
+
+func (s failingSigner) SignTx(context.Context, *types.Transaction, *big.Int) (*types.Transaction, error) {
+	return nil, errors.New("sign tx failed")
+}
+
+func (s failingSigner) Type() string {
+	return "failing"
 }
 
 func testChains() []config.ChainConfig {
@@ -1182,7 +1388,7 @@ func testChains() []config.ChainConfig {
 	}
 }
 
-func testTarget(chainEID uint32, chainID *big.Int, signer *keystore.Signer, client *fakeChainClient, policy FeePolicy) Target {
+func testTarget(chainEID uint32, chainID *big.Int, signer signeriface.Signer, client *fakeChainClient, policy FeePolicy) Target {
 	return Target{
 		ChainEID: chainEID,
 		ChainID:  chainID,

@@ -26,12 +26,10 @@ const (
 	TxStatusFailed = "failed"
 )
 
-var pendingNonceStatuses = []string{
-	TxStatusQueued,
-	TxStatusNonceAssigned,
-	TxStatusSigned,
-	TxStatusBroadcast,
-}
+const maxDBNonce = uint64(1<<63 - 1)
+
+// ErrNonceCursorMissing indicates a signer has no durable local nonce cursor yet.
+var ErrNonceCursorMissing = errors.New("tx nonce cursor missing")
 
 // TxRequest describes a durable transaction request before nonce assignment.
 type TxRequest struct {
@@ -163,25 +161,71 @@ func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID stri
 	return row.toQueuedOutboxTx()
 }
 
-// ClaimNextNonce reserves the next nonce for one queued outbox row.
+// ClaimNextNonce reserves the next local nonce for one queued outbox row.
 //
 // The transaction-scoped advisory lock serializes nonce assignment per
 // (chain_eid, signer_id). If a queued replacement already has a nonce, that
-// nonce is preserved; otherwise the assigned nonce is max(rpcPendingNonce,
-// highest locally pending nonce + 1).
-func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
-	return s.claimQueuedNonce(ctx, 0, chainEID, signerID, rpcPendingNonce)
+// nonce is preserved; otherwise the assigned nonce comes from tx_nonce_cursors.
+func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID string) (ClaimedTx, error) {
+	return s.claimQueuedNonce(ctx, 0, chainEID, signerID)
 }
 
 // ClaimTxNonce reserves a nonce for the selected queued outbox row.
-func (s *Store) ClaimTxNonce(ctx context.Context, id int64, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
+func (s *Store) ClaimTxNonce(ctx context.Context, id int64, chainEID uint32, signerID string) (ClaimedTx, error) {
 	if id <= 0 {
 		return ClaimedTx{}, errors.New("outbox tx id is required")
 	}
-	return s.claimQueuedNonce(ctx, id, chainEID, signerID, rpcPendingNonce)
+	return s.claimQueuedNonce(ctx, id, chainEID, signerID)
 }
 
-func (s *Store) claimQueuedNonce(ctx context.Context, selectedID int64, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
+// BootstrapTxNonceCursor inserts a local signer nonce cursor when one does not exist.
+//
+// This is the only tx manager boundary that accepts an RPC nonce. Existing
+// cursors are never updated from RPC; first-use bootstrap chooses the greater
+// of the RPC pending nonce and all locally recorded outbox nonces plus one.
+func (s *Store) BootstrapTxNonceCursor(ctx context.Context, chainEID uint32, signerID string, rpcPendingNonce uint64) (bool, error) {
+	if chainEID == 0 {
+		return false, errors.New("chain eid is required")
+	}
+	if signerID == "" {
+		return false, errors.New("signer id is required")
+	}
+	if rpcPendingNonce > maxDBNonce {
+		return false, fmt.Errorf("rpc pending nonce %d exceeds database nonce limit", rpcPendingNonce)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := lockSignerNonce(ctx, tx, chainEID, signerID); err != nil {
+		return false, err
+	}
+	localNext, err := s.localNextNonce(ctx, tx, chainEID, signerID)
+	if err != nil {
+		return false, err
+	}
+	nextNonce := rpcPendingNonce
+	if localNext > nextNonce {
+		nextNonce = localNext
+	}
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO tx_nonce_cursors (chain_eid, signer_id, next_nonce)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (chain_eid, signer_id) DO NOTHING
+	`, chainEID, signerID, int64(nextNonce))
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func (s *Store) claimQueuedNonce(ctx context.Context, selectedID int64, chainEID uint32, signerID string) (ClaimedTx, error) {
 	if chainEID == 0 {
 		return ClaimedTx{}, errors.New("chain eid is required")
 	}
@@ -195,7 +239,7 @@ func (s *Store) claimQueuedNonce(ctx context.Context, selectedID int64, chainEID
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1::integer, hashtext($2)::integer)", int32(chainEID), signerID); err != nil {
+	if err := lockSignerNonce(ctx, tx, chainEID, signerID); err != nil {
 		return ClaimedTx{}, err
 	}
 
@@ -233,7 +277,7 @@ func (s *Store) claimQueuedNonce(ctx context.Context, selectedID int64, chainEID
 		}
 		nextNonce = uint64(*assignedNonce)
 	} else {
-		nextNonce, err = s.nextNonce(ctx, tx, chainEID, signerID, rpcPendingNonce)
+		nextNonce, err = s.claimCursorNonce(ctx, tx, chainEID, signerID)
 		if err != nil {
 			return ClaimedTx{}, err
 		}
@@ -421,51 +465,135 @@ func (s *Store) PrepareReplacementTx(ctx context.Context, id int64) error {
 	return nil
 }
 
-// RetryFailedTx returns a failed transaction request to the queue with a fresh nonce assignment.
-func (s *Store) RetryFailedTx(ctx context.Context, id int64) error {
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE tx_outbox
-		SET
-			status = $1,
-			nonce = NULL,
-			tx_hash = NULL,
-			attempts = attempts + 1,
-			last_error = NULL,
-			updated_at = now()
-		WHERE id = $2 AND status = $3
-	`, TxStatusQueued, id, TxStatusFailed)
+// RetryFailedTx returns a failed transaction request to the queue.
+//
+// Rows that already consumed a nonce are cloned to preserve the original nonce
+// evidence. Rows without a nonce are requeued in place because no nonce was
+// consumed.
+func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox tx %d is not failed", id)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var assignedNonce *int64
+	if err := tx.QueryRow(ctx, `
+		SELECT nonce
+		FROM tx_outbox
+		WHERE id = $1 AND status = $2
+		FOR UPDATE
+	`, id, TxStatusFailed).Scan(&assignedNonce); errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("outbox tx %d is not failed", id)
+	} else if err != nil {
+		return 0, err
 	}
-	return nil
+
+	if assignedNonce == nil {
+		tag, err := tx.Exec(ctx, `
+			UPDATE tx_outbox
+			SET
+				status = $1,
+				tx_hash = NULL,
+				gas_limit = NULL,
+				max_fee_per_gas = NULL,
+				max_priority_fee_per_gas = NULL,
+				attempts = attempts + 1,
+				last_error = NULL,
+				updated_at = now()
+			WHERE id = $2 AND status = $3 AND nonce IS NULL
+		`, TxStatusQueued, id, TxStatusFailed)
+		if err != nil {
+			return 0, err
+		}
+		if tag.RowsAffected() != 1 {
+			return 0, fmt.Errorf("outbox tx %d is not failed without nonce", id)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	if *assignedNonce < 0 {
+		return 0, fmt.Errorf("negative nonce for outbox tx %d", id)
+	}
+
+	var retryID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tx_outbox (
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, status, attempts
+		)
+		SELECT
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, $1, attempts + 1
+		FROM tx_outbox
+		WHERE id = $2 AND status = $3 AND nonce IS NOT NULL
+		RETURNING id
+	`, TxStatusQueued, id, TxStatusFailed).Scan(&retryID); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return retryID, nil
 }
 
-func (s *Store) nextNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string, rpcPendingNonce uint64) (uint64, error) {
+func lockSignerNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1::integer, hashtext($2)::integer)", int32(chainEID), signerID)
+	return err
+}
+
+func (s *Store) localNextNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string) (uint64, error) {
 	var dbMax *int64
 	if err := tx.QueryRow(ctx, `
 		SELECT max(nonce)::bigint
 		FROM tx_outbox
-		WHERE chain_eid = $1 AND signer_id = $2 AND status = ANY($3)
-	`, chainEID, signerID, pendingNonceStatuses).Scan(&dbMax); err != nil {
+		WHERE chain_eid = $1 AND signer_id = $2 AND nonce IS NOT NULL
+	`, chainEID, signerID).Scan(&dbMax); err != nil {
 		return 0, err
 	}
 	if dbMax == nil {
-		return rpcPendingNonce, nil
+		return 0, nil
 	}
 	if *dbMax < 0 {
 		return 0, fmt.Errorf("negative nonce for chain %d signer %s", chainEID, signerID)
 	}
-	if *dbMax == int64(^uint64(0)>>1) {
+	if uint64(*dbMax) >= maxDBNonce {
 		return 0, fmt.Errorf("nonce overflow for chain %d signer %s", chainEID, signerID)
 	}
-	localNext := uint64(*dbMax) + 1
-	if rpcPendingNonce > localNext {
-		return rpcPendingNonce, nil
+	return uint64(*dbMax) + 1, nil
+}
+
+func (s *Store) claimCursorNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string) (uint64, error) {
+	var dbNext int64
+	err := tx.QueryRow(ctx, `
+		SELECT next_nonce
+		FROM tx_nonce_cursors
+		WHERE chain_eid = $1 AND signer_id = $2
+		FOR UPDATE
+	`, chainEID, signerID).Scan(&dbNext)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNonceCursorMissing
 	}
-	return localNext, nil
+	if err != nil {
+		return 0, err
+	}
+	if dbNext < 0 {
+		return 0, fmt.Errorf("negative nonce cursor for chain %d signer %s", chainEID, signerID)
+	}
+	if uint64(dbNext) >= maxDBNonce {
+		return 0, fmt.Errorf("nonce cursor overflow for chain %d signer %s", chainEID, signerID)
+	}
+	nextNonce := uint64(dbNext)
+	if _, err := tx.Exec(ctx, `
+		UPDATE tx_nonce_cursors
+		SET next_nonce = $1, updated_at = now()
+		WHERE chain_eid = $2 AND signer_id = $3
+	`, int64(nextNonce+1), chainEID, signerID); err != nil {
+		return 0, err
+	}
+	return nextNonce, nil
 }
 
 func numericString(value *big.Int) any {

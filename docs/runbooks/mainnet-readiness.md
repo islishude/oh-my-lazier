@@ -108,7 +108,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
-- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row. Replacement keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap.
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.
 
 ## Rejection Criteria
 

@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS tx_outbox (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS tx_nonce_cursors (
+  chain_eid INTEGER NOT NULL REFERENCES chains(eid),
+  signer_id TEXT NOT NULL,
+  next_nonce BIGINT NOT NULL CHECK (next_nonce >= 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(chain_eid, signer_id)
+);
+
 CREATE TABLE IF NOT EXISTS indexer_cursors (
   chain_eid INTEGER NOT NULL REFERENCES chains(eid),
   stream TEXT NOT NULL,
