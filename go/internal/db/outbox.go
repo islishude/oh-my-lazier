@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,8 +31,39 @@ const (
 
 const maxDBNonce = uint64(1<<63 - 1)
 
+const (
+	// TxFailureEstimateGasRevert records a deterministic estimate-gas revert before nonce assignment.
+	TxFailureEstimateGasRevert = "estimate_gas_revert"
+	// TxFailureSignFailed records a signer failure after nonce assignment.
+	TxFailureSignFailed = "sign_failed"
+	// TxFailureBroadcastFailed records a SendTransaction failure after signing.
+	TxFailureBroadcastFailed = "broadcast_failed"
+	// TxFailureReceiptFailed records a mined receipt with failed status.
+	TxFailureReceiptFailed = "receipt_failed"
+
+	// TxOutboxRetryStateRetrying means a failed row is still eligible for automatic retry.
+	TxOutboxRetryStateRetrying = "retrying"
+	// TxOutboxRetryStateSuperseded means a failed row already has a fresh retry child.
+	TxOutboxRetryStateSuperseded = "superseded"
+	// TxOutboxRetryStateExhausted means a failed row requires manual intervention.
+	TxOutboxRetryStateExhausted = "exhausted"
+
+	// TxAutoRetryMaxAttempts is the maximum automatic retry count recorded in tx_outbox.attempts.
+	TxAutoRetryMaxAttempts = uint32(5)
+)
+
+const (
+	txAutoRetryBaseDelay = time.Minute
+	txAutoRetryMaxDelay  = 30 * time.Minute
+)
+
+const txPurposeExecutorLzReceive = "executor_lz_receive"
+
 // ErrNonceCursorMissing indicates a signer has no durable local nonce cursor yet.
 var ErrNonceCursorMissing = errors.New("tx nonce cursor missing")
+
+// ErrNoFailedTxRetry indicates no failed outbox row is due for automatic retry.
+var ErrNoFailedTxRetry = errors.New("no failed tx retry")
 
 // TxRequest describes a durable transaction request before nonce assignment.
 type TxRequest struct {
@@ -66,6 +99,9 @@ type OutboxTx struct {
 	SignerID             string
 	Status               string
 	Attempts             uint32
+	FailureKind          string
+	NextRetryAt          *time.Time
+	RetryOfID            *int64
 }
 
 // QueuedOutboxTx is a queued transaction request before the tx manager decides whether to sign it.
@@ -85,6 +121,9 @@ type QueuedOutboxTx struct {
 	SignerID             string
 	Status               string
 	Attempts             uint32
+	FailureKind          string
+	NextRetryAt          *time.Time
+	RetryOfID            *int64
 }
 
 // EnqueueTx inserts a transaction request into tx_outbox with queued status.
@@ -131,7 +170,8 @@ func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID stri
 		SELECT
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
-			nonce, tx_hash, signer_id, status, attempts
+			nonce, tx_hash, signer_id, status, attempts,
+			failure_kind, next_retry_at, retry_of_id
 		FROM tx_outbox
 		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
 		ORDER BY id
@@ -152,6 +192,9 @@ func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID stri
 		&row.SignerID,
 		&row.Status,
 		&row.Attempts,
+		&row.FailureKind,
+		&row.NextRetryAt,
+		&row.RetryOfID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QueuedOutboxTx{}, pgx.ErrNoRows
@@ -208,10 +251,7 @@ func (s *Store) BootstrapTxNonceCursor(ctx context.Context, chainEID uint32, sig
 	if err != nil {
 		return false, err
 	}
-	nextNonce := rpcPendingNonce
-	if localNext > nextNonce {
-		nextNonce = localNext
-	}
+	nextNonce := max(localNext, rpcPendingNonce)
 	tag, err := tx.Exec(ctx, `
 		INSERT INTO tx_nonce_cursors (chain_eid, signer_id, next_nonce)
 		VALUES ($1, $2, $3)
@@ -303,7 +343,8 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		SELECT
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
-			nonce, tx_hash, signer_id, status, attempts
+			nonce, tx_hash, signer_id, status, attempts,
+			failure_kind, next_retry_at, retry_of_id
 		FROM tx_outbox
 		WHERE id = $1
 	`, id).Scan(
@@ -322,6 +363,9 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		&row.SignerID,
 		&row.Status,
 		&row.Attempts,
+		&row.FailureKind,
+		&row.NextRetryAt,
+		&row.RetryOfID,
 	)
 	if err != nil {
 		return OutboxTx{}, err
@@ -344,7 +388,8 @@ func (s *Store) ListBroadcastTx(ctx context.Context, chainEID uint32, signerID s
 		SELECT
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
-			nonce, tx_hash, signer_id, status, attempts
+			nonce, tx_hash, signer_id, status, attempts,
+			failure_kind, next_retry_at, retry_of_id
 		FROM tx_outbox
 		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3 AND tx_hash IS NOT NULL
 		ORDER BY updated_at, id
@@ -374,6 +419,9 @@ func (s *Store) ListBroadcastTx(ctx context.Context, chainEID uint32, signerID s
 			&row.SignerID,
 			&row.Status,
 			&row.Attempts,
+			&row.FailureKind,
+			&row.NextRetryAt,
+			&row.RetryOfID,
 		); err != nil {
 			return nil, err
 		}
@@ -413,6 +461,8 @@ func (s *Store) MarkTxSignedWithGasAndFees(ctx context.Context, id int64, txHash
 			gas_limit = $3,
 			max_fee_per_gas = $4,
 			max_priority_fee_per_gas = $5,
+			failure_kind = NULL,
+			next_retry_at = NULL,
 			last_error = NULL,
 			updated_at = now()
 		WHERE id = $6
@@ -436,13 +486,64 @@ func (s *Store) MarkTxConfirmed(ctx context.Context, id int64, txHash common.Has
 	return s.updateTxStatus(ctx, id, TxStatusConfirmed, txHash, "")
 }
 
-// MarkTxFailed records that an outbox transaction failed and is eligible for later retry policy.
-func (s *Store) MarkTxFailed(ctx context.Context, id int64, failure error) error {
+// MarkTxFailed records that an outbox transaction failed and may be eligible for automatic retry.
+func (s *Store) MarkTxFailed(ctx context.Context, id int64, failure error, failureKind string) error {
+	if id <= 0 {
+		return errors.New("outbox tx id is required")
+	}
 	message := ""
 	if failure != nil {
 		message = failure.Error()
 	}
-	return s.updateTxStatus(ctx, id, TxStatusFailed, common.Hash{}, message)
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var attempts uint32
+	if err := tx.QueryRow(ctx, `
+		SELECT attempts
+		FROM tx_outbox
+		WHERE id = $1
+		FOR UPDATE
+	`, id).Scan(&attempts); errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("outbox tx %d not found", id)
+	} else if err != nil {
+		return err
+	}
+
+	var retryAt any
+	if failureKind != "" && attempts < TxAutoRetryMaxAttempts {
+		next := time.Now().UTC().Add(autoRetryDelay(attempts))
+		retryAt = next
+	}
+	var failureKindArg any
+	if failureKind != "" {
+		failureKindArg = failureKind
+	}
+	clearSendQuote := failureKind == TxFailureEstimateGasRevert || failureKind == TxFailureSignFailed || failureKind == TxFailureBroadcastFailed
+	tag, err := tx.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			failure_kind = $2,
+			next_retry_at = $3,
+			gas_limit = CASE WHEN $4 THEN NULL ELSE gas_limit END,
+			max_fee_per_gas = CASE WHEN $4 THEN NULL ELSE max_fee_per_gas END,
+			max_priority_fee_per_gas = CASE WHEN $4 THEN NULL ELSE max_priority_fee_per_gas END,
+			last_error = $5,
+			updated_at = now()
+		WHERE id = $6
+	`, TxStatusFailed, failureKindArg, retryAt, clearSendQuote, optionalString(message), id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d not found", id)
+	}
+	return tx.Commit(ctx)
 }
 
 // PrepareReplacementTx resets a transaction for re-signing while preserving its nonce and last signed fees.
@@ -453,6 +554,8 @@ func (s *Store) PrepareReplacementTx(ctx context.Context, id int64) error {
 			status = $1,
 			tx_hash = NULL,
 			attempts = attempts + 1,
+			failure_kind = NULL,
+			next_retry_at = NULL,
 			last_error = NULL,
 			updated_at = now()
 		WHERE id = $2 AND nonce IS NOT NULL
@@ -478,66 +581,219 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var assignedNonce *int64
+	var row struct {
+		Purpose string
+		GUID    *[]byte
+		Nonce   *int64
+	}
 	if err := tx.QueryRow(ctx, `
-		SELECT nonce
+		SELECT purpose, guid, nonce
 		FROM tx_outbox
 		WHERE id = $1 AND status = $2
 		FOR UPDATE
-	`, id, TxStatusFailed).Scan(&assignedNonce); errors.Is(err, pgx.ErrNoRows) {
+	`, id, TxStatusFailed).Scan(&row.Purpose, &row.GUID, &row.Nonce); errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("outbox tx %d is not failed", id)
 	} else if err != nil {
 		return 0, err
 	}
 
-	if assignedNonce == nil {
-		tag, err := tx.Exec(ctx, `
-			UPDATE tx_outbox
-			SET
-				status = $1,
-				tx_hash = NULL,
-				gas_limit = NULL,
-				max_fee_per_gas = NULL,
-				max_priority_fee_per_gas = NULL,
-				attempts = attempts + 1,
-				last_error = NULL,
-				updated_at = now()
-			WHERE id = $2 AND status = $3 AND nonce IS NULL
-		`, TxStatusQueued, id, TxStatusFailed)
-		if err != nil {
+	if row.Nonce == nil {
+		if err := requeueFailedTx(ctx, tx, id, true); err != nil {
 			return 0, err
-		}
-		if tag.RowsAffected() != 1 {
-			return 0, fmt.Errorf("outbox tx %d is not failed without nonce", id)
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return 0, err
 		}
 		return id, nil
 	}
-	if *assignedNonce < 0 {
+	if *row.Nonce < 0 {
 		return 0, fmt.Errorf("negative nonce for outbox tx %d", id)
 	}
 
-	var retryID int64
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO tx_outbox (
-			chain_eid, purpose, guid, to_address, calldata, value,
-			signer_id, status, attempts
-		)
-		SELECT
-			chain_eid, purpose, guid, to_address, calldata, value,
-			signer_id, $1, attempts + 1
-		FROM tx_outbox
-		WHERE id = $2 AND status = $3 AND nonce IS NOT NULL
-		RETURNING id
-	`, TxStatusQueued, id, TxStatusFailed).Scan(&retryID); err != nil {
+	retryID, err := cloneFailedTxRetry(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
+	if err := restoreRetryWorkflow(ctx, tx, row.Purpose, row.GUID); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
 	return retryID, nil
+}
+
+// PrepareNextFailedTxRetry promotes one due failed row for automatic retry.
+func (s *Store) PrepareNextFailedTxRetry(ctx context.Context, chainEID uint32, signerID string) (int64, error) {
+	if chainEID == 0 {
+		return 0, errors.New("chain eid is required")
+	}
+	if signerID == "" {
+		return 0, errors.New("signer id is required")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var row struct {
+		ID          int64
+		Purpose     string
+		GUID        *[]byte
+		Nonce       *int64
+		FailureKind string
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT id, purpose, guid, nonce, failure_kind
+		FROM tx_outbox failed
+		WHERE chain_eid = $1
+			AND signer_id = $2
+			AND status = $3
+			AND attempts < $4
+			AND next_retry_at IS NOT NULL
+			AND next_retry_at <= now()
+			AND failure_kind IN ($5, $6, $7, $8)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM tx_outbox child
+				WHERE child.retry_of_id = failed.id
+			)
+		ORDER BY next_retry_at, id
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`, chainEID, signerID, TxStatusFailed, TxAutoRetryMaxAttempts, TxFailureEstimateGasRevert, TxFailureSignFailed, TxFailureBroadcastFailed, TxFailureReceiptFailed).Scan(
+		&row.ID,
+		&row.Purpose,
+		&row.GUID,
+		&row.Nonce,
+		&row.FailureKind,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNoFailedTxRetry
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	var retryID int64
+	switch {
+	case row.Nonce == nil || row.FailureKind == TxFailureEstimateGasRevert:
+		if err := requeueFailedTx(ctx, tx, row.ID, true); err != nil {
+			return 0, err
+		}
+		retryID = row.ID
+	case row.FailureKind == TxFailureSignFailed || row.FailureKind == TxFailureBroadcastFailed:
+		if err := requeueFailedTx(ctx, tx, row.ID, true); err != nil {
+			return 0, err
+		}
+		retryID = row.ID
+	case row.FailureKind == TxFailureReceiptFailed:
+		retryID, err = cloneFailedTxRetry(ctx, tx, row.ID)
+		if err != nil {
+			return 0, err
+		}
+		if err := restoreRetryWorkflow(ctx, tx, row.Purpose, row.GUID); err != nil {
+			return 0, err
+		}
+	default:
+		return 0, ErrNoFailedTxRetry
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return retryID, nil
+}
+
+func requeueFailedTx(ctx context.Context, tx pgx.Tx, id int64, clearGas bool) error {
+	tag, err := tx.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			tx_hash = NULL,
+			gas_limit = CASE WHEN $2 THEN NULL ELSE gas_limit END,
+			max_fee_per_gas = CASE WHEN $2 THEN NULL ELSE max_fee_per_gas END,
+			max_priority_fee_per_gas = CASE WHEN $2 THEN NULL ELSE max_priority_fee_per_gas END,
+			attempts = attempts + 1,
+			failure_kind = NULL,
+			next_retry_at = NULL,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $3 AND status = $4
+	`, TxStatusQueued, clearGas, id, TxStatusFailed)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d is not failed", id)
+	}
+	return nil
+}
+
+func cloneFailedTxRetry(ctx context.Context, tx pgx.Tx, id int64) (int64, error) {
+	var retryID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO tx_outbox (
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, status, attempts, retry_of_id
+		)
+		SELECT
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, $1, attempts + 1, id
+		FROM tx_outbox
+		WHERE id = $2
+			AND status = $3
+			AND nonce IS NOT NULL
+			AND NOT EXISTS (
+				SELECT 1
+				FROM tx_outbox child
+				WHERE child.retry_of_id = tx_outbox.id
+			)
+		RETURNING id
+	`, TxStatusQueued, id, TxStatusFailed).Scan(&retryID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, fmt.Errorf("outbox tx %d is not a cloneable failed row", id)
+		}
+		return 0, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE tx_outbox
+		SET next_retry_at = NULL, updated_at = now()
+		WHERE id = $1
+	`, id); err != nil {
+		return 0, err
+	}
+	return retryID, nil
+}
+
+func restoreRetryWorkflow(ctx context.Context, tx pgx.Tx, purpose string, guidBytes *[]byte) error {
+	if purpose != txPurposeExecutorLzReceive || guidBytes == nil {
+		return nil
+	}
+	if len(*guidBytes) != common.HashLength {
+		return fmt.Errorf("executor lzReceive retry guid has length %d", len(*guidBytes))
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE executor_jobs
+		SET status = $1, last_error = NULL, updated_at = now()
+		WHERE guid = $2 AND status = $3
+	`, string(packets.ExecutorLzReceiveTxEnqueued), *guidBytes, string(packets.ExecutorLzReceiveFailed))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("executor job %s is not in status %s", common.BytesToHash(*guidBytes), packets.ExecutorLzReceiveFailed)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE packets
+		SET status = $1, updated_at = now()
+		WHERE guid = $2 AND status = $3
+	`, string(packets.ExecutorLzReceiveTxEnqueued), *guidBytes, string(packets.ExecutorLzReceiveFailed)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func lockSignerNonce(ctx context.Context, tx pgx.Tx, chainEID uint32, signerID string) error {
@@ -604,6 +860,13 @@ func numericString(value *big.Int) any {
 	return value.String()
 }
 
+func optionalString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func optionalBytes(value []byte) any {
 	if len(value) == 0 {
 		return nil
@@ -627,7 +890,13 @@ func (s *Store) updateTxStatus(ctx context.Context, id int64, status string, txH
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
-		SET status = $1, tx_hash = COALESCE($2, tx_hash), last_error = $3, updated_at = now()
+		SET
+			status = $1,
+			tx_hash = COALESCE($2, tx_hash),
+			failure_kind = NULL,
+			next_retry_at = NULL,
+			last_error = $3,
+			updated_at = now()
 		WHERE id = $4
 	`, status, txHashArg, lastErrorArg, id)
 	if err != nil {
@@ -655,6 +924,9 @@ type outboxTxRow struct {
 	SignerID             string
 	Status               string
 	Attempts             uint32
+	FailureKind          *string
+	NextRetryAt          *time.Time
+	RetryOfID            *int64
 }
 
 func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
@@ -682,6 +954,9 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 		SignerID:             queued.SignerID,
 		Status:               queued.Status,
 		Attempts:             queued.Attempts,
+		FailureKind:          queued.FailureKind,
+		NextRetryAt:          cloneOptionalTime(queued.NextRetryAt),
+		RetryOfID:            cloneOptionalInt64(queued.RetryOfID),
 	}, nil
 }
 
@@ -736,6 +1011,9 @@ func (r outboxTxRow) toQueuedOutboxTx() (QueuedOutboxTx, error) {
 		SignerID:             r.SignerID,
 		Status:               r.Status,
 		Attempts:             r.Attempts,
+		FailureKind:          optionalStringValue(r.FailureKind),
+		NextRetryAt:          cloneOptionalTime(r.NextRetryAt),
+		RetryOfID:            cloneOptionalInt64(r.RetryOfID),
 	}, nil
 }
 
@@ -769,4 +1047,41 @@ func cloneOptionalBytes(value *[]byte) []byte {
 		return nil
 	}
 	return bytes.Clone(*value)
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func cloneOptionalTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func cloneOptionalInt64(value *int64) *int64 {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func autoRetryDelay(attempts uint32) time.Duration {
+	delay := txAutoRetryBaseDelay
+	for range attempts {
+		if delay >= txAutoRetryMaxDelay/2 {
+			return txAutoRetryMaxDelay
+		}
+		delay *= 2
+	}
+	if delay > txAutoRetryMaxDelay {
+		return txAutoRetryMaxDelay
+	}
+	return delay
 }

@@ -84,7 +84,7 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 			{Status: "QUORUM_CONFLICT", Count: 1},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: "failed", Count: 3},
+			{ChainEID: 40245, Status: "failed", RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "source", LastBlock: 123456},
@@ -106,7 +106,7 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 		`laz_packets_total{src_eid="40161",dst_eid="40245",status="MANUAL_REVIEW"} 2`,
 		`laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} 1`,
 		`laz_dvn_jobs_total{status="QUORUM_CONFLICT"} 1`,
-		`laz_tx_outbox_total{chain_eid="40245",status="failed"} 3`,
+		`laz_tx_outbox_total{chain_eid="40245",status="failed",retry_state="exhausted"} 3`,
 		`laz_indexer_cursor_last_block{chain_eid="40161",stream="source"} 123456`,
 	} {
 		if !strings.Contains(body, want) {

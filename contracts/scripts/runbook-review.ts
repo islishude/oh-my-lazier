@@ -165,7 +165,10 @@ const requiredAlertRules: RequiredAlertRule[] = [
   },
   {
     alert: "LazTxOutboxFailed",
-    anchors: ['laz_tx_outbox_total{status="failed"} > 0', "severity: ticket"],
+    anchors: [
+      'laz_tx_outbox_total{status="failed",retry_state="exhausted"} > 0',
+      "severity: ticket",
+    ],
   },
   {
     alert: "LazIndexerPollFailing",

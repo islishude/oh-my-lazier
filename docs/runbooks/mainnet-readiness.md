@@ -69,7 +69,7 @@ Required runtime checks:
 - `/readyz` returns `200`.
 - `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, indexer cursor, and indexer polling metrics.
 - No chain or pathway is paused before the migration begins.
-- No tx outbox row is stuck in `failed` for active chains.
+- No active-chain tx outbox row is stuck in `failed` with `retry_state="exhausted"`.
 - No DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
 - No executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
 - Every enabled pathway has advanced `executor_source` and `executor_destination` indexer cursors on the relevant active chains.
@@ -108,7 +108,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause TestOFT
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
-- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` for the selected outbox row. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using txmgr automatic retry first and `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` only after automatic retry is exhausted or an operator override is approved. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.
 
 ## Rejection Criteria
 

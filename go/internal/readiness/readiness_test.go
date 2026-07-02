@@ -43,7 +43,7 @@ func TestEvaluateRejectsPausedActiveStateAndFailedOutbox(t *testing.T) {
 			{SrcEID: 40161, DstEID: 40245, Enabled: true, Paused: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: db.TxStatusFailed, Count: 3},
+			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
@@ -62,6 +62,30 @@ func TestEvaluateRejectsPausedActiveStateAndFailedOutbox(t *testing.T) {
 		if report.Issues[i].Code != want {
 			t.Fatalf("issue[%d].code = %q, want %q", i, report.Issues[i].Code, want)
 		}
+	}
+}
+
+func TestEvaluateIgnoresRetryingFailedOutbox(t *testing.T) {
+	report := Evaluate(db.StatsSnapshot{
+		Chains: []db.ChainStat{
+			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
+			{EID: 40245, Name: "base-sepolia", Enabled: true},
+		},
+		Pathways: []db.PathwayStat{
+			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+		},
+		TxOutbox: []db.TxOutboxStat{
+			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateRetrying, Count: 2},
+			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateSuperseded, Count: 1},
+		},
+		IndexerCursors: []db.IndexerCursorStat{
+			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+		},
+	})
+
+	if !report.Ready {
+		t.Fatalf("ready = false, issues = %+v", report.Issues)
 	}
 }
 
@@ -154,7 +178,7 @@ func TestEvaluateIgnoresDisabledState(t *testing.T) {
 			{SrcEID: 40161, DstEID: 40245, Enabled: true, Paused: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40161, Status: db.TxStatusFailed, Count: 3},
+			{ChainEID: 40161, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
 	})
 

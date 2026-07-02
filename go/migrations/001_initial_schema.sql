@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS tx_outbox (
   status TEXT NOT NULL,
   tx_hash BYTEA,
   attempts INTEGER NOT NULL DEFAULT 0,
+  failure_kind TEXT,
+  next_retry_at TIMESTAMPTZ,
+  retry_of_id BIGINT REFERENCES tx_outbox(id),
   last_error TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -123,6 +126,9 @@ CREATE INDEX IF NOT EXISTS idx_packets_source_position ON packets(src_eid, src_b
 CREATE INDEX IF NOT EXISTS idx_executor_jobs_status_retry ON executor_jobs(status, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_dvn_jobs_status_retry ON dvn_jobs(status, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_tx_outbox_status_chain ON tx_outbox(status, chain_eid, id);
+CREATE INDEX IF NOT EXISTS idx_tx_outbox_failed_retry
+  ON tx_outbox(status, chain_eid, signer_id, next_retry_at, id)
+  WHERE status = 'failed';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tx_outbox_chain_signer_nonce
   ON tx_outbox(chain_eid, signer_id, nonce)
   WHERE nonce IS NOT NULL;

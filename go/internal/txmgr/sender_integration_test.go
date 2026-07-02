@@ -21,6 +21,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	signeriface "github.com/islishude/oh-my-lazier/go/internal/signer"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
@@ -359,11 +360,12 @@ func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	if _, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
-		t.Fatal("ProcessNext() error = nil, want revert error")
+	processedID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
 	}
-	if errors.Is(err, ErrTxDeferred) {
-		t.Fatalf("ProcessNext() error = %v, want non-deferred revert error", err)
+	if processedID != queuedID {
+		t.Fatalf("processed id = %d, want %d", processedID, queuedID)
 	}
 	outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
 	if err != nil {
@@ -377,6 +379,9 @@ func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing
 	}
 	if outboxTx.Attempts != 0 {
 		t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
+	}
+	if outboxTx.FailureKind != db.TxFailureEstimateGasRevert || outboxTx.NextRetryAt == nil {
+		t.Fatalf("failure metadata = %q/%v, want retryable estimate gas revert", outboxTx.FailureKind, outboxTx.NextRetryAt)
 	}
 	if client.pendingNonceCalls != 0 {
 		t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
@@ -466,8 +471,12 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 		t.Fatalf("EnqueueTx(first) error = %v", err)
 	}
 
-	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
-		t.Fatal("ProcessNext() error = nil, want send error")
+	processedID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext(first) error = %v", err)
+	}
+	if processedID != firstID {
+		t.Fatalf("processed id = %d, want %d", processedID, firstID)
 	}
 	failedTx, err := store.GetOutboxTx(t.Context(), firstID)
 	if err != nil {
@@ -481,6 +490,12 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 	}
 	if failedTx.TxHash == (common.Hash{}) {
 		t.Fatal("failed tx hash = zero, want signed hash retained")
+	}
+	if failedTx.GasLimit != 0 || failedTx.MaxFeePerGas != nil || failedTx.MaxPriorityFeePerGas != nil {
+		t.Fatalf("failed gas/fees = %d/%v/%v, want cleared", failedTx.GasLimit, failedTx.MaxFeePerGas, failedTx.MaxPriorityFeePerGas)
+	}
+	if failedTx.FailureKind != db.TxFailureBroadcastFailed || failedTx.NextRetryAt == nil {
+		t.Fatalf("failure metadata = %q/%v, want retryable broadcast failure", failedTx.FailureKind, failedTx.NextRetryAt)
 	}
 	if client.pendingNonceCalls != 1 {
 		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
@@ -501,7 +516,7 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueTx(second) error = %v", err)
 	}
-	processedID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	processedID, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext(second) error = %v", err)
 	}
@@ -516,6 +531,106 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 	}
 	if client.sent[1].Nonce() != 32 {
 		t.Fatalf("second sent nonce = %d, want 32", client.sent[1].Nonce())
+	}
+}
+
+func TestProcessOnceRetriesDueBroadcastFailureBeforeQueuedTx(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       31,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+		sendErr:            errors.New("broadcast timeout"),
+	}
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	manager := NewWithTargets(store, []Target{target}, discardLogger())
+
+	failedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(failed) error = %v", err)
+	}
+	processedID, err := manager.ProcessNext(t.Context(), target)
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	if processedID != failedID {
+		t.Fatalf("processed id = %d, want %d", processedID, failedID)
+	}
+	forceRetryDue(t, failedID)
+	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		Calldata: []byte{0x04, 0x05, 0x06},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(queued) error = %v", err)
+	}
+
+	processed, err := manager.processOnce(t.Context())
+	if err != nil {
+		t.Fatalf("processOnce(retry) error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processOnce(retry) processed = false, want true")
+	}
+	retryTx, err := store.GetOutboxTx(t.Context(), failedID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(retry) error = %v", err)
+	}
+	if retryTx.Status != db.TxStatusQueued {
+		t.Fatalf("retry status = %q, want %q", retryTx.Status, db.TxStatusQueued)
+	}
+	if retryTx.Attempts != 1 {
+		t.Fatalf("retry attempts = %d, want 1", retryTx.Attempts)
+	}
+	if retryTx.FailureKind != "" || retryTx.NextRetryAt != nil {
+		t.Fatalf("retry failure metadata = %q/%v, want cleared", retryTx.FailureKind, retryTx.NextRetryAt)
+	}
+	if retryTx.GasLimit != 0 || retryTx.MaxFeePerGas != nil || retryTx.MaxPriorityFeePerGas != nil {
+		t.Fatalf("retry gas/fees = %d/%v/%v, want cleared for fresh quote", retryTx.GasLimit, retryTx.MaxFeePerGas, retryTx.MaxPriorityFeePerGas)
+	}
+	stillQueued, err := store.GetOutboxTx(t.Context(), queuedID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(queued) error = %v", err)
+	}
+	if stillQueued.Status != db.TxStatusQueued {
+		t.Fatalf("later queued status = %q, want queued", stillQueued.Status)
+	}
+
+	client.sendErr = nil
+	processed, err = manager.processOnce(t.Context())
+	if err != nil {
+		t.Fatalf("processOnce(send retry) error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processOnce(send retry) processed = false, want true")
+	}
+	if len(client.sent) != 2 {
+		t.Fatalf("sent tx count = %d, want 2", len(client.sent))
+	}
+	if client.sent[1].Nonce() != 31 {
+		t.Fatalf("replacement nonce = %d, want 31", client.sent[1].Nonce())
+	}
+	if client.sent[1].GasFeeCap().Cmp(big.NewInt(2_000_000_000)) != 0 {
+		t.Fatalf("replacement max fee = %s, want fresh quote", client.sent[1].GasFeeCap())
+	}
+	if client.sent[1].GasTipCap().Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("replacement priority fee = %s, want fresh quote", client.sent[1].GasTipCap())
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want only bootstrap call", client.pendingNonceCalls)
 	}
 }
 
@@ -546,8 +661,12 @@ func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
-		t.Fatal("ProcessNext() error = nil, want sign error")
+	processedID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	if processedID != id {
+		t.Fatalf("processed id = %d, want %d", processedID, id)
 	}
 	failedTx, err := store.GetOutboxTx(t.Context(), id)
 	if err != nil {
@@ -561,6 +680,12 @@ func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
 	}
 	if failedTx.TxHash != (common.Hash{}) {
 		t.Fatalf("tx hash = %s, want zero hash", failedTx.TxHash)
+	}
+	if failedTx.GasLimit != 0 || failedTx.MaxFeePerGas != nil || failedTx.MaxPriorityFeePerGas != nil {
+		t.Fatalf("failed gas/fees = %d/%v/%v, want cleared", failedTx.GasLimit, failedTx.MaxFeePerGas, failedTx.MaxPriorityFeePerGas)
+	}
+	if failedTx.FailureKind != db.TxFailureSignFailed || failedTx.NextRetryAt == nil {
+		t.Fatalf("failure metadata = %q/%v, want retryable sign failure", failedTx.FailureKind, failedTx.NextRetryAt)
 	}
 	if client.pendingNonceCalls != 1 {
 		t.Fatalf("PendingNonceAt() calls = %d, want 1", client.pendingNonceCalls)
@@ -910,6 +1035,122 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	}
 }
 
+func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       56,
+		receipts:           make(map[common.Hash]*types.Receipt),
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+	packet := testExecutorPacket(t)
+	packet.Status = string(packets.ExecutorExecutable)
+	if err := store.UpsertPacket(t.Context(), packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorExecutable),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if _, err := store.EnqueueExecutorTx(
+		t.Context(),
+		packet.GUID,
+		string(packets.ExecutorExecutable),
+		string(packets.ExecutorLzReceiveTxEnqueued),
+		db.TxRequest{
+			ChainEID: packet.DstEID,
+			Purpose:  executorLzReceivePurpose,
+			GUID:     packet.GUID.Bytes(),
+			To:       packet.Receiver,
+			Calldata: []byte{0x04, 0x05},
+			Value:    big.NewInt(0),
+			SignerID: signer.Address().Hex(),
+		},
+	); err != nil {
+		t.Fatalf("EnqueueExecutorTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+	forceRetryDue(t, id)
+
+	retryID, err := manager.ProcessFailedRetry(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessFailedRetry() error = %v", err)
+	}
+	if retryID == id {
+		t.Fatalf("retry id = %d, want cloned row", retryID)
+	}
+	retryTx, err := store.GetOutboxTx(t.Context(), retryID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(retry) error = %v", err)
+	}
+	if retryTx.RetryOfID == nil || *retryTx.RetryOfID != id {
+		t.Fatalf("retry_of_id = %v, want %d", retryTx.RetryOfID, id)
+	}
+	restored, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket(restored) error = %v", err)
+	}
+	if restored.Status != string(packets.ExecutorLzReceiveTxEnqueued) {
+		t.Fatalf("packet status = %q, want %q", restored.Status, packets.ExecutorLzReceiveTxEnqueued)
+	}
+
+	retryProcessedID, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext(retry) error = %v", err)
+	}
+	if retryProcessedID != retryID {
+		t.Fatalf("processed retry id = %d, want %d", retryProcessedID, retryID)
+	}
+	if client.pendingNonceCalls != 1 {
+		t.Fatalf("PendingNonceAt() calls = %d, want only bootstrap call", client.pendingNonceCalls)
+	}
+	retryTx, err = store.GetOutboxTx(t.Context(), retryID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(retry broadcast) error = %v", err)
+	}
+	if retryTx.Nonce != 57 {
+		t.Fatalf("fresh retry nonce = %d, want next local nonce 57", retryTx.Nonce)
+	}
+	client.receipts[retryTx.TxHash] = &types.Receipt{TxHash: retryTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: packet.DstEID,
+		ChainID:  big.NewInt(84532),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err != nil {
+		t.Fatalf("ProcessReceipts(retry) error = %v", err)
+	}
+	delivered, err := store.GetPacket(t.Context(), packet.GUID)
+	if err != nil {
+		t.Fatalf("GetPacket(delivered) error = %v", err)
+	}
+	if delivered.Status != string(packets.ExecutorDelivered) {
+		t.Fatalf("packet status = %q, want %q", delivered.Status, packets.ExecutorDelivered)
+	}
+}
+
 func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
@@ -1213,6 +1454,30 @@ func openTestStore(t *testing.T) *db.Store {
 		t.Fatalf("SyncConfig() error = %v", err)
 	}
 	return store
+}
+
+func forceRetryDue(t *testing.T, id int64) {
+	t.Helper()
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	tag, err := pool.Exec(t.Context(), `
+		UPDATE tx_outbox
+		SET next_retry_at = now() - interval '1 second'
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		t.Fatalf("force retry due: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("force retry due rows = %d, want 1", tag.RowsAffected())
+	}
 }
 
 func newTestKeystoreSigner(t *testing.T) *keystore.Signer {

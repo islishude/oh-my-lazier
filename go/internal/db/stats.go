@@ -48,9 +48,10 @@ type StatusStat struct {
 
 // TxOutboxStat counts transaction requests by chain and state.
 type TxOutboxStat struct {
-	ChainEID uint32
-	Status   string
-	Count    uint64
+	ChainEID   uint32
+	Status     string
+	RetryState string
+	Count      uint64
 }
 
 // IndexerCursorStat exposes durable indexer cursor progress.
@@ -198,11 +199,24 @@ func (s *Store) statusStats(ctx context.Context, table string) ([]StatusStat, er
 
 func (s *Store) txOutboxStats(ctx context.Context) ([]TxOutboxStat, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT chain_eid, status, count(*)::bigint
-		FROM tx_outbox
-		GROUP BY chain_eid, status
-		ORDER BY chain_eid, status
-	`)
+		SELECT
+			tx.chain_eid,
+			tx.status,
+			CASE
+				WHEN tx.status <> $1 THEN ''
+				WHEN EXISTS (
+					SELECT 1
+					FROM tx_outbox child
+					WHERE child.retry_of_id = tx.id
+				) THEN $2
+				WHEN tx.failure_kind IS NOT NULL AND tx.attempts < $3 AND tx.next_retry_at IS NOT NULL THEN $4
+				ELSE $5
+			END AS retry_state,
+			count(*)::bigint
+		FROM tx_outbox tx
+		GROUP BY chain_eid, status, retry_state
+		ORDER BY chain_eid, status, retry_state
+	`, TxStatusFailed, TxOutboxRetryStateSuperseded, TxAutoRetryMaxAttempts, TxOutboxRetryStateRetrying, TxOutboxRetryStateExhausted)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +225,7 @@ func (s *Store) txOutboxStats(ctx context.Context) ([]TxOutboxStat, error) {
 	var stats []TxOutboxStat
 	for rows.Next() {
 		var stat TxOutboxStat
-		if err := rows.Scan(&stat.ChainEID, &stat.Status, &stat.Count); err != nil {
+		if err := rows.Scan(&stat.ChainEID, &stat.Status, &stat.RetryState, &stat.Count); err != nil {
 			return nil, err
 		}
 		stats = append(stats, stat)

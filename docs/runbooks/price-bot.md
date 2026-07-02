@@ -65,4 +65,4 @@ If the newly submitted price config is wrong:
 1. Pause sends for affected pathways when pricing could undercharge execution.
 2. Restore the previous approved config values with `contracts/scripts/configure-workers.ts` or a manually reviewed owner transaction.
 3. Restart the worker after updating config files; phase 1 does not support hot reload.
-4. Retry failed pricing outbox rows only after the signer, fee caps, and calldata have been reviewed.
+4. Let txmgr automatic retry handle classified pricing outbox failures. Use `txretry` only after automatic retry is exhausted or after the signer, fee caps, and calldata have been reviewed for an operator override.

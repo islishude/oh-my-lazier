@@ -256,10 +256,10 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.DVNJobs {
 		fmt.Fprintf(output, "laz_dvn_jobs_total{status=%s} %d\n", label(stat.Status), stat.Count)
 	}
-	output.WriteString("# HELP laz_tx_outbox_total Transaction outbox rows by chain and status.\n")
+	output.WriteString("# HELP laz_tx_outbox_total Transaction outbox rows by chain, status, and retry state.\n")
 	output.WriteString("# TYPE laz_tx_outbox_total gauge\n")
 	for _, stat := range snapshot.TxOutbox {
-		fmt.Fprintf(output, "laz_tx_outbox_total{chain_eid=%q,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Status), stat.Count)
+		fmt.Fprintf(output, "laz_tx_outbox_total{chain_eid=%q,status=%s,retry_state=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Status), label(stat.RetryState), stat.Count)
 	}
 	output.WriteString("# HELP laz_indexer_cursor_last_block Last indexed block by chain and stream.\n")
 	output.WriteString("# TYPE laz_indexer_cursor_last_block gauge\n")

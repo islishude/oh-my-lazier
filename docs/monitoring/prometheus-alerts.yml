@@ -74,12 +74,12 @@ groups:
           runbook: docs/runbooks/monitoring.md
 
       - alert: LazTxOutboxFailed
-        expr: laz_tx_outbox_total{status="failed"} > 0
+        expr: laz_tx_outbox_total{status="failed",retry_state="exhausted"} > 0
         for: 0m
         labels:
           severity: ticket
         annotations:
-          summary: Transaction outbox has failed rows
+          summary: Transaction outbox has exhausted failed rows
           runbook: docs/runbooks/monitoring.md
 
       - alert: LazIndexerPollFailing

@@ -395,7 +395,7 @@ func TestRetryFailedTxClonesAssignedNonceAndFreshRetryUsesCursor(t *testing.T) {
 	if err := store.MarkTxBroadcast(ctx, id, txHash); err != nil {
 		t.Fatalf("MarkTxBroadcast() error = %v", err)
 	}
-	if err := store.MarkTxFailed(ctx, id, errors.New("receipt reverted")); err != nil {
+	if err := store.MarkTxFailed(ctx, id, errors.New("receipt reverted"), TxFailureReceiptFailed); err != nil {
 		t.Fatalf("MarkTxFailed() error = %v", err)
 	}
 
@@ -437,6 +437,9 @@ func TestRetryFailedTxClonesAssignedNonceAndFreshRetryUsesCursor(t *testing.T) {
 	}
 	if retryTx.Attempts != 1 {
 		t.Fatalf("retry attempts = %d, want 1", retryTx.Attempts)
+	}
+	if duplicateID, err := store.RetryFailedTx(ctx, id); err == nil {
+		t.Fatalf("duplicate RetryFailedTx() id = %d, want error", duplicateID)
 	}
 
 	reclaimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
@@ -505,7 +508,7 @@ func TestRetryFailedTxRequeuesNoNonceRowInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
-	if err := store.MarkTxFailed(ctx, id, errors.New("estimate gas reverted")); err != nil {
+	if err := store.MarkTxFailed(ctx, id, errors.New("estimate gas reverted"), TxFailureEstimateGasRevert); err != nil {
 		t.Fatalf("MarkTxFailed() error = %v", err)
 	}
 
@@ -528,6 +531,142 @@ func TestRetryFailedTxRequeuesNoNonceRowInPlace(t *testing.T) {
 	}
 	if retryTx.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
+	}
+}
+
+func TestPrepareNextFailedTxRetryStopsAtAttemptCapAndStatsExposeRetryState(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	const (
+		retryStatsChainEID = 49991
+		signerID           = "0x5555555555555555555555555555555555555555"
+	)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO chains (eid, name, chain_id, endpoint_address)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (eid) DO NOTHING
+	`, retryStatsChainEID, "retry-stats-test", int64(49991), common.HexToAddress("0x9999999999999999999999999999999999999999").Bytes()); err != nil {
+		t.Fatalf("insert retry stats chain: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE chain_eid = $1", retryStatsChainEID); err != nil {
+		t.Fatalf("delete retry stats chain rows: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test rows: %v", err)
+	}
+	exhaustedID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: retryStatsChainEID,
+		Purpose:  "exhausted-retry",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(exhausted) error = %v", err)
+	}
+	retryingID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: retryStatsChainEID,
+		Purpose:  "retrying",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x02},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(retrying) error = %v", err)
+	}
+	parentID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: retryStatsChainEID,
+		Purpose:  "superseded",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x03},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(parent) error = %v", err)
+	}
+	childID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: retryStatsChainEID,
+		Purpose:  "child",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x04},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(child) error = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET status = $1, failure_kind = $2, next_retry_at = now() - interval '1 second', attempts = $3
+		WHERE id = $4
+	`, TxStatusFailed, TxFailureBroadcastFailed, TxAutoRetryMaxAttempts, exhaustedID); err != nil {
+		t.Fatalf("mark exhausted: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET status = $1, failure_kind = $2, next_retry_at = now() + interval '1 minute', attempts = 1
+		WHERE id = $3
+	`, TxStatusFailed, TxFailureBroadcastFailed, retryingID); err != nil {
+		t.Fatalf("mark retrying: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET status = $1, failure_kind = $2, next_retry_at = NULL, attempts = 1
+		WHERE id = $3
+	`, TxStatusFailed, TxFailureReceiptFailed, parentID); err != nil {
+		t.Fatalf("mark superseded parent: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "UPDATE tx_outbox SET retry_of_id = $1 WHERE id = $2", parentID, childID); err != nil {
+		t.Fatalf("mark superseded child: %v", err)
+	}
+
+	if _, err := store.PrepareNextFailedTxRetry(ctx, retryStatsChainEID, signerID); !errors.Is(err, ErrNoFailedTxRetry) {
+		t.Fatalf("PrepareNextFailedTxRetry() error = %v, want ErrNoFailedTxRetry", err)
+	}
+	snapshot, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	counts := make(map[string]uint64)
+	for _, stat := range snapshot.TxOutbox {
+		if stat.ChainEID == retryStatsChainEID && stat.Status == TxStatusFailed {
+			counts[stat.RetryState] += stat.Count
+		}
+	}
+	if counts[TxOutboxRetryStateExhausted] != 1 {
+		t.Fatalf("exhausted count = %d, want 1; counts=%v", counts[TxOutboxRetryStateExhausted], counts)
+	}
+	if counts[TxOutboxRetryStateRetrying] != 1 {
+		t.Fatalf("retrying count = %d, want 1; counts=%v", counts[TxOutboxRetryStateRetrying], counts)
+	}
+	if counts[TxOutboxRetryStateSuperseded] != 1 {
+		t.Fatalf("superseded count = %d, want 1; counts=%v", counts[TxOutboxRetryStateSuperseded], counts)
 	}
 }
 

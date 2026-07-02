@@ -89,8 +89,10 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 	gasLimit, err := estimateGas(ctx, queued, target.Signer.Address(), target.Client)
 	if err != nil {
 		if isEstimateGasRevert(err) {
-			_ = m.store.MarkTxFailed(ctx, queued.ID, fmt.Errorf("estimate gas reverted: %w", err))
-			return 0, err
+			if markErr := m.store.MarkTxFailed(ctx, queued.ID, fmt.Errorf("estimate gas reverted: %w", err), db.TxFailureEstimateGasRevert); markErr != nil {
+				return 0, markErr
+			}
+			return queued.ID, nil
 		}
 		return 0, fmt.Errorf("%w: estimate gas for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
 	}
@@ -117,15 +119,19 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 	}
 	signed, err := signOutboxTx(ctx, outboxTx, target.ChainID, gasLimit, quote, target.Signer)
 	if err != nil {
-		_ = m.store.MarkTxFailed(ctx, outboxTx.ID, err)
-		return 0, err
+		if markErr := m.store.MarkTxFailed(ctx, outboxTx.ID, err, db.TxFailureSignFailed); markErr != nil {
+			return 0, markErr
+		}
+		return outboxTx.ID, nil
 	}
 	if err := m.store.MarkTxSignedWithGasAndFees(ctx, outboxTx.ID, signed.Hash(), gasLimit, quote.MaxFeePerGas, quote.MaxPriorityFeePerGas); err != nil {
 		return 0, err
 	}
 	if err := target.Client.SendTransaction(ctx, signed); err != nil {
-		_ = m.store.MarkTxFailed(ctx, outboxTx.ID, err)
-		return 0, err
+		if markErr := m.store.MarkTxFailed(ctx, outboxTx.ID, err, db.TxFailureBroadcastFailed); markErr != nil {
+			return 0, markErr
+		}
+		return outboxTx.ID, nil
 	}
 	if err := m.store.MarkTxBroadcast(ctx, outboxTx.ID, signed.Hash()); err != nil {
 		return 0, err
@@ -165,12 +171,20 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		if err := m.applyWorkflowReceipt(ctx, outboxTx, false); err != nil {
 			return 0, err
 		}
-		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status)); err != nil {
+		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status), db.TxFailureReceiptFailed); err != nil {
 			return 0, err
 		}
 		return outboxTx.ID, nil
 	}
 	return 0, ErrNoReceiptUpdate
+}
+
+// ProcessFailedRetry requeues one due failed transaction for a signer.
+func (m *Manager) ProcessFailedRetry(ctx context.Context, target Target) (int64, error) {
+	if target.Signer == nil {
+		return 0, errors.New("target signer is required")
+	}
+	return m.store.PrepareNextFailedTxRetry(ctx, target.ChainEID, target.Signer.Address().Hex())
 }
 
 func (m *Manager) applyWorkflowReceipt(ctx context.Context, outboxTx db.OutboxTx, success bool) error {
@@ -298,9 +312,9 @@ func quoteLegacyFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePol
 		return feeQuote{}, fmt.Errorf("outbox tx %d legacy gas price is required", queued.ID)
 	}
 	price := bigutil.Clone(gasPrice)
-	if queued.Nonce != nil {
-		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
-			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas is required for replacement", queued.ID)
+	if queued.Nonce != nil && queued.MaxFeePerGas != nil {
+		if queued.MaxFeePerGas.Sign() <= 0 {
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas must be positive for replacement", queued.ID)
 		}
 		price = maxBigInt(price, bumpFee(queued.MaxFeePerGas))
 	}
@@ -325,12 +339,13 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 		return feeQuote{}, fmt.Errorf("outbox tx %d priority fee per gas is required", queued.ID)
 	}
 	tip := minBigInt(suggestedTip, policy.ConfiguredMaxPriorityFeePerGas)
-	if queued.Nonce != nil {
+	hasPreviousFee := queued.Nonce != nil && (queued.MaxFeePerGas != nil || queued.MaxPriorityFeePerGas != nil)
+	if hasPreviousFee {
 		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
-			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas is required for replacement", queued.ID)
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas must be positive for replacement", queued.ID)
 		}
 		if queued.MaxPriorityFeePerGas == nil || queued.MaxPriorityFeePerGas.Sign() <= 0 {
-			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas is required for replacement", queued.ID)
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas must be positive for replacement", queued.ID)
 		}
 		tip = maxBigInt(tip, bumpFee(queued.MaxPriorityFeePerGas))
 		if tip.Cmp(policy.ConfiguredMaxPriorityFeePerGas) > 0 {
@@ -339,7 +354,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	}
 	feeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	feeCap.Add(feeCap, tip)
-	if queued.Nonce != nil {
+	if hasPreviousFee {
 		feeCap = maxBigInt(feeCap, bumpFee(queued.MaxFeePerGas))
 	}
 	if feeCap.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {

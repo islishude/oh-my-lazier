@@ -65,12 +65,15 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 		if outbox.Status != db.TxStatusFailed || outbox.Count == 0 {
 			continue
 		}
+		if outbox.RetryState != db.TxOutboxRetryStateExhausted {
+			continue
+		}
 		if _, ok := activeChains[outbox.ChainEID]; !ok {
 			continue
 		}
 		issues = append(issues, Issue{
 			Code:    "failed_outbox",
-			Message: fmt.Sprintf("chain %d has %d failed tx_outbox rows", outbox.ChainEID, outbox.Count),
+			Message: fmt.Sprintf("chain %d has %d exhausted failed tx_outbox rows", outbox.ChainEID, outbox.Count),
 		})
 	}
 	for _, packet := range snapshot.Packets {

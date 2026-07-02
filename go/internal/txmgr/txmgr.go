@@ -86,6 +86,16 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 			continue
 		}
+		id, err = m.ProcessFailedRetry(ctx, target)
+		if errors.Is(err, db.ErrNoFailedTxRetry) {
+			// No due failed retry; queued work may still be available.
+		} else if err != nil {
+			return processed, err
+		} else {
+			processed = true
+			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			continue
+		}
 		id, err = m.ProcessNext(ctx, target)
 		if errors.Is(err, ErrNoQueuedTx) {
 			continue

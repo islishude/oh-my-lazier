@@ -45,3 +45,36 @@ func TestQuoteFeeDefersOverCap(t *testing.T) {
 		t.Fatalf("quoteFee() error = %v, want ErrTxDeferred", err)
 	}
 }
+
+func TestQuoteFeeAssignedNonceWithoutPreviousFeesUsesFreshQuote(t *testing.T) {
+	nonce := uint64(7)
+	t.Run("dynamic", func(t *testing.T) {
+		client := &fakeChainClient{
+			header:             dynamicHeader(),
+			suggestedGasTipCap: big.NewInt(1_000_000_000),
+		}
+		quote, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1, Nonce: &nonce}, defaultFeePolicy(), client)
+		if err != nil {
+			t.Fatalf("quoteFee() error = %v", err)
+		}
+		if quote.MaxFeePerGas.Cmp(big.NewInt(2_000_000_000)) != 0 {
+			t.Fatalf("max fee = %s, want fresh quote", quote.MaxFeePerGas)
+		}
+		if quote.MaxPriorityFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
+			t.Fatalf("priority fee = %s, want fresh quote", quote.MaxPriorityFeePerGas)
+		}
+	})
+	t.Run("legacy", func(t *testing.T) {
+		client := &fakeChainClient{
+			header:            legacyHeader(),
+			suggestedGasPrice: big.NewInt(5_000_000_000),
+		}
+		quote, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1, Nonce: &nonce}, defaultFeePolicy(), client)
+		if err != nil {
+			t.Fatalf("quoteFee() error = %v", err)
+		}
+		if quote.MaxFeePerGas.Cmp(big.NewInt(5_000_000_000)) != 0 {
+			t.Fatalf("gas price = %s, want fresh quote", quote.MaxFeePerGas)
+		}
+	})
+}
