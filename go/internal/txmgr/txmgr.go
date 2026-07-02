@@ -24,12 +24,10 @@ type Target struct {
 
 // Manager owns transaction outbox processing and nonce assignment.
 type Manager struct {
-	store          *db.Store
-	targets        []Target
-	pollInterval   time.Duration
-	logger         *slog.Logger
-	processNext    func(context.Context, Target) (int64, error)
-	processReceipt func(context.Context, Target) (int64, error)
+	store        *db.Store
+	targets      []Target
+	pollInterval time.Duration
+	logger       *slog.Logger
 }
 
 // New creates a transaction manager using the shared store.
@@ -47,16 +45,18 @@ func NewWithTargets(store *db.Store, targets []Target, logger *slog.Logger) *Man
 		pollInterval: defaultPollInterval,
 		logger:       logger,
 	}
-	manager.processNext = manager.processTarget
-	manager.processReceipt = manager.processTargetReceipt
 	return manager
 }
 
 // Run starts the transaction manager loop until the context is canceled.
 func (m *Manager) Run(ctx context.Context) error {
+	return m.runLoop(ctx, m.processOnce)
+}
+
+func (m *Manager) runLoop(ctx context.Context, processOnce func(context.Context) (bool, error)) error {
 	m.logger.Info("tx manager loop started", "targets", len(m.targets))
 	for {
-		processed, err := m.processOnce(ctx)
+		processed, err := processOnce(ctx)
 		if err != nil {
 			return err
 		}
@@ -76,7 +76,7 @@ func (m *Manager) Run(ctx context.Context) error {
 func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 	processed := false
 	for _, target := range m.targets {
-		id, err := m.processReceipt(ctx, target)
+		id, err := m.ProcessReceipts(ctx, target, 1)
 		if errors.Is(err, ErrNoReceiptUpdate) {
 			// No mined receipt yet; queued work may still be available.
 		} else if err != nil {
@@ -86,7 +86,7 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 			continue
 		}
-		id, err = m.processNext(ctx, target)
+		id, err = m.ProcessNext(ctx, target)
 		if errors.Is(err, ErrNoQueuedTx) {
 			continue
 		}
@@ -100,12 +100,4 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 	}
 	return processed, nil
-}
-
-func (m *Manager) processTarget(ctx context.Context, target Target) (int64, error) {
-	return m.ProcessNext(ctx, target)
-}
-
-func (m *Manager) processTargetReceipt(ctx context.Context, target Target) (int64, error) {
-	return m.ProcessReceipts(ctx, target, 1)
 }

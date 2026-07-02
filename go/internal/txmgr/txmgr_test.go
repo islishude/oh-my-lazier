@@ -17,18 +17,17 @@ func TestRunProcessesTargetsUntilQueueIsEmpty(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Hour
-	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
 	calls := 0
-	manager.processNext = func(context.Context, Target) (int64, error) {
+	processOnce := func(context.Context) (bool, error) {
 		calls++
 		if calls == 1 {
-			return 42, nil
+			return true, nil
 		}
 		cancel()
-		return 0, ErrNoQueuedTx
+		return false, nil
 	}
 
-	err := manager.Run(ctx)
+	err := manager.runLoop(ctx, processOnce)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() error = %v, want context canceled", err)
 	}
@@ -41,15 +40,14 @@ func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Millisecond
-	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
 	calls := 0
-	manager.processNext = func(context.Context, Target) (int64, error) {
+	processOnce := func(context.Context) (bool, error) {
 		calls++
 		cancel()
-		return 0, ErrNoQueuedTx
+		return false, nil
 	}
 
-	err := manager.Run(ctx)
+	err := manager.runLoop(ctx, processOnce)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run() error = %v, want context canceled", err)
 	}
@@ -61,12 +59,11 @@ func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 func TestRunReturnsProcessingError(t *testing.T) {
 	wantErr := errors.New("broadcast failed")
 	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
-	manager.processReceipt = func(context.Context, Target) (int64, error) { return 0, ErrNoReceiptUpdate }
-	manager.processNext = func(context.Context, Target) (int64, error) {
-		return 0, wantErr
+	processOnce := func(context.Context) (bool, error) {
+		return false, wantErr
 	}
 
-	err := manager.Run(t.Context())
+	err := manager.runLoop(t.Context(), processOnce)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Run() error = %v, want %v", err, wantErr)
 	}
