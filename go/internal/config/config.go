@@ -133,7 +133,7 @@ type KMSSignerConfig struct {
 type ChainConfig struct {
 	EID                    uint32             `yaml:"eid"`
 	Name                   string             `yaml:"name"`
-	ChainID                int64              `yaml:"chain_id"`
+	ChainID                uint64             `yaml:"chain_id"`
 	TxType                 string             `yaml:"tx_type"`
 	EndpointAddress        string             `yaml:"endpoint_address"`
 	Confirmations          uint64             `yaml:"confirmations"`

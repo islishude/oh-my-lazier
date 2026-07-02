@@ -80,7 +80,7 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 		registry.byEID[cfg.EID] = Chain{
 			EID:                    cfg.EID,
 			Name:                   cfg.Name,
-			ChainID:                big.NewInt(cfg.ChainID),
+			ChainID:                new(big.Int).SetUint64(cfg.ChainID),
 			TxType:                 config.NormalizeTxType(cfg.TxType),
 			EndpointAddress:        common.HexToAddress(cfg.EndpointAddress),
 			Confirmations:          cfg.Confirmations,
