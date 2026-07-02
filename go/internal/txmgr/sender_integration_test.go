@@ -172,8 +172,8 @@ func TestProcessNextDefersFeeOverCapBeforeNonceAssignment(t *testing.T) {
 				suggestedGasTipCap: big.NewInt(1_000_000_000),
 			},
 			policy: FeePolicy{
-				MaxFeePerGas:         big.NewInt(1_500_000_000),
-				MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+				ConfiguredMaxFeePerGas:         big.NewInt(1_500_000_000),
+				ConfiguredMaxPriorityFeePerGas: big.NewInt(1_000_000_000),
 			},
 		},
 		{
@@ -184,7 +184,7 @@ func TestProcessNextDefersFeeOverCapBeforeNonceAssignment(t *testing.T) {
 				suggestedGasPrice: big.NewInt(2_000_000_000),
 			},
 			policy: FeePolicy{
-				MaxFeePerGas: big.NewInt(1_500_000_000),
+				ConfiguredMaxFeePerGas: big.NewInt(1_500_000_000),
 			},
 		},
 	}
@@ -1200,8 +1200,8 @@ func testTarget(chainEID uint32, chainID *big.Int, signer *keystore.Signer, clie
 
 func defaultFeePolicy() FeePolicy {
 	return FeePolicy{
-		MaxFeePerGas:         big.NewInt(10_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(2_000_000_000),
+		ConfiguredMaxFeePerGas:         big.NewInt(10_000_000_000),
+		ConfiguredMaxPriorityFeePerGas: big.NewInt(2_000_000_000),
 	}
 }
 

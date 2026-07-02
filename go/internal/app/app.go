@@ -464,7 +464,10 @@ func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy
 			return txmgr.FeePolicy{}, err
 		}
 	}
-	return txmgr.FeePolicy{MaxFeePerGas: maxFeePerGas, MaxPriorityFeePerGas: maxPriorityFeePerGas}, nil
+	return txmgr.FeePolicy{
+		ConfiguredMaxFeePerGas:         maxFeePerGas,
+		ConfiguredMaxPriorityFeePerGas: maxPriorityFeePerGas,
+	}, nil
 }
 
 func validateRuntimeFeePolicies(ctx context.Context, configuredChain chain.Chain, policies map[string]txmgr.FeePolicy) error {
@@ -476,7 +479,7 @@ func validateRuntimeFeePolicies(ctx context.Context, configuredChain chain.Chain
 		return nil
 	}
 	for purpose, policy := range policies {
-		if policy.MaxPriorityFeePerGas == nil || policy.MaxPriorityFeePerGas.Sign() <= 0 {
+		if policy.ConfiguredMaxPriorityFeePerGas == nil || policy.ConfiguredMaxPriorityFeePerGas.Sign() <= 0 {
 			return fmt.Errorf("chain %s purpose %s max_priority_fee_per_gas_wei is required because latest header has base fee", configuredChain.Name, purpose)
 		}
 	}
@@ -487,8 +490,8 @@ func cloneFeePolicies(policies map[string]txmgr.FeePolicy) map[string]txmgr.FeeP
 	out := make(map[string]txmgr.FeePolicy, len(policies))
 	for purpose, policy := range policies {
 		out[purpose] = txmgr.FeePolicy{
-			MaxFeePerGas:         bigutil.Clone(policy.MaxFeePerGas),
-			MaxPriorityFeePerGas: bigutil.Clone(policy.MaxPriorityFeePerGas),
+			ConfiguredMaxFeePerGas:         bigutil.Clone(policy.ConfiguredMaxFeePerGas),
+			ConfiguredMaxPriorityFeePerGas: bigutil.Clone(policy.ConfiguredMaxPriorityFeePerGas),
 		}
 	}
 	return out

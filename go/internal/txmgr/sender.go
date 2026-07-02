@@ -40,8 +40,8 @@ type ChainClient interface {
 
 // FeePolicy caps send-time gas fees for one outbox purpose.
 type FeePolicy struct {
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
+	ConfiguredMaxFeePerGas         *big.Int
+	ConfiguredMaxPriorityFeePerGas *big.Int
 }
 
 type feeQuote struct {
@@ -267,7 +267,7 @@ func estimateGas(ctx context.Context, queued db.QueuedOutboxTx, from common.Addr
 }
 
 func quoteFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, client ChainClient) (feeQuote, error) {
-	if policy.MaxFeePerGas == nil || policy.MaxFeePerGas.Sign() <= 0 {
+	if policy.ConfiguredMaxFeePerGas == nil || policy.ConfiguredMaxFeePerGas.Sign() <= 0 {
 		return feeQuote{}, errors.New("max fee per gas cap is required")
 	}
 	header, err := client.HeaderByNumber(ctx, nil)
@@ -298,7 +298,7 @@ func quoteLegacyFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePol
 		}
 		price = maxBigInt(price, bumpFee(queued.MaxFeePerGas))
 	}
-	if price.Cmp(policy.MaxFeePerGas) > 0 {
+	if price.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
 		return feeQuote{}, ErrTxDeferred
 	}
 	return feeQuote{MaxFeePerGas: price}, nil
@@ -308,7 +308,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	if baseFee.Sign() < 0 {
 		return feeQuote{}, fmt.Errorf("latest block base fee is negative: %s", baseFee)
 	}
-	if policy.MaxPriorityFeePerGas == nil || policy.MaxPriorityFeePerGas.Sign() <= 0 {
+	if policy.ConfiguredMaxPriorityFeePerGas == nil || policy.ConfiguredMaxPriorityFeePerGas.Sign() <= 0 {
 		return feeQuote{}, errors.New("max priority fee per gas cap is required for dynamic-fee chains")
 	}
 	suggestedTip, err := client.SuggestGasTipCap(ctx)
@@ -318,7 +318,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	if suggestedTip == nil || suggestedTip.Sign() <= 0 {
 		return feeQuote{}, fmt.Errorf("outbox tx %d priority fee per gas is required", queued.ID)
 	}
-	tip := minBigInt(suggestedTip, policy.MaxPriorityFeePerGas)
+	tip := minBigInt(suggestedTip, policy.ConfiguredMaxPriorityFeePerGas)
 	if queued.Nonce != nil {
 		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
 			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas is required for replacement", queued.ID)
@@ -327,7 +327,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas is required for replacement", queued.ID)
 		}
 		tip = maxBigInt(tip, bumpFee(queued.MaxPriorityFeePerGas))
-		if tip.Cmp(policy.MaxPriorityFeePerGas) > 0 {
+		if tip.Cmp(policy.ConfiguredMaxPriorityFeePerGas) > 0 {
 			return feeQuote{}, ErrTxDeferred
 		}
 	}
@@ -336,7 +336,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	if queued.Nonce != nil {
 		feeCap = maxBigInt(feeCap, bumpFee(queued.MaxFeePerGas))
 	}
-	if feeCap.Cmp(policy.MaxFeePerGas) > 0 {
+	if feeCap.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
 		return feeQuote{}, ErrTxDeferred
 	}
 	return feeQuote{Dynamic: true, MaxFeePerGas: feeCap, MaxPriorityFeePerGas: tip}, nil

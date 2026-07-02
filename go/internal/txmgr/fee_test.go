@@ -15,8 +15,8 @@ func TestQuoteDynamicFeeClampsPriorityTip(t *testing.T) {
 		suggestedGasTipCap: big.NewInt(1_500_000_000),
 	}
 	quote, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1}, FeePolicy{
-		MaxFeePerGas:         big.NewInt(3_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(500_000_000),
+		ConfiguredMaxFeePerGas:         big.NewInt(3_000_000_000),
+		ConfiguredMaxPriorityFeePerGas: big.NewInt(500_000_000),
 	}, client)
 	if err != nil {
 		t.Fatalf("quoteFee() error = %v", err)
@@ -38,8 +38,8 @@ func TestQuoteFeeDefersOverCap(t *testing.T) {
 		suggestedGasTipCap: big.NewInt(1_000_000_000),
 	}
 	_, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1}, FeePolicy{
-		MaxFeePerGas:         big.NewInt(1_500_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+		ConfiguredMaxFeePerGas:         big.NewInt(1_500_000_000),
+		ConfiguredMaxPriorityFeePerGas: big.NewInt(1_000_000_000),
 	}, client)
 	if !errors.Is(err, ErrTxDeferred) {
 		t.Fatalf("quoteFee() error = %v, want ErrTxDeferred", err)
