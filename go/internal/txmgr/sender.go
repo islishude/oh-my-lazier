@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
@@ -20,16 +23,31 @@ const (
 	executorLzReceivePurpose          = "executor_lz_receive"
 	dvnVerifyPurpose                  = "dvn_verify"
 
-	txTypeDynamicFee = "dynamic_fee"
-	txTypeLegacy     = "legacy"
+	replacementBumpNumerator   = int64(110)
+	replacementBumpDenominator = int64(100)
 )
 
 // ChainClient is the tx manager's RPC boundary for nonce reads and broadcasts.
 type ChainClient interface {
+	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
+	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
 	SuggestGasPrice(ctx context.Context) (*big.Int, error)
+	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	SendTransaction(ctx context.Context, tx *types.Transaction) error
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*types.Receipt, error)
+}
+
+// FeePolicy caps send-time gas fees for one outbox purpose.
+type FeePolicy struct {
+	MaxFeePerGas         *big.Int
+	MaxPriorityFeePerGas *big.Int
+}
+
+type feeQuote struct {
+	Dynamic              bool
+	MaxFeePerGas         *big.Int
+	MaxPriorityFeePerGas *big.Int
 }
 
 // ErrNoQueuedTx indicates no queued outbox row exists for the signer on a chain.
@@ -38,16 +56,49 @@ var ErrNoQueuedTx = errors.New("no queued tx")
 // ErrNoReceiptUpdate indicates no broadcast tx receipt changed durable state.
 var ErrNoReceiptUpdate = errors.New("no receipt update")
 
+// ErrTxDeferred indicates the queued outbox row should stay queued and be retried later.
+var ErrTxDeferred = errors.New("tx deferred")
+
 // ProcessNext signs and broadcasts one queued outbox transaction for a signer.
-func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big.Int, txType string, signer signer.Signer, client ChainClient) (int64, error) {
-	if chainID == nil || chainID.Sign() <= 0 {
+func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error) {
+	if target.ChainID == nil || target.ChainID.Sign() <= 0 {
 		return 0, errors.New("chain id is required")
 	}
-	rpcNonce, err := client.PendingNonceAt(ctx, signer.Address())
+	if target.Signer == nil {
+		return 0, errors.New("target signer is required")
+	}
+	if target.Client == nil {
+		return 0, errors.New("target client is required")
+	}
+	signerID := target.Signer.Address().Hex()
+	queued, err := m.store.PeekQueuedTx(ctx, target.ChainEID, signerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNoQueuedTx
+	}
 	if err != nil {
 		return 0, err
 	}
-	claimed, err := m.store.ClaimNextNonce(ctx, chainEID, signer.Address().Hex(), rpcNonce)
+	policy, ok := target.FeePolicies[queued.Purpose]
+	if !ok {
+		return 0, fmt.Errorf("tx purpose %q has no fee policy for chain %d signer %s", queued.Purpose, target.ChainEID, signerID)
+	}
+	quote, err := quoteFee(ctx, queued, policy, target.Client)
+	if err != nil {
+		return 0, err
+	}
+	gasLimit, err := estimateGas(ctx, queued, target.Signer.Address(), target.Client)
+	if err != nil {
+		if isEstimateGasRevert(err) {
+			_ = m.store.MarkTxFailed(ctx, queued.ID, fmt.Errorf("estimate gas reverted: %w", err))
+			return 0, err
+		}
+		return 0, fmt.Errorf("%w: estimate gas for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
+	}
+	rpcNonce, err := target.Client.PendingNonceAt(ctx, target.Signer.Address())
+	if err != nil {
+		return 0, err
+	}
+	claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID, rpcNonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNoQueuedTx
 	}
@@ -58,15 +109,15 @@ func (m *Manager) ProcessNext(ctx context.Context, chainEID uint32, chainID *big
 	if err != nil {
 		return 0, err
 	}
-	signed, err := signOutboxTx(ctx, outboxTx, chainID, normalizeTxType(txType), signer, client)
+	signed, err := signOutboxTx(ctx, outboxTx, target.ChainID, gasLimit, quote, target.Signer)
 	if err != nil {
 		_ = m.store.MarkTxFailed(ctx, outboxTx.ID, err)
 		return 0, err
 	}
-	if err := m.store.MarkTxSigned(ctx, outboxTx.ID, signed.Hash()); err != nil {
+	if err := m.store.MarkTxSignedWithGasAndFees(ctx, outboxTx.ID, signed.Hash(), gasLimit, quote.MaxFeePerGas, quote.MaxPriorityFeePerGas); err != nil {
 		return 0, err
 	}
-	if err := client.SendTransaction(ctx, signed); err != nil {
+	if err := target.Client.SendTransaction(ctx, signed); err != nil {
 		_ = m.store.MarkTxFailed(ctx, outboxTx.ID, err)
 		return 0, err
 	}
@@ -199,57 +250,190 @@ func (m *Manager) dvnStatusMatches(ctx context.Context, guid common.Hash, status
 	return false
 }
 
-func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, txType string, signer signer.Signer, client ChainClient) (*types.Transaction, error) {
+func estimateGas(ctx context.Context, queued db.QueuedOutboxTx, from common.Address, client ChainClient) (uint64, error) {
+	gasLimit, err := client.EstimateGas(ctx, ethereum.CallMsg{
+		From:  from,
+		To:    &queued.To,
+		Value: queued.Value,
+		Data:  queued.Calldata,
+	})
+	if err != nil {
+		return 0, err
+	}
+	if gasLimit == 0 {
+		return 0, fmt.Errorf("outbox tx %d estimated gas is zero", queued.ID)
+	}
+	return gasLimit, nil
+}
+
+func quoteFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, client ChainClient) (feeQuote, error) {
+	if policy.MaxFeePerGas == nil || policy.MaxFeePerGas.Sign() <= 0 {
+		return feeQuote{}, errors.New("max fee per gas cap is required")
+	}
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return feeQuote{}, err
+	}
+	if header == nil {
+		return feeQuote{}, errors.New("latest block header is required")
+	}
+	if header.BaseFee == nil {
+		return quoteLegacyFee(ctx, queued, policy, client)
+	}
+	return quoteDynamicFee(ctx, queued, policy, client, header.BaseFee)
+}
+
+func quoteLegacyFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, client ChainClient) (feeQuote, error) {
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return feeQuote{}, err
+	}
+	if gasPrice == nil || gasPrice.Sign() <= 0 {
+		return feeQuote{}, fmt.Errorf("outbox tx %d legacy gas price is required", queued.ID)
+	}
+	price := bigutil.Clone(gasPrice)
+	if queued.Nonce != nil {
+		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas is required for replacement", queued.ID)
+		}
+		price = maxBigInt(price, bumpFee(queued.MaxFeePerGas))
+	}
+	if price.Cmp(policy.MaxFeePerGas) > 0 {
+		return feeQuote{}, ErrTxDeferred
+	}
+	return feeQuote{MaxFeePerGas: price}, nil
+}
+
+func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, client ChainClient, baseFee *big.Int) (feeQuote, error) {
+	if baseFee.Sign() < 0 {
+		return feeQuote{}, fmt.Errorf("latest block base fee is negative: %s", baseFee)
+	}
+	if policy.MaxPriorityFeePerGas == nil || policy.MaxPriorityFeePerGas.Sign() <= 0 {
+		return feeQuote{}, errors.New("max priority fee per gas cap is required for dynamic-fee chains")
+	}
+	suggestedTip, err := client.SuggestGasTipCap(ctx)
+	if err != nil {
+		return feeQuote{}, err
+	}
+	if suggestedTip == nil || suggestedTip.Sign() <= 0 {
+		return feeQuote{}, fmt.Errorf("outbox tx %d priority fee per gas is required", queued.ID)
+	}
+	tip := minBigInt(suggestedTip, policy.MaxPriorityFeePerGas)
+	if queued.Nonce != nil {
+		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas is required for replacement", queued.ID)
+		}
+		if queued.MaxPriorityFeePerGas == nil || queued.MaxPriorityFeePerGas.Sign() <= 0 {
+			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas is required for replacement", queued.ID)
+		}
+		tip = maxBigInt(tip, bumpFee(queued.MaxPriorityFeePerGas))
+		if tip.Cmp(policy.MaxPriorityFeePerGas) > 0 {
+			return feeQuote{}, ErrTxDeferred
+		}
+	}
+	feeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
+	feeCap.Add(feeCap, tip)
+	if queued.Nonce != nil {
+		feeCap = maxBigInt(feeCap, bumpFee(queued.MaxFeePerGas))
+	}
+	if feeCap.Cmp(policy.MaxFeePerGas) > 0 {
+		return feeQuote{}, ErrTxDeferred
+	}
+	return feeQuote{Dynamic: true, MaxFeePerGas: feeCap, MaxPriorityFeePerGas: tip}, nil
+}
+
+func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer) (*types.Transaction, error) {
 	if outboxTx.Status != db.TxStatusNonceAssigned {
 		return nil, fmt.Errorf("outbox tx %d status %q is not signable", outboxTx.ID, outboxTx.Status)
 	}
-	if outboxTx.GasLimit == 0 {
+	if gasLimit == 0 {
 		return nil, fmt.Errorf("outbox tx %d gas limit is required", outboxTx.ID)
 	}
 	var tx *types.Transaction
-	switch txType {
-	case txTypeDynamicFee:
-		if outboxTx.MaxFeePerGas == nil || outboxTx.MaxFeePerGas.Sign() <= 0 {
+	if quote.Dynamic {
+		if quote.MaxFeePerGas == nil || quote.MaxFeePerGas.Sign() <= 0 {
 			return nil, fmt.Errorf("outbox tx %d max fee per gas is required", outboxTx.ID)
 		}
-		if outboxTx.MaxPriorityFeePerGas == nil || outboxTx.MaxPriorityFeePerGas.Sign() <= 0 {
+		if quote.MaxPriorityFeePerGas == nil || quote.MaxPriorityFeePerGas.Sign() <= 0 {
 			return nil, fmt.Errorf("outbox tx %d max priority fee per gas is required", outboxTx.ID)
 		}
 		tx = types.NewTx(&types.DynamicFeeTx{
 			ChainID:   chainID,
 			Nonce:     outboxTx.Nonce,
-			GasTipCap: outboxTx.MaxPriorityFeePerGas,
-			GasFeeCap: outboxTx.MaxFeePerGas,
-			Gas:       outboxTx.GasLimit,
+			GasTipCap: quote.MaxPriorityFeePerGas,
+			GasFeeCap: quote.MaxFeePerGas,
+			Gas:       gasLimit,
 			To:        &outboxTx.To,
 			Value:     outboxTx.Value,
 			Data:      outboxTx.Calldata,
 		})
-	case txTypeLegacy:
-		gasPrice, err := client.SuggestGasPrice(ctx)
-		if err != nil {
-			return nil, err
-		}
-		if gasPrice == nil || gasPrice.Sign() <= 0 {
+	} else {
+		if quote.MaxFeePerGas == nil || quote.MaxFeePerGas.Sign() <= 0 {
 			return nil, fmt.Errorf("outbox tx %d legacy gas price is required", outboxTx.ID)
 		}
 		tx = types.NewTx(&types.LegacyTx{
 			Nonce:    outboxTx.Nonce,
-			GasPrice: gasPrice,
-			Gas:      outboxTx.GasLimit,
+			GasPrice: quote.MaxFeePerGas,
+			Gas:      gasLimit,
 			To:       &outboxTx.To,
 			Value:    outboxTx.Value,
 			Data:     outboxTx.Calldata,
 		})
-	default:
-		return nil, fmt.Errorf("unsupported tx type %q", txType)
 	}
 	return signer.SignTx(ctx, tx, chainID)
 }
 
-func normalizeTxType(txType string) string {
-	if txType == "" {
-		return txTypeDynamicFee
+func isEstimateGasRevert(err error) bool {
+	if err == nil {
+		return false
 	}
-	return txType
+	var dataErr rpc.DataError
+	if errors.As(err, &dataErr) {
+		if isRevertErrorData(dataErr.ErrorData()) {
+			return true
+		}
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == 3 {
+		return true
+	}
+	return containsRevertText(err.Error())
+}
+
+func isRevertErrorData(data any) bool {
+	switch value := data.(type) {
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		return strings.HasPrefix(normalized, "0x") || containsRevertText(normalized)
+	case []byte:
+		return len(value) > 0
+	default:
+		return false
+	}
+}
+
+func containsRevertText(value string) bool {
+	normalized := strings.ToLower(value)
+	return strings.Contains(normalized, "execution reverted") || strings.Contains(normalized, "reverted")
+}
+
+func bumpFee(value *big.Int) *big.Int {
+	bumped := new(big.Int).Mul(value, big.NewInt(replacementBumpNumerator))
+	bumped.Add(bumped, big.NewInt(replacementBumpDenominator-1))
+	bumped.Div(bumped, big.NewInt(replacementBumpDenominator))
+	return bumped
+}
+
+func minBigInt(left, right *big.Int) *big.Int {
+	if left.Cmp(right) <= 0 {
+		return bigutil.Clone(left)
+	}
+	return bigutil.Clone(right)
+}
+
+func maxBigInt(left, right *big.Int) *big.Int {
+	if left.Cmp(right) >= 0 {
+		return bigutil.Clone(left)
+	}
+	return bigutil.Clone(right)
 }

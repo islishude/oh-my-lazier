@@ -131,11 +131,6 @@ func TestBuildSetPriceConfigTx(t *testing.T) {
 		TxPurposeSetExecutorPriceConfig,
 		"0x9999999999999999999999999999999999999999",
 		testPriceConfig(),
-		TxFees{
-			GasLimit:             big.NewInt(100_000),
-			MaxFeePerGas:         big.NewInt(2_000_000_000),
-			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		},
 	)
 	if err != nil {
 		t.Fatalf("BuildSetPriceConfigTx() error = %v", err)

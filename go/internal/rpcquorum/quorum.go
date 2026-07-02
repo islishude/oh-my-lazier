@@ -20,10 +20,13 @@ var _ interface {
 	ChainID(context.Context) (*big.Int, error)
 	CheckHead(context.Context) (HeadResult, error)
 	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
+	EstimateGas(context.Context, ethereum.CallMsg) (uint64, error)
 	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
+	HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error)
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
 	SendTransaction(context.Context, *gethtypes.Transaction) error
 	SuggestGasPrice(context.Context) (*big.Int, error)
+	SuggestGasTipCap(context.Context) (*big.Int, error)
 	TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error)
 } = (*Client)(nil)
 
@@ -282,6 +285,19 @@ func (c *Client) CodeAt(ctx context.Context, account common.Address, blockNumber
 	return client.CodeAt(ctx, account, blockNumber)
 }
 
+// EstimateGas returns the first healthy provider's gas limit estimate.
+func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return 0, err
+	}
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return 0, err
+	}
+	return client.EstimateGas(ctx, call)
+}
+
 // FilterLogs returns logs from the first currently healthy provider for a bounded query.
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
 	index, err := c.firstHealthyProvider()
@@ -306,6 +322,28 @@ func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	return client.SuggestGasPrice(ctx)
+}
+
+// SuggestGasTipCap returns the first healthy provider's EIP-1559 priority-fee estimate.
+func (c *Client) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	return client.SuggestGasTipCap(ctx)
+}
+
+// HeaderByNumber returns a block header from the first currently healthy provider.
+func (c *Client) HeaderByNumber(ctx context.Context, number *big.Int) (*gethtypes.Header, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	return c.headerByNumberFromProvider(ctx, index, number)
 }
 
 // PendingNonceAt returns the first healthy provider's pending account nonce.

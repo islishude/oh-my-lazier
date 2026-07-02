@@ -230,11 +230,6 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 		map[uint32]Settings{
 			packet.DstEID: {
 				SignerID: "0x8888888888888888888888888888888888888888",
-				TxFees: TxFees{
-					GasLimit:             big.NewInt(120000),
-					MaxFeePerGas:         big.NewInt(2_000_000_000),
-					MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-				},
 			},
 		},
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
@@ -275,7 +270,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 
 func TestBuildVerifyTxRejectsMissingConfirmations(t *testing.T) {
 	packet := testDVNPacket()
-	_, err := BuildVerifyTx(packet, common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0, "0x9999999999999999999999999999999999999999", TxFees{})
+	_, err := BuildVerifyTx(packet, common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0, "0x9999999999999999999999999999999999999999")
 	if err == nil {
 		t.Fatal("BuildVerifyTx() error = nil, want missing confirmations error")
 	}
@@ -481,10 +476,13 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: config.ExecutorTxRoleConfig{
+						Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+						MaxFeePerGasWei:         "2000000000",
+						MaxPriorityFeePerGasWei: "1000000000",
+					},
 					DVN: config.DVNTxRoleConfig{
 						Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-						TxGasLimit:              120000,
 						MaxFeePerGasWei:         "2000000000",
 						MaxPriorityFeePerGasWei: "1000000000",
 					},
@@ -499,10 +497,13 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x8888888888888888888888888888888888888888")},
+					Executor: config.ExecutorTxRoleConfig{
+						Signer:                  config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+						MaxFeePerGasWei:         "2000000000",
+						MaxPriorityFeePerGasWei: "1000000000",
+					},
 					DVN: config.DVNTxRoleConfig{
 						Signer:                  config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-						TxGasLimit:              120000,
 						MaxFeePerGasWei:         "2000000000",
 						MaxPriorityFeePerGasWei: "1000000000",
 					},

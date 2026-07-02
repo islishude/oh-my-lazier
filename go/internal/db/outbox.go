@@ -35,16 +35,13 @@ var pendingNonceStatuses = []string{
 
 // TxRequest describes a durable transaction request before nonce assignment.
 type TxRequest struct {
-	ChainEID             uint32
-	Purpose              string
-	GUID                 []byte
-	To                   common.Address
-	Calldata             []byte
-	Value                *big.Int
-	GasLimit             *big.Int
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
-	SignerID             string
+	ChainEID uint32
+	Purpose  string
+	GUID     []byte
+	To       common.Address
+	Calldata []byte
+	Value    *big.Int
+	SignerID string
 }
 
 // ClaimedTx records the queued outbox row and nonce reserved by ClaimNextNonce.
@@ -66,6 +63,25 @@ type OutboxTx struct {
 	MaxFeePerGas         *big.Int
 	MaxPriorityFeePerGas *big.Int
 	Nonce                uint64
+	TxHash               common.Hash
+	SignerID             string
+	Status               string
+	Attempts             uint32
+}
+
+// QueuedOutboxTx is a queued transaction request before the tx manager decides whether to sign it.
+type QueuedOutboxTx struct {
+	ID                   int64
+	ChainEID             uint32
+	Purpose              string
+	GUID                 []byte
+	To                   common.Address
+	Calldata             []byte
+	Value                *big.Int
+	GasLimit             uint64
+	MaxFeePerGas         *big.Int
+	MaxPriorityFeePerGas *big.Int
+	Nonce                *uint64
 	TxHash               common.Hash
 	SignerID             string
 	Status               string
@@ -94,13 +110,57 @@ func (s *Store) EnqueueTx(ctx context.Context, request TxRequest) (int64, error)
 	var id int64
 	err := s.pool.QueryRow(ctx, `
 		INSERT INTO tx_outbox (
-			chain_eid, purpose, guid, to_address, calldata, value, gas_limit,
-			max_fee_per_gas, max_priority_fee_per_gas, signer_id, status
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, status
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, request.ChainEID, request.Purpose, optionalBytes(request.GUID), addressBytes(request.To), request.Calldata, value.String(), numericString(request.GasLimit), numericString(request.MaxFeePerGas), numericString(request.MaxPriorityFeePerGas), request.SignerID, TxStatusQueued).Scan(&id)
+	`, request.ChainEID, request.Purpose, optionalBytes(request.GUID), addressBytes(request.To), request.Calldata, value.String(), request.SignerID, TxStatusQueued).Scan(&id)
 	return id, err
+}
+
+// PeekQueuedTx returns the next queued outbox row for one chain signer without reserving a nonce.
+func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID string) (QueuedOutboxTx, error) {
+	if chainEID == 0 {
+		return QueuedOutboxTx{}, errors.New("chain eid is required")
+	}
+	if signerID == "" {
+		return QueuedOutboxTx{}, errors.New("signer id is required")
+	}
+	var row outboxTxRow
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			id, chain_eid, purpose, guid, to_address, calldata, value::text,
+			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
+			nonce, tx_hash, signer_id, status, attempts
+		FROM tx_outbox
+		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
+		ORDER BY id
+		LIMIT 1
+	`, chainEID, signerID, TxStatusQueued).Scan(
+		&row.ID,
+		&row.ChainEID,
+		&row.Purpose,
+		&row.GUID,
+		&row.ToAddress,
+		&row.Calldata,
+		&row.Value,
+		&row.GasLimit,
+		&row.MaxFeePerGas,
+		&row.MaxPriorityFeePerGas,
+		&row.Nonce,
+		&row.TxHash,
+		&row.SignerID,
+		&row.Status,
+		&row.Attempts,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return QueuedOutboxTx{}, pgx.ErrNoRows
+	}
+	if err != nil {
+		return QueuedOutboxTx{}, err
+	}
+	return row.toQueuedOutboxTx()
 }
 
 // ClaimNextNonce reserves the next nonce for one queued outbox row.
@@ -110,6 +170,18 @@ func (s *Store) EnqueueTx(ctx context.Context, request TxRequest) (int64, error)
 // nonce is preserved; otherwise the assigned nonce is max(rpcPendingNonce,
 // highest locally pending nonce + 1).
 func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
+	return s.claimQueuedNonce(ctx, 0, chainEID, signerID, rpcPendingNonce)
+}
+
+// ClaimTxNonce reserves a nonce for the selected queued outbox row.
+func (s *Store) ClaimTxNonce(ctx context.Context, id int64, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
+	if id <= 0 {
+		return ClaimedTx{}, errors.New("outbox tx id is required")
+	}
+	return s.claimQueuedNonce(ctx, id, chainEID, signerID, rpcPendingNonce)
+}
+
+func (s *Store) claimQueuedNonce(ctx context.Context, selectedID int64, chainEID uint32, signerID string, rpcPendingNonce uint64) (ClaimedTx, error) {
 	if chainEID == 0 {
 		return ClaimedTx{}, errors.New("chain eid is required")
 	}
@@ -129,19 +201,29 @@ func (s *Store) ClaimNextNonce(ctx context.Context, chainEID uint32, signerID st
 
 	var id int64
 	var assignedNonce *int64
-	err = tx.QueryRow(ctx, `
-		SELECT id, nonce
-		FROM tx_outbox
-		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
-		ORDER BY id
-		FOR UPDATE SKIP LOCKED
-		LIMIT 1
-	`, chainEID, signerID, TxStatusQueued).Scan(&id, &assignedNonce)
-	if errors.Is(err, pgx.ErrNoRows) {
+	var queryErr error
+	if selectedID > 0 {
+		queryErr = tx.QueryRow(ctx, `
+			SELECT id, nonce
+			FROM tx_outbox
+			WHERE id = $1 AND chain_eid = $2 AND signer_id = $3 AND status = $4
+			FOR UPDATE
+		`, selectedID, chainEID, signerID, TxStatusQueued).Scan(&id, &assignedNonce)
+	} else {
+		queryErr = tx.QueryRow(ctx, `
+			SELECT id, nonce
+			FROM tx_outbox
+			WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
+			ORDER BY id
+			FOR UPDATE SKIP LOCKED
+			LIMIT 1
+		`, chainEID, signerID, TxStatusQueued).Scan(&id, &assignedNonce)
+	}
+	if errors.Is(queryErr, pgx.ErrNoRows) {
 		return ClaimedTx{}, pgx.ErrNoRows
 	}
-	if err != nil {
-		return ClaimedTx{}, err
+	if queryErr != nil {
+		return ClaimedTx{}, queryErr
 	}
 
 	var nextNonce uint64
@@ -267,6 +349,38 @@ func (s *Store) MarkTxSigned(ctx context.Context, id int64, txHash common.Hash) 
 	return s.updateTxStatus(ctx, id, TxStatusSigned, txHash, "")
 }
 
+// MarkTxSignedWithGasAndFees records the signed transaction hash and exact gas settings used to sign it.
+func (s *Store) MarkTxSignedWithGasAndFees(ctx context.Context, id int64, txHash common.Hash, gasLimit uint64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("tx hash is required")
+	}
+	if gasLimit == 0 {
+		return errors.New("gas limit is required")
+	}
+	if maxFeePerGas == nil || maxFeePerGas.Sign() <= 0 {
+		return errors.New("max fee per gas is required")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			tx_hash = $2,
+			gas_limit = $3,
+			max_fee_per_gas = $4,
+			max_priority_fee_per_gas = $5,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $6
+	`, TxStatusSigned, txHash.Bytes(), gasLimit, maxFeePerGas.String(), numericString(maxPriorityFeePerGas), id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d not found", id)
+	}
+	return nil
+}
+
 // MarkTxBroadcast records that an outbox transaction was broadcast.
 func (s *Store) MarkTxBroadcast(ctx context.Context, id int64, txHash common.Hash) error {
 	return s.updateTxStatus(ctx, id, TxStatusBroadcast, txHash, "")
@@ -286,37 +400,8 @@ func (s *Store) MarkTxFailed(ctx context.Context, id int64, failure error) error
 	return s.updateTxStatus(ctx, id, TxStatusFailed, common.Hash{}, message)
 }
 
-// PrepareReplacementTx bumps fees on a transaction while preserving its nonce for re-signing.
-func (s *Store) PrepareReplacementTx(ctx context.Context, id int64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
-	if maxFeePerGas == nil || maxFeePerGas.Sign() <= 0 {
-		return errors.New("replacement max fee per gas is required")
-	}
-	if maxPriorityFeePerGas == nil || maxPriorityFeePerGas.Sign() <= 0 {
-		return errors.New("replacement max priority fee per gas is required")
-	}
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE tx_outbox
-		SET
-			max_fee_per_gas = $1,
-			max_priority_fee_per_gas = $2,
-			status = $3,
-			tx_hash = NULL,
-			attempts = attempts + 1,
-			last_error = NULL,
-			updated_at = now()
-		WHERE id = $4 AND nonce IS NOT NULL
-	`, maxFeePerGas.String(), maxPriorityFeePerGas.String(), TxStatusQueued, id)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox tx %d is not replaceable", id)
-	}
-	return nil
-}
-
-// PrepareLegacyReplacementTx resets a transaction for re-signing with a fresh legacy gas price while preserving its nonce.
-func (s *Store) PrepareLegacyReplacementTx(ctx context.Context, id int64) error {
+// PrepareReplacementTx resets a transaction for re-signing while preserving its nonce and last signed fees.
+func (s *Store) PrepareReplacementTx(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
 		SET
@@ -337,26 +422,18 @@ func (s *Store) PrepareLegacyReplacementTx(ctx context.Context, id int64) error 
 }
 
 // RetryFailedTx returns a failed transaction request to the queue with a fresh nonce assignment.
-func (s *Store) RetryFailedTx(ctx context.Context, id int64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
-	if maxFeePerGas != nil && maxFeePerGas.Sign() <= 0 {
-		return errors.New("retry max fee per gas must be positive")
-	}
-	if maxPriorityFeePerGas != nil && maxPriorityFeePerGas.Sign() <= 0 {
-		return errors.New("retry max priority fee per gas must be positive")
-	}
+func (s *Store) RetryFailedTx(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
 		SET
 			status = $1,
 			nonce = NULL,
 			tx_hash = NULL,
-			max_fee_per_gas = COALESCE($2, max_fee_per_gas),
-			max_priority_fee_per_gas = COALESCE($3, max_priority_fee_per_gas),
 			attempts = attempts + 1,
 			last_error = NULL,
 			updated_at = now()
-		WHERE id = $4 AND status = $5
-	`, TxStatusQueued, numericString(maxFeePerGas), numericString(maxPriorityFeePerGas), id, TxStatusFailed)
+		WHERE id = $2 AND status = $3
+	`, TxStatusQueued, id, TxStatusFailed)
 	if err != nil {
 		return err
 	}
@@ -452,39 +529,69 @@ type outboxTxRow struct {
 }
 
 func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
-	value, err := parseBigInt("value", &r.Value, true)
+	queued, err := r.toQueuedOutboxTx()
 	if err != nil {
 		return OutboxTx{}, err
+	}
+	nonce := uint64(0)
+	if queued.Nonce != nil {
+		nonce = *queued.Nonce
+	}
+	return OutboxTx{
+		ID:                   queued.ID,
+		ChainEID:             queued.ChainEID,
+		Purpose:              queued.Purpose,
+		GUID:                 queued.GUID,
+		To:                   queued.To,
+		Calldata:             queued.Calldata,
+		Value:                queued.Value,
+		GasLimit:             queued.GasLimit,
+		MaxFeePerGas:         queued.MaxFeePerGas,
+		MaxPriorityFeePerGas: queued.MaxPriorityFeePerGas,
+		Nonce:                nonce,
+		TxHash:               queued.TxHash,
+		SignerID:             queued.SignerID,
+		Status:               queued.Status,
+		Attempts:             queued.Attempts,
+	}, nil
+}
+
+func (r outboxTxRow) toQueuedOutboxTx() (QueuedOutboxTx, error) {
+	value, err := parseBigInt("value", &r.Value, true)
+	if err != nil {
+		return QueuedOutboxTx{}, err
 	}
 	maxFeePerGas, err := parseBigInt("max_fee_per_gas", r.MaxFeePerGas, false)
 	if err != nil {
-		return OutboxTx{}, err
+		return QueuedOutboxTx{}, err
 	}
 	maxPriorityFeePerGas, err := parseBigInt("max_priority_fee_per_gas", r.MaxPriorityFeePerGas, false)
 	if err != nil {
-		return OutboxTx{}, err
+		return QueuedOutboxTx{}, err
 	}
 	gasLimit, err := parseUint64("gas_limit", r.GasLimit)
 	if err != nil {
-		return OutboxTx{}, err
+		return QueuedOutboxTx{}, err
 	}
-	if r.Nonce == nil {
-		return OutboxTx{}, errors.New("outbox tx nonce is not assigned")
-	}
-	if *r.Nonce < 0 {
-		return OutboxTx{}, fmt.Errorf("outbox tx nonce is negative: %d", *r.Nonce)
+	var nonce *uint64
+	if r.Nonce != nil {
+		if *r.Nonce < 0 {
+			return QueuedOutboxTx{}, fmt.Errorf("outbox tx nonce is negative: %d", *r.Nonce)
+		}
+		parsedNonce := uint64(*r.Nonce)
+		nonce = &parsedNonce
 	}
 	if len(r.ToAddress) != common.AddressLength {
-		return OutboxTx{}, fmt.Errorf("outbox tx to_address has length %d", len(r.ToAddress))
+		return QueuedOutboxTx{}, fmt.Errorf("outbox tx to_address has length %d", len(r.ToAddress))
 	}
 	var txHash common.Hash
 	if r.TxHash != nil {
 		if len(*r.TxHash) != common.HashLength {
-			return OutboxTx{}, fmt.Errorf("outbox tx tx_hash has length %d", len(*r.TxHash))
+			return QueuedOutboxTx{}, fmt.Errorf("outbox tx tx_hash has length %d", len(*r.TxHash))
 		}
 		txHash = common.BytesToHash(*r.TxHash)
 	}
-	return OutboxTx{
+	return QueuedOutboxTx{
 		ID:                   r.ID,
 		ChainEID:             r.ChainEID,
 		Purpose:              r.Purpose,
@@ -495,7 +602,7 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 		GasLimit:             gasLimit,
 		MaxFeePerGas:         maxFeePerGas,
 		MaxPriorityFeePerGas: maxPriorityFeePerGas,
-		Nonce:                uint64(*r.Nonce),
+		Nonce:                nonce,
 		TxHash:               txHash,
 		SignerID:             r.SignerID,
 		Status:               r.Status,

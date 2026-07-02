@@ -5,19 +5,24 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
+	"github.com/islishude/oh-my-lazier/go/internal/txmgr"
 	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
+	stubReadTxHeader(t, &gethtypes.Header{})
+
 	dir := t.TempDir()
 	const password = "test-password"
 	account, err := gethkeystore.StoreKey(dir, password, gethkeystore.StandardScryptN, gethkeystore.StandardScryptP)
@@ -43,7 +48,6 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want one per chain", len(targets))
 	}
-	wantTxTypes := map[uint32]string{40161: config.TxTypeDynamicFee, 40245: config.TxTypeLegacy}
 	for _, target := range targets {
 		if target.Signer.Address() != account.Address {
 			t.Fatalf("target signer = %s, want %s", target.Signer.Address(), account.Address)
@@ -54,9 +58,40 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 		if target.Client == nil {
 			t.Fatal("target client is nil")
 		}
-		if target.TxType != wantTxTypes[target.ChainEID] {
-			t.Fatalf("target tx type for chain %d = %q, want %q", target.ChainEID, target.TxType, wantTxTypes[target.ChainEID])
+		if len(target.FeePolicies) != 2 {
+			t.Fatalf("target fee policies for chain %d = %d, want 2", target.ChainEID, len(target.FeePolicies))
 		}
+	}
+}
+
+func TestTxTargetsRejectsDynamicFeeChainWithoutPriorityCap(t *testing.T) {
+	stubReadTxHeader(t, &gethtypes.Header{BaseFee: bigOne()})
+
+	dir := t.TempDir()
+	const password = "test-password"
+	account, err := gethkeystore.StoreKey(dir, password, gethkeystore.StandardScryptN, gethkeystore.StandardScryptP)
+	if err != nil {
+		t.Fatalf("StoreKey() error = %v", err)
+	}
+	t.Setenv("KEYSTORE_PASSWORD", password)
+
+	cfg := testConfig(account.Address.Hex(), filepath.Clean(account.URL.Path))
+	cfg.Chains[0].TxRoles.Executor.MaxPriorityFeePerGasWei = ""
+	registry, err := chain.NewRegistry(cfg.Chains, cfg.Pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	worker, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	_, err = worker.txTargets(t.Context(), registry)
+	if err == nil {
+		t.Fatal("txTargets() error = nil, want dynamic priority cap error")
+	}
+	if !strings.Contains(err.Error(), "max_priority_fee_per_gas_wei is required") {
+		t.Fatalf("txTargets() error = %v, want priority cap error", err)
 	}
 }
 
@@ -239,7 +274,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: signerAddress},
+					Executor: testExecutorRole(signerAddress),
 				},
 			},
 			{
@@ -247,12 +282,11 @@ func testConfig(signerID, keystorePath string) config.Config {
 				Name:            "base-sepolia",
 				Family:          config.ChainFamilyEVM,
 				ChainID:         84532,
-				TxType:          config.TxTypeLegacy,
 				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: signerAddress},
+					Executor: testExecutorRole(signerAddress),
 				},
 			},
 		},
@@ -278,6 +312,27 @@ func testConfig(signerID, keystorePath string) config.Config {
 	}
 }
 
+func stubReadTxHeader(t *testing.T, header *gethtypes.Header) {
+	t.Helper()
+	original := readTxHeader
+	t.Cleanup(func() { readTxHeader = original })
+	readTxHeader = func(context.Context, txmgr.ChainClient) (*gethtypes.Header, error) {
+		return header, nil
+	}
+}
+
+func bigOne() *big.Int {
+	return big.NewInt(1)
+}
+
+func testExecutorRole(signer config.EVMAddress) config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  signer,
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
+}
+
 func testPricingConfig() config.PricingConfig {
 	return config.PricingConfig{
 		Enabled:                 true,
@@ -289,7 +344,6 @@ func testPricingConfig() config.PricingConfig {
 		MaxDeviationBps:         500,
 		GasSpikeBps:             1000,
 		AllowUniswapFallback:    true,
-		TxGasLimit:              100000,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
 		Chains: []config.PricingChainConfig{

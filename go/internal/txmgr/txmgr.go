@@ -15,11 +15,11 @@ const defaultPollInterval = 5 * time.Second
 
 // Target binds one configured chain RPC client to the signer that should consume its tx_outbox rows.
 type Target struct {
-	ChainEID uint32
-	ChainID  *big.Int
-	TxType   string
-	Signer   signer.Signer
-	Client   ChainClient
+	ChainEID    uint32
+	ChainID     *big.Int
+	Signer      signer.Signer
+	Client      ChainClient
+	FeePolicies map[string]FeePolicy
 }
 
 // Manager owns transaction outbox processing and nonce assignment.
@@ -90,6 +90,9 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 		if errors.Is(err, ErrNoQueuedTx) {
 			continue
 		}
+		if errors.Is(err, ErrTxDeferred) {
+			continue
+		}
 		if err != nil {
 			return processed, err
 		}
@@ -100,7 +103,7 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 }
 
 func (m *Manager) processTarget(ctx context.Context, target Target) (int64, error) {
-	return m.ProcessNext(ctx, target.ChainEID, target.ChainID, target.TxType, target.Signer, target.Client)
+	return m.ProcessNext(ctx, target)
 }
 
 func (m *Manager) processTargetReceipt(ctx context.Context, target Target) (int64, error) {

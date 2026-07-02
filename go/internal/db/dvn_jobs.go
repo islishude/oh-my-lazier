@@ -220,12 +220,12 @@ func (s *Store) EnqueueDVNVerifyTx(ctx context.Context, guid common.Hash, expect
 	var id int64
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO tx_outbox (
-			chain_eid, purpose, guid, to_address, calldata, value, gas_limit,
-			max_fee_per_gas, max_priority_fee_per_gas, signer_id, status
+			chain_eid, purpose, guid, to_address, calldata, value,
+			signer_id, status
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id
-	`, request.ChainEID, request.Purpose, optionalBytes(request.GUID), addressBytes(request.To), request.Calldata, value.String(), numericString(request.GasLimit), numericString(request.MaxFeePerGas), numericString(request.MaxPriorityFeePerGas), request.SignerID, TxStatusQueued).Scan(&id); err != nil {
+	`, request.ChainEID, request.Purpose, optionalBytes(request.GUID), addressBytes(request.To), request.Calldata, value.String(), request.SignerID, TxStatusQueued).Scan(&id); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(ctx, `

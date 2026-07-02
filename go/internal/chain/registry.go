@@ -14,7 +14,6 @@ type Chain struct {
 	EID                    uint32
 	Name                   string
 	ChainID                *big.Int
-	TxType                 string
 	EndpointAddress        common.Address
 	Confirmations          uint64
 	StartBlockNumber       uint64
@@ -31,13 +30,14 @@ type TxRoles struct {
 
 // ExecutorTxRole identifies the executor transaction signer for one chain.
 type ExecutorTxRole struct {
-	SignerID string
+	SignerID                string
+	MaxFeePerGasWei         string
+	MaxPriorityFeePerGasWei string
 }
 
 // DVNTxRole identifies active DVN transaction settings for one chain.
 type DVNTxRole struct {
 	SignerID                string
-	TxGasLimit              uint64
 	MaxFeePerGasWei         string
 	MaxPriorityFeePerGasWei string
 }
@@ -81,16 +81,18 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			EID:                    cfg.EID,
 			Name:                   cfg.Name,
 			ChainID:                new(big.Int).SetUint64(cfg.ChainID),
-			TxType:                 config.NormalizeTxType(cfg.TxType),
 			EndpointAddress:        cfg.EndpointAddress.Common(),
 			Confirmations:          cfg.Confirmations,
 			StartBlockNumber:       cfg.StartBlockNumber,
 			IndexerQueryBlockRange: cfg.IndexerQueryBlockRange,
 			TxRoles: TxRoles{
-				Executor: ExecutorTxRole{SignerID: cfg.TxRoles.Executor.Signer.Hex()},
+				Executor: ExecutorTxRole{
+					SignerID:                cfg.TxRoles.Executor.Signer.Hex(),
+					MaxFeePerGasWei:         cfg.TxRoles.Executor.MaxFeePerGasWei,
+					MaxPriorityFeePerGasWei: cfg.TxRoles.Executor.MaxPriorityFeePerGasWei,
+				},
 				DVN: DVNTxRole{
 					SignerID:                optionalSignerID(cfg.TxRoles.DVN.Signer),
-					TxGasLimit:              cfg.TxRoles.DVN.TxGasLimit,
 					MaxFeePerGasWei:         cfg.TxRoles.DVN.MaxFeePerGasWei,
 					MaxPriorityFeePerGasWei: cfg.TxRoles.DVN.MaxPriorityFeePerGasWei,
 				},

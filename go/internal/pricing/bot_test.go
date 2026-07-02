@@ -152,11 +152,6 @@ func testSettings() Settings {
 		MaxDeviation:  500,
 		GasSpikeBps:   1000,
 		AllowFallback: true,
-		TxFees: TxFees{
-			GasLimit:             big.NewInt(100_000),
-			MaxFeePerGas:         big.NewInt(2_000_000_000),
-			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		},
 	}
 }
 
@@ -172,7 +167,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
 		{
@@ -184,7 +179,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
 	}, []config.PathwayConfig{
@@ -223,6 +218,14 @@ func testRegistry(t *testing.T) *chain.Registry {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	return registry
+}
+
+func testExecutorRole() config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
 }
 
 func discardLogger() *slog.Logger {

@@ -97,7 +97,7 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	if !ready {
 		return false, nil
 	}
-	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID, TxFees{})
+	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {
 		return false, err
 	}
@@ -199,7 +199,7 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	if !ready {
 		return false, nil
 	}
-	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID, TxFees{})
+	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {
 		return false, err
 	}

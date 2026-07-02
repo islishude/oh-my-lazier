@@ -12,6 +12,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/configcheck"
@@ -30,6 +32,10 @@ import (
 
 var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (configcheck.Report, error) {
 	return configcheck.Check(ctx, registry)
+}
+
+var readTxHeader = func(ctx context.Context, client txmgr.ChainClient) (*gethtypes.Header, error) {
+	return client.HeaderByNumber(ctx, nil)
 }
 
 const loopRestartDelay = 5 * time.Second
@@ -226,15 +232,6 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	if err != nil {
 		return nil, err
 	}
-	dynamicFeeCapsRequired := a.requiresDynamicFeeCaps()
-	maxFeePerGas, err := parseOptionalBigInt(a.cfg.Pricing.MaxFeePerGasWei, dynamicFeeCapsRequired)
-	if err != nil {
-		return nil, err
-	}
-	maxPriorityFeePerGas, err := parseOptionalBigInt(a.cfg.Pricing.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
-	if err != nil {
-		return nil, err
-	}
 	settings := pricing.Settings{
 		Enabled:       true,
 		SignerID:      a.cfg.Pricing.Signer.Hex(),
@@ -245,11 +242,6 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		MaxDeviation:  a.cfg.Pricing.MaxDeviationBps,
 		GasSpikeBps:   a.cfg.Pricing.GasSpikeBps,
 		AllowFallback: a.cfg.Pricing.AllowUniswapFallback,
-		TxFees: pricing.TxFees{
-			GasLimit:             new(big.Int).SetUint64(a.cfg.Pricing.TxGasLimit),
-			MaxFeePerGas:         maxFeePerGas,
-			MaxPriorityFeePerGas: maxPriorityFeePerGas,
-		},
 	}
 	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
 	coinMarketCapClient, err := pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
@@ -332,22 +324,8 @@ func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker,
 		if err != nil {
 			return nil, err
 		}
-		dynamicFeeCapsRequired := dstChain.TxType == config.TxTypeDynamicFee
-		maxFeePerGas, err := parseOptionalBigInt(dstChain.TxRoles.DVN.MaxFeePerGasWei, dynamicFeeCapsRequired)
-		if err != nil {
-			return nil, err
-		}
-		maxPriorityFeePerGas, err := parseOptionalBigInt(dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei, dynamicFeeCapsRequired)
-		if err != nil {
-			return nil, err
-		}
 		settings[pathway.DstEID] = dvn.Settings{
 			SignerID: dstChain.TxRoles.DVN.SignerID,
-			TxFees: dvn.TxFees{
-				GasLimit:             new(big.Int).SetUint64(dstChain.TxRoles.DVN.TxGasLimit),
-				MaxFeePerGas:         maxFeePerGas,
-				MaxPriorityFeePerGas: maxPriorityFeePerGas,
-			},
 		}
 	}
 	return dvn.NewWithSettings(store, registry, settings, a.logger), nil
@@ -362,11 +340,28 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		chainEID uint32
 		signerID string
 	}
-	required := make(map[targetKey]struct{})
+	required := make(map[targetKey]map[string]txmgr.FeePolicy)
+	addPolicy := func(chainEID uint32, signerID, purpose string, policy txmgr.FeePolicy) {
+		key := targetKey{chainEID: chainEID, signerID: signerID}
+		if required[key] == nil {
+			required[key] = make(map[string]txmgr.FeePolicy)
+		}
+		required[key][purpose] = policy
+	}
 	for _, configuredChain := range registry.All() {
-		required[targetKey{chainEID: configuredChain.EID, signerID: configuredChain.TxRoles.Executor.SignerID}] = struct{}{}
+		executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
+		if err != nil {
+			return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
+		}
+		addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy)
+		addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy)
 		if a.cfg.Pricing.Enabled {
-			required[targetKey{chainEID: configuredChain.EID, signerID: a.cfg.Pricing.Signer.Hex()}] = struct{}{}
+			pricingPolicy, err := feePolicy(a.cfg.Pricing.MaxFeePerGasWei, a.cfg.Pricing.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return nil, fmt.Errorf("pricing fee policy: %w", err)
+			}
+			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetExecutorPriceConfig, pricingPolicy)
+			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetDVNPriceConfig, pricingPolicy)
 		}
 	}
 	for _, pathway := range registry.Pathways() {
@@ -377,12 +372,19 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		if err != nil {
 			return nil, err
 		}
-		required[targetKey{chainEID: dstChain.EID, signerID: dstChain.TxRoles.DVN.SignerID}] = struct{}{}
+		dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
+		if err != nil {
+			return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
+		}
+		addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy)
 	}
 	targets := make([]txmgr.Target, 0, len(required))
-	for key := range required {
+	for key, policies := range required {
 		configuredChain, err := registry.Get(key.chainEID)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateRuntimeFeePolicies(ctx, configuredChain, policies); err != nil {
 			return nil, err
 		}
 		configuredSigner, ok := signers[key.signerID]
@@ -390,11 +392,11 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			return nil, errors.New("configured signer was not loaded")
 		}
 		targets = append(targets, txmgr.Target{
-			ChainEID: configuredChain.EID,
-			ChainID:  new(big.Int).Set(configuredChain.ChainID),
-			TxType:   configuredChain.TxType,
-			Signer:   configuredSigner,
-			Client:   configuredChain.RPC,
+			ChainEID:    configuredChain.EID,
+			ChainID:     new(big.Int).Set(configuredChain.ChainID),
+			Signer:      configuredSigner,
+			Client:      configuredChain.RPC,
+			FeePolicies: cloneFeePolicies(policies),
 		})
 	}
 	return targets, nil
@@ -442,15 +444,6 @@ func loadKMSAWSConfig(ctx context.Context, cfg config.KMSSignerConfig) (aws.Conf
 	return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 }
 
-func (a *App) requiresDynamicFeeCaps() bool {
-	for _, chain := range a.cfg.Chains {
-		if config.NormalizeTxType(chain.TxType) == config.TxTypeDynamicFee {
-			return true
-		}
-	}
-	return false
-}
-
 func parseBigInt(value string) (*big.Int, error) {
 	parsed, ok := new(big.Int).SetString(value, 10)
 	if !ok {
@@ -459,9 +452,44 @@ func parseBigInt(value string) (*big.Int, error) {
 	return parsed, nil
 }
 
-func parseOptionalBigInt(value string, required bool) (*big.Int, error) {
-	if value == "" && !required {
-		return nil, nil
+func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy, error) {
+	maxFeePerGas, err := parseBigInt(maxFeePerGasWei)
+	if err != nil {
+		return txmgr.FeePolicy{}, err
 	}
-	return parseBigInt(value)
+	var maxPriorityFeePerGas *big.Int
+	if maxPriorityFeePerGasWei != "" {
+		maxPriorityFeePerGas, err = parseBigInt(maxPriorityFeePerGasWei)
+		if err != nil {
+			return txmgr.FeePolicy{}, err
+		}
+	}
+	return txmgr.FeePolicy{MaxFeePerGas: maxFeePerGas, MaxPriorityFeePerGas: maxPriorityFeePerGas}, nil
+}
+
+func validateRuntimeFeePolicies(ctx context.Context, configuredChain chain.Chain, policies map[string]txmgr.FeePolicy) error {
+	header, err := readTxHeader(ctx, configuredChain.RPC)
+	if err != nil {
+		return fmt.Errorf("read latest header for chain %s: %w", configuredChain.Name, err)
+	}
+	if header == nil || header.BaseFee == nil {
+		return nil
+	}
+	for purpose, policy := range policies {
+		if policy.MaxPriorityFeePerGas == nil || policy.MaxPriorityFeePerGas.Sign() <= 0 {
+			return fmt.Errorf("chain %s purpose %s max_priority_fee_per_gas_wei is required because latest header has base fee", configuredChain.Name, purpose)
+		}
+	}
+	return nil
+}
+
+func cloneFeePolicies(policies map[string]txmgr.FeePolicy) map[string]txmgr.FeePolicy {
+	out := make(map[string]txmgr.FeePolicy, len(policies))
+	for purpose, policy := range policies {
+		out[purpose] = txmgr.FeePolicy{
+			MaxFeePerGas:         bigutil.Clone(policy.MaxFeePerGas),
+			MaxPriorityFeePerGas: bigutil.Clone(policy.MaxPriorityFeePerGas),
+		}
+	}
+	return out
 }

@@ -13,13 +13,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	// TxTypeDynamicFee selects EIP-1559 dynamic-fee transaction signing.
-	TxTypeDynamicFee = "dynamic_fee"
-	// TxTypeLegacy selects legacy gas-price transaction signing.
-	TxTypeLegacy = "legacy"
-)
-
 // ChainFamily identifies the chain runtime family for a configured LayerZero endpoint.
 type ChainFamily string
 
@@ -55,13 +48,14 @@ type MetricsConfig struct {
 
 // ExecutorTxRoleConfig controls executor transaction submission on one chain.
 type ExecutorTxRoleConfig struct {
-	Signer EVMAddress `yaml:"signer"`
+	Signer                  EVMAddress `yaml:"signer"`
+	MaxFeePerGasWei         string     `yaml:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string     `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // DVNTxRoleConfig controls active DVN verification transaction submission on one chain.
 type DVNTxRoleConfig struct {
 	Signer                  EVMAddress `yaml:"signer"`
-	TxGasLimit              uint64     `yaml:"tx_gas_limit"`
 	MaxFeePerGasWei         string     `yaml:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string     `yaml:"max_priority_fee_per_gas_wei"`
 }
@@ -83,7 +77,6 @@ type PricingConfig struct {
 	MaxDeviationBps         uint64               `yaml:"max_deviation_bps"`
 	GasSpikeBps             uint64               `yaml:"gas_spike_bps"`
 	AllowUniswapFallback    bool                 `yaml:"allow_uniswap_fallback"`
-	TxGasLimit              uint64               `yaml:"tx_gas_limit"`
 	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string               `yaml:"max_priority_fee_per_gas_wei"`
 	PrimarySource           string               `yaml:"primary_source"`
@@ -142,7 +135,6 @@ type ChainConfig struct {
 	Name                   string             `yaml:"name"`
 	Family                 ChainFamily        `yaml:"family"`
 	ChainID                uint64             `yaml:"chain_id"`
-	TxType                 string             `yaml:"tx_type"`
 	EndpointAddress        EVMAddress         `yaml:"endpoint_address"`
 	Confirmations          uint64             `yaml:"confirmations"`
 	StartBlockNumber       uint64             `yaml:"start_block_number"`
@@ -223,7 +215,6 @@ func load(path string, applyEnv bool) (Config, error) {
 		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
 			cfg.Chains[idx].IndexerQueryBlockRange = 500
 		}
-		cfg.Chains[idx].TxType = NormalizeTxType(cfg.Chains[idx].TxType)
 	}
 	for idx := range cfg.Pathways {
 		if cfg.Pathways[idx].DVN.Mode == "" {
@@ -231,14 +222,6 @@ func load(path string, applyEnv bool) (Config, error) {
 		}
 	}
 	return cfg, cfg.Validate()
-}
-
-// NormalizeTxType applies the worker's default transaction type.
-func NormalizeTxType(txType string) string {
-	if txType == "" {
-		return TxTypeDynamicFee
-	}
-	return txType
 }
 
 // Validate checks that required chains, pathways, and mode settings are internally consistent.
@@ -255,8 +238,6 @@ func (c Config) Validate() error {
 	}
 	seen := make(map[uint32]struct{}, len(c.Chains))
 	chains := make(map[uint32]ChainConfig, len(c.Chains))
-	dynamicFeeChains := make(map[uint32]bool, len(c.Chains))
-	dynamicFeeCapsRequired := false
 	for _, chain := range c.Chains {
 		if chain.EID == 0 {
 			return errors.New("chain eid is required")
@@ -274,22 +255,11 @@ func (c Config) Validate() error {
 		if chain.ChainID <= 0 {
 			return fmt.Errorf("chain %s chain_id is required", chain.Name)
 		}
-		switch NormalizeTxType(chain.TxType) {
-		case TxTypeDynamicFee:
-			dynamicFeeCapsRequired = true
-			dynamicFeeChains[chain.EID] = true
-		case TxTypeLegacy:
-		default:
-			return fmt.Errorf("chain %s tx_type must be %q or %q", chain.Name, TxTypeDynamicFee, TxTypeLegacy)
-		}
 		if chain.EndpointAddress.IsZero() {
 			return fmt.Errorf("chain %s endpoint_address is required", chain.Name)
 		}
-		if chain.TxRoles.Executor.Signer.IsZero() {
-			return fmt.Errorf("chain %s tx_roles.executor.signer is required", chain.Name)
-		}
-		if _, ok := signers[chain.TxRoles.Executor.Signer.Hex()]; !ok {
-			return fmt.Errorf("chain %s tx_roles.executor.signer must reference a configured signer", chain.Name)
+		if err := validateExecutorTxRole(chain.Name, chain.TxRoles.Executor, signers); err != nil {
+			return err
 		}
 		if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
 			return err
@@ -314,7 +284,7 @@ func (c Config) Validate() error {
 		seen[chain.EID] = struct{}{}
 		chains[chain.EID] = chain
 	}
-	if err := c.validatePricing(seen, signers, dynamicFeeCapsRequired); err != nil {
+	if err := c.validatePricing(seen, signers); err != nil {
 		return err
 	}
 	pathways := make(map[string]struct{}, len(c.Pathways))
@@ -368,55 +338,35 @@ func (c Config) Validate() error {
 	}
 	for eid := range activeDVNDestinations {
 		chain := chains[eid]
-		if err := validateRequiredDVNTxRole(chain.Name, chain.TxRoles.DVN, signers, dynamicFeeChains[eid]); err != nil {
+		if err := validateRequiredDVNTxRole(chain.Name, chain.TxRoles.DVN, signers); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
-	for label, value := range map[string]string{
-		"max_fee_per_gas_wei":          role.MaxFeePerGasWei,
-		"max_priority_fee_per_gas_wei": role.MaxPriorityFeePerGasWei,
-	} {
-		if value == "" {
-			continue
-		}
-		parsed, ok := new(big.Int).SetString(value, 10)
-		if !ok || parsed.Sign() <= 0 {
-			return fmt.Errorf("chain %s tx_roles.dvn.%s must be a positive integer", chainName, label)
-		}
+func validateExecutorTxRole(chainName string, role ExecutorTxRoleConfig, signers map[string]struct{}) error {
+	if role.Signer.IsZero() {
+		return fmt.Errorf("chain %s tx_roles.executor.signer is required", chainName)
 	}
-	return nil
+	if _, ok := signers[role.Signer.Hex()]; !ok {
+		return fmt.Errorf("chain %s tx_roles.executor.signer must reference a configured signer", chainName)
+	}
+	return validateTxFeePolicy(fmt.Sprintf("chain %s tx_roles.executor", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
 }
 
-func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers map[string]struct{}, dynamicFeeCapsRequired bool) error {
+func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
+	return validateOptionalTxFeePolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
+}
+
+func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers map[string]struct{}) error {
 	if role.Signer.IsZero() {
 		return fmt.Errorf("chain %s tx_roles.dvn.signer is required for active dvn pathways", chainName)
 	}
 	if _, ok := signers[role.Signer.Hex()]; !ok {
 		return fmt.Errorf("chain %s tx_roles.dvn.signer must reference a configured signer", chainName)
 	}
-	if role.TxGasLimit == 0 {
-		return fmt.Errorf("chain %s tx_roles.dvn.tx_gas_limit is required for active dvn pathways", chainName)
-	}
-	for label, value := range map[string]string{
-		"max_fee_per_gas_wei":          role.MaxFeePerGasWei,
-		"max_priority_fee_per_gas_wei": role.MaxPriorityFeePerGasWei,
-	} {
-		if value == "" {
-			if dynamicFeeCapsRequired {
-				return fmt.Errorf("chain %s tx_roles.dvn.%s is required for active dvn pathways on dynamic_fee chains", chainName, label)
-			}
-			continue
-		}
-		parsed, ok := new(big.Int).SetString(value, 10)
-		if !ok || parsed.Sign() <= 0 {
-			return fmt.Errorf("chain %s tx_roles.dvn.%s must be a positive integer", chainName, label)
-		}
-	}
-	return nil
+	return validateTxFeePolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
 }
 
 func validateRPCURL(raw string) error {
@@ -494,7 +444,7 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 	return seen, nil
 }
 
-func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]struct{}, dynamicFeeCapsRequired bool) error {
+func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]struct{}) error {
 	if !c.Pricing.Enabled {
 		return nil
 	}
@@ -526,23 +476,8 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if !ok || baseFee.Sign() < 0 {
 		return errors.New("pricing base_fee_wei must be a non-negative integer")
 	}
-	for label, value := range map[string]string{
-		"max_fee_per_gas_wei":          c.Pricing.MaxFeePerGasWei,
-		"max_priority_fee_per_gas_wei": c.Pricing.MaxPriorityFeePerGasWei,
-	} {
-		if value == "" {
-			if dynamicFeeCapsRequired {
-				return fmt.Errorf("pricing %s is required when a dynamic_fee chain is configured", label)
-			}
-			continue
-		}
-		parsed, ok := new(big.Int).SetString(value, 10)
-		if !ok || parsed.Sign() < 0 {
-			return fmt.Errorf("pricing %s must be a non-negative integer", label)
-		}
-	}
-	if c.Pricing.TxGasLimit == 0 {
-		return errors.New("pricing tx_gas_limit is required")
+	if err := validateTxFeePolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei); err != nil {
+		return err
 	}
 	primarySource := c.Pricing.PrimarySource
 	if primarySource == "" {
@@ -609,4 +544,40 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 		return errors.New("pricing must configure every chain when enabled")
 	}
 	return nil
+}
+
+func validateTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei string) error {
+	if maxFeePerGasWei == "" {
+		return fmt.Errorf("%s.max_fee_per_gas_wei is required", prefix)
+	}
+	maxFee, err := parsePositiveInteger(fmt.Sprintf("%s.max_fee_per_gas_wei", prefix), maxFeePerGasWei)
+	if err != nil {
+		return err
+	}
+	if maxPriorityFeePerGasWei == "" {
+		return nil
+	}
+	priorityFee, err := parsePositiveInteger(fmt.Sprintf("%s.max_priority_fee_per_gas_wei", prefix), maxPriorityFeePerGasWei)
+	if err != nil {
+		return err
+	}
+	if priorityFee.Cmp(maxFee) > 0 {
+		return fmt.Errorf("%s.max_priority_fee_per_gas_wei must not exceed max_fee_per_gas_wei", prefix)
+	}
+	return nil
+}
+
+func validateOptionalTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei string) error {
+	if maxFeePerGasWei == "" && maxPriorityFeePerGasWei == "" {
+		return nil
+	}
+	return validateTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei)
+}
+
+func parsePositiveInteger(field, value string) (*big.Int, error) {
+	parsed, ok := new(big.Int).SetString(value, 10)
+	if !ok || parsed.Sign() <= 0 {
+		return nil, fmt.Errorf("%s must be a positive integer", field)
+	}
+	return parsed, nil
 }

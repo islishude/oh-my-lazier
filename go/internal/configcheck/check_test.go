@@ -339,7 +339,7 @@ func testConfig() config.Config {
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: testExecutorRole(),
 				},
 			},
 			{
@@ -351,7 +351,7 @@ func testConfig() config.Config {
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: testExecutorRole(),
 				},
 			},
 		},
@@ -391,6 +391,14 @@ func testConfig() config.Config {
 				MaxLzReceiveGas: 300000,
 			},
 		},
+	}
+}
+
+func testExecutorRole() config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
 	}
 }
 

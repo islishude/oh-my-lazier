@@ -242,15 +242,12 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 		t.Fatalf("delete test rows: %v", err)
 	}
 	id, err := store.EnqueueTx(ctx, TxRequest{
-		ChainEID:             40161,
-		Purpose:              "retry-test",
-		To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		Calldata:             []byte{0x01, 0x02},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(150_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signerID,
+		ChainEID: 40161,
+		Purpose:  "retry-test",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
 	})
 	if err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
@@ -263,6 +260,9 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 		t.Fatalf("initial nonce = %d, want 42", claimed.Nonce)
 	}
 	txHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	if err := store.MarkTxSignedWithGasAndFees(ctx, id, txHash, 123_456, big.NewInt(2_000_000_000), big.NewInt(1_000_000_000)); err != nil {
+		t.Fatalf("MarkTxSignedWithGasAndFees() error = %v", err)
+	}
 	if err := store.MarkTxBroadcast(ctx, id, txHash); err != nil {
 		t.Fatalf("MarkTxBroadcast() error = %v", err)
 	}
@@ -270,7 +270,7 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 		t.Fatalf("MarkTxFailed() error = %v", err)
 	}
 
-	if err := store.RetryFailedTx(ctx, id, big.NewInt(3_000_000_000), big.NewInt(1_500_000_000)); err != nil {
+	if err := store.RetryFailedTx(ctx, id); err != nil {
 		t.Fatalf("RetryFailedTx() error = %v", err)
 	}
 	reclaimed, err := store.ClaimNextNonce(ctx, 40161, signerID, 43)
@@ -296,11 +296,11 @@ func TestRetryFailedTxRequeuesWithFreshNonce(t *testing.T) {
 	if retryTx.Attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
 	}
-	if retryTx.MaxFeePerGas.Cmp(big.NewInt(3_000_000_000)) != 0 {
-		t.Fatalf("max fee = %s, want 3000000000", retryTx.MaxFeePerGas)
+	if retryTx.MaxFeePerGas.Cmp(big.NewInt(2_000_000_000)) != 0 {
+		t.Fatalf("max fee = %s, want previous recorded fee", retryTx.MaxFeePerGas)
 	}
-	if retryTx.MaxPriorityFeePerGas.Cmp(big.NewInt(1_500_000_000)) != 0 {
-		t.Fatalf("priority fee = %s, want 1500000000", retryTx.MaxPriorityFeePerGas)
+	if retryTx.MaxPriorityFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("priority fee = %s, want previous recorded priority fee", retryTx.MaxPriorityFeePerGas)
 	}
 }
 
@@ -625,16 +625,13 @@ func TestEnqueueDVNVerifyTxAdvancesJobAtomically(t *testing.T) {
 	}
 
 	id, err := store.EnqueueDVNVerifyTx(ctx, packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              "dvn_verify",
-		GUID:                 packet.GUID.Bytes(),
-		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		Calldata:             []byte{0x01, 0x02},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(120000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             "0x9999999999999999999999999999999999999999",
+		ChainEID: packet.DstEID,
+		Purpose:  "dvn_verify",
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: "0x9999999999999999999999999999999999999999",
 	}, report)
 	if err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
@@ -1101,7 +1098,7 @@ func testChains() []config.ChainConfig {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
 		{
@@ -1113,9 +1110,17 @@ func testChains() []config.ChainConfig {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
+	}
+}
+
+func testExecutorRole() config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
 	}
 }
 
@@ -1188,7 +1193,7 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: testExecutorRole(),
 				},
 			},
 			{
@@ -1200,7 +1205,7 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
-					Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: testExecutorRole(),
 				},
 			},
 		},

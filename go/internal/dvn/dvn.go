@@ -55,17 +55,9 @@ type ReceiptReader interface {
 	TransactionReceipt(ctx context.Context, txHash common.Hash) (*gethtypes.Receipt, error)
 }
 
-// TxFees carries optional dynamic-fee transaction fee caps for active verify requests.
-type TxFees struct {
-	GasLimit             *big.Int
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
-}
-
 // Settings controls active DVN verification transaction generation.
 type Settings struct {
 	SignerID string
-	TxFees   TxFees
 }
 
 // Worker runs the DVN verification workflow.
@@ -298,7 +290,7 @@ func (w *Worker) buildVerifyTx(packet db.PacketRecord, pathway chain.Pathway, co
 	if settings.SignerID == "" {
 		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires signer id"))
 	}
-	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, settings.SignerID, settings.TxFees)
+	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, settings.SignerID)
 }
 
 func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord, err error) error {
@@ -413,7 +405,7 @@ func BuildVerifyCalldata(packet db.PacketRecord, confirmations uint64) ([]byte, 
 }
 
 // BuildVerifyTx creates the outbox request for ReceiveUln302.verify.
-func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmations uint64, signerID string, fees TxFees) (db.TxRequest, error) {
+func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmations uint64, signerID string) (db.TxRequest, error) {
 	if receiveLib == (common.Address{}) {
 		return db.TxRequest{}, errors.New("receive lib address is required")
 	}
@@ -425,24 +417,14 @@ func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmati
 		return db.TxRequest{}, err
 	}
 	return db.TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              TxPurposeVerify,
-		GUID:                 packet.GUID.Bytes(),
-		To:                   receiveLib,
-		Calldata:             calldata,
-		Value:                new(big.Int),
-		GasLimit:             cloneBigInt(fees.GasLimit),
-		MaxFeePerGas:         cloneBigInt(fees.MaxFeePerGas),
-		MaxPriorityFeePerGas: cloneBigInt(fees.MaxPriorityFeePerGas),
-		SignerID:             signerID,
+		ChainEID: packet.DstEID,
+		Purpose:  TxPurposeVerify,
+		GUID:     packet.GUID.Bytes(),
+		To:       receiveLib,
+		Calldata: calldata,
+		Value:    new(big.Int),
+		SignerID: signerID,
 	}, nil
-}
-
-func cloneBigInt(value *big.Int) *big.Int {
-	if value == nil {
-		return nil
-	}
-	return new(big.Int).Set(value)
 }
 
 func validateReceiptPacket(expected, actual db.PacketRecord) error {

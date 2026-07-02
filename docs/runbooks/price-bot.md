@@ -9,7 +9,7 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 - Every configured chain has the configured primary source identifier, Uniswap V3 sanity route, and at least one healthy RPC URL.
 - `primary_source` defaults to `binance`; supported values are `binance`, `coinmarketcap`, and `coingecko`.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap_symbol` is configured; do not put API keys in worker YAML.
-- `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, `gas_spike_bps`, configured transaction type, dynamic-fee caps when `tx_type: dynamic_fee`, and `tx_gas_limit` are approved for the target environment.
+- `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, `gas_spike_bps`, and configured gas price/fee caps are approved for the target environment. `base_fee_wei` is the worker quote base fee, not an EIP-1559 block header base fee; the tx manager derives legacy versus dynamic-fee signing and estimates outer transaction gas from RPC before broadcast.
 - `pathways[].source_workers` addresses and pathway EIDs match the latest deployment record.
 
 ## One-Shot Update

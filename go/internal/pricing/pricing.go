@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
@@ -123,7 +124,6 @@ type Settings struct {
 	MaxDeviation  uint64
 	GasSpikeBps   uint64
 	AllowFallback bool
-	TxFees        TxFees
 }
 
 // Validate checks settings required for enabled price updates.
@@ -194,7 +194,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		}
 		previous := b.lastGasPrices[key]
 		if previous == nil {
-			b.lastGasPrices[key] = cloneBigInt(current)
+			b.lastGasPrices[key] = bigutil.Clone(current)
 			continue
 		}
 		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
@@ -205,7 +205,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			return err
 		}
 		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", pathway.SrcEID, "dst_eid", pathway.DstEID, "previous_gas_wei", previous, "current_gas_wei", current)
-		b.lastGasPrices[key] = cloneBigInt(enqueuedGas)
+		b.lastGasPrices[key] = bigutil.Clone(enqueuedGas)
 	}
 	return nil
 }
@@ -257,7 +257,7 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 		{worker: pathway.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig},
 		{worker: pathway.OpenDVN, purpose: TxPurposeSetDVNPriceConfig},
 	} {
-		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config, b.settings.TxFees)
+		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config)
 		if err != nil {
 			return nil, err
 		}
@@ -269,7 +269,7 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
-	b.lastGasPrices[key] = cloneBigInt(dstGasPrice)
+	b.lastGasPrices[key] = bigutil.Clone(dstGasPrice)
 	return dstGasPrice, nil
 }
 
@@ -455,13 +455,6 @@ func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
 	}, nil
 }
 
-// TxFees carries optional dynamic-fee transaction fee caps for an outbox request.
-type TxFees struct {
-	GasLimit             *big.Int
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
-}
-
 // BuildSetPriceConfigCalldata ABI-encodes OpenExecutor/OpenDVN setPriceConfig.
 func BuildSetPriceConfigCalldata(dstEID uint32, config PriceConfig) ([]byte, error) {
 	if dstEID == 0 {
@@ -474,7 +467,7 @@ func BuildSetPriceConfigCalldata(dstEID uint32, config PriceConfig) ([]byte, err
 }
 
 // BuildSetPriceConfigTx creates an outbox transaction for a worker setPriceConfig call.
-func BuildSetPriceConfigTx(chainEID uint32, worker common.Address, dstEID uint32, purpose, signerID string, config PriceConfig, fees TxFees) (db.TxRequest, error) {
+func BuildSetPriceConfigTx(chainEID uint32, worker common.Address, dstEID uint32, purpose, signerID string, config PriceConfig) (db.TxRequest, error) {
 	if chainEID == 0 {
 		return db.TxRequest{}, errors.New("chain eid is required")
 	}
@@ -492,15 +485,12 @@ func BuildSetPriceConfigTx(chainEID uint32, worker common.Address, dstEID uint32
 		return db.TxRequest{}, err
 	}
 	return db.TxRequest{
-		ChainEID:             chainEID,
-		Purpose:              purpose,
-		To:                   worker,
-		Calldata:             calldata,
-		Value:                new(big.Int),
-		GasLimit:             cloneBigInt(fees.GasLimit),
-		MaxFeePerGas:         cloneBigInt(fees.MaxFeePerGas),
-		MaxPriorityFeePerGas: cloneBigInt(fees.MaxPriorityFeePerGas),
-		SignerID:             signerID,
+		ChainEID: chainEID,
+		Purpose:  purpose,
+		To:       worker,
+		Calldata: calldata,
+		Value:    new(big.Int),
+		SignerID: signerID,
 	}, nil
 }
 
@@ -549,11 +539,4 @@ func cloneRat(value *big.Rat) *big.Rat {
 		return nil
 	}
 	return new(big.Rat).Set(value)
-}
-
-func cloneBigInt(value *big.Int) *big.Int {
-	if value == nil {
-		return nil
-	}
-	return new(big.Int).Set(value)
 }

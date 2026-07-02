@@ -29,17 +29,6 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if ethereum.IndexerQueryBlockRange != 250 {
 		t.Fatalf("IndexerQueryBlockRange = %d, want 250", ethereum.IndexerQueryBlockRange)
 	}
-	if ethereum.TxType != config.TxTypeDynamicFee {
-		t.Fatalf("TxType = %q, want %q", ethereum.TxType, config.TxTypeDynamicFee)
-	}
-	base, err := registry.Get(40245)
-	if err != nil {
-		t.Fatalf("Get(40245) error = %v", err)
-	}
-	if base.TxType != config.TxTypeLegacy {
-		t.Fatalf("base TxType = %q, want %q", base.TxType, config.TxTypeLegacy)
-	}
-
 	pathway, err := registry.Pathway(
 		40161,
 		40245,
@@ -92,10 +81,9 @@ func testChains() []config.ChainConfig {
 			IndexerQueryBlockRange: 250,
 			RPCURLs:                []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 				DVN: config.DVNTxRoleConfig{
 					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-					TxGasLimit:              120000,
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
 				},
@@ -106,20 +94,26 @@ func testChains() []config.ChainConfig {
 			Name:            "base-sepolia",
 			Family:          config.ChainFamilyEVM,
 			ChainID:         84532,
-			TxType:          config.TxTypeLegacy,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 				DVN: config.DVNTxRoleConfig{
 					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-					TxGasLimit:              120000,
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
 				},
 			},
 		},
+	}
+}
+
+func testExecutorRole() config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
 	}
 }
 

@@ -1,6 +1,7 @@
 package txmgr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"math/big"
@@ -22,76 +23,9 @@ import (
 )
 
 func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		txType string
-	}{
-		{name: "default empty", txType: ""},
-		{name: "explicit dynamic fee", txType: txTypeDynamicFee},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			store := openTestStore(t)
-			signer := newTestKeystoreSigner(t)
-			client := &fakeChainClient{pendingNonce: 10}
-			manager := New(store, discardLogger())
-
-			if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
-				ChainEID:             40161,
-				Purpose:              "commit-verification",
-				To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
-				Calldata:             []byte{0x01, 0x02, 0x03},
-				Value:                big.NewInt(123),
-				GasLimit:             big.NewInt(100_000),
-				MaxFeePerGas:         big.NewInt(2_000_000_000),
-				MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-				SignerID:             signer.Address().Hex(),
-			}); err != nil {
-				t.Fatalf("EnqueueTx() error = %v", err)
-			}
-
-			id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), tt.txType, signer, client)
-			if err != nil {
-				t.Fatalf("ProcessNext() error = %v", err)
-			}
-			if len(client.sent) != 1 {
-				t.Fatalf("sent tx count = %d, want 1", len(client.sent))
-			}
-			sent := client.sent[0]
-			if sent.Type() != types.DynamicFeeTxType {
-				t.Fatalf("sent tx type = %d, want dynamic fee", sent.Type())
-			}
-			if sent.Nonce() != 10 {
-				t.Fatalf("sent nonce = %d, want 10", sent.Nonce())
-			}
-			if sent.GasFeeCap().Cmp(big.NewInt(2_000_000_000)) != 0 {
-				t.Fatalf("sent gas fee cap = %s", sent.GasFeeCap())
-			}
-			if client.suggestGasPriceCalls != 0 {
-				t.Fatalf("SuggestGasPrice() calls = %d, want 0", client.suggestGasPriceCalls)
-			}
-			from, err := types.Sender(types.LatestSignerForChainID(big.NewInt(11155111)), sent)
-			if err != nil {
-				t.Fatalf("Sender() error = %v", err)
-			}
-			if from != signer.Address() {
-				t.Fatalf("sender = %s, want %s", from, signer.Address())
-			}
-
-			outboxTx, err := store.GetOutboxTx(t.Context(), id)
-			if err != nil {
-				t.Fatalf("GetOutboxTx() error = %v", err)
-			}
-			if outboxTx.Status != db.TxStatusBroadcast {
-				t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusBroadcast)
-			}
-		})
-	}
-}
-
-func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
-	client := &fakeChainClient{pendingNonce: 12, suggestedGasPrice: big.NewInt(7_000_000_000)}
+	client := &fakeChainClient{pendingNonce: 10, estimatedGas: 123_456, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(1_000_000_000)}
 	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
@@ -100,13 +34,85 @@ func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
 		Calldata: []byte{0x01, 0x02, 0x03},
 		Value:    big.NewInt(123),
-		GasLimit: big.NewInt(100_000),
 		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), txTypeLegacy, signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent tx count = %d, want 1", len(client.sent))
+	}
+	sent := client.sent[0]
+	if sent.Type() != types.DynamicFeeTxType {
+		t.Fatalf("sent tx type = %d, want dynamic fee", sent.Type())
+	}
+	if sent.Nonce() != 10 {
+		t.Fatalf("sent nonce = %d, want 10", sent.Nonce())
+	}
+	if sent.Gas() != 123_456 {
+		t.Fatalf("sent gas = %d, want estimated gas", sent.Gas())
+	}
+	if sent.GasFeeCap().Cmp(big.NewInt(2_000_000_000)) != 0 {
+		t.Fatalf("sent gas fee cap = %s", sent.GasFeeCap())
+	}
+	if sent.GasTipCap().Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("sent gas tip cap = %s", sent.GasTipCap())
+	}
+	if client.suggestGasPriceCalls != 0 {
+		t.Fatalf("SuggestGasPrice() calls = %d, want 0", client.suggestGasPriceCalls)
+	}
+	if client.suggestGasTipCapCalls != 1 {
+		t.Fatalf("SuggestGasTipCap() calls = %d, want 1", client.suggestGasTipCapCalls)
+	}
+	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+	from, err := types.Sender(types.LatestSignerForChainID(big.NewInt(11155111)), sent)
+	if err != nil {
+		t.Fatalf("Sender() error = %v", err)
+	}
+	if from != signer.Address() {
+		t.Fatalf("sender = %s, want %s", from, signer.Address())
+	}
+
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.Status != db.TxStatusBroadcast {
+		t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusBroadcast)
+	}
+	if outboxTx.MaxFeePerGas.Cmp(big.NewInt(2_000_000_000)) != 0 {
+		t.Fatalf("recorded max fee = %s", outboxTx.MaxFeePerGas)
+	}
+	if outboxTx.MaxPriorityFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("recorded priority fee = %s", outboxTx.MaxPriorityFeePerGas)
+	}
+	if outboxTx.GasLimit != 123_456 {
+		t.Fatalf("recorded gas limit = %d, want estimated gas", outboxTx.GasLimit)
+	}
+}
+
+func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{pendingNonce: 12, estimatedGas: 98_765, header: legacyHeader(), suggestedGasPrice: big.NewInt(7_000_000_000)}
+	manager := New(store, discardLogger())
+
+	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -126,6 +132,23 @@ func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 	if sent.GasPrice().Cmp(big.NewInt(7_000_000_000)) != 0 {
 		t.Fatalf("sent gas price = %s, want 7000000000", sent.GasPrice())
 	}
+	if sent.Gas() != 98_765 {
+		t.Fatalf("sent gas = %d, want estimated gas", sent.Gas())
+	}
+	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.MaxFeePerGas.Cmp(big.NewInt(7_000_000_000)) != 0 {
+		t.Fatalf("recorded gas price = %s, want 7000000000", outboxTx.MaxFeePerGas)
+	}
+	if outboxTx.MaxPriorityFeePerGas != nil {
+		t.Fatalf("recorded priority fee = %s, want nil", outboxTx.MaxPriorityFeePerGas)
+	}
+	if outboxTx.GasLimit != 98_765 {
+		t.Fatalf("recorded gas limit = %d, want estimated gas", outboxTx.GasLimit)
+	}
 	from, err := types.Sender(types.LatestSignerForChainID(big.NewInt(11155111)), sent)
 	if err != nil {
 		t.Fatalf("Sender() error = %v", err)
@@ -135,7 +158,188 @@ func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
 	}
 }
 
-func TestProcessNextLegacyGasPriceFailuresFailOutbox(t *testing.T) {
+func TestProcessNextDefersFeeOverCapBeforeNonceAssignment(t *testing.T) {
+	tests := []struct {
+		name   string
+		client *fakeChainClient
+		policy FeePolicy
+	}{
+		{
+			name: "dynamic",
+			client: &fakeChainClient{
+				pendingNonce:       13,
+				header:             dynamicHeader(),
+				suggestedGasTipCap: big.NewInt(1_000_000_000),
+			},
+			policy: FeePolicy{
+				MaxFeePerGas:         big.NewInt(1_500_000_000),
+				MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
+			},
+		},
+		{
+			name: "legacy",
+			client: &fakeChainClient{
+				pendingNonce:      13,
+				header:            legacyHeader(),
+				suggestedGasPrice: big.NewInt(2_000_000_000),
+			},
+			policy: FeePolicy{
+				MaxFeePerGas: big.NewInt(1_500_000_000),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			manager := New(store, discardLogger())
+
+			queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+				ChainEID: 40161,
+				Purpose:  "commit-verification",
+				To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+				Calldata: []byte{0x01, 0x02, 0x03},
+				Value:    big.NewInt(123),
+				SignerID: signer.Address().Hex(),
+			})
+			if err != nil {
+				t.Fatalf("EnqueueTx() error = %v", err)
+			}
+
+			_, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, tt.client, tt.policy))
+			if !errors.Is(err, ErrTxDeferred) {
+				t.Fatalf("ProcessNext() error = %v, want ErrTxDeferred", err)
+			}
+			outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
+			if err != nil {
+				t.Fatalf("GetOutboxTx() error = %v", err)
+			}
+			if outboxTx.Status != db.TxStatusQueued {
+				t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusQueued)
+			}
+			if outboxTx.Nonce != 0 {
+				t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
+			}
+			if outboxTx.Attempts != 0 {
+				t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
+			}
+			if outboxTx.MaxFeePerGas != nil || outboxTx.MaxPriorityFeePerGas != nil {
+				t.Fatalf("recorded fees = %v/%v, want nil", outboxTx.MaxFeePerGas, outboxTx.MaxPriorityFeePerGas)
+			}
+			if tt.client.pendingNonceCalls != 0 {
+				t.Fatalf("PendingNonceAt() calls = %d, want 0", tt.client.pendingNonceCalls)
+			}
+			if len(tt.client.estimateGasCalls) != 0 {
+				t.Fatalf("EstimateGas() calls = %d, want 0", len(tt.client.estimateGasCalls))
+			}
+			if len(tt.client.sent) != 0 {
+				t.Fatalf("sent tx count = %d, want 0", len(tt.client.sent))
+			}
+		})
+	}
+}
+
+func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       13,
+		estimateGasErr:     errors.New("rpc unavailable"),
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+
+	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	_, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if !errors.Is(err, ErrTxDeferred) {
+		t.Fatalf("ProcessNext() error = %v, want ErrTxDeferred", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.Status != db.TxStatusQueued {
+		t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusQueued)
+	}
+	if outboxTx.Nonce != 0 {
+		t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
+	}
+	if outboxTx.Attempts != 0 {
+		t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
+	}
+	if client.pendingNonceCalls != 0 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 0 {
+		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
+	}
+	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+}
+
+func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       13,
+		estimateGasErr:     fakeRPCDataError{message: "execution reverted: denied", data: "0x08c379a0"},
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+
+	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	if _, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
+		t.Fatal("ProcessNext() error = nil, want revert error")
+	}
+	if errors.Is(err, ErrTxDeferred) {
+		t.Fatalf("ProcessNext() error = %v, want non-deferred revert error", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if outboxTx.Status != db.TxStatusFailed {
+		t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusFailed)
+	}
+	if outboxTx.Nonce != 0 {
+		t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
+	}
+	if outboxTx.Attempts != 0 {
+		t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
+	}
+	if client.pendingNonceCalls != 0 {
+		t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
+	}
+	if len(client.sent) != 0 {
+		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
+	}
+	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+}
+
+func TestProcessNextLegacyGasPriceFailuresLeaveOutboxQueued(t *testing.T) {
 	tests := []struct {
 		name              string
 		suggestedGasPrice *big.Int
@@ -152,6 +356,7 @@ func TestProcessNextLegacyGasPriceFailuresFailOutbox(t *testing.T) {
 			signer := newTestKeystoreSigner(t)
 			client := &fakeChainClient{
 				pendingNonce:       13,
+				header:             legacyHeader(),
 				suggestedGasPrice:  tt.suggestedGasPrice,
 				suggestGasPriceErr: tt.suggestErr,
 			}
@@ -163,22 +368,24 @@ func TestProcessNextLegacyGasPriceFailuresFailOutbox(t *testing.T) {
 				To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
 				Calldata: []byte{0x01, 0x02, 0x03},
 				Value:    big.NewInt(123),
-				GasLimit: big.NewInt(100_000),
 				SignerID: signer.Address().Hex(),
 			})
 			if err != nil {
 				t.Fatalf("EnqueueTx() error = %v", err)
 			}
 
-			if _, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), txTypeLegacy, signer, client); err == nil {
+			if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err == nil {
 				t.Fatal("ProcessNext() error = nil, want gas price error")
 			}
 			outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
 			if err != nil {
 				t.Fatalf("GetOutboxTx() error = %v", err)
 			}
-			if outboxTx.Status != db.TxStatusFailed {
-				t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusFailed)
+			if outboxTx.Status != db.TxStatusQueued {
+				t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusQueued)
+			}
+			if outboxTx.Nonce != 0 {
+				t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
 			}
 			if len(client.sent) != 0 {
 				t.Fatalf("sent tx count = %d, want 0", len(client.sent))
@@ -190,28 +397,25 @@ func TestProcessNextLegacyGasPriceFailuresFailOutbox(t *testing.T) {
 func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
-	client := &fakeChainClient{pendingNonce: 21}
+	client := &fakeChainClient{pendingNonce: 21, estimatedGas: 111_111, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(1_000_000_000)}
 	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
-		ChainEID:             40161,
-		Purpose:              "lz-receive",
-		To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		Calldata:             []byte{0x04, 0x05},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(150_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: 40161,
+		Purpose:  "lz-receive",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x04, 0x05},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
-	if err := store.PrepareReplacementTx(t.Context(), id, big.NewInt(3_000_000_000), big.NewInt(1_500_000_000)); err != nil {
+	if err := store.PrepareReplacementTx(t.Context(), id); err != nil {
 		t.Fatalf("PrepareReplacementTx() error = %v", err)
 	}
 	replacement, err := store.GetOutboxTx(t.Context(), id)
@@ -224,16 +428,17 @@ func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	if replacement.Status != db.TxStatusQueued {
 		t.Fatalf("replacement status = %q, want %q", replacement.Status, db.TxStatusQueued)
 	}
-	if replacement.MaxFeePerGas.Cmp(big.NewInt(3_000_000_000)) != 0 {
+	if replacement.MaxFeePerGas.Cmp(big.NewInt(2_000_000_000)) != 0 {
 		t.Fatalf("replacement max fee = %s", replacement.MaxFeePerGas)
 	}
-	if replacement.MaxPriorityFeePerGas.Cmp(big.NewInt(1_500_000_000)) != 0 {
+	if replacement.MaxPriorityFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
 		t.Fatalf("replacement priority fee = %s", replacement.MaxPriorityFeePerGas)
 	}
 	if replacement.Attempts != 1 {
 		t.Fatalf("replacement attempts = %d, want 1", replacement.Attempts)
 	}
-	replacementID, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), "", signer, client)
+	client.estimatedGas = 222_222
+	replacementID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() replacement error = %v", err)
 	}
@@ -247,15 +452,24 @@ func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
 	if replacementTx.Nonce() != 21 {
 		t.Fatalf("replacement tx nonce = %d, want 21", replacementTx.Nonce())
 	}
-	if replacementTx.GasFeeCap().Cmp(big.NewInt(3_000_000_000)) != 0 {
+	if replacementTx.Gas() != 222_222 {
+		t.Fatalf("replacement tx gas = %d, want re-estimated gas", replacementTx.Gas())
+	}
+	if replacementTx.GasFeeCap().Cmp(big.NewInt(2_200_000_000)) != 0 {
 		t.Fatalf("replacement tx max fee = %s", replacementTx.GasFeeCap())
+	}
+	if replacementTx.GasTipCap().Cmp(big.NewInt(1_100_000_000)) != 0 {
+		t.Fatalf("replacement tx priority fee = %s", replacementTx.GasTipCap())
+	}
+	if len(client.estimateGasCalls) != 2 {
+		t.Fatalf("EstimateGas() calls = %d, want 2", len(client.estimateGasCalls))
 	}
 }
 
-func TestPrepareLegacyReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing.T) {
+func TestPrepareReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
-	client := &fakeChainClient{pendingNonce: 22, suggestedGasPrice: big.NewInt(4_000_000_000)}
+	client := &fakeChainClient{pendingNonce: 22, estimatedGas: 111_111, header: legacyHeader(), suggestedGasPrice: big.NewInt(4_000_000_000)}
 	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
@@ -264,18 +478,17 @@ func TestPrepareLegacyReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing
 		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
 		Calldata: []byte{0x04, 0x05},
 		Value:    big.NewInt(0),
-		GasLimit: big.NewInt(150_000),
 		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), txTypeLegacy, signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
-	if err := store.PrepareLegacyReplacementTx(t.Context(), id); err != nil {
-		t.Fatalf("PrepareLegacyReplacementTx() error = %v", err)
+	if err := store.PrepareReplacementTx(t.Context(), id); err != nil {
+		t.Fatalf("PrepareReplacementTx() error = %v", err)
 	}
 	replacement, err := store.GetOutboxTx(t.Context(), id)
 	if err != nil {
@@ -292,7 +505,8 @@ func TestPrepareLegacyReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing
 	}
 
 	client.suggestedGasPrice = big.NewInt(5_000_000_000)
-	replacementID, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), txTypeLegacy, signer, client)
+	client.estimatedGas = 222_222
+	replacementID, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() replacement error = %v", err)
 	}
@@ -309,8 +523,14 @@ func TestPrepareLegacyReplacementTxPreservesNonceAndRefreshesGasPrice(t *testing
 	if replacementTx.Nonce() != 22 {
 		t.Fatalf("replacement tx nonce = %d, want 22", replacementTx.Nonce())
 	}
+	if replacementTx.Gas() != 222_222 {
+		t.Fatalf("replacement tx gas = %d, want re-estimated gas", replacementTx.Gas())
+	}
 	if replacementTx.GasPrice().Cmp(big.NewInt(5_000_000_000)) != 0 {
 		t.Fatalf("replacement tx gas price = %s", replacementTx.GasPrice())
+	}
+	if len(client.estimateGasCalls) != 2 {
+		t.Fatalf("EstimateGas() calls = %d, want 2", len(client.estimateGasCalls))
 	}
 }
 
@@ -324,20 +544,17 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	manager := New(store, discardLogger())
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
-		ChainEID:             40161,
-		Purpose:              "lz-receive",
-		To:                   common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		Calldata:             []byte{0x04, 0x05},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(150_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: 40161,
+		Purpose:  "lz-receive",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x04, 0x05},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), 40161, big.NewInt(11155111), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -397,22 +614,19 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 		string(packets.ExecutorExecutable),
 		string(packets.ExecutorLzReceiveTxEnqueued),
 		db.TxRequest{
-			ChainEID:             packet.DstEID,
-			Purpose:              executorLzReceivePurpose,
-			GUID:                 packet.GUID.Bytes(),
-			To:                   packet.Receiver,
-			Calldata:             []byte{0x04, 0x05},
-			Value:                big.NewInt(0),
-			GasLimit:             big.NewInt(150_000),
-			MaxFeePerGas:         big.NewInt(2_000_000_000),
-			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-			SignerID:             signer.Address().Hex(),
+			ChainEID: packet.DstEID,
+			Purpose:  executorLzReceivePurpose,
+			GUID:     packet.GUID.Bytes(),
+			To:       packet.Receiver,
+			Calldata: []byte{0x04, 0x05},
+			Value:    big.NewInt(0),
+			SignerID: signer.Address().Hex(),
 		},
 	); err != nil {
 		t.Fatalf("EnqueueExecutorTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -468,22 +682,19 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 		string(packets.ExecutorExecutable),
 		string(packets.ExecutorLzReceiveTxEnqueued),
 		db.TxRequest{
-			ChainEID:             packet.DstEID,
-			Purpose:              executorLzReceivePurpose,
-			GUID:                 packet.GUID.Bytes(),
-			To:                   packet.Receiver,
-			Calldata:             []byte{0x04, 0x05},
-			Value:                big.NewInt(0),
-			GasLimit:             big.NewInt(150_000),
-			MaxFeePerGas:         big.NewInt(2_000_000_000),
-			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-			SignerID:             signer.Address().Hex(),
+			ChainEID: packet.DstEID,
+			Purpose:  executorLzReceivePurpose,
+			GUID:     packet.GUID.Bytes(),
+			To:       packet.Receiver,
+			Calldata: []byte{0x04, 0x05},
+			Value:    big.NewInt(0),
+			SignerID: signer.Address().Hex(),
 		},
 	); err != nil {
 		t.Fatalf("EnqueueExecutorTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -542,23 +753,20 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 		string(packets.DVNQuorumChecking),
 		string(packets.DVNVerifyTxEnqueued),
 		db.TxRequest{
-			ChainEID:             packet.DstEID,
-			Purpose:              dvnVerifyPurpose,
-			GUID:                 packet.GUID.Bytes(),
-			To:                   packet.Receiver,
-			Calldata:             []byte{0x06, 0x07},
-			Value:                big.NewInt(0),
-			GasLimit:             big.NewInt(120_000),
-			MaxFeePerGas:         big.NewInt(2_000_000_000),
-			MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-			SignerID:             signer.Address().Hex(),
+			ChainEID: packet.DstEID,
+			Purpose:  dvnVerifyPurpose,
+			GUID:     packet.GUID.Bytes(),
+			To:       packet.Receiver,
+			Calldata: []byte{0x06, 0x07},
+			Value:    big.NewInt(0),
+			SignerID: signer.Address().Hex(),
 		},
 		[]byte(`{"status":"ready"}`),
 	); err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -605,21 +813,18 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 		t.Fatalf("UpsertDVNJob() error = %v", err)
 	}
 	if _, err := store.EnqueueDVNVerifyTx(t.Context(), packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), db.TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              dvnVerifyPurpose,
-		GUID:                 packet.GUID.Bytes(),
-		To:                   packet.Receiver,
-		Calldata:             []byte{0x06, 0x07},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(120_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: packet.DstEID,
+		Purpose:  dvnVerifyPurpose,
+		GUID:     packet.GUID.Bytes(),
+		To:       packet.Receiver,
+		Calldata: []byte{0x06, 0x07},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}, []byte(`{"status":"ready"}`)); err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), packet.DstEID, big.NewInt(84532), "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -682,16 +887,13 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 	}
 
 	if _, err := store.EnqueueDVNVerifyTx(t.Context(), packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), db.TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              dvnVerifyPurpose,
-		GUID:                 packet.GUID.Bytes(),
-		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		Calldata:             []byte{0x06, 0x07},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(120_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: packet.DstEID,
+		Purpose:  dvnVerifyPurpose,
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata: []byte{0x06, 0x07},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}, []byte(`{"status":"ready"}`)); err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
@@ -711,16 +913,13 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 		t.Fatalf("MarkExecutorVerifiable() error = %v", err)
 	}
 	if _, err := store.EnqueueExecutorTx(t.Context(), packet.GUID, string(packets.ExecutorVerifiable), string(packets.ExecutorCommitTxEnqueued), db.TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              executorCommitVerificationPurpose,
-		GUID:                 packet.GUID.Bytes(),
-		To:                   common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		Calldata:             []byte{0x08, 0x09},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(150_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: packet.DstEID,
+		Purpose:  executorCommitVerificationPurpose,
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		Calldata: []byte{0x08, 0x09},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueExecutorTx(commit) error = %v", err)
 	}
@@ -737,16 +936,13 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 		t.Fatalf("MarkExecutorExecutable() error = %v", err)
 	}
 	if _, err := store.EnqueueExecutorTx(t.Context(), packet.GUID, string(packets.ExecutorExecutable), string(packets.ExecutorLzReceiveTxEnqueued), db.TxRequest{
-		ChainEID:             packet.DstEID,
-		Purpose:              executorLzReceivePurpose,
-		GUID:                 packet.GUID.Bytes(),
-		To:                   common.HexToAddress("0x4444444444444444444444444444444444444444"),
-		Calldata:             []byte{0x0a, 0x0b},
-		Value:                big.NewInt(0),
-		GasLimit:             big.NewInt(150_000),
-		MaxFeePerGas:         big.NewInt(2_000_000_000),
-		MaxPriorityFeePerGas: big.NewInt(1_000_000_000),
-		SignerID:             signer.Address().Hex(),
+		ChainEID: packet.DstEID,
+		Purpose:  executorLzReceivePurpose,
+		GUID:     packet.GUID.Bytes(),
+		To:       common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		Calldata: []byte{0x0a, 0x0b},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
 	}); err != nil {
 		t.Fatalf("EnqueueExecutorTx(lzReceive) error = %v", err)
 	}
@@ -762,7 +958,7 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 
 func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, client *fakeChainClient, signer *keystore.Signer, chainEID uint32, chainID *big.Int) {
 	t.Helper()
-	id, err := manager.ProcessNext(t.Context(), chainEID, chainID, "", signer, client)
+	id, err := manager.ProcessNext(t.Context(), testTarget(chainEID, chainID, signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -781,6 +977,32 @@ func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, clien
 		Client:   client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+}
+
+func assertEstimateGasCall(t *testing.T, client *fakeChainClient, from, to common.Address, value *big.Int, data []byte) {
+	t.Helper()
+	if len(client.estimateGasCalls) != 1 {
+		t.Fatalf("EstimateGas() calls = %d, want 1", len(client.estimateGasCalls))
+	}
+	call := client.estimateGasCalls[0]
+	if call.From != from {
+		t.Fatalf("EstimateGas() from = %s, want %s", call.From, from)
+	}
+	if call.To == nil || *call.To != to {
+		t.Fatalf("EstimateGas() to = %v, want %s", call.To, to)
+	}
+	if call.Value.Cmp(value) != 0 {
+		t.Fatalf("EstimateGas() value = %s, want %s", call.Value, value)
+	}
+	if !bytes.Equal(call.Data, data) {
+		t.Fatalf("EstimateGas() data = %x, want %x", call.Data, data)
+	}
+	if call.Gas != 0 {
+		t.Fatalf("EstimateGas() gas = %d, want 0", call.Gas)
+	}
+	if call.GasPrice != nil || call.GasFeeCap != nil || call.GasTipCap != nil {
+		t.Fatalf("EstimateGas() fee fields = %v/%v/%v, want nil", call.GasPrice, call.GasFeeCap, call.GasTipCap)
 	}
 }
 
@@ -852,15 +1074,47 @@ func testExecutorPacket(t *testing.T) db.PacketRecord {
 }
 
 type fakeChainClient struct {
-	pendingNonce         uint64
-	suggestedGasPrice    *big.Int
-	suggestGasPriceErr   error
-	suggestGasPriceCalls int
-	sent                 []*types.Transaction
-	receipts             map[common.Hash]*types.Receipt
+	pendingNonce          uint64
+	pendingNonceCalls     int
+	estimatedGas          uint64
+	estimateGasErr        error
+	estimateGasCalls      []ethereum.CallMsg
+	header                *types.Header
+	headerErr             error
+	suggestedGasPrice     *big.Int
+	suggestGasPriceErr    error
+	suggestGasPriceCalls  int
+	suggestedGasTipCap    *big.Int
+	suggestGasTipCapErr   error
+	suggestGasTipCapCalls int
+	sent                  []*types.Transaction
+	receipts              map[common.Hash]*types.Receipt
+}
+
+func (f *fakeChainClient) EstimateGas(_ context.Context, call ethereum.CallMsg) (uint64, error) {
+	f.estimateGasCalls = append(f.estimateGasCalls, call)
+	if f.estimateGasErr != nil {
+		return 0, f.estimateGasErr
+	}
+	if f.estimatedGas == 0 {
+		return 150_000, nil
+	}
+	return f.estimatedGas, nil
+}
+
+func (f *fakeChainClient) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
+	if f.headerErr != nil {
+		return nil, f.headerErr
+	}
+	if f.header != nil {
+		copied := *f.header
+		return &copied, nil
+	}
+	return dynamicHeader(), nil
 }
 
 func (f *fakeChainClient) PendingNonceAt(context.Context, common.Address) (uint64, error) {
+	f.pendingNonceCalls++
 	return f.pendingNonce, nil
 }
 
@@ -873,6 +1127,17 @@ func (f *fakeChainClient) SuggestGasPrice(context.Context) (*big.Int, error) {
 		return nil, nil
 	}
 	return new(big.Int).Set(f.suggestedGasPrice), nil
+}
+
+func (f *fakeChainClient) SuggestGasTipCap(context.Context) (*big.Int, error) {
+	f.suggestGasTipCapCalls++
+	if f.suggestGasTipCapErr != nil {
+		return nil, f.suggestGasTipCapErr
+	}
+	if f.suggestedGasTipCap == nil {
+		return big.NewInt(1_000_000_000), nil
+	}
+	return new(big.Int).Set(f.suggestedGasTipCap), nil
 }
 
 func (f *fakeChainClient) SendTransaction(_ context.Context, tx *types.Transaction) error {
@@ -899,7 +1164,7 @@ func testChains() []config.ChainConfig {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
 		{
@@ -911,10 +1176,66 @@ func testChains() []config.ChainConfig {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: testExecutorRole(),
 			},
 		},
 	}
+}
+
+func testTarget(chainEID uint32, chainID *big.Int, signer *keystore.Signer, client *fakeChainClient, policy FeePolicy) Target {
+	return Target{
+		ChainEID: chainEID,
+		ChainID:  chainID,
+		Signer:   signer,
+		Client:   client,
+		FeePolicies: map[string]FeePolicy{
+			"commit-verification":             policy,
+			"lz-receive":                      policy,
+			executorCommitVerificationPurpose: policy,
+			executorLzReceivePurpose:          policy,
+			dvnVerifyPurpose:                  policy,
+		},
+	}
+}
+
+func defaultFeePolicy() FeePolicy {
+	return FeePolicy{
+		MaxFeePerGas:         big.NewInt(10_000_000_000),
+		MaxPriorityFeePerGas: big.NewInt(2_000_000_000),
+	}
+}
+
+func dynamicHeader() *types.Header {
+	return &types.Header{BaseFee: big.NewInt(500_000_000)}
+}
+
+func legacyHeader() *types.Header {
+	return &types.Header{}
+}
+
+func testExecutorRole() config.ExecutorTxRoleConfig {
+	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
+}
+
+type fakeRPCDataError struct {
+	message string
+	data    any
+}
+
+func (e fakeRPCDataError) Error() string {
+	return e.message
+}
+
+func (e fakeRPCDataError) ErrorCode() int {
+	return 3
+}
+
+func (e fakeRPCDataError) ErrorData() any {
+	return e.data
 }
 
 func testPathways() []config.PathwayConfig {

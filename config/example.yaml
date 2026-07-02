@@ -17,7 +17,6 @@ pricing:
   max_deviation_bps: 500
   gas_spike_bps: 1000
   allow_uniswap_fallback: true
-  tx_gas_limit: 100000
   max_fee_per_gas_wei: "2000000000"
   max_priority_fee_per_gas_wei: "1000000000"
   primary_source: binance
@@ -50,8 +49,6 @@ chains:
     name: ethereum-sepolia
     family: evm
     chain_id: 11155111
-    # tx_type defaults to dynamic_fee. Use legacy for RPCs/chains that require legacy gas-price transactions.
-    tx_type: dynamic_fee
     endpoint_address: "0x1111111111111111111111111111111111111111"
     confirmations: 12
     start_block_number: 0
@@ -62,16 +59,16 @@ chains:
     tx_roles:
       executor:
         signer: "0x9999999999999999999999999999999999999999"
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
-        tx_gas_limit: 120000
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
     name: base-sepolia
     family: evm
     chain_id: 84532
-    tx_type: dynamic_fee
     endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
     start_block_number: 0
@@ -81,9 +78,10 @@ chains:
     tx_roles:
       executor:
         signer: "0x9999999999999999999999999999999999999999"
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
-        tx_gas_limit: 120000
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
 pathways:

@@ -14,7 +14,7 @@ func TestBuildCommitVerificationTx(t *testing.T) {
 	packet := testPacketRecord()
 	receiveLib := common.HexToAddress("0x3333333333333333333333333333333333333333")
 
-	request, err := BuildCommitVerificationTx(packet, receiveLib, "executor", TxFees{GasLimit: big.NewInt(250_000)})
+	request, err := BuildCommitVerificationTx(packet, receiveLib, "executor")
 	if err != nil {
 		t.Fatalf("BuildCommitVerificationTx() error = %v", err)
 	}
@@ -34,16 +34,13 @@ func TestBuildCommitVerificationTx(t *testing.T) {
 	if len(request.Calldata) < 4 || !bytes.Equal(request.Calldata[:4], receiveUlnABI.Methods["commitVerification"].ID) {
 		t.Fatalf("calldata selector = %x, want commitVerification selector", request.Calldata[:4])
 	}
-	if request.GasLimit.Cmp(big.NewInt(250_000)) != 0 {
-		t.Fatalf("gas limit = %s, want 250000", request.GasLimit)
-	}
 }
 
 func TestBuildLzReceiveTx(t *testing.T) {
 	packet := testPacketRecord()
 	endpoint := common.HexToAddress("0x4444444444444444444444444444444444444444")
 
-	request, err := BuildLzReceiveTx(packet, endpoint, "executor", TxFees{})
+	request, err := BuildLzReceiveTx(packet, endpoint, "executor")
 	if err != nil {
 		t.Fatalf("BuildLzReceiveTx() error = %v", err)
 	}
@@ -59,9 +56,6 @@ func TestBuildLzReceiveTx(t *testing.T) {
 	if len(request.Calldata) < 4 || !bytes.Equal(request.Calldata[:4], endpointABI.Methods["lzReceive"].ID) {
 		t.Fatalf("calldata selector = %x, want lzReceive selector", request.Calldata[:4])
 	}
-	if request.GasLimit.Cmp(big.NewInt(100_000)) != 0 {
-		t.Fatalf("gas limit = %s, want 100000 from packet options", request.GasLimit)
-	}
 	if request.Value.Sign() != 0 {
 		t.Fatalf("tx value = %s, want 0", request.Value)
 	}
@@ -71,7 +65,7 @@ func TestBuildLzReceiveTxRejectsUnsupportedOptions(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Options[5] = 2
 
-	_, err := BuildLzReceiveTx(packet, common.HexToAddress("0x4444444444444444444444444444444444444444"), "executor", TxFees{})
+	_, err := BuildLzReceiveTx(packet, common.HexToAddress("0x4444444444444444444444444444444444444444"), "executor")
 	if err == nil {
 		t.Fatal("BuildLzReceiveTx() error = nil, want unsupported option error")
 	}

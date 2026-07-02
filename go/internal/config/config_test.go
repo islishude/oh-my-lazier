@@ -83,33 +83,6 @@ func TestValidateRejectsNonPhaseOneConfirmations(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsSupportedChainTxTypes(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		txType string
-	}{
-		{name: "default empty", txType: ""},
-		{name: "dynamic fee", txType: TxTypeDynamicFee},
-		{name: "legacy", txType: TxTypeLegacy},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.Chains[0].TxType = tt.txType
-			if err := cfg.Validate(); err != nil {
-				t.Fatalf("Validate() error = %v", err)
-			}
-		})
-	}
-}
-
-func TestValidateRejectsInvalidChainTxType(t *testing.T) {
-	cfg := validConfig()
-	cfg.Chains[0].TxType = "blob"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want invalid tx_type error")
-	}
-}
-
 func TestValidateAcceptsSupportedRPCURLFormats(t *testing.T) {
 	for _, rpcURL := range []string{
 		"http://localhost:8545",
@@ -163,6 +136,14 @@ func TestValidateRejectsUnknownExecutorSigner(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsIncompleteExecutorFeePolicy(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].TxRoles.Executor.MaxFeePerGasWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing executor max fee error")
+	}
+}
+
 func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pathways[0].DVN.Mode = DVNModeActive
@@ -199,13 +180,9 @@ func TestValidateRejectsActiveDVNWithoutFees(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsLegacyActiveDVNWithoutDynamicFeeCaps(t *testing.T) {
+func TestValidateAcceptsActiveDVNWithoutPriorityFeeCap(t *testing.T) {
 	cfg := validConfig()
-	for i := range cfg.Chains {
-		cfg.Chains[i].TxType = TxTypeLegacy
-	}
 	cfg.Pathways[0].DVN.Mode = DVNModeActive
-	cfg.Chains[1].TxRoles.DVN.MaxFeePerGasWei = ""
 	cfg.Chains[1].TxRoles.DVN.MaxPriorityFeePerGasWei = ""
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -261,13 +238,9 @@ func TestValidateRejectsIncompletePricingChains(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsLegacyPricingWithoutDynamicFeeCaps(t *testing.T) {
+func TestValidateAcceptsPricingWithoutPriorityFeeCap(t *testing.T) {
 	cfg := validConfig()
-	for i := range cfg.Chains {
-		cfg.Chains[i].TxType = TxTypeLegacy
-	}
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.MaxFeePerGasWei = ""
 	cfg.Pricing.MaxPriorityFeePerGasWei = ""
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -341,9 +314,10 @@ chains:
     tx_roles:
       executor:
         signer: "0x9999999999999999999999999999999999999999"
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
-        tx_gas_limit: 120000
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
   - eid: 40245
@@ -357,9 +331,10 @@ chains:
     tx_roles:
       executor:
         signer: "0x9999999999999999999999999999999999999999"
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
-        tx_gas_limit: 120000
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
 pathways:
@@ -394,9 +369,6 @@ pathways:
 	}
 	if staticConfig.Chains[0].IndexerQueryBlockRange != 500 {
 		t.Fatalf("LoadStatic() indexer_query_block_range = %d, want default 500", staticConfig.Chains[0].IndexerQueryBlockRange)
-	}
-	if staticConfig.Chains[0].TxType != TxTypeDynamicFee {
-		t.Fatalf("LoadStatic() tx_type = %q, want %q", staticConfig.Chains[0].TxType, TxTypeDynamicFee)
 	}
 	if staticConfig.Pathways[0].DVN.Mode != DVNModeShadow {
 		t.Fatalf("LoadStatic() pathway dvn mode = %q, want %q", staticConfig.Pathways[0].DVN.Mode, DVNModeShadow)
@@ -434,7 +406,7 @@ func validConfig() Config {
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8545"},
 				TxRoles: ChainTxRolesConfig{
-					Executor: ExecutorTxRoleConfig{Signer: MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: validExecutorTxRoleConfig(),
 					DVN:      validDVNTxRoleConfig(),
 				},
 			},
@@ -448,7 +420,7 @@ func validConfig() Config {
 				IndexerQueryBlockRange: 500,
 				RPCURLs:                []string{"http://localhost:8546"},
 				TxRoles: ChainTxRolesConfig{
-					Executor: ExecutorTxRoleConfig{Signer: MustEVMAddress("0x9999999999999999999999999999999999999999")},
+					Executor: validExecutorTxRoleConfig(),
 					DVN:      validDVNTxRoleConfig(),
 				},
 			},
@@ -492,10 +464,17 @@ func validConfig() Config {
 	}
 }
 
+func validExecutorTxRoleConfig() ExecutorTxRoleConfig {
+	return ExecutorTxRoleConfig{
+		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
+}
+
 func validDVNTxRoleConfig() DVNTxRoleConfig {
 	return DVNTxRoleConfig{
 		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
-		TxGasLimit:              120000,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
 	}
@@ -512,7 +491,6 @@ func validPricingConfig() PricingConfig {
 		MaxDeviationBps:         500,
 		GasSpikeBps:             1000,
 		AllowUniswapFallback:    true,
-		TxGasLimit:              100000,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
 		Chains: []PricingChainConfig{

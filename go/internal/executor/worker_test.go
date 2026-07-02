@@ -461,10 +461,13 @@ func testRegistry(t *testing.T) *chain.Registry {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x9999999999999999999999999999999999999999")},
+				Executor: config.ExecutorTxRoleConfig{
+					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+					MaxFeePerGasWei:         "2000000000",
+					MaxPriorityFeePerGasWei: "1000000000",
+				},
 				DVN: config.DVNTxRoleConfig{
 					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-					TxGasLimit:              120000,
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
 				},
@@ -479,10 +482,13 @@ func testRegistry(t *testing.T) *chain.Registry {
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
-				Executor: config.ExecutorTxRoleConfig{Signer: config.MustEVMAddress("0x8888888888888888888888888888888888888888")},
+				Executor: config.ExecutorTxRoleConfig{
+					Signer:                  config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+					MaxFeePerGasWei:         "2000000000",
+					MaxPriorityFeePerGasWei: "1000000000",
+				},
 				DVN: config.DVNTxRoleConfig{
 					Signer:                  config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-					TxGasLimit:              120000,
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
 				},
