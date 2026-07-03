@@ -28,7 +28,7 @@ import (
 const loopInterval = 5 * time.Second
 
 const (
-	// TxPurposeVerify identifies ReceiveUln302.verify outbox requests.
+	// TxPurposeVerify identifies OpenDVN.submitVerification outbox requests.
 	TxPurposeVerify = "dvn_verify"
 )
 
@@ -337,7 +337,7 @@ func (w *Worker) verificationAlreadyComplete(ctx context.Context, packet db.Pack
 	if payloadHash == packet.PayloadHash {
 		return true, nil
 	}
-	submitted, observedConfirmations, err := callHashLookup(ctx, caller, pathway.ReceiveLib, crypto.Keccak256Hash(packet.PacketHeader), packet.PayloadHash, pathway.SourceWorkers.OpenDVN)
+	submitted, observedConfirmations, err := callHashLookup(ctx, caller, pathway.ReceiveLib, crypto.Keccak256Hash(packet.PacketHeader), packet.PayloadHash, pathway.DestinationWorkers.OpenDVN)
 	if err != nil {
 		return false, err
 	}
@@ -420,7 +420,7 @@ func (w *Worker) buildVerifyTx(packet db.PacketRecord, pathway chain.Pathway, co
 	if settings.SignerID == "" {
 		return db.TxRequest{}, workerloop.Fatal(errors.New("dvn active mode requires signer id"))
 	}
-	return BuildVerifyTx(packet, pathway.ReceiveLib, confirmations, settings.SignerID)
+	return BuildVerifyTx(packet, pathway.DestinationWorkers.OpenDVN, pathway.ReceiveLib, confirmations, settings.SignerID)
 }
 
 func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord, err error) error {
@@ -530,26 +530,29 @@ func verifySourceReceipt(packet db.PacketRecord, receipt *gethtypes.Receipt) (Qu
 	return QuorumReport{}, fmt.Errorf("source receipt missing PacketSent log index %d", packet.SrcLogIndex)
 }
 
-// BuildVerifyCalldata ABI-encodes ReceiveUln302.verify for active DVN mode.
-func BuildVerifyCalldata(packet db.PacketRecord, confirmations uint64) ([]byte, error) {
+// BuildVerifyCalldata ABI-encodes OpenDVN.submitVerification for active DVN mode.
+func BuildVerifyCalldata(packet db.PacketRecord, receiveLib common.Address, confirmations uint64) ([]byte, error) {
 	if err := packet.Validate(); err != nil {
 		return nil, err
+	}
+	if receiveLib == (common.Address{}) {
+		return nil, errors.New("receive lib address is required")
 	}
 	if confirmations == 0 {
 		return nil, errors.New("dvn confirmations required is required")
 	}
-	return lzabi.PackReceiveUln302Verify(packet.PacketHeader, packet.PayloadHash, confirmations)
+	return lzabi.PackOpenDVNSubmitVerification(receiveLib, packet.PacketHeader, packet.PayloadHash, confirmations)
 }
 
-// BuildVerifyTx creates the outbox request for ReceiveUln302.verify.
-func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmations uint64, signerID string) (db.TxRequest, error) {
-	if receiveLib == (common.Address{}) {
-		return db.TxRequest{}, errors.New("receive lib address is required")
+// BuildVerifyTx creates the outbox request for OpenDVN.submitVerification.
+func BuildVerifyTx(packet db.PacketRecord, openDVN, receiveLib common.Address, confirmations uint64, signerID string) (db.TxRequest, error) {
+	if openDVN == (common.Address{}) {
+		return db.TxRequest{}, errors.New("destination open dvn address is required")
 	}
 	if signerID == "" {
 		return db.TxRequest{}, errors.New("signer id is required")
 	}
-	calldata, err := BuildVerifyCalldata(packet, confirmations)
+	calldata, err := BuildVerifyCalldata(packet, receiveLib, confirmations)
 	if err != nil {
 		return db.TxRequest{}, err
 	}
@@ -557,7 +560,7 @@ func BuildVerifyTx(packet db.PacketRecord, receiveLib common.Address, confirmati
 		ChainEID: packet.DstEID,
 		Purpose:  TxPurposeVerify,
 		GUID:     packet.GUID.Bytes(),
-		To:       receiveLib,
+		To:       openDVN,
 		Calldata: calldata,
 		Value:    new(big.Int),
 		SignerID: signerID,

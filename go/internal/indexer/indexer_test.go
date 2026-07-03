@@ -193,7 +193,7 @@ func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 	}
 	client := &fakeLogClient{
 		head:            200,
-		destinationLogs: []gethtypes.Log{testPayloadVerifiedLog(t, packet, common.HexToAddress("0x3333333333333333333333333333333333333333"))},
+		destinationLogs: []gethtypes.Log{testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))},
 	}
 	indexer := NewWithClient(
 		testIndexerChain(packet.DstEID, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555")),
@@ -967,6 +967,9 @@ func testIndexerPathway() chain.Pathway {
 		SourceWorkers: chain.WorkerContracts{
 			OpenExecutor: common.HexToAddress("0x2222222222222222222222222222222222222222"),
 			OpenDVN:      common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		},
+		DestinationWorkers: chain.DestinationWorkerContracts{
+			OpenDVN: common.HexToAddress("0x6666666666666666666666666666666666666666"),
 		},
 		DVNMode:        "shadow",
 		Enabled:        true,

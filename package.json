@@ -29,6 +29,8 @@
     "check:deployment-preflight": "tsx contracts/scripts/deployment-preflight.ts",
     "oft:pathway": "tsx contracts/scripts/oft-pathway-control.ts",
     "check:price-config": "tsx contracts/scripts/price-config-check.ts",
+    "e2e:deploy-local": "tsx contracts/scripts/e2e-local-deploy.ts",
+    "e2e:run-local": "tsx contracts/scripts/e2e-local-run.ts",
     "check:migration-evidence": "tsx contracts/scripts/migration-evidence.ts",
     "check:npm-audit-disposition": "tsx contracts/scripts/npm-audit-disposition.ts",
     "check:security-review": "tsx contracts/scripts/security-review.ts",

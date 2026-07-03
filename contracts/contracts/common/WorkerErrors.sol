@@ -5,6 +5,7 @@ pragma solidity ^0.8.35;
 /// @notice Custom errors shared by worker contracts.
 library WorkerErrors {
     error UnauthorizedSendLib(address sendLib);
+    error UnauthorizedVerifier(address verifier);
     error PathwayDisabled(uint32 dstEid, address sender);
     error MessageTooLarge(uint256 size, uint256 maxSize);
     error PriceConfigStale(uint32 dstEid, uint256 updatedAt, uint256 staleAfter);

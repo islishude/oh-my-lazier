@@ -47,6 +47,9 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if pathway.SourceWorkers.OpenExecutor != common.HexToAddress("0x2222222222222222222222222222222222222222") {
 		t.Fatalf("pathway open executor address = %s", pathway.SourceWorkers.OpenExecutor)
 	}
+	if pathway.DestinationWorkers.OpenDVN != common.HexToAddress("0x6666666666666666666666666666666666666666") {
+		t.Fatalf("pathway destination open dvn address = %s", pathway.DestinationWorkers.OpenDVN)
+	}
 	if pathway.DVNMode != config.DVNModeShadow {
 		t.Fatalf("pathway dvn mode = %q", pathway.DVNMode)
 	}
@@ -129,6 +132,9 @@ func testPathways() []config.PathwayConfig {
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+			},
+			DestinationWorkers: config.DestinationWorkerContractsConfig{
+				OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 			},
 			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 			Enabled:        true,

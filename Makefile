@@ -4,8 +4,14 @@ INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compo
 INTEGRATION_TMP_DIR = tmp/integration
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
+E2E_COMPOSE = docker compose -p oh-my-lazier-e2e -f docker-compose.e2e.yml
+E2E_TMP_DIR = tmp/e2e
+E2E_DEPLOYER_PRIVATE_KEY ?= 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+E2E_WORKER_PRIVATE_KEY ?= 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+E2E_KEYSTORE_PASSWORD ?= local-e2e-password
+E2E_WORKER_UP_FLAGS ?= --build
 
-.PHONY: all check compile typecheck generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
+.PHONY: all check compile typecheck generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration e2e-up e2e-down e2e-local security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
 
 all: check
 
@@ -68,6 +74,31 @@ test-integration:
 	$(INTEGRATION_COMPOSE) up -d --wait; \
 	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" go test ./go/internal/db ./go/internal/txmgr -count=1; \
 	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
+
+e2e-up:
+	mkdir -p $(E2E_TMP_DIR)/postgres
+	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b
+
+e2e-down:
+	-$(E2E_COMPOSE) --profile worker down -v --remove-orphans
+	rm -rf $(E2E_TMP_DIR)/postgres
+
+e2e-local:
+	rm -rf $(E2E_TMP_DIR)
+	mkdir -p $(E2E_TMP_DIR)/postgres
+	@set -e; \
+	cleanup() { \
+		$(E2E_COMPOSE) --profile worker down -v --remove-orphans; \
+		rm -rf $(E2E_TMP_DIR)/postgres; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b; \
+	npm run compile; \
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" npm run e2e:deploy-local; \
+	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
+	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
+	$(E2E_COMPOSE) --profile worker up --build -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local
 
 security-check:
 	npm run check:security-review

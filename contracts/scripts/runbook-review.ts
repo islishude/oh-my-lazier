@@ -107,6 +107,7 @@ const requiredDocs: RequiredDoc[] = [
       '"ownerAccount"',
       '"signerAccount"',
       '"sourceWorkers"',
+      '"destinationWorkers"',
       '"canary"',
       '"dvnJoin"',
       '"rollback"',

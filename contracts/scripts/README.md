@@ -10,6 +10,35 @@ npm run check:lz-addresses
 
 The check compares `docs/deployments/layerzero-testnet-addresses.md` values encoded in the script against LayerZero's current `deploymentsV2.json` and `dvnDeployments.json` metadata.
 
+Run the local dual-Anvil E2E from the repository root:
+
+```bash
+make e2e-local
+```
+
+The target writes all generated files under `tmp/e2e`, starts isolated
+Postgres, Anvil, and worker services through `docker-compose.e2e.yml`, runs
+`npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
+ReceiveUln302, TestOFT, OpenExecutor, a primary OpenDVN, and a secondary
+OpenDVN on both chains, generates a worker keystore, runs `configcheck`, and
+then runs `npm run e2e:run-local`. The local runner sends OFT canaries in both
+directions. It does not start the price bot; deployment writes fresh hard-coded
+worker price configs, with source OpenExecutor pricing non-zero and local
+OpenDVN pricing zero because pinned SendUln302 accounts DVN fees internally
+without forwarding native value to DVN `assignJob`.
+
+The active DVN transaction target is the destination OpenDVN, not
+ReceiveUln302 directly. `e2e:run-local` requires the worker-submitted primary
+OpenDVN verification and a script-submitted secondary OpenDVN verification,
+then checks that ReceiveUln302 emitted `PayloadVerified` for both OpenDVNs,
+EndpointV2 emitted `PacketDelivered`, and the recipient TestOFT balance
+increased.
+
+When registry access is unavailable, set `ANVIL_IMAGE` to a compatible local
+Foundry image. If `oh-my-lazier-worker:e2e` already exists, set
+`E2E_WORKER_UP_FLAGS=--no-build` to reuse it instead of rebuilding the worker
+image.
+
 Before approving a migration ticket, validate that the ticket has attached the required local evidence references:
 
 ```bash
@@ -17,7 +46,7 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
 npm run check:migration-evidence
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction records source worker contracts plus config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
 Deploy the local pathway contracts:
 
@@ -187,7 +216,7 @@ LZ_RECEIVE_GAS=200000 \
 npm run send:oft-canary
 ```
 
-`send:oft-canary` calls `quoteSend` first and pays the quoted native fee. It builds exactly one zero-value executor `lzReceiveOption`; `composeMsg` and `oftCmd` are always empty for the first phase.
+`send:oft-canary` calls `quoteSend` first and pays the quoted native fee. It builds exactly one canonical zero-value executor `lzReceiveOption`; `composeMsg` and `oftCmd` are always empty for the first phase.
 
 Check the source-chain canary receipt after the send transaction is mined:
 
@@ -219,7 +248,7 @@ npm run check:oft-canary
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
 
-The migration evidence record must capture each direction's source OpenExecutor/OpenDVN contracts, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `updatedAt`, `staleAfter`, and non-zero `dstGasPriceInSrcToken` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
+The migration evidence record must capture each direction's source OpenExecutor/OpenDVN contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `updatedAt`, `staleAfter`, and non-zero `dstGasPriceInSrcToken` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 
@@ -235,7 +264,7 @@ ENDPOINT=... \
 npm run check:dvn-verification
 ```
 
-`check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
+`check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. For the active OpenDVN path, the worker transaction calls `OpenDVN.submitVerification`, and OpenDVN calls `ReceiveUln302.verify` so the `PayloadVerified.dvn` field is the OpenDVN address. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
 Set `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` to also require the `PayloadVerified` PacketV1 header to match the exact migration direction and packet identity.
 
 Run the LayerZero config scripts on both chains with the local endpoint, local OApp, local message libraries, and local DVN addresses for each direction. `configure:lz-dvn` explicitly sets `optionalDVNCount` to LayerZero's NIL value so default optional DVNs are not inherited during the first-phase required-DVN migration.

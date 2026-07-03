@@ -77,14 +77,15 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
 });
 
 test("validateMigrationEvidenceRecord rejects zero and invalid account addresses", () => {
-	const record = baseRecord();
-	record.ownerAccount = "0x0000000000000000000000000000000000000000";
-	record.signerAccount = "not-an-address";
-	record.directions[0].sourceWorkers.openExecutor =
-		"0x0000000000000000000000000000000000000000";
-	record.directions[0].sourceWorkers.openDVN = "not-an-address";
-	record.directions[0].canary.senderAccount =
-		"0x0000000000000000000000000000000000000000";
+  const record = baseRecord();
+  record.ownerAccount = "0x0000000000000000000000000000000000000000";
+  record.signerAccount = "not-an-address";
+  record.directions[0].sourceWorkers.openExecutor =
+    "0x0000000000000000000000000000000000000000";
+  record.directions[0].sourceWorkers.openDVN = "not-an-address";
+  record.directions[1].destinationWorkers.openDVN = "0xabc";
+  record.directions[0].canary.senderAccount =
+    "0x0000000000000000000000000000000000000000";
   record.directions[1].canary.recipientAccount = "0xabc";
   record.rollback.ownerPauseAccount =
     "0x0000000000000000000000000000000000000000";
@@ -92,13 +93,14 @@ test("validateMigrationEvidenceRecord rejects zero and invalid account addresses
 
   const errors = validateMigrationEvidenceRecord(record);
 
-	assert.deepEqual(errors, [
-		"ownerAccount must not be the zero address",
-		"signerAccount must be an EVM address",
-		"directions[0].sourceWorkers.openExecutor must not be the zero address",
-		"directions[0].sourceWorkers.openDVN must be an EVM address",
-		"directions[0].canary.senderAccount must not be the zero address",
-		"directions[1].canary.recipientAccount must be an EVM address",
+  assert.deepEqual(errors, [
+    "ownerAccount must not be the zero address",
+    "signerAccount must be an EVM address",
+    "directions[0].sourceWorkers.openExecutor must not be the zero address",
+    "directions[0].sourceWorkers.openDVN must be an EVM address",
+    "directions[0].canary.senderAccount must not be the zero address",
+    "directions[1].destinationWorkers.openDVN must be an EVM address",
+    "directions[1].canary.recipientAccount must be an EVM address",
     "rollback.ownerPauseAccount must not be the zero address",
     "rollback.signerAccount must be an EVM address",
   ]);
@@ -226,6 +228,9 @@ function baseRecord(): MigrationEvidenceRecord {
 	          openExecutor: "0x2222222222222222222222222222222222222222",
 	          openDVN: "0x3333333333333333333333333333333333333333",
 	        },
+	        destinationWorkers: {
+	          openDVN: "0x6666666666666666666666666666666666666666",
+	        },
 	        configDiff: evidence("artifacts/configdiff-sepolia-base.json"),
         deploymentPreflight: evidence("artifacts/preflight-sepolia.json"),
         lzConfigBefore: evidence(
@@ -269,6 +274,9 @@ function baseRecord(): MigrationEvidenceRecord {
 	        sourceWorkers: {
 	          openExecutor: "0x5555555555555555555555555555555555555555",
 	          openDVN: "0x6666666666666666666666666666666666666666",
+	        },
+	        destinationWorkers: {
+	          openDVN: "0x3333333333333333333333333333333333333333",
 	        },
 	        configDiff: evidence("artifacts/configdiff-base-sepolia.json"),
         deploymentPreflight: evidence("artifacts/preflight-base-sepolia.json"),

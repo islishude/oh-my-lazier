@@ -41,5 +41,17 @@
     ],
     "name": "DVNJobAssigned",
     "type": "event"
+  },
+  {
+    "name": "submitVerification",
+    "type": "function",
+    "stateMutability": "nonpayable",
+    "inputs": [
+      { "name": "receiveLib", "type": "address" },
+      { "name": "packetHeader", "type": "bytes" },
+      { "name": "payloadHash", "type": "bytes32" },
+      { "name": "confirmations", "type": "uint64" }
+    ],
+    "outputs": []
   }
 ]

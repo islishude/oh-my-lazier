@@ -12,23 +12,22 @@ library WorkerOptions {
     using CalldataBytesLib for bytes;
 
     uint8 internal constant EXECUTOR_WORKER_ID = 1;
-    uint16 internal constant TYPE_3 = 3;
 
     /// @notice Decodes the single supported executor option.
-    /// @dev Parses LayerZero type-3 options and intentionally accepts only one executor lzReceive option.
+    /// @dev Parses the executor worker-option stream passed by SendUln302 after type-3 option splitting.
     /// First-phase worker contracts reject every other worker/option type so unsupported execution modes
     /// cannot be silently priced or assigned.
-    /// @param options LayerZero type-3 options bytes.
+    /// @param options LayerZero executor worker options bytes.
     /// @return parsed Decoded lzReceive gas and value.
     function decodeExecutorOptions(bytes calldata options)
         internal
         pure
         returns (WorkerTypes.ExecutorOption memory parsed)
     {
-        if (options.length < 2 || options.toU16(0) != TYPE_3) revert WorkerErrors.InvalidOptions();
+        if (options.length == 0) revert WorkerErrors.InvalidOptions();
 
         bool hasLzReceive;
-        uint256 cursor = 2;
+        uint256 cursor = 0;
         while (cursor < options.length) {
             if (options.length < cursor + 4) revert WorkerErrors.InvalidOptions();
             uint8 workerId = options.toU8(cursor);

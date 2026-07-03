@@ -4,7 +4,7 @@ import { addressToBytes32 } from "./lib.js";
 const type3 = "0003";
 const executorWorkerID = "01";
 const lzReceiveOptionType = "01";
-const lzReceivePayloadBytes = 32;
+const lzReceivePayloadBytes = 16;
 
 export type OFTSendParam = {
   dstEid: number;
@@ -53,7 +53,7 @@ export function buildLzReceiveOption(gas: bigint): Hex {
   if (gas <= 0n || gas > (1n << 128n) - 1n) {
     throw new Error("lzReceiveGas must be a non-zero uint128");
   }
-  const payload = `${uint128Hex(gas)}${uint128Hex(0n)}`;
+  const payload = uint128Hex(gas);
   const size = (1 + lzReceivePayloadBytes).toString(16).padStart(4, "0");
   return `0x${type3}${executorWorkerID}${size}${lzReceiveOptionType}${payload}` as Hex;
 }

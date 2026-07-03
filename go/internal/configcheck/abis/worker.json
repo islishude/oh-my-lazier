@@ -20,5 +20,12 @@
       { "name": "minLzReceiveGas", "type": "uint128" },
       { "name": "maxLzReceiveGas", "type": "uint128" }
     ]
+  },
+  {
+    "name": "verifiers",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "name": "verifier", "type": "address" }],
+    "outputs": [{ "name": "allowed", "type": "bool" }]
   }
 ]

@@ -66,10 +66,14 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		if packet.DstEID != dstEID {
 			return applied, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
 		}
-		if _, err := store.GetExecutorJob(ctx, packet.GUID); errors.Is(err, pgx.ErrNoRows) {
+		job, err := store.GetExecutorJob(ctx, packet.GUID)
+		if errors.Is(err, pgx.ErrNoRows) {
 			continue
 		} else if err != nil {
 			return applied, err
+		}
+		if executorDestinationLogAlreadyApplied(job.Status, log.Topics[0]) {
+			continue
 		}
 		didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, log)
 		if err != nil {
@@ -80,6 +84,25 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		}
 	}
 	return applied, nil
+}
+
+func executorDestinationLogAlreadyApplied(status string, topic common.Hash) bool {
+	switch topic {
+	case lzabi.PacketVerifiedTopic():
+		switch status {
+		case string(packets.ExecutorCommitted),
+			string(packets.ExecutorExecutable),
+			string(packets.ExecutorLzReceiveTxEnqueued),
+			string(packets.ExecutorDelivered),
+			string(packets.ExecutorLzReceiveFailed):
+			return true
+		}
+	case lzabi.PacketDeliveredTopic():
+		return status == string(packets.ExecutorDelivered)
+	case lzabi.LzReceiveAlertTopic():
+		return status == string(packets.ExecutorLzReceiveFailed)
+	}
+	return false
 }
 
 // ApplyDVNDestinationLogs applies ReceiveUln302 PayloadVerified logs for configured pathway OpenDVNs.
@@ -113,7 +136,7 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		if !ok {
 			continue
 		}
-		if event.DVN != pathway.SourceWorkers.OpenDVN {
+		if event.DVN != pathway.DestinationWorkers.OpenDVN {
 			continue
 		}
 		if err := validatePayloadVerified(packet, event); err != nil {

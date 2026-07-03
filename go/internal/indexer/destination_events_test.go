@@ -156,6 +156,38 @@ func TestApplyExecutorDestinationLogsSkipsPacketsWithoutExecutorJob(t *testing.T
 	}
 }
 
+func TestApplyExecutorDestinationLogsSkipsAlreadyAppliedEvents(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+		executorJobs: map[common.Hash]db.ExecutorJobRecord{
+			packet.GUID: {
+				GUID:   packet.GUID,
+				Status: string(packets.ExecutorDelivered),
+			},
+		},
+	}
+
+	applied, err := ApplyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+		testPacketDeliveredLog(t, packet),
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutorDestinationLogs() error = %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+	if store.committedGUID != (common.Hash{}) {
+		t.Fatalf("committed guid = %s, want zero", store.committedGUID)
+	}
+	if store.deliveredGUID != (common.Hash{}) {
+		t.Fatalf("delivered guid = %s, want zero", store.deliveredGUID)
+	}
+}
+
 func TestApplyExecutorDestinationLogsSkipsUnknownPackets(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{}
@@ -173,7 +205,7 @@ func TestApplyExecutorDestinationLogsSkipsUnknownPackets(t *testing.T) {
 
 func TestApplyDVNDestinationLogsMarksVerified(t *testing.T) {
 	packet := testDestinationPacketRecord()
-	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x3333333333333333333333333333333333333333"))
+	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))
 	store := &fakeDestinationStore{
 		byVerification: map[string]db.PacketRecord{
 			verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,

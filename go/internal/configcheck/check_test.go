@@ -99,6 +99,38 @@ func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
 	}
 }
 
+func TestCheckWithClientsReportsMissingDestinationVerifierAuthorization(t *testing.T) {
+	cfg := testConfig()
+	cfg.Pathways[0].DVN.Mode = config.DVNModeActive
+	registry, clients := testRegistryAndClientsForConfig(t, cfg)
+	pathway, err := registry.Pathway(
+		cfg.Pathways[0].SrcEID,
+		cfg.Pathways[0].DstEID,
+		cfg.Pathways[0].SrcOApp.Common(),
+		cfg.Pathways[0].DstOApp.Common(),
+	)
+	if err != nil {
+		t.Fatalf("Pathway() error = %v", err)
+	}
+	dstChain, _ := registry.Get(pathway.DstEID)
+	verifier := common.HexToAddress(dstChain.TxRoles.DVN.SignerID)
+	delete(clients[pathway.DstEID].verifiers, verifierKey(pathway.DestinationWorkers.OpenDVN, verifier))
+
+	report, err := CheckWithClients(t.Context(), registry, chainClients(clients))
+	if err != nil {
+		t.Fatalf("CheckWithClients() error = %v", err)
+	}
+	if report.OK {
+		t.Fatal("CheckWithClients() ok = true, want verifier mismatch")
+	}
+	if len(report.Issues) != 1 {
+		t.Fatalf("issues = %+v, want one verifier issue", report.Issues)
+	}
+	if !strings.Contains(report.Issues[0].Path, "destination_workers.open_dvn.verifiers") {
+		t.Fatalf("issue path = %q", report.Issues[0].Path)
+	}
+}
+
 func TestRenderTextIncludesIssuePaths(t *testing.T) {
 	output := RenderText(Report{
 		Issues: []Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
@@ -110,7 +142,11 @@ func TestRenderTextIncludesIssuePaths(t *testing.T) {
 
 func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChainClient) {
 	t.Helper()
-	cfg := testConfig()
+	return testRegistryAndClientsForConfig(t, testConfig())
+}
+
+func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Registry, map[uint32]*fakeChainClient) {
+	t.Helper()
 	registry, err := chain.NewRegistry(cfg.Chains, cfg.Pathways)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
@@ -139,7 +175,7 @@ func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChai
 			Executor:       pathway.SourceWorkers.OpenExecutor,
 		}
 		src.ulnConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = expectedULNConfig(srcChain, pathway.SourceWorkers.OpenDVN)
-		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain, pathway.SourceWorkers.OpenDVN)
+		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain, pathway.DestinationWorkers.OpenDVN)
 		for _, worker := range []common.Address{pathway.SourceWorkers.OpenExecutor, pathway.SourceWorkers.OpenDVN} {
 			src.code[worker] = true
 			src.allowedSendLibs[workerSendLibKey(worker, pathway.SendLib)] = true
@@ -149,6 +185,11 @@ func testRegistryAndClients(t *testing.T) (*chain.Registry, map[uint32]*fakeChai
 				MinLzReceiveGas: new(big.Int).SetUint64(pathway.MinLzReceiveGas),
 				MaxLzReceiveGas: new(big.Int).SetUint64(pathway.MaxLzReceiveGas),
 			}
+		}
+		dst.code[pathway.DestinationWorkers.OpenDVN] = true
+		if pathway.DVNMode == config.DVNModeActive {
+			verifier := common.HexToAddress(dstChain.TxRoles.DVN.SignerID)
+			dst.verifiers[verifierKey(pathway.DestinationWorkers.OpenDVN, verifier)] = true
 		}
 	}
 	report, err := CheckWithClients(context.Background(), registry, chainClients(clients))
@@ -182,6 +223,7 @@ type fakeChainClient struct {
 	ulnConfigs       map[string]ulnConfig
 	allowedSendLibs  map[string]bool
 	workerPathways   map[string]pathwayConfig
+	verifiers        map[string]bool
 }
 
 func newFakeChainClient(chainID int64, eid uint32) *fakeChainClient {
@@ -197,6 +239,7 @@ func newFakeChainClient(chainID int64, eid uint32) *fakeChainClient {
 		ulnConfigs:       make(map[string]ulnConfig),
 		allowedSendLibs:  make(map[string]bool),
 		workerPathways:   make(map[string]pathwayConfig),
+		verifiers:        make(map[string]bool),
 	}
 }
 
@@ -292,6 +335,8 @@ func (f *fakeChainClient) callWorker(to common.Address, method *abi.Method, args
 	case "pathwayConfig":
 		config := f.workerPathways[workerPathwayKey(to, args[0].(uint32), args[1].(common.Address))]
 		return method.Outputs.Pack(config.Enabled, config.MaxMessageSize, config.MinLzReceiveGas, config.MaxLzReceiveGas)
+	case "verifiers":
+		return method.Outputs.Pack(f.verifiers[verifierKey(to, args[0].(common.Address))])
 	default:
 		return nil, errors.New("unknown worker method")
 	}
@@ -340,6 +385,7 @@ func testConfig() config.Config {
 				RPCURLs:         []string{"http://localhost:8545"},
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(),
+					DVN:      testDVNRole(),
 				},
 			},
 			{
@@ -352,6 +398,7 @@ func testConfig() config.Config {
 				RPCURLs:         []string{"http://localhost:8546"},
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(),
+					DVN:      testDVNRole(),
 				},
 			},
 		},
@@ -366,6 +413,9 @@ func testConfig() config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+				},
+				DestinationWorkers: config.DestinationWorkerContractsConfig{
+					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
@@ -384,6 +434,9 @@ func testConfig() config.Config {
 					OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
+				DestinationWorkers: config.DestinationWorkerContractsConfig{
+					OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
@@ -396,6 +449,14 @@ func testConfig() config.Config {
 
 func testExecutorRole() config.ExecutorTxRoleConfig {
 	return config.ExecutorTxRoleConfig{
+		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
+}
+
+func testDVNRole() config.DVNTxRoleConfig {
+	return config.DVNTxRoleConfig{
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
@@ -416,6 +477,10 @@ func workerSendLibKey(worker, sendLib common.Address) string {
 
 func workerPathwayKey(worker common.Address, dstEID uint32, sender common.Address) string {
 	return worker.Hex() + ":" + big.NewInt(int64(dstEID)).String() + ":" + sender.Hex()
+}
+
+func verifierKey(openDVN, verifier common.Address) string {
+	return openDVN.Hex() + ":" + verifier.Hex()
 }
 
 func addr(raw string) common.Address {

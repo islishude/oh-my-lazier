@@ -70,6 +70,9 @@ Contract authority:
 - `OpenExecutor`, `OpenDVN`, `WorkerAccess`, and OFT controls use owner-gated
   configuration.
 - SendLib allowlists are explicit.
+- OpenDVN verifier allowlists are explicit; active worker verification submits
+  to destination `OpenDVN.submitVerification`, and OpenDVN calls
+  `ReceiveUln302.verify` so the recorded `PayloadVerified.dvn` is OpenDVN.
 - Worker assignment can be paused.
 - OFT sends and receives can be paused per endpoint direction.
 

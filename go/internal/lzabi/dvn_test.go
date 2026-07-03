@@ -79,6 +79,20 @@ func TestDecodePayloadVerified(t *testing.T) {
 	}
 }
 
+func TestPackOpenDVNSubmitVerification(t *testing.T) {
+	receiveLib := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	packetHeader := []byte{0x01, 0x02, 0x03}
+	payloadHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+	data, err := PackOpenDVNSubmitVerification(receiveLib, packetHeader, payloadHash, 12)
+	if err != nil {
+		t.Fatalf("PackOpenDVNSubmitVerification() error = %v", err)
+	}
+	if string(data[:4]) != string(openDVNABI.Methods["submitVerification"].ID) {
+		t.Fatalf("selector = %x", data[:4])
+	}
+}
+
 func TestDecodeDVNJobAssignedRejectsWrongTopic(t *testing.T) {
 	if _, err := DecodeDVNJobAssigned(gethtypes.Log{Topics: []common.Hash{common.HexToHash("0x01")}}); err == nil {
 		t.Fatal("DecodeDVNJobAssigned() error = nil, want topic error")

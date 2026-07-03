@@ -96,17 +96,18 @@ func (s *Store) SyncConfig(ctx context.Context, registry *chain.Registry) error 
 		if _, err := tx.Exec(ctx, `
 				INSERT INTO pathways (
 					src_eid, dst_eid, src_oapp, dst_oapp, send_lib, receive_lib,
-					open_executor, open_dvn, max_message_size, enabled
+					open_executor, open_dvn, destination_open_dvn, max_message_size, enabled
 				)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 				ON CONFLICT (src_eid, dst_eid, src_oapp, dst_oapp) DO UPDATE SET
 					send_lib = EXCLUDED.send_lib,
 					receive_lib = EXCLUDED.receive_lib,
 					open_executor = EXCLUDED.open_executor,
 					open_dvn = EXCLUDED.open_dvn,
+					destination_open_dvn = EXCLUDED.destination_open_dvn,
 					max_message_size = EXCLUDED.max_message_size,
 					enabled = EXCLUDED.enabled
-			`, pathway.SrcEID, pathway.DstEID, addressBytes(pathway.SrcOApp), addressBytes(pathway.DstOApp), addressBytes(pathway.SendLib), addressBytes(pathway.ReceiveLib), addressBytes(pathway.SourceWorkers.OpenExecutor), addressBytes(pathway.SourceWorkers.OpenDVN), pathway.MaxMessageSize, pathway.Enabled); err != nil {
+			`, pathway.SrcEID, pathway.DstEID, addressBytes(pathway.SrcOApp), addressBytes(pathway.DstOApp), addressBytes(pathway.SendLib), addressBytes(pathway.ReceiveLib), addressBytes(pathway.SourceWorkers.OpenExecutor), addressBytes(pathway.SourceWorkers.OpenDVN), addressBytes(pathway.DestinationWorkers.OpenDVN), pathway.MaxMessageSize, pathway.Enabled); err != nil {
 			return err
 		}
 	}

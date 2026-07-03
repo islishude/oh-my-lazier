@@ -50,3 +50,8 @@ func DecodeDVNJobAssigned(log gethtypes.Log) (DVNJobAssigned, error) {
 	event.Sender = common.BytesToAddress(log.Topics[3].Bytes()[12:])
 	return event, nil
 }
+
+// PackOpenDVNSubmitVerification ABI-encodes OpenDVN.submitVerification.
+func PackOpenDVNSubmitVerification(receiveLib common.Address, packetHeader []byte, payloadHash common.Hash, confirmations uint64) ([]byte, error) {
+	return openDVNABI.Pack("submitVerification", receiveLib, packetHeader, payloadHash, confirmations)
+}

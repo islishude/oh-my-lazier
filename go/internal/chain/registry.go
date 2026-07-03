@@ -48,20 +48,26 @@ type WorkerContracts struct {
 	OpenDVN      common.Address
 }
 
+// DestinationWorkerContracts identifies target-chain worker contracts selected for one pathway.
+type DestinationWorkerContracts struct {
+	OpenDVN common.Address
+}
+
 // Pathway is one configured source-to-destination OApp pathway.
 type Pathway struct {
-	SrcEID          uint32
-	DstEID          uint32
-	SrcOApp         common.Address
-	DstOApp         common.Address
-	SendLib         common.Address
-	ReceiveLib      common.Address
-	SourceWorkers   WorkerContracts
-	DVNMode         config.DVNMode
-	Enabled         bool
-	MaxMessageSize  uint64
-	MinLzReceiveGas uint64
-	MaxLzReceiveGas uint64
+	SrcEID             uint32
+	DstEID             uint32
+	SrcOApp            common.Address
+	DstOApp            common.Address
+	SendLib            common.Address
+	ReceiveLib         common.Address
+	SourceWorkers      WorkerContracts
+	DestinationWorkers DestinationWorkerContracts
+	DVNMode            config.DVNMode
+	Enabled            bool
+	MaxMessageSize     uint64
+	MinLzReceiveGas    uint64
+	MaxLzReceiveGas    uint64
 }
 
 // Registry indexes configured chains by endpoint ID.
@@ -111,6 +117,9 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			SourceWorkers: WorkerContracts{
 				OpenExecutor: cfg.SourceWorkers.OpenExecutor.Common(),
 				OpenDVN:      cfg.SourceWorkers.OpenDVN.Common(),
+			},
+			DestinationWorkers: DestinationWorkerContracts{
+				OpenDVN: cfg.DestinationWorkers.OpenDVN.Common(),
 			},
 			DVNMode:         cfg.DVN.Mode,
 			Enabled:         cfg.Enabled,

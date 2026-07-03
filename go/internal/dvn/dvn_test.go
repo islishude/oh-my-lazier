@@ -254,15 +254,22 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	if store.verifyRequest.ChainEID != packet.DstEID {
 		t.Fatalf("verify chain = %d, want %d", store.verifyRequest.ChainEID, packet.DstEID)
 	}
-	if store.verifyRequest.To != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+	if store.verifyRequest.To != common.HexToAddress("0x6666666666666666666666666666666666666666") {
 		t.Fatalf("verify target = %s", store.verifyRequest.To)
 	}
 	if store.verifyRequest.SignerID != "0x8888888888888888888888888888888888888888" {
 		t.Fatalf("verify signer = %q, want destination dvn signer", store.verifyRequest.SignerID)
 	}
-	receiveUlnABI := lzabi.ReceiveUln302ABI()
-	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], receiveUlnABI.Methods["verify"].ID) {
+	openDVNABI := lzabi.OpenDVNABI()
+	if len(store.verifyRequest.Calldata) < 4 || !bytes.Equal(store.verifyRequest.Calldata[:4], openDVNABI.Methods["submitVerification"].ID) {
 		t.Fatalf("verify calldata selector = %x", store.verifyRequest.Calldata[:4])
+	}
+	args, err := openDVNABI.Methods["submitVerification"].Inputs.Unpack(store.verifyRequest.Calldata[4:])
+	if err != nil {
+		t.Fatalf("unpack submitVerification calldata: %v", err)
+	}
+	if args[0].(common.Address) != common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Fatalf("submitVerification receiveLib = %s", args[0].(common.Address))
 	}
 	if !bytes.Equal(store.quorumResult, report) {
 		t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
@@ -334,7 +341,13 @@ func TestProcessReadyToVerifyOnceActiveMarksVerifiedWhenAlreadyCompleteOnChain(t
 
 func TestBuildVerifyTxRejectsMissingConfirmations(t *testing.T) {
 	packet := testDVNPacket()
-	_, err := BuildVerifyTx(packet, common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), 0, "0x9999999999999999999999999999999999999999")
+	_, err := BuildVerifyTx(
+		packet,
+		common.HexToAddress("0x6666666666666666666666666666666666666666"),
+		common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		0,
+		"0x9999999999999999999999999999999999999999",
+	)
 	if err == nil {
 		t.Fatal("BuildVerifyTx() error = nil, want missing confirmations error")
 	}
@@ -592,6 +605,9 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+				},
+				DestinationWorkers: config.DestinationWorkerContractsConfig{
+					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: mode},
 				Enabled:        true,

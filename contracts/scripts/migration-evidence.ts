@@ -14,6 +14,7 @@ export type MigrationDirectionEvidence = {
   srcEid: number;
   dstEid: number;
   sourceWorkers: SourceWorkersEvidence;
+  destinationWorkers: DestinationWorkersEvidence;
   configDiff: EvidenceRef;
   deploymentPreflight: EvidenceRef;
   lzConfigBefore: EvidenceRef;
@@ -29,6 +30,10 @@ export type MigrationDirectionEvidence = {
 
 export type SourceWorkersEvidence = {
   openExecutor: string;
+  openDVN: string;
+};
+
+export type DestinationWorkersEvidence = {
   openDVN: string;
 };
 
@@ -153,6 +158,11 @@ function validateDirections(
       errors.push(`${prefix}.srcEid and ${prefix}.dstEid must differ`);
     }
     validateSourceWorkers(errors, direction.sourceWorkers, `${prefix}.sourceWorkers`);
+    validateDestinationWorkers(
+      errors,
+      direction.destinationWorkers,
+      `${prefix}.destinationWorkers`,
+    );
     const key = `${direction.srcEid}->${direction.dstEid}`;
     if (seen.has(key)) {
       errors.push(`${prefix} duplicates direction ${key}`);
@@ -229,6 +239,18 @@ function validateSourceWorkers(
     return;
   }
   requireEVMAddress(errors, workers.openExecutor, `${field}.openExecutor`);
+  requireEVMAddress(errors, workers.openDVN, `${field}.openDVN`);
+}
+
+function validateDestinationWorkers(
+  errors: string[],
+  workers: DestinationWorkersEvidence,
+  field: string,
+): void {
+  if (!isRecord(workers)) {
+    errors.push(`${field} is required`);
+    return;
+  }
   requireEVMAddress(errors, workers.openDVN, `${field}.openDVN`);
 }
 

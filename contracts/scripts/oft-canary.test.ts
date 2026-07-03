@@ -5,7 +5,7 @@ import { buildCanarySendParam, buildLzReceiveOption } from "./oft-canary.js";
 test("buildLzReceiveOption encodes one zero-value executor lzReceive option", () => {
   assert.equal(
     buildLzReceiveOption(100_000n),
-    "0x000301002101000000000000000000000000000186a000000000000000000000000000000000",
+    "0x000301001101000000000000000000000000000186a0",
   );
 });
 
@@ -28,7 +28,7 @@ test("buildCanarySendParam builds first-phase OFT send params", () => {
     amountLD: 1_000_000n,
     minAmountLD: 999_000n,
     extraOptions:
-      "0x00030100210100000000000000000000000000030d4000000000000000000000000000000000",
+      "0x00030100110100000000000000000000000000030d40",
     composeMsg: "0x",
     oftCmd: "0x",
   });

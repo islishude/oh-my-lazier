@@ -10,7 +10,7 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 - `primary_source` defaults to `binance`; supported values are `binance`, `coinmarketcap`, and `coingecko`.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap_symbol` is configured; do not put API keys in worker YAML.
 - `base_fee_wei`, `buffer_bps`, `stale_after_seconds`, `gas_spike_bps`, and configured gas price/fee caps are approved for the target environment. `base_fee_wei` is the worker quote base fee, not an EIP-1559 block header base fee; the tx manager derives legacy versus dynamic-fee signing and estimates outer transaction gas from RPC before broadcast.
-- `pathways[].source_workers` addresses and pathway EIDs match the latest deployment record.
+- `pathways[].source_workers`, `pathways[].destination_workers.open_dvn`, and pathway EIDs match the latest deployment record.
 
 ## One-Shot Update
 
@@ -20,7 +20,7 @@ Run one price calculation and enqueue the resulting worker transactions:
 go run ./go/cmd/pricebot-once -config <worker.yaml>
 ```
 
-The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, ULN, OpenExecutor, and OpenDVN state before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique `(src_eid, dst_eid, source_workers.open_executor, source_workers.open_dvn)` pair. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
+The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenExecutor, source OpenDVN, destination OpenDVN code, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique `(src_eid, dst_eid, source_workers.open_executor, source_workers.open_dvn)` pair. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
 
 ## Expected Outbox Effects
 

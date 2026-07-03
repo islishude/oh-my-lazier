@@ -99,6 +99,8 @@ pathways:
     source_workers:
       open_executor: "0x2222222222222222222222222222222222222222"
       open_dvn: "0x3333333333333333333333333333333333333333"
+    destination_workers:
+      open_dvn: "0x6666666666666666666666666666666666666666"
     dvn:
       mode: shadow
     enabled: true
@@ -114,6 +116,8 @@ pathways:
     source_workers:
       open_executor: "0x5555555555555555555555555555555555555555"
       open_dvn: "0x6666666666666666666666666666666666666666"
+    destination_workers:
+      open_dvn: "0x3333333333333333333333333333333333333333"
     dvn:
       mode: shadow
     enabled: true

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.35;
 
 import {ILayerZeroDVN} from "@layerzerolabs/lz-evm-messagelib-v2/contracts/uln/interfaces/ILayerZeroDVN.sol";
+import {IReceiveUlnE2} from "@layerzerolabs/lz-evm-messagelib-v2/contracts/uln/interfaces/IReceiveUlnE2.sol";
 import {WorkerAccess} from "../common/WorkerAccess.sol";
 import {WorkerErrors} from "../common/WorkerErrors.sol";
 import {WorkerFeeLib} from "../common/WorkerFeeLib.sol";
@@ -13,6 +14,9 @@ import {PriceFeedStore} from "../common/PriceFeedStore.sol";
 contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
     /// @notice Per-destination and per-OApp pathway configuration.
     mapping(uint32 dstEid => mapping(address sender => WorkerTypes.PathwayConfig config)) public pathwayConfig;
+
+    /// @notice Addresses allowed to submit ReceiveUln302 verification through this DVN contract.
+    mapping(address verifier => bool allowed) public verifiers;
 
     /// @notice Emitted when a LayerZero send library assigns a DVN job.
     /// @param jobId Deterministic job identifier derived from destination, packet header, payload hash, and sender.
@@ -36,6 +40,25 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
     /// @param config New pathway configuration.
     event PathwayConfigSet(uint32 indexed dstEid, address indexed sender, WorkerTypes.PathwayConfig config);
 
+    /// @notice Emitted when verifier authorization changes.
+    /// @param verifier Verifier address whose authorization changed.
+    /// @param allowed Whether the verifier is allowed to submit verification.
+    event VerifierSet(address indexed verifier, bool allowed);
+
+    /// @notice Emitted after an authorized verifier submits a ReceiveUln302 verification through this DVN.
+    /// @param verifier Authorized verifier caller.
+    /// @param receiveLib Destination ReceiveUln302 library called by this DVN.
+    /// @param payloadHash Packet payload hash submitted to ReceiveUln302.
+    /// @param packetHeaderHash Hash of the packet header submitted to ReceiveUln302.
+    /// @param confirmations Source confirmations submitted to ReceiveUln302.
+    event DVNVerificationSubmitted(
+        address indexed verifier,
+        address indexed receiveLib,
+        bytes32 indexed payloadHash,
+        bytes32 packetHeaderHash,
+        uint64 confirmations
+    );
+
     /// @notice Initializes DVN ownership.
     /// @param initialOwner Initial owner address.
     constructor(address initialOwner) WorkerAccess(initialOwner) {}
@@ -57,6 +80,30 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
     /// @param config Price configuration.
     function setPriceConfig(uint32 dstEid, WorkerTypes.PriceConfig calldata config) external onlyOwner {
         _setPriceConfig(dstEid, config);
+    }
+
+    /// @notice Sets whether an address may submit destination verification through this DVN.
+    /// @param verifier Verifier address to update.
+    /// @param allowed Whether the verifier is allowed to submit verification.
+    function setVerifier(address verifier, bool allowed) external onlyOwner {
+        verifiers[verifier] = allowed;
+        emit VerifierSet(verifier, allowed);
+    }
+
+    /// @notice Submits destination ReceiveUln302 verification with this DVN as the recorded verifier.
+    /// @param receiveLib Destination ReceiveUln302 library.
+    /// @param packetHeader LayerZero packet header.
+    /// @param payloadHash LayerZero packet payload hash.
+    /// @param confirmations Source confirmations observed by the verifier.
+    function submitVerification(
+        address receiveLib,
+        bytes calldata packetHeader,
+        bytes32 payloadHash,
+        uint64 confirmations
+    ) external {
+        if (!verifiers[msg.sender]) revert WorkerErrors.UnauthorizedVerifier(msg.sender);
+        IReceiveUlnE2(receiveLib).verify(packetHeader, payloadHash, confirmations);
+        emit DVNVerificationSubmitted(msg.sender, receiveLib, payloadHash, keccak256(packetHeader), confirmations);
     }
 
     /// @notice Quotes, charges, and assigns a DVN verification job.

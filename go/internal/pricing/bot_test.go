@@ -194,6 +194,9 @@ func testRegistry(t *testing.T) *chain.Registry {
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 			},
+			DestinationWorkers: config.DestinationWorkerContractsConfig{
+				OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+			},
 			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 			Enabled:        true,
 			MaxMessageSize: 10000,
@@ -208,6 +211,9 @@ func testRegistry(t *testing.T) *chain.Registry {
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 				OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+			},
+			DestinationWorkers: config.DestinationWorkerContractsConfig{
+				OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 			},
 			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 			Enabled:        true,

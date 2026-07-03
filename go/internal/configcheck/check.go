@@ -200,7 +200,7 @@ func (c *checker) checkPathway(ctx context.Context, pathway chain.Pathway) error
 	if err := c.checkLibraries(ctx, srcClient, dstClient, base, srcChain, dstChain, pathway); err != nil {
 		return err
 	}
-	if err := c.checkWorkers(ctx, srcClient, base, srcChain, pathway); err != nil {
+	if err := c.checkWorkers(ctx, srcClient, dstClient, base, srcChain, dstChain, pathway); err != nil {
 		return err
 	}
 	return nil
@@ -280,26 +280,26 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.SourceWorkers.OpenDVN)
+	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.DestinationWorkers.OpenDVN)
 	return nil
 }
 
-func (c *checker) checkWorkers(ctx context.Context, client ChainClient, base string, srcChain chain.Chain, pathway chain.Pathway) error {
+func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
 	for label, worker := range map[string]common.Address{
 		"open_executor": pathway.SourceWorkers.OpenExecutor,
 		"open_dvn":      pathway.SourceWorkers.OpenDVN,
 	} {
-		if err := c.requireCode(ctx, client, base+".source_workers."+label, srcChain.EID, worker); err != nil {
+		if err := c.requireCode(ctx, srcClient, base+".source_workers."+label, srcChain.EID, worker); err != nil {
 			return err
 		}
-		allowed, err := callBool(ctx, client, workerABI, worker, "allowedSendLib", pathway.SendLib)
+		allowed, err := callBool(ctx, srcClient, workerABI, worker, "allowedSendLib", pathway.SendLib)
 		if err != nil {
 			return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
 		}
 		if !allowed {
 			c.add(base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
 		}
-		config, err := callPathwayConfig(ctx, client, worker, pathway.DstEID, pathway.SrcOApp)
+		config, err := callPathwayConfig(ctx, srcClient, worker, pathway.DstEID, pathway.SrcOApp)
 		if err != nil {
 			return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
 		}
@@ -314,6 +314,23 @@ func (c *checker) checkWorkers(ctx context.Context, client ChainClient, base str
 		}
 		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
 			c.add(base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+		}
+	}
+	if err := c.requireCode(ctx, dstClient, base+".destination_workers.open_dvn", dstChain.EID, pathway.DestinationWorkers.OpenDVN); err != nil {
+		return err
+	}
+	if pathway.DVNMode == "active" {
+		if dstChain.TxRoles.DVN.SignerID == "" {
+			c.add(base+".destination_workers.open_dvn.verifiers", "destination chain dvn signer is required for active dvn pathways")
+			return nil
+		}
+		verifier := common.HexToAddress(dstChain.TxRoles.DVN.SignerID)
+		allowed, err := callBool(ctx, dstClient, workerABI, pathway.DestinationWorkers.OpenDVN, "verifiers", verifier)
+		if err != nil {
+			return fmt.Errorf("read destination open_dvn verifier authorization for %s: %w", base, err)
+		}
+		if !allowed {
+			c.add(base+".destination_workers.open_dvn.verifiers", "dvn signer %s is not authorized on destination OpenDVN %s", verifier, pathway.DestinationWorkers.OpenDVN)
 		}
 	}
 	return nil
@@ -338,7 +355,7 @@ func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations 
 	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
 		c.add(path+".required_dvn_count", "requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
 	}
-	if config.OptionalDVNCount != nilDVNCount {
+	if config.OptionalDVNCount != 0 && config.OptionalDVNCount != nilDVNCount {
 		c.add(path+".optional_dvn_count", "optionalDVNCount %d is not disabled", config.OptionalDVNCount)
 	}
 	if config.OptionalDVNThreshold != 0 {

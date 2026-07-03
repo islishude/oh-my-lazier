@@ -179,6 +179,11 @@ type WorkerContractsConfig struct {
 	OpenDVN      EVMAddress `yaml:"open_dvn"`
 }
 
+// DestinationWorkerContractsConfig identifies target-chain worker contracts selected for a pathway.
+type DestinationWorkerContractsConfig struct {
+	OpenDVN EVMAddress `yaml:"open_dvn"`
+}
+
 // PathwayDVNConfig controls DVN behavior for one source-to-destination pathway.
 type PathwayDVNConfig struct {
 	Mode DVNMode `yaml:"mode"`
@@ -186,18 +191,19 @@ type PathwayDVNConfig struct {
 
 // PathwayConfig defines an allowed source-to-destination message pathway.
 type PathwayConfig struct {
-	SrcEID          uint32                `yaml:"src_eid"`
-	DstEID          uint32                `yaml:"dst_eid"`
-	SrcOApp         EVMAddress            `yaml:"src_oapp"`
-	DstOApp         EVMAddress            `yaml:"dst_oapp"`
-	SendLib         EVMAddress            `yaml:"send_lib"`
-	ReceiveLib      EVMAddress            `yaml:"receive_lib"`
-	SourceWorkers   WorkerContractsConfig `yaml:"source_workers"`
-	DVN             PathwayDVNConfig      `yaml:"dvn"`
-	Enabled         bool                  `yaml:"enabled"`
-	MaxMessageSize  uint64                `yaml:"max_message_size"`
-	MinLzReceiveGas uint64                `yaml:"min_lz_receive_gas"`
-	MaxLzReceiveGas uint64                `yaml:"max_lz_receive_gas"`
+	SrcEID             uint32                           `yaml:"src_eid"`
+	DstEID             uint32                           `yaml:"dst_eid"`
+	SrcOApp            EVMAddress                       `yaml:"src_oapp"`
+	DstOApp            EVMAddress                       `yaml:"dst_oapp"`
+	SendLib            EVMAddress                       `yaml:"send_lib"`
+	ReceiveLib         EVMAddress                       `yaml:"receive_lib"`
+	SourceWorkers      WorkerContractsConfig            `yaml:"source_workers"`
+	DestinationWorkers DestinationWorkerContractsConfig `yaml:"destination_workers"`
+	DVN                PathwayDVNConfig                 `yaml:"dvn"`
+	Enabled            bool                             `yaml:"enabled"`
+	MaxMessageSize     uint64                           `yaml:"max_message_size"`
+	MinLzReceiveGas    uint64                           `yaml:"min_lz_receive_gas"`
+	MaxLzReceiveGas    uint64                           `yaml:"max_lz_receive_gas"`
 }
 
 // Load reads a YAML config file, applies environment overrides, and validates the result.
@@ -340,6 +346,7 @@ func (c Config) Validate() error {
 			"receive_lib":                  pathway.ReceiveLib,
 			"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
 			"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
+			"destination_workers.open_dvn": pathway.DestinationWorkers.OpenDVN,
 		} {
 			if value.IsZero() {
 				return fmt.Errorf("pathway %d -> %d %s is required", pathway.SrcEID, pathway.DstEID, label)

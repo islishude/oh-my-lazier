@@ -109,6 +109,12 @@ const outputs: AbiOutput[] = [
         type: "event",
         name: "DVNJobAssigned",
       },
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
+        type: "function",
+        name: "submitVerification",
+      },
     ],
   },
   {
@@ -240,6 +246,12 @@ const outputs: AbiOutput[] = [
           "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
         type: "function",
         name: "pathwayConfig",
+      },
+      {
+        artifact:
+          "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
+        type: "function",
+        name: "verifiers",
       },
     ],
   },

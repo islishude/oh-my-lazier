@@ -22,14 +22,16 @@ type ExecutorOptions struct {
 }
 
 // DecodeExecutorOptions decodes the only executor option shape supported in phase 1.
+// It accepts either full LayerZero type-3 options or the executor worker-option
+// stream that SendUln302 passes to worker contracts after splitting type-3 input.
 func DecodeExecutorOptions(options []byte) (ExecutorOptions, error) {
-	if len(options) < 2 || binary.BigEndian.Uint16(options[:2]) != optionType3 {
-		return ExecutorOptions{}, errors.New("invalid LayerZero type-3 options")
+	cursor := 0
+	if len(options) >= 2 && binary.BigEndian.Uint16(options[:2]) == optionType3 {
+		cursor = 2
 	}
 
 	var decoded ExecutorOptions
 	hasLzReceive := false
-	cursor := 2
 	for cursor < len(options) {
 		if len(options) < cursor+4 {
 			return ExecutorOptions{}, errors.New("truncated executor option header")

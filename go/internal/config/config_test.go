@@ -16,10 +16,21 @@ func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 }
 
 func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
-	cfg := validConfig()
-	cfg.Pathways[0].SourceWorkers.OpenDVN = EVMAddress{}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want missing worker contract error")
+	for name, mutate := range map[string]func(*Config){
+		"source": func(cfg *Config) {
+			cfg.Pathways[0].SourceWorkers.OpenDVN = EVMAddress{}
+		},
+		"destination": func(cfg *Config) {
+			cfg.Pathways[0].DestinationWorkers.OpenDVN = EVMAddress{}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want missing worker contract error")
+			}
+		})
 	}
 }
 
@@ -447,6 +458,8 @@ pathways:
     source_workers:
       open_executor: "0x2222222222222222222222222222222222222222"
       open_dvn: "0x3333333333333333333333333333333333333333"
+    destination_workers:
+      open_dvn: "0x6666666666666666666666666666666666666666"
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000
@@ -540,6 +553,9 @@ func validConfig() Config {
 					OpenExecutor: MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
+				DestinationWorkers: DestinationWorkerContractsConfig{
+					OpenDVN: MustEVMAddress("0x6666666666666666666666666666666666666666"),
+				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,
 				MaxMessageSize:  10000,
@@ -556,6 +572,9 @@ func validConfig() Config {
 				SourceWorkers: WorkerContractsConfig{
 					OpenExecutor: MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      MustEVMAddress("0x6666666666666666666666666666666666666666"),
+				},
+				DestinationWorkers: DestinationWorkerContractsConfig{
+					OpenDVN: MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
 				Enabled:         true,

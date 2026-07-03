@@ -408,8 +408,7 @@ func isEstimateGasRevert(err error) bool {
 	if err == nil {
 		return false
 	}
-	var dataErr rpc.DataError
-	if errors.As(err, &dataErr) {
+	if dataErr, ok := errors.AsType[rpc.DataError](err); ok {
 		if isRevertErrorData(dataErr.ErrorData()) {
 			return true
 		}

@@ -1,0 +1,97 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: laz_worker
+      POSTGRES_USER: laz_worker
+      POSTGRES_PASSWORD: laz_worker
+    ports:
+      - "55433:5432"
+    volumes:
+      - ./tmp/e2e/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U laz_worker -d laz_worker"]
+      interval: 5s
+      timeout: 5s
+      start_period: 1s
+      retries: 12
+
+  anvil-a:
+    image: ${ANVIL_IMAGE:-ghcr.io/foundry-rs/foundry:latest}
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8545"
+      - "--chain-id"
+      - "31337"
+      - "--mnemonic"
+      - "test test test test test test test test test test test junk"
+      - "--accounts"
+      - "10"
+      - "--balance"
+      - "10000"
+    ports:
+      - "18545:8545"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1",
+        ]
+      interval: 2s
+      timeout: 5s
+      start_period: 1s
+      retries: 30
+
+  anvil-b:
+    image: ${ANVIL_IMAGE:-ghcr.io/foundry-rs/foundry:latest}
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8545"
+      - "--chain-id"
+      - "31338"
+      - "--mnemonic"
+      - "test test test test test test test test test test test junk"
+      - "--accounts"
+      - "10"
+      - "--balance"
+      - "10000"
+    ports:
+      - "18546:8545"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1",
+        ]
+      interval: 2s
+      timeout: 5s
+      start_period: 1s
+      retries: 30
+
+  worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oh-my-lazier-worker:e2e
+    command: ["-config", "/app/tmp/e2e/worker.container.yaml"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      anvil-a:
+        condition: service_healthy
+      anvil-b:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable
+      E2E_KEYSTORE_PASSWORD: local-e2e-password
+    ports:
+      - "19090:9090"
+    volumes:
+      - ./tmp/e2e:/app/tmp/e2e:ro

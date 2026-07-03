@@ -91,7 +91,9 @@ Required state:
 - OpenExecutor and OpenDVN allow only intended SendLib addresses.
 - Worker pathway config is enabled only for approved OApps.
 - Endpoint executor config points to each pathway's configured `source_workers.open_executor` only after the executor migration step.
-- ULN config includes each pathway's configured `source_workers.open_dvn` plus an independent LayerZero Labs DVN only during the DVN join step.
+- Source SendUln config includes each pathway's configured `source_workers.open_dvn` plus an independent LayerZero Labs DVN only during the DVN join step.
+- Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same independent LayerZero Labs DVN only during the DVN join step.
+- Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
 - OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence.
 

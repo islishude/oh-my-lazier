@@ -71,6 +71,20 @@ contract SendLibCaller {
     }
 }
 
+contract ReceiveUlnMock {
+    address public lastDVN;
+    bytes public lastPacketHeader;
+    bytes32 public lastPayloadHash;
+    uint64 public lastConfirmations;
+
+    function verify(bytes calldata packetHeader, bytes32 payloadHash, uint64 confirmations) external {
+        lastDVN = msg.sender;
+        lastPacketHeader = packetHeader;
+        lastPayloadHash = payloadHash;
+        lastConfirmations = confirmations;
+    }
+}
+
 contract OpenWorkersTest {
     uint32 internal constant DST_EID = 40245;
     address internal constant OAPP = address(0x2002);
@@ -167,8 +181,7 @@ contract OpenWorkersTest {
 
     function test_executorRejectsDuplicateLzReceiveOption() public {
         bytes memory payload = bytes.concat(bytes16(uint128(100_000)));
-        bytes memory duplicate =
-            bytes.concat(bytes2(uint16(3)), executorOptionEntry(1, payload), executorOptionEntry(1, payload));
+        bytes memory duplicate = bytes.concat(executorOptionEntry(1, payload), executorOptionEntry(1, payload));
         expectRevert(
             address(sendLib),
             abi.encodeCall(sendLib.executorFee, (executor, DST_EID, OAPP, 512, duplicate)),
@@ -327,6 +340,39 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_dvnOwnerSetsVerifierAuthorization() public {
+        address verifier = address(0xBEEF);
+        dvn.setVerifier(verifier, true);
+        require(dvn.verifiers(verifier), "verifier not allowed");
+        dvn.setVerifier(verifier, false);
+        require(!dvn.verifiers(verifier), "verifier still allowed");
+    }
+
+    function test_dvnSubmitVerificationRejectsUnauthorizedVerifier() public {
+        ReceiveUlnMock receiveLib = new ReceiveUlnMock();
+        expectRevert(
+            address(dvn),
+            abi.encodeCall(
+                dvn.submitVerification, (address(receiveLib), hex"01020304", bytes32(uint256(0x55)), uint64(12))
+            ),
+            WorkerErrors.UnauthorizedVerifier.selector
+        );
+    }
+
+    function test_dvnSubmitVerificationRecordsOpenDVNAsSender() public {
+        ReceiveUlnMock receiveLib = new ReceiveUlnMock();
+        bytes memory packetHeader = hex"01020304";
+        bytes32 payloadHash = bytes32(uint256(0x55));
+
+        dvn.setVerifier(address(this), true);
+        dvn.submitVerification(address(receiveLib), packetHeader, payloadHash, 12);
+
+        require(receiveLib.lastDVN() == address(dvn), "receive lib sender is not OpenDVN");
+        require(keccak256(receiveLib.lastPacketHeader()) == keccak256(packetHeader), "packet header mismatch");
+        require(receiveLib.lastPayloadHash() == payloadHash, "payload hash mismatch");
+        require(receiveLib.lastConfirmations() == 12, "confirmations mismatch");
+    }
+
     function test_dvnWithdraw() public {
         ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
             dstEid: DST_EID,
@@ -429,7 +475,7 @@ contract OpenWorkersTest {
     }
 
     function executorOption(uint8 optionType, bytes memory payload) internal pure returns (bytes memory) {
-        return bytes.concat(bytes2(uint16(3)), executorOptionEntry(optionType, payload));
+        return executorOptionEntry(optionType, payload);
     }
 
     function executorOptionEntry(uint8 optionType, bytes memory payload) internal pure returns (bytes memory) {

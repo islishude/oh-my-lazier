@@ -8,14 +8,21 @@ import (
 )
 
 func TestDecodeExecutorOptionsAcceptsSingleLzReceiveOption(t *testing.T) {
-	options := testLzReceiveOptions(t, 0)
-
-	decoded, err := DecodeExecutorOptions(options)
-	if err != nil {
-		t.Fatalf("DecodeExecutorOptions() error = %v", err)
+	tests := map[string][]byte{
+		"type3":    testLzReceiveOptions(t, 0),
+		"stripped": testLzReceiveOptions(t, 0)[2:],
 	}
-	if decoded.LzReceiveGas.Cmp(big.NewInt(100_000)) != 0 {
-		t.Fatalf("lzReceive gas = %s, want 100000", decoded.LzReceiveGas)
+
+	for name, options := range tests {
+		t.Run(name, func(t *testing.T) {
+			decoded, err := DecodeExecutorOptions(options)
+			if err != nil {
+				t.Fatalf("DecodeExecutorOptions() error = %v", err)
+			}
+			if decoded.LzReceiveGas.Cmp(big.NewInt(100_000)) != 0 {
+				t.Fatalf("lzReceive gas = %s, want 100000", decoded.LzReceiveGas)
+			}
+		})
 	}
 }
 
