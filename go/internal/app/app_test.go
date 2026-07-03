@@ -486,8 +486,3 @@ func sortStrings(values []string) {
 		}
 	}
 }
-
-//go:fix inline
-func boolPtr(value bool) *bool {
-	return new(value)
-}

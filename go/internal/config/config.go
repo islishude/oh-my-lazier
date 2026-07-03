@@ -298,8 +298,8 @@ func (c Config) Validate() error {
 				return err
 			}
 		}
-		if chain.Confirmations != 12 {
-			return fmt.Errorf("chain %s confirmations must be 12 in phase 1", chain.Name)
+		if chain.Confirmations == 0 {
+			return fmt.Errorf("chain %s confirmations is required", chain.Name)
 		}
 		if chain.IndexerQueryBlockRange == 0 {
 			return fmt.Errorf("chain %s indexer_query_block_range is required", chain.Name)

@@ -171,8 +171,3 @@ func validPricingConfig() config.PricingConfig {
 	cfg := validConfig()
 	return cfg.Pricing
 }
-
-//go:fix inline
-func boolPtr(value bool) *bool {
-	return new(value)
-}

@@ -28,7 +28,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - Worker chain configs must declare `family: evm`.
 - No self-only DVN.
 - Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.
-- Confirmations must be 12 unless the maintained scope documentation is explicitly updated.
+- Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.
 
 ## Review Sequence
 
@@ -117,7 +117,7 @@ Reject mainnet readiness if:
 - any critical security finding remains open
 - self-only DVN is proposed
 - required DVNs do not include an independent LayerZero Labs DVN
-- confirmations are not 12 without an explicit scope documentation update
+- confirmations are missing, zero, or do not match the approved LayerZero ULN configuration
 - signer inventory or rollback signer is missing
 - price config evidence is missing, stale, or not produced through the approved pricing path
 - rate-limit capacity/refill is not documented per pathway

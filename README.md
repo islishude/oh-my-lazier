@@ -112,7 +112,7 @@ go run ./go/cmd/configcheck -config config/example.yaml
 The initial target is Ethereum Sepolia <-> Base Sepolia with:
 
 - `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`
-- `confirmations = 12`
+- explicitly configured source-chain confirmations that match the approved LayerZero ULN configuration
 - basic OFT send only
 - no `composeMsg`
 - no `lzCompose`

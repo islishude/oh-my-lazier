@@ -29,7 +29,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
       recipientBalanceCheck: evidence(""),
     },
     dvnJoin: {
-      confirmations: 11,
+      confirmations: 0,
       requiredDVNs: ["OpenDVN"],
       optionalDVNsDisabled: false,
       configCheck: evidence(""),
@@ -60,7 +60,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "directions[0].canary.sourceReceipt.ref must be a non-empty string",
     "directions[0].canary.destinationReceipt.ref must be a non-empty string",
     "directions[0].canary.recipientBalanceCheck.ref must be a non-empty string",
-    "directions[0].dvnJoin.confirmations must be 12",
+    "directions[0].dvnJoin.confirmations must be a positive integer",
     "directions[0].dvnJoin.requiredDVNs must include layerzero labs dvn",
     "directions[0].dvnJoin.requiredDVNs must not be self-only",
     "directions[0].dvnJoin.optionalDVNsDisabled must be true",

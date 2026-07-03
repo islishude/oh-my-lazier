@@ -376,9 +376,11 @@ function validateDVNJoin(
     errors.push(`${field} is required`);
     return;
   }
-  if (dvnJoin.confirmations !== 12) {
-    errors.push(`${field}.confirmations must be 12`);
-  }
+  requirePositiveInteger(
+    errors,
+    dvnJoin.confirmations,
+    `${field}.confirmations`,
+  );
   requireStringArray(errors, dvnJoin.requiredDVNs, `${field}.requiredDVNs`);
   if (Array.isArray(dvnJoin.requiredDVNs)) {
     const required = new Set(

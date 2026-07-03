@@ -75,11 +75,19 @@ func TestValidateRejectsInvalidPathwayGasBounds(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsNonPhaseOneConfirmations(t *testing.T) {
+func TestValidateAcceptsConfiguredConfirmations(t *testing.T) {
 	cfg := validConfig()
 	cfg.Chains[0].Confirmations = 6
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsMissingConfirmations(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].Confirmations = 0
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want phase-1 confirmations error")
+		t.Fatal("Validate() error = nil, want missing confirmations error")
 	}
 }
 
@@ -615,9 +623,4 @@ func validPricingConfig() PricingConfig {
 			},
 		},
 	}
-}
-
-//go:fix inline
-func boolPtr(value bool) *bool {
-	return new(value)
 }
