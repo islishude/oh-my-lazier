@@ -10,7 +10,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/lzabi"
 )
 
-// ExecutorSourceTxRecords are the durable records derived from one source-chain send transaction.
+// ExecutorSourceTxRecords are the durable records derived from one source-chain send.
 type ExecutorSourceTxRecords struct {
 	Packet      db.PacketRecord
 	ExecutorJob db.ExecutorJobRecord
@@ -18,69 +18,90 @@ type ExecutorSourceTxRecords struct {
 }
 
 // ExecutorSourceTxRecordsFromLogs decodes and cross-checks source-chain executor logs from one transaction.
-func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log) (ExecutorSourceTxRecords, bool, error) {
-	var packet *db.PacketRecord
-	var feePaid *lzabi.ExecutorFeePaid
-	var feeLogAddress common.Address
-	var assignment *lzabi.ExecutorJobAssigned
-	var assignmentLogAddress common.Address
+func ExecutorSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]ExecutorSourceTxRecords, error) {
+	ordered, err := orderedSourceTxLogs(logs)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, log := range logs {
+	records := make([]ExecutorSourceTxRecords, 0)
+	var segment executorSourceSegment
+	for _, log := range ordered {
 		switch {
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.PacketSentTopic():
-			if packet != nil {
-				return ExecutorSourceTxRecords{}, false, errors.New("source tx contains multiple PacketSent logs")
-			}
-			record, err := PacketRecordFromSentLog(log)
-			if err != nil {
-				return ExecutorSourceTxRecords{}, false, err
-			}
-			packet = &record
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.ExecutorFeePaidTopic():
-			if feePaid != nil {
-				return ExecutorSourceTxRecords{}, false, errors.New("source tx contains multiple ExecutorFeePaid logs")
-			}
-			event, err := lzabi.DecodeExecutorFeePaid(log)
-			if err != nil {
-				return ExecutorSourceTxRecords{}, false, err
-			}
-			feePaid = &event
-			feeLogAddress = log.Address
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.ExecutorJobAssignedTopic():
-			if assignment != nil {
-				return ExecutorSourceTxRecords{}, false, errors.New("source tx contains multiple ExecutorJobAssigned logs")
+		case logHasTopic(log, lzabi.ExecutorJobAssignedTopic()):
+			if segment.assignment != nil {
+				return nil, errors.New("source tx send segment contains multiple ExecutorJobAssigned logs")
 			}
 			event, err := lzabi.DecodeExecutorJobAssigned(log)
 			if err != nil {
-				return ExecutorSourceTxRecords{}, false, err
+				return nil, err
 			}
-			assignment = &event
-			assignmentLogAddress = log.Address
+			segment.assignment = &event
+			segment.assignmentLogAddress = log.Address
+		case logHasTopic(log, lzabi.ExecutorFeePaidTopic()):
+			event, err := lzabi.DecodeExecutorFeePaid(log)
+			if err != nil {
+				return nil, err
+			}
+			segment.feePaid = &event
+			segment.feeLogAddress = log.Address
+			segment.feePaidCount++
+		case logHasTopic(log, lzabi.PacketSentTopic()):
+			record, ok, err := segment.recordsFromPacket(log)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				records = append(records, record)
+			}
+			segment = executorSourceSegment{}
 		}
 	}
+	if segment.assignment != nil {
+		return nil, errors.New("source tx contains ExecutorJobAssigned without following PacketSent")
+	}
+	return records, nil
+}
 
-	if assignment == nil {
-		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing ExecutorJobAssigned log")
-	}
-	if packet == nil {
-		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing PacketSent log")
-	}
-	if feePaid == nil {
-		return ExecutorSourceTxRecords{}, false, errors.New("source tx missing ExecutorFeePaid log")
-	}
-	if feePaid.Executor != assignmentLogAddress {
-		return ExecutorSourceTxRecords{}, false, fmt.Errorf("executor fee paid executor %s does not match assignment log address %s", feePaid.Executor, assignmentLogAddress)
-	}
-	if packet.SendLib != feeLogAddress {
-		return ExecutorSourceTxRecords{}, false, fmt.Errorf("PacketSent send lib %s does not match ExecutorFeePaid log address %s", packet.SendLib, feeLogAddress)
-	}
-	if assignment.Price == nil || feePaid.Fee == nil || assignment.Price.Cmp(feePaid.Fee) != 0 {
-		return ExecutorSourceTxRecords{}, false, fmt.Errorf("executor assignment price %s does not match fee paid %s", assignment.Price, feePaid.Fee)
-	}
+type executorSourceSegment struct {
+	feePaid              *lzabi.ExecutorFeePaid
+	feeLogAddress        common.Address
+	feePaidCount         int
+	assignment           *lzabi.ExecutorJobAssigned
+	assignmentLogAddress common.Address
+}
 
-	job, err := ExecutorJobFromAssignment(*packet, *assignment)
+func (s executorSourceSegment) recordsFromPacket(log gethtypes.Log) (ExecutorSourceTxRecords, bool, error) {
+	if s.assignment == nil {
+		return ExecutorSourceTxRecords{}, false, nil
+	}
+	packet, err := PacketRecordFromSentLog(log)
 	if err != nil {
 		return ExecutorSourceTxRecords{}, false, err
 	}
-	return ExecutorSourceTxRecords{Packet: *packet, ExecutorJob: job, Executor: assignmentLogAddress}, true, nil
+	if s.feePaidCount == 0 {
+		return ExecutorSourceTxRecords{}, false, errors.New("source tx send segment missing ExecutorFeePaid log")
+	}
+	if s.feePaidCount > 1 {
+		return ExecutorSourceTxRecords{}, false, errors.New("source tx send segment contains multiple ExecutorFeePaid logs")
+	}
+	if s.feePaid == nil {
+		return ExecutorSourceTxRecords{}, false, errors.New("source tx send segment missing ExecutorFeePaid log")
+	}
+
+	if s.feePaid.Executor != s.assignmentLogAddress {
+		return ExecutorSourceTxRecords{}, false, fmt.Errorf("executor fee paid executor %s does not match assignment log address %s", s.feePaid.Executor, s.assignmentLogAddress)
+	}
+	if packet.SendLib != s.feeLogAddress {
+		return ExecutorSourceTxRecords{}, false, fmt.Errorf("PacketSent send lib %s does not match ExecutorFeePaid log address %s", packet.SendLib, s.feeLogAddress)
+	}
+	if s.assignment.Price == nil || s.feePaid.Fee == nil || s.assignment.Price.Cmp(s.feePaid.Fee) != 0 {
+		return ExecutorSourceTxRecords{}, false, fmt.Errorf("executor assignment price %s does not match fee paid %s", s.assignment.Price, s.feePaid.Fee)
+	}
+
+	job, err := ExecutorJobFromAssignment(packet, *s.assignment)
+	if err != nil {
+		return ExecutorSourceTxRecords{}, false, err
+	}
+	return ExecutorSourceTxRecords{Packet: packet, ExecutorJob: job, Executor: s.assignmentLogAddress}, true, nil
 }

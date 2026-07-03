@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"encoding/binary"
 	"math/big"
 	"testing"
 
@@ -15,27 +16,60 @@ func TestExecutorSourceTxRecordsFromLogs(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	logs := testExecutorSourceLogs(t, expectedExecutor, sendLib, big.NewInt(42))
 
-	records, ok, err := ExecutorSourceTxRecordsFromLogs(logs)
+	records, err := ExecutorSourceTxRecordsFromLogs(logs)
 	if err != nil {
 		t.Fatalf("ExecutorSourceTxRecordsFromLogs() error = %v", err)
 	}
-	if !ok {
-		t.Fatal("ExecutorSourceTxRecordsFromLogs() ok = false, want true")
+	if len(records) != 1 {
+		t.Fatalf("ExecutorSourceTxRecordsFromLogs() records = %d, want 1", len(records))
 	}
-	if records.Packet.SendLib != sendLib {
-		t.Fatalf("packet send lib = %s, want %s", records.Packet.SendLib, sendLib)
+	record := records[0]
+	if record.Packet.SendLib != sendLib {
+		t.Fatalf("packet send lib = %s, want %s", record.Packet.SendLib, sendLib)
 	}
-	if records.Executor != expectedExecutor {
-		t.Fatalf("executor = %s, want %s", records.Executor, expectedExecutor)
+	if record.Executor != expectedExecutor {
+		t.Fatalf("executor = %s, want %s", record.Executor, expectedExecutor)
 	}
-	if records.ExecutorJob.GUID != records.Packet.GUID {
-		t.Fatalf("job guid = %s, want packet guid %s", records.ExecutorJob.GUID, records.Packet.GUID)
+	if record.ExecutorJob.GUID != record.Packet.GUID {
+		t.Fatalf("job guid = %s, want packet guid %s", record.ExecutorJob.GUID, record.Packet.GUID)
 	}
-	if records.ExecutorJob.Status != string(packets.ExecutorAssigned) {
-		t.Fatalf("job status = %q, want %q", records.ExecutorJob.Status, packets.ExecutorAssigned)
+	if record.ExecutorJob.Status != string(packets.ExecutorAssigned) {
+		t.Fatalf("job status = %q, want %q", record.ExecutorJob.Status, packets.ExecutorAssigned)
 	}
-	if records.ExecutorJob.AssignedFee.Cmp(big.NewInt(42)) != 0 {
-		t.Fatalf("assigned fee = %s, want 42", records.ExecutorJob.AssignedFee)
+	if record.ExecutorJob.AssignedFee.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("assigned fee = %s, want 42", record.ExecutorJob.AssignedFee)
+	}
+}
+
+func TestExecutorSourceTxRecordsFromLogsMatchesMultipleSendsByLogIndex(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	secondGUID := common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	logs := []gethtypes.Log{
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(41), validExecutorOptions(), 0),
+		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(41), 1),
+		testPacketSentLog(t, txHash, sendLib, 2),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(42), validExecutorOptions(), 3),
+		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(42), 4),
+		testPacketSentLogWithPacket(t, txHash, sendLib, testEncodedPacketWithNonceAndGUID(8, secondGUID), 5),
+	}
+
+	records, err := ExecutorSourceTxRecordsFromLogs(logs)
+	if err != nil {
+		t.Fatalf("ExecutorSourceTxRecordsFromLogs() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("ExecutorSourceTxRecordsFromLogs() records = %d, want 2", len(records))
+	}
+	if records[0].Packet.SrcLogIndex != 2 || records[1].Packet.SrcLogIndex != 5 {
+		t.Fatalf("source log indexes = %d/%d, want 2/5", records[0].Packet.SrcLogIndex, records[1].Packet.SrcLogIndex)
+	}
+	if records[0].ExecutorJob.AssignedFee.Cmp(big.NewInt(41)) != 0 || records[1].ExecutorJob.AssignedFee.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("assigned fees = %s/%s, want 41/42", records[0].ExecutorJob.AssignedFee, records[1].ExecutorJob.AssignedFee)
+	}
+	if records[0].Packet.GUID == records[1].Packet.GUID || records[1].Packet.GUID != secondGUID {
+		t.Fatalf("packet GUIDs = %s/%s, want distinct second %s", records[0].Packet.GUID, records[1].Packet.GUID, secondGUID)
 	}
 }
 
@@ -43,16 +77,21 @@ func testExecutorSourceLogs(t *testing.T, executor, sendLib common.Address, fee 
 	t.Helper()
 	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	return []gethtypes.Log{
-		testPacketSentLog(t, txHash, sendLib, 0),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, fee, validExecutorOptions(), 0),
 		testExecutorFeePaidLog(t, txHash, sendLib, executor, fee, 1),
-		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, fee, validExecutorOptions(), 2),
+		testPacketSentLog(t, txHash, sendLib, 2),
 	}
 }
 
 func testPacketSentLog(t *testing.T, txHash common.Hash, sendLib common.Address, index uint) gethtypes.Log {
 	t.Helper()
+	return testPacketSentLogWithPacket(t, txHash, sendLib, testEncodedPacket(), index)
+}
+
+func testPacketSentLogWithPacket(t *testing.T, txHash common.Hash, sendLib common.Address, encodedPacket []byte, index uint) gethtypes.Log {
+	t.Helper()
 	eventABI := lzabi.EndpointV2ABI()
-	data, err := eventABI.Events["PacketSent"].Inputs.Pack(testEncodedPacket(), []byte{0x01, 0x02}, sendLib)
+	data, err := eventABI.Events["PacketSent"].Inputs.Pack(encodedPacket, []byte{0x01, 0x02}, sendLib)
 	if err != nil {
 		t.Fatalf("Pack PacketSent error = %v", err)
 	}
@@ -64,6 +103,19 @@ func testPacketSentLog(t *testing.T, txHash common.Hash, sendLib common.Address,
 		BlockNumber: 123,
 		Index:       index,
 	}
+}
+
+func testEncodedPacketWithNonceAndGUID(nonce uint64, guid common.Hash) []byte {
+	encoded := make([]byte, 0, 118)
+	encoded = append(encoded, 1)
+	encoded = binary.BigEndian.AppendUint64(encoded, nonce)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40161)
+	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x7777777777777777777777777777777777777777"))...)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40245)
+	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x8888888888888888888888888888888888888888"))...)
+	encoded = append(encoded, guid.Bytes()...)
+	encoded = append(encoded, []byte("hello")...)
+	return encoded
 }
 
 func testExecutorFeePaidLog(t *testing.T, txHash common.Hash, sendLib, executor common.Address, fee *big.Int, index uint) gethtypes.Log {

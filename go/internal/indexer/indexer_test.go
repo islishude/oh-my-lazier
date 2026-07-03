@@ -83,9 +83,9 @@ func TestIndexerProcessOnceMarksUnsupportedExecutorOptionsManualReview(t *testin
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	sourceLogs := []gethtypes.Log{
-		testPacketSentLog(t, txHash, sendLib, 0),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(42), unsupportedExecutorOptions(), 0),
 		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(42), 1),
-		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(42), unsupportedExecutorOptions(), 2),
+		testPacketSentLog(t, txHash, sendLib, 2),
 	}
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
@@ -417,12 +417,12 @@ func TestIndexerProcessOnceProcessesSourceLogsAsContiguousTransactions(t *testin
 	firstTx := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	secondTx := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	sourceLogs := []gethtypes.Log{
-		testPacketSentLog(t, firstTx, sendLib, 0),
+		testExecutorJobAssignedLogWithOptions(t, firstTx, executor, sendLib, big.NewInt(42), validExecutorOptions(), 0),
 		testExecutorFeePaidLog(t, firstTx, sendLib, executor, big.NewInt(42), 1),
-		testExecutorJobAssignedLogWithOptions(t, firstTx, executor, sendLib, big.NewInt(42), validExecutorOptions(), 2),
-		testPacketSentLog(t, secondTx, sendLib, 3),
+		testPacketSentLog(t, firstTx, sendLib, 2),
+		testExecutorJobAssignedLogWithOptions(t, secondTx, executor, sendLib, big.NewInt(42), validExecutorOptions(), 3),
 		testExecutorFeePaidLog(t, secondTx, sendLib, executor, big.NewInt(42), 4),
-		testExecutorJobAssignedLogWithOptions(t, secondTx, executor, sendLib, big.NewInt(42), validExecutorOptions(), 5),
+		testPacketSentLog(t, secondTx, sendLib, 5),
 	}
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
@@ -443,6 +443,47 @@ func TestIndexerProcessOnceProcessesSourceLogsAsContiguousTransactions(t *testin
 	}
 	if result.SourceTransactions != 2 {
 		t.Fatalf("SourceTransactions = %d, want 2", result.SourceTransactions)
+	}
+}
+
+func TestIndexerProcessOnceProcessesMultipleSourceSendsInOneTransaction(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	secondGUID := common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	sourceLogs := []gethtypes.Log{
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(41), validExecutorOptions(), 0),
+		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(41), 1),
+		testPacketSentLog(t, txHash, sendLib, 2),
+		testExecutorJobAssignedLogWithOptions(t, txHash, executor, sendLib, big.NewInt(42), validExecutorOptions(), 3),
+		testExecutorFeePaidLog(t, txHash, sendLib, executor, big.NewInt(42), 4),
+		testPacketSentLogWithPacket(t, txHash, sendLib, testEncodedPacketWithNonceAndGUID(8, secondGUID), 5),
+	}
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: sourceLogs,
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", executor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceTransactions != 2 {
+		t.Fatalf("SourceTransactions = %d, want 2", result.SourceTransactions)
+	}
+	if len(store.packets) != 2 || len(store.jobs) != 2 {
+		t.Fatalf("stored packets/jobs = %d/%d, want 2/2", len(store.packets), len(store.jobs))
+	}
+	if _, ok := store.packets[secondGUID]; !ok {
+		t.Fatalf("second packet %s was not stored", secondGUID)
 	}
 }
 

@@ -12,7 +12,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
 
-// DVNSourceTxRecords are durable records derived from one source-chain DVN assignment transaction.
+// DVNSourceTxRecords are durable records derived from one source-chain DVN assignment.
 type DVNSourceTxRecords struct {
 	Packet db.PacketRecord
 	DVNJob db.DVNJobRecord
@@ -20,74 +20,137 @@ type DVNSourceTxRecords struct {
 }
 
 // DVNSourceTxRecordsFromLogs decodes and cross-checks source-chain DVN logs from one transaction.
-func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) (DVNSourceTxRecords, bool, error) {
-	var packet *db.PacketRecord
-	var feePaid *lzabi.DVNFeePaid
-	var assignment *lzabi.DVNJobAssigned
-	var assignmentLogAddress common.Address
+func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]DVNSourceTxRecords, error) {
+	ordered, err := orderedSourceTxLogs(logs)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, log := range logs {
+	records := make([]DVNSourceTxRecords, 0)
+	feeEvents := make([]dvnFeeEvent, 0)
+	assignments := make([]dvnAssignmentEvent, 0)
+	for _, log := range ordered {
 		switch {
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.PacketSentTopic():
-			if packet != nil {
-				return DVNSourceTxRecords{}, false, errors.New("source tx contains multiple PacketSent logs")
-			}
-			record, err := PacketRecordFromSentLog(log)
-			if err != nil {
-				return DVNSourceTxRecords{}, false, err
-			}
-			packet = &record
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.DVNFeePaidTopic():
-			if feePaid != nil {
-				return DVNSourceTxRecords{}, false, errors.New("source tx contains multiple DVNFeePaid logs")
-			}
-			event, err := lzabi.DecodeDVNFeePaid(log)
-			if err != nil {
-				return DVNSourceTxRecords{}, false, err
-			}
-			feePaid = &event
-		case len(log.Topics) > 0 && log.Topics[0] == lzabi.DVNJobAssignedTopic():
-			if assignment != nil {
-				return DVNSourceTxRecords{}, false, errors.New("source tx contains multiple DVNJobAssigned logs")
-			}
+		case logHasTopic(log, lzabi.DVNJobAssignedTopic()):
 			event, err := lzabi.DecodeDVNJobAssigned(log)
 			if err != nil {
-				return DVNSourceTxRecords{}, false, err
+				return nil, err
 			}
-			assignment = &event
-			assignmentLogAddress = log.Address
+			assignments = append(assignments, dvnAssignmentEvent{Log: log, Event: event})
+		case logHasTopic(log, lzabi.DVNFeePaidTopic()):
+			event, err := lzabi.DecodeDVNFeePaid(log)
+			if err != nil {
+				return nil, err
+			}
+			feeEvents = append(feeEvents, dvnFeeEvent{Log: log, Event: event})
+		case logHasTopic(log, lzabi.PacketSentTopic()):
+			packet, err := PacketRecordFromSentLog(log)
+			if err != nil {
+				return nil, err
+			}
+			feeIndex := latestUnmatchedDVNFee(feeEvents, packet.SendLib)
+			if feeIndex < 0 {
+				if hasUnmatchedDVNAssignmentForPacket(assignments, packet) {
+					return nil, errors.New("source tx PacketSent missing matching DVNFeePaid log")
+				}
+				continue
+			}
+			assignmentIndex, err := matchingDVNAssignment(assignments, packet, feeEvents[feeIndex].Event)
+			if err != nil {
+				return nil, err
+			}
+			feeEvents[feeIndex].Matched = true
+			if assignmentIndex >= 0 {
+				assignments[assignmentIndex].Matched = true
+				record := dvnRecordFromMatchedLogs(packet, assignments[assignmentIndex])
+				records = append(records, record)
+			}
 		}
 	}
-	if assignment == nil {
-		return DVNSourceTxRecords{}, false, errors.New("source tx missing DVNJobAssigned log")
+	if hasUnmatchedDVNAssignment(assignments) {
+		return nil, errors.New("source tx contains DVNJobAssigned without following PacketSent")
 	}
-	if packet == nil {
-		return DVNSourceTxRecords{}, false, errors.New("source tx missing PacketSent log")
+	return records, nil
+}
+
+type dvnFeeEvent struct {
+	Log     gethtypes.Log
+	Event   lzabi.DVNFeePaid
+	Matched bool
+}
+
+type dvnAssignmentEvent struct {
+	Log     gethtypes.Log
+	Event   lzabi.DVNJobAssigned
+	Matched bool
+}
+
+func latestUnmatchedDVNFee(fees []dvnFeeEvent, sendLib common.Address) int {
+	for i := len(fees) - 1; i >= 0; i-- {
+		if !fees[i].Matched && fees[i].Log.Address == sendLib {
+			return i
+		}
 	}
-	if feePaid == nil {
-		return DVNSourceTxRecords{}, false, errors.New("source tx missing DVNFeePaid log")
+	return -1
+}
+
+func matchingDVNAssignment(assignments []dvnAssignmentEvent, packet db.PacketRecord, fee lzabi.DVNFeePaid) (int, error) {
+	candidates := make([]int, 0, 1)
+	matches := make([]int, 0, 1)
+	for i, assignment := range assignments {
+		if assignment.Matched || !dvnAssignmentMatchesPacket(assignment.Event, packet) {
+			continue
+		}
+		candidates = append(candidates, i)
+		if dvnFeeMatches(fee, assignment.Log.Address, assignment.Event.Fee) {
+			matches = append(matches, i)
+		}
 	}
-	if assignment.DstEID != packet.DstEID {
-		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn assignment dst eid %d does not match packet dst eid %d", assignment.DstEID, packet.DstEID)
+	if len(matches) > 1 {
+		return -1, fmt.Errorf("packet %s matches multiple DVNJobAssigned logs", packet.GUID)
 	}
-	if assignment.Sender != packet.Sender {
-		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn assignment sender %s does not match packet sender %s", assignment.Sender, packet.Sender)
+	if len(matches) == 1 {
+		return matches[0], nil
 	}
-	if assignment.SendLib != packet.SendLib {
-		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn assignment send lib %s does not match packet send lib %s", assignment.SendLib, packet.SendLib)
+	if len(candidates) > 0 {
+		assignment := assignments[candidates[0]]
+		return -1, fmt.Errorf("dvn fee paid does not include assigned dvn %s fee %s", assignment.Log.Address, assignment.Event.Fee)
 	}
-	if !dvnFeeMatches(*feePaid, assignmentLogAddress, assignment.Fee) {
-		return DVNSourceTxRecords{}, false, fmt.Errorf("dvn fee paid does not include assigned dvn %s fee %s", assignmentLogAddress, assignment.Fee)
+	return -1, nil
+}
+
+func hasUnmatchedDVNAssignmentForPacket(assignments []dvnAssignmentEvent, packet db.PacketRecord) bool {
+	for _, assignment := range assignments {
+		if !assignment.Matched && dvnAssignmentMatchesPacket(assignment.Event, packet) {
+			return true
+		}
 	}
+	return false
+}
+
+func hasUnmatchedDVNAssignment(assignments []dvnAssignmentEvent) bool {
+	for _, assignment := range assignments {
+		if !assignment.Matched {
+			return true
+		}
+	}
+	return false
+}
+
+func dvnAssignmentMatchesPacket(assignment lzabi.DVNJobAssigned, packet db.PacketRecord) bool {
+	return assignment.DstEID == packet.DstEID && assignment.Sender == packet.Sender && assignment.SendLib == packet.SendLib
+}
+
+func dvnRecordFromMatchedLogs(packet db.PacketRecord, assignment dvnAssignmentEvent) DVNSourceTxRecords {
 	return DVNSourceTxRecords{
-		Packet: *packet,
+		Packet: packet,
 		DVNJob: db.DVNJobRecord{
 			GUID:                  packet.GUID,
-			ConfirmationsRequired: assignment.Confirmations,
+			ConfirmationsRequired: assignment.Event.Confirmations,
 			Status:                string(packets.DVNAssigned),
 		},
-		DVN: assignmentLogAddress,
-	}, true, nil
+		DVN: assignment.Log.Address,
+	}
 }
 
 func dvnFeeMatches(event lzabi.DVNFeePaid, expectedDVN common.Address, expectedFee *big.Int) bool {

@@ -353,22 +353,18 @@ func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role
 	dvnProcessed := 0
 	// PacketSent and fee logs are decoder context; assignment logs anchor job processing.
 	if role == sourceRoleExecutor && tx.hasExecutorAssignment {
-		didProcess, err := i.processExecutorSourceTx(ctx, tx.logs)
+		processed, err := i.processExecutorSourceTx(ctx, tx.logs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
-		if didProcess {
-			executorProcessed++
-		}
+		executorProcessed += processed
 	}
 	if role == sourceRoleDVN && tx.hasDVNAssignment {
-		didProcess, err := i.processDVNSourceTx(ctx, tx.logs)
+		processed, err := i.processDVNSourceTx(ctx, tx.logs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
-		if didProcess {
-			dvnProcessed++
-		}
+		dvnProcessed += processed
 	}
 	return executorProcessed, dvnProcessed, nil
 }
@@ -413,59 +409,67 @@ func (i *Indexer) chunkToBlock(from, limit uint64) uint64 {
 	return to
 }
 
-func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, ok, err := ExecutorSourceTxRecordsFromLogs(txLogs)
+func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {
+	records, err := ExecutorSourceTxRecordsFromLogs(txLogs)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	if !ok {
-		return false, nil
+	processed := 0
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return processed, err
+		}
+		pathway, ok := i.sourcePathway(record.Packet)
+		if !ok || !pathway.Enabled {
+			continue
+		}
+		if record.Executor != pathway.SourceWorkers.OpenExecutor {
+			continue
+		}
+		if record.Packet.SendLib != pathway.SendLib {
+			return processed, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", record.Packet.GUID, record.Packet.SendLib, pathway.SendLib)
+		}
+		record.Packet.Status = record.ExecutorJob.Status
+		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
+			return processed, err
+		}
+		if err := i.store.UpsertExecutorJob(ctx, record.ExecutorJob); err != nil {
+			return processed, err
+		}
+		processed++
 	}
-	pathway, ok := i.sourcePathway(records.Packet)
-	if !ok || !pathway.Enabled {
-		return false, nil
-	}
-	if records.Executor != pathway.SourceWorkers.OpenExecutor {
-		return false, nil
-	}
-	if records.Packet.SendLib != pathway.SendLib {
-		return false, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", records.Packet.GUID, records.Packet.SendLib, pathway.SendLib)
-	}
-	records.Packet.Status = records.ExecutorJob.Status
-	if err := i.store.UpsertPacket(ctx, records.Packet); err != nil {
-		return false, err
-	}
-	if err := i.store.UpsertExecutorJob(ctx, records.ExecutorJob); err != nil {
-		return false, err
-	}
-	return true, nil
+	return processed, nil
 }
 
-func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (bool, error) {
-	records, ok, err := DVNSourceTxRecordsFromLogs(txLogs)
+func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {
+	records, err := DVNSourceTxRecordsFromLogs(txLogs)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
-	if !ok {
-		return false, nil
+	processed := 0
+	for _, record := range records {
+		if err := ctx.Err(); err != nil {
+			return processed, err
+		}
+		pathway, ok := i.sourcePathway(record.Packet)
+		if !ok || !pathway.Enabled {
+			continue
+		}
+		if record.DVN != pathway.SourceWorkers.OpenDVN {
+			continue
+		}
+		if record.Packet.SendLib != pathway.SendLib {
+			return processed, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", record.Packet.GUID, record.Packet.SendLib, pathway.SendLib)
+		}
+		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
+			return processed, err
+		}
+		if err := i.store.UpsertDVNJob(ctx, record.DVNJob); err != nil {
+			return processed, err
+		}
+		processed++
 	}
-	pathway, ok := i.sourcePathway(records.Packet)
-	if !ok || !pathway.Enabled {
-		return false, nil
-	}
-	if records.DVN != pathway.SourceWorkers.OpenDVN {
-		return false, nil
-	}
-	if records.Packet.SendLib != pathway.SendLib {
-		return false, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", records.Packet.GUID, records.Packet.SendLib, pathway.SendLib)
-	}
-	if err := i.store.UpsertPacket(ctx, records.Packet); err != nil {
-		return false, err
-	}
-	if err := i.store.UpsertDVNJob(ctx, records.DVNJob); err != nil {
-		return false, err
-	}
-	return true, nil
+	return processed, nil
 }
 
 func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (int, error) {

@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -15,27 +16,101 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	logs := testDVNSourceLogs(t, expectedDVN, sendLib, big.NewInt(42))
 
-	records, ok, err := DVNSourceTxRecordsFromLogs(logs)
+	records, err := DVNSourceTxRecordsFromLogs(logs)
 	if err != nil {
 		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v", err)
 	}
-	if !ok {
-		t.Fatal("DVNSourceTxRecordsFromLogs() ok = false, want true")
+	if len(records) != 1 {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() records = %d, want 1", len(records))
 	}
-	if records.Packet.SendLib != sendLib {
-		t.Fatalf("packet send lib = %s, want %s", records.Packet.SendLib, sendLib)
+	record := records[0]
+	if record.Packet.SendLib != sendLib {
+		t.Fatalf("packet send lib = %s, want %s", record.Packet.SendLib, sendLib)
 	}
-	if records.DVN != expectedDVN {
-		t.Fatalf("dvn = %s, want %s", records.DVN, expectedDVN)
+	if record.DVN != expectedDVN {
+		t.Fatalf("dvn = %s, want %s", record.DVN, expectedDVN)
 	}
-	if records.DVNJob.GUID != records.Packet.GUID {
-		t.Fatalf("dvn job guid = %s, want packet guid %s", records.DVNJob.GUID, records.Packet.GUID)
+	if record.DVNJob.GUID != record.Packet.GUID {
+		t.Fatalf("dvn job guid = %s, want packet guid %s", record.DVNJob.GUID, record.Packet.GUID)
 	}
-	if records.DVNJob.ConfirmationsRequired != 12 {
-		t.Fatalf("confirmations = %d, want 12", records.DVNJob.ConfirmationsRequired)
+	if record.DVNJob.ConfirmationsRequired != 12 {
+		t.Fatalf("confirmations = %d, want 12", record.DVNJob.ConfirmationsRequired)
 	}
-	if records.DVNJob.Status != string(packets.DVNAssigned) {
-		t.Fatalf("status = %q, want %q", records.DVNJob.Status, packets.DVNAssigned)
+	if record.DVNJob.Status != string(packets.DVNAssigned) {
+		t.Fatalf("status = %q, want %q", record.DVNJob.Status, packets.DVNAssigned)
+	}
+}
+
+func TestDVNSourceTxRecordsFromLogsMatchesMultipleSendsByLogIndex(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	secondGUID := common.HexToHash("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+	logs := []gethtypes.Log{
+		testDVNJobAssignedLog(t, txHash, dvn, sendLib, big.NewInt(41), 0),
+		testDVNFeePaidLog(t, txHash, sendLib, dvn, big.NewInt(41), 1),
+		testPacketSentLog(t, txHash, sendLib, 2),
+		testDVNJobAssignedLog(t, txHash, dvn, sendLib, big.NewInt(42), 3),
+		testDVNFeePaidLog(t, txHash, sendLib, dvn, big.NewInt(42), 4),
+		testPacketSentLogWithPacket(t, txHash, sendLib, testEncodedPacketWithNonceAndGUID(8, secondGUID), 5),
+	}
+
+	records, err := DVNSourceTxRecordsFromLogs(logs)
+	if err != nil {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() records = %d, want 2", len(records))
+	}
+	if records[0].Packet.SrcLogIndex != 2 || records[1].Packet.SrcLogIndex != 5 {
+		t.Fatalf("source log indexes = %d/%d, want 2/5", records[0].Packet.SrcLogIndex, records[1].Packet.SrcLogIndex)
+	}
+	if records[0].Packet.GUID == records[1].Packet.GUID || records[1].Packet.GUID != secondGUID {
+		t.Fatalf("packet GUIDs = %s/%s, want distinct second %s", records[0].Packet.GUID, records[1].Packet.GUID, secondGUID)
+	}
+}
+
+func TestDVNSourceTxRecordsFromLogsUsesLatestUnmatchedFeeForPacket(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	otherSendLib := common.HexToAddress("0x9898989898989898989898989898989898989898")
+	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	logs := []gethtypes.Log{
+		testDVNFeePaidLog(t, txHash, otherSendLib, dvn, big.NewInt(99), 0),
+		testDVNJobAssignedLog(t, txHash, dvn, sendLib, big.NewInt(42), 1),
+		testDVNFeePaidLog(t, txHash, sendLib, dvn, big.NewInt(42), 2),
+		testPacketSentLog(t, txHash, sendLib, 3),
+	}
+
+	records, err := DVNSourceTxRecordsFromLogs(logs)
+	if err != nil {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() records = %d, want 1", len(records))
+	}
+	if records[0].Packet.SrcLogIndex != 3 {
+		t.Fatalf("packet log index = %d, want 3", records[0].Packet.SrcLogIndex)
+	}
+}
+
+func TestDVNSourceTxRecordsFromLogsRejectsSendLibraryMismatch(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	otherSendLib := common.HexToAddress("0x9898989898989898989898989898989898989898")
+	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	logs := []gethtypes.Log{
+		testDVNJobAssignedLog(t, txHash, dvn, sendLib, big.NewInt(42), 0),
+		testDVNFeePaidLog(t, txHash, otherSendLib, dvn, big.NewInt(42), 1),
+		testPacketSentLog(t, txHash, sendLib, 2),
+	}
+
+	_, err := DVNSourceTxRecordsFromLogs(logs)
+	if err == nil {
+		t.Fatal("DVNSourceTxRecordsFromLogs() error = nil, want send-library mismatch")
+	}
+	if !strings.Contains(err.Error(), "missing matching DVNFeePaid") {
+		t.Fatalf("DVNSourceTxRecordsFromLogs() error = %v, want missing matching DVNFeePaid", err)
 	}
 }
 
@@ -43,9 +118,9 @@ func testDVNSourceLogs(t *testing.T, dvn, sendLib common.Address, fee *big.Int) 
 	t.Helper()
 	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	return []gethtypes.Log{
-		testPacketSentLog(t, txHash, sendLib, 0),
+		testDVNJobAssignedLog(t, txHash, dvn, sendLib, fee, 0),
 		testDVNFeePaidLog(t, txHash, sendLib, dvn, fee, 1),
-		testDVNJobAssignedLog(t, txHash, dvn, sendLib, fee, 2),
+		testPacketSentLog(t, txHash, sendLib, 2),
 	}
 }
 
