@@ -188,6 +188,57 @@ func TestNewRejectsNilLogger(t *testing.T) {
 	}
 }
 
+func TestNewWithOptionsDefaultsIndexerProgressLogInterval(t *testing.T) {
+	worker, err := NewWithOptions(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger(), Options{})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	if worker.options.IndexerProgressLogInterval != DefaultIndexerProgressLogInterval {
+		t.Fatalf("indexer progress log interval = %s, want %s", worker.options.IndexerProgressLogInterval, DefaultIndexerProgressLogInterval)
+	}
+	if !worker.options.IndexerProgressLogIntervalSet {
+		t.Fatal("IndexerProgressLogIntervalSet = false, want true")
+	}
+}
+
+func TestNewWithOptionsAcceptsIndexerProgressLogInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval time.Duration
+	}{
+		{name: "custom interval", interval: 10 * time.Second},
+		{name: "disabled", interval: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			worker, err := NewWithOptions(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger(), Options{
+				IndexerProgressLogInterval:    test.interval,
+				IndexerProgressLogIntervalSet: true,
+			})
+			if err != nil {
+				t.Fatalf("NewWithOptions() error = %v", err)
+			}
+			if worker.options.IndexerProgressLogInterval != test.interval {
+				t.Fatalf("indexer progress log interval = %s, want %s", worker.options.IndexerProgressLogInterval, test.interval)
+			}
+		})
+	}
+}
+
+func TestNewWithOptionsRejectsNegativeIndexerProgressLogInterval(t *testing.T) {
+	_, err := NewWithOptions(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger(), Options{
+		IndexerProgressLogInterval:    -time.Second,
+		IndexerProgressLogIntervalSet: true,
+	})
+	if err == nil {
+		t.Fatal("NewWithOptions() error = nil, want interval error")
+	}
+	if !strings.Contains(err.Error(), "indexer progress log interval") {
+		t.Fatalf("NewWithOptions() error = %v, want interval error", err)
+	}
+}
+
 func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
 	worker, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger())
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -26,6 +27,9 @@ const (
 	defaultBackfillRange   = uint64(500)
 	defaultQueryBlockRange = uint64(500)
 )
+
+// DefaultProgressLogInterval is the default minimum interval between indexer progress Info logs.
+const DefaultProgressLogInterval = time.Minute
 
 const (
 	// ExecutorSourceStream tracks source-chain OpenExecutor assignments.
@@ -119,9 +123,12 @@ type Indexer struct {
 	pollInterval        time.Duration
 	backfillRange       uint64
 	queryBlockRange     uint64
+	progressLogInterval time.Duration
+	lastProgressLogs    map[string]time.Time
 	logger              *slog.Logger
 	metrics             MetricsRecorder
 	streams             StreamSet
+	now                 func() time.Time
 }
 
 // New creates an indexer for one configured chain.
@@ -155,8 +162,11 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		pollInterval:        defaultPollInterval,
 		backfillRange:       defaultBackfillRange,
 		queryBlockRange:     queryBlockRange,
+		progressLogInterval: DefaultProgressLogInterval,
+		lastProgressLogs:    make(map[string]time.Time),
 		logger:              logger,
 		streams:             allStreams(),
+		now:                 time.Now,
 	}
 }
 
@@ -169,6 +179,12 @@ func (i *Indexer) WithStreams(streams StreamSet) *Indexer {
 // WithMetrics records process-local indexer polling metrics.
 func (i *Indexer) WithMetrics(metrics MetricsRecorder) *Indexer {
 	i.metrics = metrics
+	return i
+}
+
+// WithProgressLogInterval sets the minimum interval between indexer progress Info logs.
+func (i *Indexer) WithProgressLogInterval(interval time.Duration) *Indexer {
+	i.progressLogInterval = interval
 	return i
 }
 
@@ -690,7 +706,7 @@ func (i *Indexer) logCursorSkip(stream string, reason cursorSkipReason, confirme
 
 func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 	if result.ObservedHeadBlock < i.chain.Confirmations {
-		i.logger.Info(
+		i.logger.Debug(
 			"indexer poll waiting for confirmations",
 			"chain", i.chain.Name,
 			"eid", i.chain.EID,
@@ -698,10 +714,21 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 			"confirmations", i.chain.Confirmations,
 			"duration", duration,
 		)
+		if i.shouldLogProgressInfo() {
+			i.logger.Info(
+				"indexer progress",
+				"chain", i.chain.Name,
+				"eid", i.chain.EID,
+				"status", "waiting_for_confirmations",
+				"observed_head_block", result.ObservedHeadBlock,
+				"confirmations", i.chain.Confirmations,
+				"duration", duration,
+			)
+		}
 		return
 	}
 	for _, progress := range result.streamProgress[:result.streamProgressCount] {
-		i.logger.Info(
+		i.logger.Debug(
 			"indexer stream advanced",
 			"chain", i.chain.Name,
 			"eid", i.chain.EID,
@@ -713,9 +740,10 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 			"source_transactions", progress.sourceTransactions,
 			"dvn_transactions", progress.dvnTransactions,
 			"destination_logs", progress.destinationLogs,
+			"duration", duration,
 		)
 	}
-	i.logger.Info(
+	i.logger.Debug(
 		"indexer poll completed",
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
@@ -727,6 +755,72 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 		"destination_logs", result.DestinationLogs,
 		"duration", duration,
 	)
+	if i.shouldLogProgressInfo() {
+		i.logProgressSummary(result, duration)
+	}
+}
+
+func (i *Indexer) shouldLogProgressInfo() bool {
+	if i.progressLogInterval <= 0 {
+		return false
+	}
+	if i.lastProgressLogs == nil {
+		i.lastProgressLogs = make(map[string]time.Time)
+	}
+	const key = "progress"
+	now := i.currentTime()
+	last, ok := i.lastProgressLogs[key]
+	if !ok || !now.Before(last.Add(i.progressLogInterval)) {
+		i.lastProgressLogs[key] = now
+		return true
+	}
+	return false
+}
+
+func (i *Indexer) currentTime() time.Time {
+	if i.now == nil {
+		return time.Now()
+	}
+	return i.now()
+}
+
+func (i *Indexer) logProgressSummary(result ProcessResult, duration time.Duration) {
+	args := []any{
+		"chain", i.chain.Name,
+		"eid", i.chain.EID,
+		"observed_head_block", result.ObservedHeadBlock,
+		"confirmed_to_block", result.ConfirmedToBlock,
+		"streams_advanced", result.streamProgressCount,
+		"source_transactions", result.SourceTransactions,
+		"dvn_transactions", result.DVNTransactions,
+		"destination_logs", result.DestinationLogs,
+		"duration", duration,
+	}
+	if result.streamProgressCount > 0 {
+		streams := make([]string, 0, result.streamProgressCount)
+		var fromBlock uint64
+		var toBlock uint64
+		var lag uint64
+		for index, progress := range result.streamProgress[:result.streamProgressCount] {
+			streams = append(streams, progress.stream)
+			if index == 0 || progress.fromBlock < fromBlock {
+				fromBlock = progress.fromBlock
+			}
+			if progress.toBlock > toBlock {
+				toBlock = progress.toBlock
+			}
+			if progressLag := lagBlocks(result.ConfirmedToBlock, progress.toBlock); progressLag > lag {
+				lag = progressLag
+			}
+		}
+		args = append(args,
+			"streams", strings.Join(streams, ","),
+			"from_block", fromBlock,
+			"to_block", toBlock,
+			"lag_blocks", lag,
+		)
+	}
+	i.logger.Info("indexer progress", args...)
 }
 
 func lagBlocks(confirmedTo, indexedTo uint64) uint64 {

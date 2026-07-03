@@ -694,26 +694,170 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 		logger,
 	).WithStreams(StreamSet{ExecutorSource: true})
 	indexer.backfillRange = 10
+	indexer.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 
 	if err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
 	output := logs.String()
-	for _, want := range []string{
-		`msg="indexer stream advanced"`,
+	assertLogContains(t, output,
+		`msg="indexer progress"`,
 		`chain=ethereum-sepolia`,
 		`eid=40161`,
-		`stream=executor_source`,
+		`streams_advanced=1`,
+		`streams=executor_source`,
 		`from_block=41`,
 		`to_block=50`,
 		`confirmed_to_block=53`,
 		`lag_blocks=3`,
-		`msg="indexer poll completed"`,
+		`duration=`,
+	)
+	if strings.Contains(output, `msg="indexer stream advanced"`) {
+		t.Fatalf("stream progress logged at info level:\n%s", output)
+	}
+	if strings.Contains(output, `msg="indexer poll completed"`) {
+		t.Fatalf("poll summary logged at info level:\n%s", output)
+	}
+}
+
+func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
+	logger, logs := captureLogger(slog.LevelInfo)
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	store.cursors[cursorKey(40161, dvnSourceStream)] = 40
+	store.cursors[cursorKey(40161, executorDestStream)] = 40
+	store.cursors[cursorKey(40161, dvnDestStream)] = 40
+	client := &fakeLogClient{head: 65}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		logger,
+	)
+	indexer.backfillRange = 10
+	indexer.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce() error = %v", err)
+	}
+	output := logs.String()
+	if count := strings.Count(output, `msg="indexer progress"`); count != 1 {
+		t.Fatalf("indexer progress logs = %d, want 1:\n%s", count, output)
+	}
+	assertLogContains(t, output,
+		`streams_advanced=4`,
+		`streams=executor_source,dvn_source,executor_destination,dvn_destination`,
+		`from_block=41`,
+		`to_block=50`,
+		`lag_blocks=3`,
+	)
+	if strings.Contains(output, `msg="indexer stream advanced"`) ||
+		strings.Contains(output, `msg="indexer poll completed"`) {
+		t.Fatalf("per-stream or poll summary logged at info level:\n%s", output)
+	}
+}
+
+func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
+	logger, logs := captureLogger(slog.LevelDebug)
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	client := &fakeLogClient{head: 65}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		logger,
+	).WithStreams(StreamSet{ExecutorSource: true}).WithProgressLogInterval(time.Minute)
+	indexer.backfillRange = 10
+	now := time.Unix(1_700_000_000, 0)
+	indexer.now = func() time.Time { return now }
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("first pollOnce() error = %v", err)
+	}
+	logs.Reset()
+	client.head = 75
+	now = now.Add(10 * time.Second)
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("second pollOnce() error = %v", err)
+	}
+	output := logs.String()
+	assertLogContains(t, output,
+		`level=DEBUG msg="indexer stream advanced"`,
+		`from_block=51`,
+		`to_block=60`,
+		`level=DEBUG msg="indexer poll completed"`,
 		`streams_advanced=1`,
-	} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("logs missing %q in:\n%s", want, output)
-		}
+	)
+	if strings.Contains(output, `level=INFO msg="indexer progress"`) {
+		t.Fatalf("throttled progress logged at info level:\n%s", output)
+	}
+}
+
+func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
+	logger, logs := captureLogger(slog.LevelDebug)
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	client := &fakeLogClient{head: 65}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		logger,
+	).WithStreams(StreamSet{ExecutorSource: true}).WithProgressLogInterval(0)
+	indexer.backfillRange = 10
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce() error = %v", err)
+	}
+	output := logs.String()
+	assertLogContains(t, output,
+		`level=DEBUG msg="indexer stream advanced"`,
+		`level=DEBUG msg="indexer poll completed"`,
+	)
+	if strings.Contains(output, `level=INFO msg="indexer progress"`) ||
+		strings.Contains(output, `level=INFO msg="indexer stream advanced"`) ||
+		strings.Contains(output, `level=INFO msg="indexer poll completed"`) {
+		t.Fatalf("progress info logs emitted with interval 0:\n%s", output)
+	}
+}
+
+func TestIndexerPollOnceThrottlesWaitingForConfirmations(t *testing.T) {
+	logger, logs := captureLogger(slog.LevelDebug)
+	client := &fakeLogClient{head: 11}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		newFakeIndexerStore(),
+		client,
+		logger,
+	).WithProgressLogInterval(time.Minute)
+	now := time.Unix(1_700_000_000, 0)
+	indexer.now = func() time.Time { return now }
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("first pollOnce() error = %v", err)
+	}
+	assertLogContains(t, logs.String(),
+		`level=DEBUG msg="indexer poll waiting for confirmations"`,
+		`level=INFO msg="indexer progress"`,
+		`status=waiting_for_confirmations`,
+	)
+	logs.Reset()
+	now = now.Add(10 * time.Second)
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("second pollOnce() error = %v", err)
+	}
+	output := logs.String()
+	assertLogContains(t, output, `level=DEBUG msg="indexer poll waiting for confirmations"`)
+	if strings.Contains(output, `level=INFO msg="indexer progress"`) ||
+		strings.Contains(output, `level=INFO msg="indexer poll waiting for confirmations"`) {
+		t.Fatalf("waiting confirmation progress logged at info level before interval:\n%s", output)
 	}
 }
 

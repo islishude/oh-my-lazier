@@ -41,22 +41,52 @@ var readTxHeader = func(ctx context.Context, client txmgr.ChainClient) (*gethtyp
 
 const loopRestartDelay = 5 * time.Second
 
+// DefaultIndexerProgressLogInterval is the default cadence for indexer progress Info logs.
+const DefaultIndexerProgressLogInterval = indexer.DefaultProgressLogInterval
+
 type loopRetryRecorder interface {
 	RecordLoopRetry(name string)
 }
 
+// Options controls process-local worker runtime behavior outside the loaded config.
+type Options struct {
+	IndexerProgressLogInterval    time.Duration
+	IndexerProgressLogIntervalSet bool
+}
+
 // App owns the configured worker process and its durable service loops.
 type App struct {
-	cfg    config.Config
-	logger *slog.Logger
+	cfg     config.Config
+	logger  *slog.Logger
+	options Options
 }
 
 // New builds an App from already-validated configuration.
 func New(cfg config.Config, logger *slog.Logger) (*App, error) {
+	return NewWithOptions(cfg, logger, Options{})
+}
+
+// NewWithOptions builds an App with process-local runtime options.
+func NewWithOptions(cfg config.Config, logger *slog.Logger, options Options) (*App, error) {
 	if logger == nil {
 		return nil, errors.New("app logger is required")
 	}
-	return &App{cfg: cfg, logger: logger}, nil
+	normalized, err := normalizeOptions(options)
+	if err != nil {
+		return nil, err
+	}
+	return &App{cfg: cfg, logger: logger, options: normalized}, nil
+}
+
+func normalizeOptions(options Options) (Options, error) {
+	if !options.IndexerProgressLogIntervalSet {
+		options.IndexerProgressLogInterval = DefaultIndexerProgressLogInterval
+		options.IndexerProgressLogIntervalSet = true
+	}
+	if options.IndexerProgressLogInterval < 0 {
+		return Options{}, errors.New("indexer progress log interval must be non-negative")
+	}
+	return options, nil
 }
 
 // Run connects dependencies and runs all worker loops until cancellation.
@@ -66,12 +96,15 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 	defer registry.Close()
+
+	a.logger.Info("worker starting and checking on-chain config...")
 	if report, err := checkOnChainConfig(ctx, registry); err != nil {
 		return err
 	} else if !report.OK {
 		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
 	}
 
+	a.logger.Info("connecting to database and running migrations...")
 	store, err := db.Connect(ctx, a.cfg.DatabaseURL)
 	if err != nil {
 		return err
@@ -84,6 +117,7 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
+	a.logger.Info("synchronizing registry configuration...")
 	if err := store.SyncConfig(ctx, registry); err != nil {
 		return err
 	}
@@ -136,7 +170,11 @@ func (a *App) Run(ctx context.Context) error {
 	}, runtimeMetrics).Run)
 	if !indexerStreams.Empty() {
 		for _, c := range registry.All() {
-			start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).WithStreams(indexerStreams).WithMetrics(runtimeMetrics).Run)
+			start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).
+				WithStreams(indexerStreams).
+				WithMetrics(runtimeMetrics).
+				WithProgressLogInterval(a.options.IndexerProgressLogInterval).
+				Run)
 		}
 	}
 	if len(txTargets) > 0 {
