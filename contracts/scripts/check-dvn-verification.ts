@@ -1,4 +1,4 @@
-import type { Address, Hex } from "viem";
+import type { Hex } from "viem";
 import {
   assertDVNVerificationReceipt,
   type DVNVerificationStatus,
@@ -9,7 +9,9 @@ import {
   envBigInt,
   jsonStringify,
   loadABIArtifact,
+  optionalAddress,
   optionalBigInt,
+  optionalParam,
   requiredEnv,
 } from "./lib.js";
 
@@ -27,15 +29,12 @@ if (receipt.status !== "success") {
   throw new Error(`transaction ${txHash} did not succeed`);
 }
 
-const endpoint =
-  process.env.ENDPOINT === undefined || process.env.ENDPOINT === ""
-    ? undefined
-    : envAddress("ENDPOINT");
+const endpoint = optionalAddress("ENDPOINT");
+const expectedPayloadHashParam = optionalParam("EXPECTED_PAYLOAD_HASH");
 const expectedPayloadHash =
-  process.env.EXPECTED_PAYLOAD_HASH === undefined ||
-  process.env.EXPECTED_PAYLOAD_HASH === ""
+  expectedPayloadHashParam === undefined || expectedPayloadHashParam === ""
     ? undefined
-    : (requiredEnv("EXPECTED_PAYLOAD_HASH") as Hex);
+    : (expectedPayloadHashParam as Hex);
 const expectedSrcEid = optionalUint32("EXPECTED_SRC_EID");
 const expectedDstEid = optionalUint32("EXPECTED_DST_EID");
 const expectedNonce = optionalBigInt("EXPECTED_NONCE");
@@ -84,12 +83,4 @@ function optionalUint32(name: string): number | undefined {
     throw new Error(`${name} exceeds uint32`);
   }
   return Number(value);
-}
-
-function optionalAddress(name: string): Address | undefined {
-  const value = process.env[name];
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  return envAddress(name);
 }

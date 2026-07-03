@@ -45,7 +45,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 11. Complete security review and resolve all critical findings.
 12. Confirm rollback steps for Executor and DVN config are documented with previous config values.
 13. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
-14. Run `MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence`.
+14. Run `npm run check:migration-evidence -- --migration-evidence <record.json>`.
 15. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
@@ -104,7 +104,7 @@ The rollback section of the migration ticket must include:
 - previous Executor config
 - previous send ULN config
 - previous receive ULN config
-- `DRY_RUN=1 npm run configure:lz-rollback` output showing the exact rollback `setConfig` batches
+- `npm run configure:lz-rollback -- --dry-run` output showing the exact rollback `setConfig` batches
 - restored Executor/ULN config check after rollback
 - canary transfer evidence after rollback
 - owner account able to pause/unpause TestOFT

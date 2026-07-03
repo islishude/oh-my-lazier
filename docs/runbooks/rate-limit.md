@@ -23,7 +23,7 @@ Implementation evidence:
 
 - `contracts/contracts/oft/OFTPauseAndRateLimit.sol`
 - `contracts/test/OpenWorkers.t.sol` pause and rate-limit tests
-- `contracts/scripts/configure-workers.ts` optional `RATE_LIMIT_CAPACITY` and `RATE_LIMIT_REFILL_PER_SECOND`
+- `contracts/scripts/configure-workers.ts` optional `--rate-limit-capacity` and `--rate-limit-refill-per-second`
 - `npm run oft:pathway` for inspecting and changing TestOFT pathway pause/drain/rate-limit state
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` for confirming worker DB state has no in-flight packet, job, or outbox work before a config switch
 
@@ -33,9 +33,9 @@ Before switching Executor or DVN config:
 
 1. Set a conservative outbound rate limit for the pathway.
 2. Run canary transfers and confirm `ExecutorFeePaid`, commit, delivery, and destination balance.
-3. For drain, run `npm run oft:pathway` with `OFT_PATHWAY_ACTION=drain` or `OFT_PATHWAY_ACTION=pause-send`.
+3. For drain, run `npm run oft:pathway -- --oft-pathway-action drain` or `npm run oft:pathway -- --oft-pathway-action pause-send`.
 4. Run `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` until it reports `ready: true` before changing DVN required sets.
-5. After validation, restore the approved rate limit with `OFT_PATHWAY_ACTION=set-rate-limit` and unpause sends with `OFT_PATHWAY_ACTION=unpause-send`.
+5. After validation, restore the approved rate limit with `--oft-pathway-action set-rate-limit` and unpause sends with `--oft-pathway-action unpause-send`.
 
 `pauseSend` is preferred when the operator wants an immediate hard stop. Zero-capacity rate limit is preferred when documenting an explicit drain configuration alongside other pathway setup.
 

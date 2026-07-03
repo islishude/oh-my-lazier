@@ -8,7 +8,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql
+      - ./tmp/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U laz_worker -d laz_worker"]
       interval: 10s
@@ -29,6 +29,3 @@ services:
       DATABASE_URL: postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable
     ports:
       - "9090:9090"
-
-volumes:
-  postgres-data:

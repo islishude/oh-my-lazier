@@ -3,6 +3,7 @@ import {
   envAddress,
   jsonStringify,
   loadArtifact,
+  optionalAddress,
   optionalBigInt,
 } from "./lib.js";
 import type { Abi, Address, PublicClient } from "viem";
@@ -199,17 +200,6 @@ async function readTotalSupply(
     abi,
     functionName: "totalSupply",
   })) as bigint;
-}
-
-function optionalAddress(name: string): Address | undefined {
-  const value = process.env[name];
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-    throw new Error(`${name} must be an EVM address`);
-  }
-  return value as Address;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

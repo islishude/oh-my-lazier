@@ -133,3 +133,7 @@ docker-smoke: docker-build
 
 clean:
 	npx hardhat clean
+
+build-go:
+	mkdir -p go/bin
+	go build -o ./go/bin ./go/cmd/...

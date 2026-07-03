@@ -13,7 +13,26 @@ test("buildLzReceiveOption rejects zero gas", () => {
   assert.throws(() => buildLzReceiveOption(0n), /non-zero uint128/);
 });
 
-test("buildCanarySendParam builds first-phase OFT send params", () => {
+test("buildCanarySendParam defaults to empty extra options", () => {
+  const sendParam = buildCanarySendParam({
+    dstEid: 40449,
+    recipient: "0x1111111111111111111111111111111111111111",
+    amountLD: 1_000_000n,
+    minAmountLD: 999_000n,
+  });
+
+  assert.deepEqual(sendParam, {
+    dstEid: 40449,
+    to: "0x0000000000000000000000001111111111111111111111111111111111111111",
+    amountLD: 1_000_000n,
+    minAmountLD: 999_000n,
+    extraOptions: "0x",
+    composeMsg: "0x",
+    oftCmd: "0x",
+  });
+});
+
+test("buildCanarySendParam builds explicit lzReceive extra option", () => {
   const sendParam = buildCanarySendParam({
     dstEid: 40449,
     recipient: "0x1111111111111111111111111111111111111111",

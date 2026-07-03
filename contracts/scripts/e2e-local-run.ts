@@ -28,6 +28,7 @@ import {
 import {
   jsonStringify,
   loadArtifact,
+  optionalEnv,
   type Artifact,
 } from "./lib.js";
 import {
@@ -36,10 +37,12 @@ import {
   type LocalE2EDeployment,
 } from "./e2e-local-artifacts.js";
 
-const tmpDir = process.env.E2E_TMP_DIR ?? "tmp/e2e";
+const tmpDir = optionalEnv("E2E_TMP_DIR", "tmp/e2e");
 const deployerPrivateKey = normalizePrivateKey(
-  process.env.E2E_DEPLOYER_PRIVATE_KEY ??
+  optionalEnv(
+    "E2E_DEPLOYER_PRIVATE_KEY",
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  ),
 );
 const deployer = privateKeyToAccount(deployerPrivateKey);
 
@@ -385,7 +388,10 @@ function clientsFor(chain: ChainDeployment): Clients {
 }
 
 async function waitForWorkerReady() {
-  const url = process.env.E2E_WORKER_READY_URL ?? "http://127.0.0.1:19090/readyz";
+  const url = optionalEnv(
+    "E2E_WORKER_READY_URL",
+    "http://127.0.0.1:19090/readyz",
+  );
   const started = Date.now();
   while (Date.now() - started < 60_000) {
     try {

@@ -23,7 +23,7 @@ const requiredDocs: RequiredDoc[] = [
       "No self-only DVN.",
       "Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.",
       "Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.",
-      "MIGRATION_EVIDENCE=<record.json> npm run check:migration-evidence",
+      "npm run check:migration-evidence -- --migration-evidence <record.json>",
       "npm run check:runbooks",
       "make security-check",
       "go run ./go/cmd/readinesscheck -config <worker.yaml>",

@@ -24,6 +24,7 @@ import {
   addressToBytes32,
   jsonStringify,
   loadArtifact,
+  optionalEnv,
   waitForContract,
 } from "./lib.js";
 import type {
@@ -31,14 +32,18 @@ import type {
   LocalE2EDeployment,
 } from "./e2e-local-artifacts.js";
 
-const tmpDir = process.env.E2E_TMP_DIR ?? "tmp/e2e";
+const tmpDir = optionalEnv("E2E_TMP_DIR", "tmp/e2e");
 const deployerPrivateKey = normalizePrivateKey(
-  process.env.E2E_DEPLOYER_PRIVATE_KEY ??
+  optionalEnv(
+    "E2E_DEPLOYER_PRIVATE_KEY",
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+  ),
 );
 const workerPrivateKey = normalizePrivateKey(
-  process.env.E2E_WORKER_PRIVATE_KEY ??
+  optionalEnv(
+    "E2E_WORKER_PRIVATE_KEY",
     "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+  ),
 );
 const deployer = privateKeyToAccount(deployerPrivateKey);
 const worker = privateKeyToAccount(workerPrivateKey);

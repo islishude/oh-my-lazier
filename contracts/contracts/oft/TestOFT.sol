@@ -25,4 +25,11 @@ contract TestOFT is OFTPauseAndRateLimit {
             _mint(initialRecipient_, initialSupply_);
         }
     }
+
+    // @notice Mints new tokens to the specified address.
+    /// @param to The address to mint tokens to.
+    /// @param amount The amount of tokens to mint in local decimals.
+    function mint(address to, uint256 amount) external onlyOwner {
+        _mint(to, amount);
+    }
 }

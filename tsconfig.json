@@ -10,6 +10,7 @@
   },
   "include": [
     "hardhat.config.ts",
+    "ignition/**/*.ts",
     "contracts/scripts/**/*.ts",
     "contracts/test/**/*.ts"
   ]

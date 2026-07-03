@@ -28,21 +28,42 @@ export type ChainClients = {
   walletClient: WalletClient;
 };
 
+let cachedCLIParams: Map<string, string> | undefined;
+
 export function requiredEnv(name: string): string {
-  const value = process.env[name];
+  const value = optionalParam(name);
   if (value === undefined || value === "") {
-    throw new Error(`${name} is required`);
+    throw new Error(`${name} or --${flagName(name)} is required`);
   }
   return value;
 }
 
 export function optionalEnv(name: string, fallback: string): string {
-  const value = process.env[name];
+  const value = optionalParam(name);
   return value === undefined || value === "" ? fallback : value;
+}
+
+export function optionalParam(name: string): string | undefined {
+  const flagValue = cliParams().get(flagName(name));
+  if (flagValue !== undefined) {
+    return flagValue;
+  }
+  return process.env[name];
 }
 
 export function envAddress(name: string): Address {
   const value = requiredEnv(name);
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    throw new Error(`${name} must be an EVM address`);
+  }
+  return value as Address;
+}
+
+export function optionalAddress(name: string): Address | undefined {
+  const value = optionalParam(name);
+  if (value === undefined || value === "") {
+    return undefined;
+  }
   if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
     throw new Error(`${name} must be an EVM address`);
   }
@@ -66,7 +87,7 @@ export function envUint32(name: string): number {
 }
 
 export function optionalBigInt(name: string): bigint | undefined {
-  const value = process.env[name];
+  const value = optionalParam(name);
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -79,6 +100,57 @@ export function optionalBigInt(name: string): bigint | undefined {
 export function optionalUint64(name: string, fallback: bigint): bigint {
   const value = optionalBigInt(name);
   return value === undefined ? fallback : value;
+}
+
+export function optionalBool(name: string): boolean | undefined {
+  const value = optionalParam(name);
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  switch (value.toLowerCase()) {
+    case "1":
+    case "true":
+    case "yes":
+      return true;
+    case "0":
+    case "false":
+    case "no":
+      return false;
+    default:
+      throw new Error(`${name} must be a boolean`);
+  }
+}
+
+export function parseCLIParams(args: readonly string[]): Map<string, string> {
+  const params = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--") {
+      break;
+    }
+    if (!arg.startsWith("--")) {
+      continue;
+    }
+    const withoutPrefix = arg.slice(2);
+    if (withoutPrefix === "") {
+      continue;
+    }
+    const equalsIndex = withoutPrefix.indexOf("=");
+    if (equalsIndex >= 0) {
+      const key = normalizeFlagName(withoutPrefix.slice(0, equalsIndex));
+      params.set(key, withoutPrefix.slice(equalsIndex + 1));
+      continue;
+    }
+    const key = normalizeFlagName(withoutPrefix);
+    const next = args[i + 1];
+    if (next !== undefined && !next.startsWith("--")) {
+      params.set(key, next);
+      i += 1;
+    } else {
+      params.set(key, "true");
+    }
+  }
+  return params;
 }
 
 export function loadArtifact(relativePath: string): Artifact {
@@ -172,4 +244,19 @@ function normalizePrivateKey(value: string): Hex {
     throw new Error("PRIVATE_KEY must be a 32-byte hex private key");
   }
   return normalized as Hex;
+}
+
+function cliParams(): Map<string, string> {
+  if (cachedCLIParams === undefined) {
+    cachedCLIParams = parseCLIParams(process.argv.slice(2));
+  }
+  return cachedCLIParams;
+}
+
+function flagName(name: string): string {
+  return normalizeFlagName(name.replaceAll("_", "-"));
+}
+
+function normalizeFlagName(name: string): string {
+  return name.toLowerCase().replaceAll("_", "-");
 }

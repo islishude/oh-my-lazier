@@ -21,7 +21,8 @@ export function buildCanarySendParam(input: {
   recipient: Address;
   amountLD: bigint;
   minAmountLD: bigint;
-  lzReceiveGas: bigint;
+  lzReceiveGas?: bigint;
+  extraOptions?: Hex;
 }): OFTSendParam {
   if (
     !Number.isInteger(input.dstEid) ||
@@ -43,7 +44,11 @@ export function buildCanarySendParam(input: {
     to: addressToBytes32(input.recipient),
     amountLD: input.amountLD,
     minAmountLD: input.minAmountLD,
-    extraOptions: buildLzReceiveOption(input.lzReceiveGas),
+    extraOptions:
+      input.extraOptions ??
+      (input.lzReceiveGas === undefined
+        ? "0x"
+        : buildLzReceiveOption(input.lzReceiveGas)),
     composeMsg: "0x",
     oftCmd: "0x",
   };

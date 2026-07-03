@@ -1,10 +1,10 @@
 import {
-  addressToBytes32,
   createClients,
   envAddress,
   envBigInt,
   envUint32,
   loadArtifact,
+  optionalAddress,
   optionalBigInt,
   optionalUint64,
   waitForTx,
@@ -26,12 +26,8 @@ const testOFT = envAddress("TEST_OFT");
 const openExecutor = envAddress("OPEN_EXECUTOR");
 const openDVN = envAddress("OPEN_DVN");
 const remoteEid = envUint32("REMOTE_EID");
-const remoteOFT = envAddress("REMOTE_OFT");
 const sendLib = envAddress("SEND_LIB");
-const srcOApp =
-  process.env.SRC_OAPP === undefined || process.env.SRC_OAPP === ""
-    ? testOFT
-    : envAddress("SRC_OAPP");
+const srcOApp = optionalAddress("SRC_OAPP") ?? testOFT;
 
 const pathwayConfig = {
   enabled: true,
@@ -48,19 +44,6 @@ const priceConfig = {
   updatedAt: optionalUint64("PRICE_UPDATED_AT", now),
   staleAfter: envBigInt("PRICE_STALE_AFTER"),
 };
-
-await waitForTx(
-  publicClient,
-  "TestOFT.setPeer",
-  await walletClient.writeContract({
-    address: testOFT,
-    abi: testOFTArtifact.abi,
-    functionName: "setPeer",
-    args: [remoteEid, addressToBytes32(remoteOFT)],
-    account,
-    chain: null,
-  }),
-);
 
 const rateLimitCapacity = optionalBigInt("RATE_LIMIT_CAPACITY");
 const rateLimitRefillPerSecond = optionalBigInt("RATE_LIMIT_REFILL_PER_SECOND");
@@ -146,7 +129,6 @@ console.log(
       openExecutor,
       openDVN,
       remoteEid,
-      remoteOFT,
       sendLib,
       srcOApp,
     },

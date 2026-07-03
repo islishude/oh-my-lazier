@@ -1,4 +1,3 @@
-import { getAddress } from "viem";
 import type { Hex } from "viem";
 import {
   assertCanaryDestinationReceipt,
@@ -11,7 +10,9 @@ import {
   jsonStringify,
   loadABIArtifact,
   loadArtifact,
+  optionalAddress,
   optionalBigInt,
+  optionalParam,
 } from "./lib.js";
 
 const endpointArtifact = loadABIArtifact(
@@ -26,8 +27,8 @@ const testOFTArtifact = loadArtifact(
 
 const publicClient = createPublicClientFromEnv();
 const endpoint = envAddress("ENDPOINT");
-const sourceTxHash = process.env.SOURCE_TX_HASH;
-const destinationTxHash = process.env.DESTINATION_TX_HASH;
+const sourceTxHash = optionalParam("SOURCE_TX_HASH");
+const destinationTxHash = optionalParam("DESTINATION_TX_HASH");
 
 const output: {
   chainId: number;
@@ -74,13 +75,13 @@ if (destinationTxHash !== undefined && destinationTxHash !== "") {
   output.destinationTxHash = destinationTxHash as Hex;
   output.destination = assertCanaryDestinationReceipt({
     logs: destinationReceipt.logs,
-    endpoint: getAddress(process.env.DESTINATION_ENDPOINT ?? endpoint),
+    endpoint: optionalAddress("DESTINATION_ENDPOINT") ?? endpoint,
     endpointAbi: endpointArtifact.abi,
   });
 }
 
-const destinationTestOFT = process.env.DESTINATION_TEST_OFT;
-const recipient = process.env.RECIPIENT;
+const destinationTestOFT = optionalAddress("DESTINATION_TEST_OFT");
+const recipient = optionalAddress("RECIPIENT");
 const minRecipientBalance = optionalBigInt("MIN_RECIPIENT_BALANCE");
 if (
   destinationTestOFT !== undefined ||
@@ -89,23 +90,20 @@ if (
 ) {
   if (
     destinationTestOFT === undefined ||
-    destinationTestOFT === "" ||
     recipient === undefined ||
-    recipient === "" ||
     minRecipientBalance === undefined
   ) {
     throw new Error(
       "DESTINATION_TEST_OFT, RECIPIENT, and MIN_RECIPIENT_BALANCE must be set together",
     );
   }
-  const recipientAddress = getAddress(recipient);
   output.recipientBalance = assertCanaryRecipientBalance({
-    recipient: recipientAddress,
+    recipient,
     balance: (await publicClient.readContract({
-      address: getAddress(destinationTestOFT),
+      address: destinationTestOFT,
       abi: testOFTArtifact.abi,
       functionName: "balanceOf",
-      args: [recipientAddress],
+      args: [recipient],
     })) as bigint,
     minBalance: minRecipientBalance,
   });

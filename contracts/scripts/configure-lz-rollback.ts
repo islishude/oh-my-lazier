@@ -4,6 +4,7 @@ import {
   createClients,
   jsonStringify,
   loadABIArtifact,
+  optionalBool,
   requiredEnv,
   waitForTx,
 } from "./lib.js";
@@ -17,7 +18,7 @@ const snapshot = JSON.parse(
   readFileSync(snapshotPath, "utf8"),
 ) as LzConfigSnapshot;
 const plan = rollbackConfigPlan(snapshot);
-if (process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true") {
+if (optionalBool("DRY_RUN") === true) {
   console.log(jsonStringify({ dryRun: true, ...plan }));
   process.exit(0);
 }

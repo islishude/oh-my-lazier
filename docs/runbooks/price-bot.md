@@ -48,14 +48,14 @@ After the tx manager broadcasts and confirms the queued transactions:
 Example:
 
 ```bash
-RPC_URL=... \
-CHAIN_ID=11155111 \
-OPEN_EXECUTOR=... \
-OPEN_DVN=... \
-DST_EID=40449 \
-MAX_PRICE_AGE_SECONDS=300 \
-EXPECTED_STALE_AFTER=1800 \
-npm run check:price-config
+npm run check:price-config -- \
+  --rpc-url ... \
+  --chain-id 11155111 \
+  --open-executor ... \
+  --open-dvn ... \
+  --dst-eid 40449 \
+  --max-price-age-seconds 300 \
+  --expected-stale-after 1800
 ```
 
 ## Rollback

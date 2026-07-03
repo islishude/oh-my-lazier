@@ -4,13 +4,33 @@ import { configVariable, defineConfig } from "hardhat/config";
 const config = defineConfig({
   plugins: [hardhatToolboxViemPlugin],
   solidity: {
-    version: "0.8.35",
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
+    profiles: {
+      default: {
+        version: "0.8.35",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+          evmVersion: "osaka",
+          viaIR: true,
+        },
       },
-      evmVersion: "prague",
+      production: {
+        version: "0.8.35",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 1000,
+          },
+          evmVersion: "osaka",
+          metadata: {
+            bytecodeHash: "none",
+            useLiteralContent: true,
+          },
+          viaIR: true,
+        },
+      },
     },
   },
   paths: {
@@ -20,19 +40,37 @@ const config = defineConfig({
     artifacts: "contracts/artifacts",
   },
   networks: {
+    hardhat: {
+      type: "edr-simulated",
+      chainType: "l1",
+    },
     sepolia: {
       type: "http",
       chainType: "l1",
       chainId: 11155111,
       url: configVariable("SEPOLIA_RPC_URL"),
-      accounts: [configVariable("PRIVATE_KEY")],
+      accounts: [configVariable("SEPOLIA_PRIVATE_KEY")],
     },
     hoodi: {
       type: "http",
       chainType: "l1",
       chainId: 560048,
       url: configVariable("HOODI_RPC_URL"),
-      accounts: [configVariable("PRIVATE_KEY")],
+      accounts: [configVariable("HOODI_PRIVATE_KEY")],
+    },
+  },
+  ignition: {
+    requiredConfirmations: 1,
+  },
+  verify: {
+    etherscan: {
+      apiKey: configVariable("ETHERSCAN_API_KEY"),
+    },
+    blockscout: {
+      enabled: false,
+    },
+    sourcify: {
+      enabled: false,
     },
   },
 });
