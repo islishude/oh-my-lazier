@@ -92,8 +92,8 @@ e2e-local:
 		rm -rf $(E2E_TMP_DIR)/postgres; \
 	}; \
 	trap cleanup EXIT INT TERM; \
-	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b; \
 	npm run compile; \
+	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b; \
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" npm run e2e:deploy-local; \
 	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
