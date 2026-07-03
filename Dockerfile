@@ -9,14 +9,14 @@ RUN apk add --no-cache ca-certificates git
 COPY . ./
 RUN  --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    go build -trimpath -ldflags="-s -w" -o /out/worker ./go/cmd/worker
+    go build -trimpath -ldflags="-s -w" -o ./go/bin/ ./go/cmd/...
 
 FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 worker
 
 WORKDIR /app
-COPY --from=build /out/worker /usr/local/bin/worker
+COPY --from=build /src/go/bin/ /usr/local/bin/
 COPY config/example.yaml /app/config/example.yaml
 
 USER worker
