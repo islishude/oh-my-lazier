@@ -26,6 +26,7 @@ import {
   assertCanarySourceReceipt,
 } from "./oft-canary-status.js";
 import {
+  addressToBytes32,
   jsonStringify,
   loadArtifact,
   optionalEnv,
@@ -69,6 +70,7 @@ type Clients = {
 
 type PacketDetails = {
   guid: Hex;
+  nonce: bigint;
   packetHeader: Hex;
   payloadHash: Hex;
   sourceReceipt: TransactionReceipt;
@@ -102,7 +104,11 @@ async function runDirection(
 ) {
   const sourceClients = clientsFor(source);
   const destinationClients = clientsFor(destination);
-  const balanceBefore = await balanceOf(destinationClients.publicClient, destination.oft, deployer.address);
+  const balanceBefore = await balanceOf(
+    destinationClients.publicClient,
+    destination.oft,
+    deployer.address,
+  );
   const sendParam = buildCanarySendParam({
     dstEid: destination.eid,
     recipient: deployer.address,
@@ -208,12 +214,25 @@ async function waitForDelivery(
           ].join(",")}`,
         );
       }
-      const deliveredLogs = await matchingPacketDeliveredLogs(
+      await assertPrimaryDVNVerifier(
         destinationClients.publicClient,
         destination,
+        packet,
+      );
+      const deliveryReceipt = await matchingPacketDeliveredReceipt(
+        destinationClients.publicClient,
+        source,
+        destination,
+        packet,
+      );
+      await assertTransactionFrom(
+        destinationClients.publicClient,
+        deliveryReceipt.transactionHash,
+        destination.executorSigner,
+        `${destination.name} PacketDelivered`,
       );
       assertCanaryDestinationReceipt({
-        logs: deliveredLogs,
+        logs: deliveryReceipt.logs,
         endpoint: destination.endpoint,
         endpointAbi: endpointArtifact.abi,
       });
@@ -265,7 +284,8 @@ function packetFromSourceReceipt(
     const packetHeader = sliceHex(encodedPayload, 0, 81);
     const payloadHash = keccak256(sliceHex(encodedPayload, 81));
     const guid = sliceHex(encodedPayload, 81, 113);
-    return { guid, packetHeader, payloadHash, sourceReceipt: receipt };
+    const nonce = BigInt(sliceHex(packetHeader, 1, 9));
+    return { guid, nonce, packetHeader, payloadHash, sourceReceipt: receipt };
   }
   throw new Error("source receipt is missing PacketSent");
 }
@@ -342,18 +362,122 @@ async function verifiedDVNs(
   return out;
 }
 
-async function matchingPacketDeliveredLogs(
+async function assertPrimaryDVNVerifier(
   publicClient: PublicClient,
   destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<void> {
+  const logs = await publicClient.getLogs({
+    address: destination.primaryOpenDVN,
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+  const packetHeaderHash = keccak256(packet.packetHeader);
+  for (const log of logs) {
+    if (
+      log.topics[0] !==
+      eventTopic(openDVNArtifact, "DVNVerificationSubmitted")
+    ) {
+      continue;
+    }
+    const decoded = decodeEventLog({
+      abi: openDVNArtifact.abi,
+      eventName: "DVNVerificationSubmitted",
+      data: log.data,
+      topics: mutableTopics(log.topics),
+    });
+    const args = decoded.args as unknown as {
+      verifier: Address;
+      receiveLib: Address;
+      payloadHash: Hex;
+      packetHeaderHash: Hex;
+    };
+    if (
+      isAddressEqual(args.receiveLib, destination.receiveUln) &&
+      args.payloadHash.toLowerCase() === packet.payloadHash.toLowerCase() &&
+      args.packetHeaderHash.toLowerCase() === packetHeaderHash.toLowerCase()
+    ) {
+      if (!isAddressEqual(args.verifier, destination.dvnSigner)) {
+        throw new Error(
+          `${destination.name} primary OpenDVN verifier ${args.verifier} does not match configured DVN signer ${destination.dvnSigner}`,
+        );
+      }
+      return;
+    }
+  }
+  throw new Error(
+    `${destination.name} primary OpenDVN is missing DVNVerificationSubmitted for ${packet.payloadHash}`,
+  );
+}
+
+async function matchingPacketDeliveredReceipt(
+  publicClient: PublicClient,
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<TransactionReceipt> {
+  const logs = await matchingPacketDeliveredLogs(
+    publicClient,
+    source,
+    destination,
+    packet,
+  );
+  const txHash = logs[0]?.transactionHash;
+  if (txHash === undefined || txHash === null) {
+    throw new Error(
+      `${destination.name} PacketDelivered log is missing transaction hash`,
+    );
+  }
+  return publicClient.getTransactionReceipt({ hash: txHash });
+}
+
+async function matchingPacketDeliveredLogs(
+  publicClient: PublicClient,
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  packet: PacketDetails,
 ): Promise<Log[]> {
   const logs = await publicClient.getLogs({
     address: destination.endpoint,
     fromBlock: 0n,
     toBlock: "latest",
   });
-  return logs.filter(
-    (log) => log.topics[0] === eventTopic(endpointArtifact, "PacketDelivered"),
-  );
+  return logs.filter((log) => {
+    if (log.topics[0] !== eventTopic(endpointArtifact, "PacketDelivered")) {
+      return false;
+    }
+    const decoded = decodeEventLog({
+      abi: endpointArtifact.abi,
+      eventName: "PacketDelivered",
+      data: log.data,
+      topics: mutableTopics(log.topics),
+    });
+    const args = decoded.args as unknown as {
+      origin: { srcEid: number; sender: Hex; nonce: bigint };
+      receiver: Address;
+    };
+    return (
+      args.origin.srcEid === source.eid &&
+      args.origin.nonce === packet.nonce &&
+      args.origin.sender.toLowerCase() ===
+        addressToBytes32(source.oft).toLowerCase() &&
+      isAddressEqual(args.receiver, destination.oft)
+    );
+  });
+}
+
+async function assertTransactionFrom(
+  publicClient: PublicClient,
+  txHash: Hex,
+  expected: Address,
+  label: string,
+): Promise<void> {
+  const tx = await publicClient.getTransaction({ hash: txHash });
+  if (!isAddressEqual(tx.from, expected)) {
+    throw new Error(
+      `${label} transaction sender ${tx.from} does not match expected signer ${expected}`,
+    );
+  }
 }
 
 async function balanceOf(

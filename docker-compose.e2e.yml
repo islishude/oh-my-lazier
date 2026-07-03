@@ -72,6 +72,13 @@ services:
       start_period: 1s
       retries: 30
 
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: kms
+    ports:
+      - "4566:4566"
+
   worker:
     profiles: ["worker"]
     build:
@@ -86,9 +93,15 @@ services:
         condition: service_healthy
       anvil-b:
         condition: service_healthy
+      localstack:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable
       E2E_KEYSTORE_PASSWORD: local-e2e-password
+      AWS_ACCESS_KEY_ID: ${E2E_AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${E2E_AWS_SECRET_ACCESS_KEY:-test}
+      AWS_REGION: ${E2E_KMS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
     ports:
       - "19090:9090"
     volumes:

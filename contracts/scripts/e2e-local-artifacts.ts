@@ -14,12 +14,31 @@ export type LocalChainDeployment = {
   openExecutor: Address;
   primaryOpenDVN: Address;
   secondaryOpenDVN: Address;
+  executorSigner: Address;
+  dvnSigner: Address;
+};
+
+export type LocalE2EGeneratedKMSKey = {
+  keyId: string;
+  region: string;
+  address: Address;
+};
+
+export type LocalE2ESigners = {
+  kms: LocalE2EGeneratedKMSKey & {
+    hostEndpoint: string;
+    containerEndpoint: string;
+  };
+  keystore: {
+    address: Address;
+  };
 };
 
 export type LocalE2EDeployment = {
   generatedAt: string;
   deployer: Address;
   worker: Address;
+  signers: LocalE2ESigners;
   parameters: {
     confirmations: string;
     maxMessageSize: number;
@@ -40,6 +59,7 @@ export function validateLocalE2EDeployment(
   stringField(deployment, "generatedAt", "deployment.generatedAt");
   addressField(deployment, "deployer", "deployment.deployer");
   addressField(deployment, "worker", "deployment.worker");
+  validateSigners(deployment.signers, "deployment.signers");
   const parameters = object(
     deployment.parameters,
     "deployment.parameters",
@@ -53,6 +73,28 @@ export function validateLocalE2EDeployment(
   validateChain(chains.a, "deployment.chains.a", "a");
   validateChain(chains.b, "deployment.chains.b", "b");
   return deployment as LocalE2EDeployment;
+}
+
+export function validateLocalE2EGeneratedKMSKey(
+  value: unknown,
+): LocalE2EGeneratedKMSKey {
+  const key = object(value, "kms");
+  stringField(key, "keyId", "kms.keyId");
+  stringField(key, "region", "kms.region");
+  addressField(key, "address", "kms.address");
+  return key as LocalE2EGeneratedKMSKey;
+}
+
+function validateSigners(value: unknown, path: string) {
+  const signers = object(value, path);
+  const kms = object(signers.kms, `${path}.kms`);
+  stringField(kms, "keyId", `${path}.kms.keyId`);
+  stringField(kms, "region", `${path}.kms.region`);
+  stringField(kms, "hostEndpoint", `${path}.kms.hostEndpoint`);
+  stringField(kms, "containerEndpoint", `${path}.kms.containerEndpoint`);
+  addressField(kms, "address", `${path}.kms.address`);
+  const keystore = object(signers.keystore, `${path}.keystore`);
+  addressField(keystore, "address", `${path}.keystore.address`);
 }
 
 function validateChain(value: unknown, path: string, key: "a" | "b") {
@@ -73,6 +115,8 @@ function validateChain(value: unknown, path: string, key: "a" | "b") {
     "openExecutor",
     "primaryOpenDVN",
     "secondaryOpenDVN",
+    "executorSigner",
+    "dvnSigner",
   ]) {
     addressField(chain, field, `${path}.${field}`);
   }

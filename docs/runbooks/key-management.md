@@ -41,6 +41,7 @@ Implementation evidence:
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
 - `go/internal/signer/kms.Signer.SignHash` parses DER signatures, normalizes low-S, and recovers the configured Ethereum address.
 - `go/internal/signer/kms.Signer.SignTx` signs configured dynamic-fee and legacy transactions through the same address-recovery boundary.
+- `make e2e-local` and `make e2e-ci` create a LocalStack KMS key for chain A while keeping chain B on a local keystore, then assert the destination delivery transaction sender and primary OpenDVN verifier match the configured signer addresses.
 
 ## Local Keystore Requirements
 
@@ -65,6 +66,7 @@ Implementation evidence:
 
 - Run `go test ./go/internal/signer/keystore ./go/internal/signer/kms -count=1`.
 - Run `make test-integration` when Docker is available; it starts dedicated Postgres and Rustack containers, runs the DB/tx manager integration tests and the Rustack KMS signing test, and removes the temporary database files on exit.
+- Run `make e2e-local` before approving local signer-path changes; it proves both KMS and keystore-backed worker transactions across the bidirectional local OFT canary flow.
 - When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.

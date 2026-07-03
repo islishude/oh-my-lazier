@@ -99,6 +99,45 @@ jobs:
     name: Local dual-Anvil E2E
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: laz_worker
+          POSTGRES_USER: laz_worker
+          POSTGRES_PASSWORD: laz_worker
+        ports: ["55433:5432"]
+        options: |
+          --health-cmd="pg_isready -U laz_worker -d laz_worker" --health-start-period=1s
+      anvil-a:
+        image: ghcr.io/foundry-rs/foundry:latest
+        entrypoint: anvil
+        command: >-
+          --host 0.0.0.0 --port 8545 --chain-id 31337 --mnemonic
+          "test test test test test test test test test test test junk"
+          --accounts 10 --balance 10000
+        ports: ["18545:8545"]
+        options: >-
+          --health-cmd="cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1"
+          --health-interval=2s --health-timeout=5s --health-start-period=1s
+          --health-retries=30
+      anvil-b:
+        image: ghcr.io/foundry-rs/foundry:latest
+        entrypoint: anvil
+        command: >-
+          --host 0.0.0.0 --port 8545 --chain-id 31338 --mnemonic
+          "test test test test test test test test test test test junk"
+          --accounts 10 --balance 10000
+        ports: ["18546:8545"]
+        options: >-
+          --health-cmd="cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1"
+          --health-interval=2s --health-timeout=5s --health-start-period=1s
+          --health-retries=30
+      localstack:
+        image: localstack/localstack:3.8.1
+        env:
+          SERVICES: kms
+        ports: ["4566:4566"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -136,9 +175,7 @@ jobs:
         run: npm ci
 
       - name: Run local dual-Anvil E2E
-        run: make e2e-local
-        env:
-          E2E_WORKER_UP_FLAGS: --no-build
+        run: make e2e-ci
 
   security:
     name: Security gates

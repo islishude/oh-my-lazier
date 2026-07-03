@@ -3,26 +3,49 @@ SHELL := /bin/sh
 INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compose.integration.yml
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
+
 E2E_COMPOSE = docker compose -p oh-my-lazier-e2e -f docker-compose.e2e.yml
 E2E_TMP_DIR = tmp/e2e
 E2E_DEPLOYER_PRIVATE_KEY ?= 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 E2E_WORKER_PRIVATE_KEY ?= 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 E2E_KEYSTORE_PASSWORD ?= local-e2e-password
 E2E_WORKER_UP_FLAGS ?= --build
+E2E_AWS_ACCESS_KEY_ID ?= test
+E2E_AWS_SECRET_ACCESS_KEY ?= test
+E2E_KMS_REGION ?= us-east-1
+E2E_KMS_HOST_ENDPOINT ?= http://127.0.0.1:4566
+E2E_CHAIN_A_HOST_RPC_URL ?= http://127.0.0.1:18545
+E2E_CHAIN_B_HOST_RPC_URL ?= http://127.0.0.1:18546
+E2E_HOST_DATABASE_URL ?= postgres://laz_worker:laz_worker@127.0.0.1:55433/laz_worker?sslmode=disable
+E2E_CHAIN_A_CONTAINER_RPC_URL ?= $(E2E_CHAIN_A_HOST_RPC_URL)
+E2E_CHAIN_B_CONTAINER_RPC_URL ?= $(E2E_CHAIN_B_HOST_RPC_URL)
+E2E_CONTAINER_DATABASE_URL ?= $(E2E_HOST_DATABASE_URL)
+E2E_KMS_CONTAINER_ENDPOINT ?= $(E2E_KMS_HOST_ENDPOINT)
+E2E_CI_WORKER_IMAGE ?= oh-my-lazier-worker:e2e
+E2E_CI_WORKER_NAME ?= oh-my-lazier-e2e-worker
+E2E_CI_WORKER_RUN_FLAGS ?= --network host
+E2E_CI_WORKER_READY_URL ?= http://127.0.0.1:9090/readyz
 
-.PHONY: all check compile typecheck generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi test test-solidity test-scripts test-go test-kms-rustack integration-up integration-down test-integration e2e-up e2e-down e2e-local security-check runbook-check migration-evidence-check lint lint-go fmt fmt-go docker-build docker-smoke clean
+.PHONY: check \
+	generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi \
+	test-integration test-kms-rustack \
+	e2e-local e2e-ci \
+	security-check docker-smoke \
+	fmt-go-check fmt-sol-check
 
-all: check
-
-ci: check
-
-check: compile typecheck check-lzabi check-pricing-abi test-solidity test-scripts test-go runbook-check migration-evidence-check lint-go fmt-check
-
-compile:
+check:
 	npm run compile
-
-typecheck:
 	npm run typecheck
+	npm run check:lzabi
+	npm run check:pricing-abi
+	npx hardhat test solidity
+	npm run test:scripts
+	go test ./...
+	npm run check:runbooks
+	MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
+	golangci-lint run ./...
+	@$(MAKE) --no-print-directory fmt-go-check
+	@$(MAKE) --no-print-directory fmt-sol-check
 
 generate-lzabi:
 	npm run generate:lzabi
@@ -36,30 +59,6 @@ generate-pricing-abi:
 check-pricing-abi:
 	npm run check:pricing-abi
 
-test: test-solidity test-go
-
-test-solidity:
-	npx hardhat test solidity
-
-test-scripts:
-	npm run test:scripts
-
-test-go:
-	go test ./...
-
-test-kms-rustack:
-	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \
-		echo "RUSTACK_KMS_ENDPOINT is required"; \
-		exit 1; \
-	fi
-	go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
-
-integration-up:
-	$(INTEGRATION_COMPOSE) up -d --wait
-
-integration-down:
-	-$(INTEGRATION_COMPOSE) down -v --remove-orphans
-
 test-integration:
 	@set -e; \
 	cleanup() { \
@@ -70,11 +69,12 @@ test-integration:
 	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" go test ./go/internal/db ./go/internal/txmgr -count=1; \
 	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
 
-e2e-up:
-	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b
-
-e2e-down:
-	-$(E2E_COMPOSE) --profile worker down -v --remove-orphans
+test-kms-rustack:
+	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \
+		printf '%s\n' "RUSTACK_KMS_ENDPOINT is required"; \
+		exit 1; \
+	fi
+	go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
 
 e2e-local:
 	rm -rf $(E2E_TMP_DIR)
@@ -86,53 +86,78 @@ e2e-local:
 	}; \
 	trap cleanup EXIT INT TERM; \
 	npm run compile; \
-	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b; \
-	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" npm run e2e:deploy-local; \
+	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b localstack; \
+	AWS_ACCESS_KEY_ID="$(E2E_AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(E2E_AWS_SECRET_ACCESS_KEY)" AWS_REGION="$(E2E_KMS_REGION)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" go run ./go/cmd/e2ekmskey -out "$(E2E_TMP_DIR)/kms.json"; \
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" npm run e2e:deploy-local; \
 	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
 	$(E2E_COMPOSE) --profile worker up -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local
+
+e2e-ci:
+	rm -rf $(E2E_TMP_DIR)
+	mkdir -p $(E2E_TMP_DIR)
+	@set -e; \
+	cleanup() { \
+		status=$$?; \
+		if [ $$status -ne 0 ]; then \
+			docker logs "$(E2E_CI_WORKER_NAME)" >/dev/stderr 2>&1 || true; \
+		fi; \
+		docker rm -f "$(E2E_CI_WORKER_NAME)" >/dev/null 2>&1 || true; \
+		rm -rf $(E2E_TMP_DIR); \
+		exit $$status; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	npm run compile; \
+	AWS_ACCESS_KEY_ID="$(E2E_AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(E2E_AWS_SECRET_ACCESS_KEY)" AWS_REGION="$(E2E_KMS_REGION)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" go run ./go/cmd/e2ekmskey -out "$(E2E_TMP_DIR)/kms.json"; \
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" \
+	E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" \
+	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" \
+	E2E_KMS_REGION="$(E2E_KMS_REGION)" \
+	E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" \
+	E2E_KMS_CONTAINER_ENDPOINT="$(E2E_KMS_CONTAINER_ENDPOINT)" \
+	E2E_CHAIN_A_HOST_RPC_URL="$(E2E_CHAIN_A_HOST_RPC_URL)" \
+	E2E_CHAIN_B_HOST_RPC_URL="$(E2E_CHAIN_B_HOST_RPC_URL)" \
+	E2E_CHAIN_A_CONTAINER_RPC_URL="$(E2E_CHAIN_A_CONTAINER_RPC_URL)" \
+	E2E_CHAIN_B_CONTAINER_RPC_URL="$(E2E_CHAIN_B_CONTAINER_RPC_URL)" \
+	E2E_HOST_DATABASE_URL="$(E2E_HOST_DATABASE_URL)" \
+	E2E_CONTAINER_DATABASE_URL="$(E2E_CONTAINER_DATABASE_URL)" \
+	npm run e2e:deploy-local; \
+	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
+	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" DATABASE_URL="$(E2E_HOST_DATABASE_URL)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
+	docker rm -f "$(E2E_CI_WORKER_NAME)" >/dev/null 2>&1 || true; \
+	docker run -d --name "$(E2E_CI_WORKER_NAME)" $(E2E_CI_WORKER_RUN_FLAGS) \
+		-v "$$(pwd)/$(E2E_TMP_DIR):/app/tmp/e2e:ro" \
+		-e E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" \
+		-e DATABASE_URL="$(E2E_CONTAINER_DATABASE_URL)" \
+		-e AWS_ACCESS_KEY_ID="$(E2E_AWS_ACCESS_KEY_ID)" \
+		-e AWS_SECRET_ACCESS_KEY="$(E2E_AWS_SECRET_ACCESS_KEY)" \
+		-e AWS_REGION="$(E2E_KMS_REGION)" \
+		-e AWS_EC2_METADATA_DISABLED=true \
+		"$(E2E_CI_WORKER_IMAGE)" -config /app/tmp/e2e/worker.container.yaml; \
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" \
+	E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" \
+	E2E_WORKER_READY_URL="$(E2E_CI_WORKER_READY_URL)" \
+	npm run e2e:run-local
 
 security-check:
 	npm run check:security-review
 	npm run check:npm-audit-disposition
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-runbook-check:
-	npm run check:runbooks
-
-migration-evidence-check:
-	MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
-
-lint: lint-go
-
-lint-go:
-	golangci-lint run ./...
-
-fmt: fmt-go fmt-sol
-
-fmt-check: fmt-go-check fmt-sol-check
-
-fmt-go:
-	gofmt -w go
+docker-smoke:
+	docker build -t oh-my-lazier-worker:local .
+	docker run --rm oh-my-lazier-worker:local -h
 
 fmt-go-check:
-	gofmt -l go
-
-fmt-sol:
-	forge fmt contracts
+	@files="$$(gofmt -l go)"; \
+	if [ -n "$$files" ]; then \
+		printf '%s\n' "$$files"; \
+		exit 1; \
+	fi
 
 fmt-sol-check:
 	forge fmt --check contracts
-
-docker-build:
-	docker build -t oh-my-lazier-worker:local .
-
-docker-smoke: docker-build
-	docker run --rm oh-my-lazier-worker:local -h
-
-clean:
-	npx hardhat clean
 
 build-go:
 	mkdir -p go/bin

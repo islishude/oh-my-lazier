@@ -16,23 +16,42 @@ Run the local dual-Anvil E2E from the repository root:
 make e2e-local
 ```
 
-The target writes all generated files under `tmp/e2e`, starts disposable
-Postgres, isolated Anvil, and worker services through `docker-compose.e2e.yml`,
-runs `npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
+The local target writes all generated files under `tmp/e2e`, starts disposable
+Postgres, LocalStack KMS, isolated Anvil, and worker services through
+`docker-compose.e2e.yml`, creates a local `ECC_SECG_P256K1` KMS key, runs
+`npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
 ReceiveUln302, TestOFT, OpenExecutor, a primary OpenDVN, and a secondary
 OpenDVN on both chains, generates a worker keystore, runs `configcheck`, and
-then runs `npm run e2e:run-local`. The local runner sends OFT canaries in both
-directions. It does not start the price bot; deployment writes fresh hard-coded
-worker price configs, with source OpenExecutor pricing non-zero and local
-OpenDVN pricing zero because pinned SendUln302 accounts DVN fees internally
-without forwarding native value to DVN `assignJob`.
+then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
+executor and active DVN roles; chain B uses the generated keystore signer. The
+local runner sends OFT canaries in both directions. It does not start the price
+bot; deployment writes fresh hard-coded worker price configs, with source
+OpenExecutor pricing non-zero and local OpenDVN pricing zero because pinned
+SendUln302 accounts DVN fees internally without forwarding native value to DVN
+`assignJob`.
+
+CI runs the same deployment and canary scripts through `make e2e-ci`, but
+GitHub Actions services own Postgres, LocalStack KMS, and the two Anvil chains. The CI target
+does not call Docker Compose or build the worker image; CI builds
+`oh-my-lazier-worker:e2e` before invoking it. The target generates host and
+container configs under `tmp/e2e`, starts the worker image with host networking,
+and points worker readiness at `http://127.0.0.1:9090/readyz`. Override
+`E2E_CI_WORKER_IMAGE`, `E2E_CHAIN_A_HOST_RPC_URL`, `E2E_CHAIN_B_HOST_RPC_URL`,
+`E2E_CHAIN_A_CONTAINER_RPC_URL`, `E2E_CHAIN_B_CONTAINER_RPC_URL`,
+`E2E_HOST_DATABASE_URL`, `E2E_CONTAINER_DATABASE_URL`,
+`E2E_KMS_HOST_ENDPOINT`, or `E2E_KMS_CONTAINER_ENDPOINT` only when the service
+ports differ from the repository defaults. `make e2e-ci` assumes the Linux
+Docker host-network behavior used by GitHub-hosted Ubuntu runners; use
+`make e2e-local` for Docker Desktop development.
 
 The active DVN transaction target is the destination OpenDVN, not
 ReceiveUln302 directly. `e2e:run-local` requires the worker-submitted primary
 OpenDVN verification and a script-submitted secondary OpenDVN verification,
 then checks that ReceiveUln302 emitted `PayloadVerified` for both OpenDVNs,
-EndpointV2 emitted `PacketDelivered`, and the recipient TestOFT balance
-increased.
+EndpointV2 emitted `PacketDelivered`, the delivery transaction sender matches
+the destination chain's configured executor signer, the primary OpenDVN verifier
+matches the destination chain's configured DVN signer, and the recipient TestOFT
+balance increased.
 
 When registry access is unavailable, set `ANVIL_IMAGE` to a compatible local
 Foundry image. If `oh-my-lazier-worker:e2e` already exists, set

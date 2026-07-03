@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { validateLocalE2EDeployment } from "./e2e-local-artifacts.js";
+import {
+  validateLocalE2EDeployment,
+  validateLocalE2EGeneratedKMSKey,
+} from "./e2e-local-artifacts.js";
 
 test("validateLocalE2EDeployment accepts generated deployment shape", () => {
   const deployment = validDeployment();
@@ -16,11 +19,34 @@ test("validateLocalE2EDeployment rejects invalid addresses", () => {
   );
 });
 
+test("validateLocalE2EGeneratedKMSKey accepts helper output", () => {
+  assert.equal(validateLocalE2EGeneratedKMSKey(validKMSKey()).keyId, "key-1");
+});
+
+test("validateLocalE2EGeneratedKMSKey rejects invalid address", () => {
+  const key = validKMSKey();
+  key.address = "not-an-address";
+  assert.throws(
+    () => validateLocalE2EGeneratedKMSKey(key),
+    /kms\.address must be an EVM address/,
+  );
+});
+
 function validDeployment() {
   return {
     generatedAt: "2026-07-03T00:00:00.000Z",
     deployer: "0x1111111111111111111111111111111111111111",
     worker: "0x2222222222222222222222222222222222222222",
+    signers: {
+      kms: {
+        ...validKMSKey(),
+        hostEndpoint: "http://127.0.0.1:4566",
+        containerEndpoint: "http://localstack:4566",
+      },
+      keystore: {
+        address: "0x2222222222222222222222222222222222222222",
+      },
+    },
     parameters: {
       confirmations: "1",
       maxMessageSize: 10000,
@@ -50,5 +76,21 @@ function validChain(key: "a" | "b", eid: number, chainId: number) {
     openExecutor: "0x7777777777777777777777777777777777777777",
     primaryOpenDVN: "0x8888888888888888888888888888888888888888",
     secondaryOpenDVN: "0x9999999999999999999999999999999999999999",
+    executorSigner:
+      key === "a"
+        ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        : "0x2222222222222222222222222222222222222222",
+    dvnSigner:
+      key === "a"
+        ? "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        : "0x2222222222222222222222222222222222222222",
+  };
+}
+
+function validKMSKey() {
+  return {
+    keyId: "key-1",
+    region: "us-east-1",
+    address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   };
 }

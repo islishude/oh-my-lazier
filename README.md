@@ -36,12 +36,17 @@ npm install
 
 ## Main Commands
 
+The Makefile intentionally exposes only repository-level gates and CI/doc
+entrypoints. Use the underlying `npm`, `go`, `gofmt`, `forge`, or `docker`
+commands directly for narrow local loops.
+
 ```bash
 make check            # compile, typecheck, ABI drift checks, tests, docs checks, lint, format checks
 make test-integration # Docker Compose Postgres plus Rustack KMS integration tests
 make security-check   # security review check, npm audit disposition, govulncheck
 make docker-smoke     # build worker image and verify its entrypoint
-make e2e-local        # local Postgres + two Anvil chains + worker canary flow
+make e2e-local        # local Postgres + LocalStack KMS + two Anvil chains + worker canary flow
+make e2e-ci           # CI E2E with prestarted services and a prebuilt worker image
 ```
 
 ABI artifacts are committed under `go/internal/lzabi/abis`, `go/internal/configcheck/abis`, and `go/internal/pricing/abis`.

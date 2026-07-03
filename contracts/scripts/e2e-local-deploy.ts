@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPublicClient,
@@ -27,10 +27,17 @@ import {
   optionalEnv,
   waitForContract,
 } from "./lib.js";
-import type {
-  LocalChainDeployment as ChainDeployment,
-  LocalE2EDeployment,
+import {
+  validateLocalE2EGeneratedKMSKey,
+  type LocalChainDeployment as ChainDeployment,
+  type LocalE2EDeployment,
 } from "./e2e-local-artifacts.js";
+import {
+  localE2EChains,
+  localE2EDatabaseURL,
+  localE2EKMS,
+  type LocalE2EChainSpec,
+} from "./e2e-local-config.js";
 
 const tmpDir = optionalEnv("E2E_TMP_DIR", "tmp/e2e");
 const deployerPrivateKey = normalizePrivateKey(
@@ -67,24 +74,7 @@ const openDVNArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
 );
 
-const localChains = [
-  {
-    key: "a",
-    name: "local-anvil-a",
-    eid: 90101,
-    chainId: 31337,
-    hostRpcUrl: "http://127.0.0.1:18545",
-    containerRpcUrl: "http://anvil-a:8545",
-  },
-  {
-    key: "b",
-    name: "local-anvil-b",
-    eid: 90102,
-    chainId: 31338,
-    hostRpcUrl: "http://127.0.0.1:18546",
-    containerRpcUrl: "http://anvil-b:8545",
-  },
-] as const;
+const localChains = localE2EChains();
 
 const maxMessageSize = 10_000;
 const minLzReceiveGas = 100_000n;
@@ -92,8 +82,14 @@ const lzReceiveGas = 250_000n;
 const maxLzReceiveGas = 1_000_000n;
 const confirmations = 1n;
 const initialSupply = 1_000_000n * 10n ** 18n;
+const signerFunding = 100n * 10n ** 18n;
 
-type LocalChainSpec = (typeof localChains)[number];
+type LocalChainSpec = LocalE2EChainSpec;
+type UnsignedChainDeployment = Omit<
+  ChainDeployment,
+  "executorSigner" | "dvnSigner"
+>;
+type ChainSignerRoles = Pick<ChainDeployment, "executorSigner" | "dvnSigner">;
 type ChainConnectionSpec = {
   name: string;
   chainId: number;
@@ -108,10 +104,35 @@ type Clients = {
 
 await mkdir(tmpDir, { recursive: true });
 
-const deployments = await Promise.all(
+const e2eKMS = localE2EKMS();
+const kmsKey = validateLocalE2EGeneratedKMSKey(
+  JSON.parse(await readFile(path.join(tmpDir, "kms.json"), "utf8")),
+);
+if (kmsKey.region !== e2eKMS.region) {
+  throw new Error(
+    `kms.json region ${kmsKey.region} does not match configured ${e2eKMS.region}`,
+  );
+}
+const kmsAddress = getAddress(kmsKey.address);
+const keystoreAddress = getAddress(worker.address);
+
+const unsignedDeployments = await Promise.all(
   localChains.map((chain) => deployChain(chain)),
 );
-const [chainA, chainB] = deployments;
+const [unsignedChainA, unsignedChainB] = unsignedDeployments;
+if (unsignedChainA === undefined || unsignedChainB === undefined) {
+  throw new Error("local e2e requires two chains");
+}
+const chainA = withSignerRoles(unsignedChainA, {
+  executorSigner: kmsAddress,
+  dvnSigner: kmsAddress,
+});
+const chainB = withSignerRoles(unsignedChainB, {
+  executorSigner: keystoreAddress,
+  dvnSigner: keystoreAddress,
+});
+
+await fundAddress(chainA, kmsAddress, signerFunding);
 
 await configureDirection(chainA, chainB);
 await configureDirection(chainB, chainA);
@@ -119,7 +140,18 @@ await configureDirection(chainB, chainA);
 const output: LocalE2EDeployment = {
   generatedAt: new Date().toISOString(),
   deployer: getAddress(deployer.address),
-  worker: getAddress(worker.address),
+  worker: keystoreAddress,
+  signers: {
+    kms: {
+      ...kmsKey,
+      address: kmsAddress,
+      hostEndpoint: e2eKMS.hostEndpoint,
+      containerEndpoint: e2eKMS.containerEndpoint,
+    },
+    keystore: {
+      address: keystoreAddress,
+    },
+  },
   parameters: {
     confirmations: confirmations.toString(),
     maxMessageSize,
@@ -145,7 +177,9 @@ await writeFile(
 
 console.log(jsonStringify(output));
 
-async function deployChain(spec: LocalChainSpec): Promise<ChainDeployment> {
+async function deployChain(
+  spec: LocalChainSpec,
+): Promise<UnsignedChainDeployment> {
   const clients = clientsFor(spec);
   await assertChainID(clients.publicClient, spec);
 
@@ -218,6 +252,13 @@ async function deployChain(spec: LocalChainSpec): Promise<ChainDeployment> {
     primaryOpenDVN,
     secondaryOpenDVN,
   };
+}
+
+function withSignerRoles(
+  chain: UnsignedChainDeployment,
+  roles: ChainSignerRoles,
+): ChainDeployment {
+  return { ...chain, ...roles };
 }
 
 async function configureDirection(
@@ -416,24 +457,22 @@ async function authorizeDestinationVerifiers(
   clients: Clients,
   chain: ChainDeployment,
 ) {
-  for (const openDVN of [chain.primaryOpenDVN, chain.secondaryOpenDVN]) {
-    await writeTx(
-      clients,
-      `${chain.name} OpenDVN.setVerifier worker ${openDVN}`,
-      openDVN,
-      openDVNArtifact.abi,
-      "setVerifier",
-      [worker.address, true],
-    );
-    await writeTx(
-      clients,
-      `${chain.name} OpenDVN.setVerifier deployer ${openDVN}`,
-      openDVN,
-      openDVNArtifact.abi,
-      "setVerifier",
-      [deployer.address, true],
-    );
-  }
+  await writeTx(
+    clients,
+    `${chain.name} primary OpenDVN.setVerifier configured DVN signer`,
+    chain.primaryOpenDVN,
+    openDVNArtifact.abi,
+    "setVerifier",
+    [chain.dvnSigner, true],
+  );
+  await writeTx(
+    clients,
+    `${chain.name} secondary OpenDVN.setVerifier deployer`,
+    chain.secondaryOpenDVN,
+    openDVNArtifact.abi,
+    "setVerifier",
+    [deployer.address, true],
+  );
 }
 
 async function deployContract(
@@ -478,6 +517,25 @@ async function writeTx(
   console.log(`${label}: ${hash}`);
 }
 
+async function fundAddress(
+  chain: ChainDeployment,
+  recipient: Address,
+  value: bigint,
+): Promise<void> {
+  const clients = clientsFor(chain);
+  const hash = await clients.walletClient.sendTransaction({
+    account: clients.account,
+    chain: null,
+    to: recipient,
+    value,
+  });
+  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`${chain.name} signer funding ${hash} failed`);
+  }
+  console.log(`${chain.name} funded signer ${recipient}: ${hash}`);
+}
+
 function clientsFor(spec: ChainConnectionSpec): Clients {
   const chain = defineChain({
     id: spec.chainId,
@@ -509,10 +567,7 @@ function workerConfig(output: LocalE2EDeployment, mode: "host" | "container") {
     mode === "host"
       ? path.join(tmpDir, "worker-keystore.json")
       : "/app/tmp/e2e/worker-keystore.json";
-  const databaseURL =
-    mode === "host"
-      ? "postgres://laz_worker:laz_worker@127.0.0.1:55433/laz_worker?sslmode=disable"
-      : "postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable";
+  const databaseURL = localE2EDatabaseURL(mode);
   const chainList = [output.chains.a, output.chains.b];
   const pathways = [
     [output.chains.a, output.chains.b],
@@ -527,7 +582,14 @@ services:
   dvn:
     enabled: true
 signers:
-  - id: "${output.worker}"
+  - id: "${output.signers.kms.address}"
+    type: kms
+    kms:
+      key_id: "${output.signers.kms.keyId}"
+      region: "${output.signers.kms.region}"
+      address: "${output.signers.kms.address}"
+      endpoint: "${mode === "host" ? output.signers.kms.hostEndpoint : output.signers.kms.containerEndpoint}"
+  - id: "${output.signers.keystore.address}"
     type: keystore
     keystore:
       path: ${keystorePath}
@@ -549,11 +611,11 @@ ${chainList
       - ${rpcURL(chain)}
     tx_roles:
       executor:
-        signer: "${output.worker}"
+        signer: "${chain.executorSigner}"
         max_fee_per_gas_wei: "100000000000"
         max_priority_fee_per_gas_wei: "1000000000"
       dvn:
-        signer: "${output.worker}"
+        signer: "${chain.dvnSigner}"
         max_fee_per_gas_wei: "100000000000"
         max_priority_fee_per_gas_wei: "1000000000"`,
   )
