@@ -21,7 +21,7 @@ const requiredDocs: RequiredSecurityDoc[] = [
       "zero critical npm findings",
       "govulncheck` currently reports no vulnerabilities in called Go code.",
       "Private key material, decrypted keystore JSON, KMS signatures, and raw secrets",
-      "Phase 1 remains EVM-only and scoped to Ethereum Sepolia <-> Base Sepolia.",
+      "Phase 1 remains EVM-only and scoped to Ethereum Sepolia <-> Hoodi.",
       "Self-only DVN is rejected",
       "Confirmations are fixed at 12 unless the maintained scope documentation is updated.",
       "Source head conflicts pause chains.",

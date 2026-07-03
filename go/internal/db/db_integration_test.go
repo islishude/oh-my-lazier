@@ -42,10 +42,10 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	}
 
 	var chains, pathways int
-	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM chains WHERE eid IN (40161, 40245)").Scan(&chains); err != nil {
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM chains WHERE eid IN (40161, 40449)").Scan(&chains); err != nil {
 		t.Fatalf("count chains: %v", err)
 	}
-	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM pathways WHERE src_eid = 40161 AND dst_eid = 40245").Scan(&pathways); err != nil {
+	if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM pathways WHERE src_eid = 40161 AND dst_eid = 40449").Scan(&pathways); err != nil {
 		t.Fatalf("count pathways: %v", err)
 	}
 	if chains != 2 {
@@ -58,7 +58,7 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `
 		SELECT open_executor, open_dvn, destination_open_dvn
 		FROM pathways
-		WHERE src_eid = 40161 AND dst_eid = 40245
+		WHERE src_eid = 40161 AND dst_eid = 40449
 	`).Scan(&openExecutor, &openDVN, &destinationOpenDVN); err != nil {
 		t.Fatalf("select pathway workers: %v", err)
 	}
@@ -1125,7 +1125,7 @@ func TestExecutorWorkEnqueueAdvancesStatusAtomically(t *testing.T) {
 	}
 
 	id, err := store.EnqueueExecutorTx(ctx, packet.GUID, string(packets.ExecutorVerifiable), string(packets.ExecutorCommitTxEnqueued), TxRequest{
-		ChainEID: 40245,
+		ChainEID: 40449,
 		Purpose:  "executor_commit_verification",
 		GUID:     packet.GUID.Bytes(),
 		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -1343,7 +1343,7 @@ func TestCheckDrainStatusReportsPendingWork(t *testing.T) {
 		t.Fatalf("UpsertDVNJob() error = %v", err)
 	}
 	if _, err := store.EnqueueTx(ctx, TxRequest{
-		ChainEID: 40245,
+		ChainEID: 40449,
 		Purpose:  "executor_lz_receive",
 		GUID:     packet.GUID.Bytes(),
 		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -1420,7 +1420,7 @@ func TestCheckDrainStatusAcceptsDeliveredShadowPathway(t *testing.T) {
 		t.Fatalf("UpsertDVNJob() error = %v", err)
 	}
 	id, err := store.EnqueueTx(ctx, TxRequest{
-		ChainEID: 40245,
+		ChainEID: 40449,
 		Purpose:  "executor_lz_receive",
 		GUID:     packet.GUID.Bytes(),
 		To:       common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
@@ -1471,10 +1471,10 @@ func testChains() []config.ChainConfig {
 			},
 		},
 		{
-			EID:             40245,
-			Name:            "base-sepolia",
+			EID:             40449,
+			Name:            "hoodi",
 			Family:          config.ChainFamilyEVM,
-			ChainID:         84532,
+			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
@@ -1497,7 +1497,7 @@ func testPacketRecord() PacketRecord {
 	return PacketRecord{
 		GUID:           common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		SrcEID:         40161,
-		DstEID:         40245,
+		DstEID:         40449,
 		Nonce:          big.NewInt(7),
 		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
@@ -1642,7 +1642,7 @@ func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
 			SrcEID:     40161,
-			DstEID:     40245,
+			DstEID:     40449,
 			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),

@@ -15,7 +15,7 @@ test("buildLzReceiveOption rejects zero gas", () => {
 
 test("buildCanarySendParam builds first-phase OFT send params", () => {
   const sendParam = buildCanarySendParam({
-    dstEid: 40245,
+    dstEid: 40449,
     recipient: "0x1111111111111111111111111111111111111111",
     amountLD: 1_000_000n,
     minAmountLD: 999_000n,
@@ -23,7 +23,7 @@ test("buildCanarySendParam builds first-phase OFT send params", () => {
   });
 
   assert.deepEqual(sendParam, {
-    dstEid: 40245,
+    dstEid: 40449,
     to: "0x0000000000000000000000001111111111111111111111111111111111111111",
     amountLD: 1_000_000n,
     minAmountLD: 999_000n,
@@ -38,7 +38,7 @@ test("buildCanarySendParam rejects slippage above amount", () => {
   assert.throws(
     () =>
       buildCanarySendParam({
-        dstEid: 40245,
+        dstEid: 40449,
         recipient: "0x1111111111111111111111111111111111111111",
         amountLD: 1_000n,
         minAmountLD: 1_001n,

@@ -46,24 +46,29 @@ function matchingFixtures(): {
       lzExecutor: { address: chain.lzExecutor },
       deadDVN: { address: chain.deadDVN },
     })),
-    dvns: expectedLayerZeroChains.flatMap((chain) => [
-      {
-        chainKey: chain.chainKey,
-        nativeChainId: chain.nativeChainId,
-        eid: chain.eid,
-        version: 2,
-        id: "layerzero-labs",
-        dvnAddress: chain.layerZeroLabsDVN,
-      },
-      {
-        chainKey: chain.chainKey,
-        nativeChainId: chain.nativeChainId,
-        eid: chain.eid,
-        version: 2,
-        id: "layerzero-labs",
-        lzReadCompatible: true,
-        dvnAddress: chain.layerZeroLabsReadDVN,
-      },
-    ]),
+    dvns: expectedLayerZeroChains.flatMap((chain) => {
+      const records: DVNDeploymentRecord[] = [
+        {
+          chainKey: chain.chainKey,
+          nativeChainId: chain.nativeChainId,
+          eid: chain.eid,
+          version: 2,
+          id: "layerzero-labs",
+          dvnAddress: chain.layerZeroLabsDVN,
+        },
+      ];
+      if (chain.layerZeroLabsReadDVN !== undefined) {
+        records.push({
+          chainKey: chain.chainKey,
+          nativeChainId: chain.nativeChainId,
+          eid: chain.eid,
+          version: 2,
+          id: "layerzero-labs",
+          lzReadCompatible: true,
+          dvnAddress: chain.layerZeroLabsReadDVN,
+        });
+      }
+      return records;
+    }),
   };
 }

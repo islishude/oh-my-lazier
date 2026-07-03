@@ -115,7 +115,7 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 			name: "executor only by default",
 			wantPurposes: map[uint32][]string{
 				40161: {"executor_commit_verification", "executor_lz_receive"},
-				40245: {"executor_commit_verification", "executor_lz_receive"},
+				40449: {"executor_commit_verification", "executor_lz_receive"},
 			},
 		},
 		{
@@ -126,7 +126,7 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 				cfg.Chains[1].TxRoles.DVN = testDVNRole(config.MustEVMAddress(account.Address.Hex()))
 			},
 			wantPurposes: map[uint32][]string{
-				40245: {"dvn_verify"},
+				40449: {"dvn_verify"},
 			},
 		},
 		{
@@ -139,7 +139,7 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 			},
 			wantPurposes: map[uint32][]string{
 				40161: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
-				40245: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
+				40449: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
 			},
 		},
 		{
@@ -361,10 +361,10 @@ func testConfig(signerID, keystorePath string) config.Config {
 				},
 			},
 			{
-				EID:             40245,
-				Name:            "base-sepolia",
+				EID:             40449,
+				Name:            "hoodi",
 				Family:          config.ChainFamilyEVM,
-				ChainID:         84532,
+				ChainID:         560048,
 				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
@@ -376,7 +376,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 		Pathways: []config.PathwayConfig{
 			{
 				SrcEID:     40161,
-				DstEID:     40245,
+				DstEID:     40449,
 				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
@@ -442,7 +442,7 @@ func testPricingConfig() config.PricingConfig {
 		MaxPriorityFeePerGasWei: "1000000000",
 		Chains: []config.PricingChainConfig{
 			{EID: 40161, BinanceSymbol: "ETHUSDT"},
-			{EID: 40245, BinanceSymbol: "ETHUSDT"},
+			{EID: 40449, BinanceSymbol: "ETHUSDT"},
 		},
 	}
 }

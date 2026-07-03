@@ -12,7 +12,7 @@
     "test": "hardhat test",
     "test:scripts": "tsx --test contracts/scripts/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "deploy:workers": "tsx contracts/scripts/deploy-workers.ts",
+    "deploy:workers": "hardhat ignition deploy ignition/modules/TestOFTWorkers.ts",
     "configure:workers": "tsx contracts/scripts/configure-workers.ts",
     "generate:lzabi": "npm run compile && tsx contracts/scripts/generate-lzabi.ts",
     "check:lzabi": "npm run compile && tsx contracts/scripts/generate-lzabi.ts --check",
@@ -49,6 +49,7 @@
   },
   "homepage": "https://github.com/islishude/oh-my-lazier#readme",
   "dependencies": {
+    "@layerzerolabs/lz-definitions": "3.1.4",
     "@layerzerolabs/lz-evm-messagelib-v2": "3.0.168",
     "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
     "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",

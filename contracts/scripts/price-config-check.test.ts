@@ -45,7 +45,7 @@ test("validatePriceConfigReport rejects future updatedAt", () => {
 function baseReport(): PriceConfigReport {
   return {
     chainId: 11155111,
-    dstEid: 40245,
+    dstEid: 40449,
     checkedAt: 1000n,
     maxAgeSeconds: 60n,
     expectedStaleAfter: 1800n,

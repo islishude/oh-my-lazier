@@ -431,10 +431,10 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
-  - eid: 40245
-    name: base-sepolia
+  - eid: 40449
+    name: hoodi
     family: evm
-    chain_id: 84532
+    chain_id: 560048
     endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
     rpc_urls:
@@ -450,7 +450,7 @@ chains:
         max_priority_fee_per_gas_wei: "1000000000"
 pathways:
   - src_eid: 40161
-    dst_eid: 40245
+    dst_eid: 40449
     src_oapp: "0x7777777777777777777777777777777777777777"
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
@@ -527,10 +527,10 @@ func validConfig() Config {
 				},
 			},
 			{
-				EID:                    40245,
-				Name:                   "base-sepolia",
+				EID:                    40449,
+				Name:                   "hoodi",
 				Family:                 ChainFamilyEVM,
-				ChainID:                84532,
+				ChainID:                560048,
 				EndpointAddress:        MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:          12,
 				IndexerQueryBlockRange: 500,
@@ -544,7 +544,7 @@ func validConfig() Config {
 		Pathways: []PathwayConfig{
 			{
 				SrcEID:     40161,
-				DstEID:     40245,
+				DstEID:     40449,
 				SrcOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
 				DstOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				SendLib:    MustEVMAddress("0x9999999999999999999999999999999999999999"),
@@ -563,7 +563,7 @@ func validConfig() Config {
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:     40245,
+				SrcEID:     40449,
 				DstEID:     40161,
 				SrcOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				DstOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
@@ -629,7 +629,7 @@ func validPricingConfig() PricingConfig {
 				},
 			},
 			{
-				EID:           40245,
+				EID:           40449,
 				BinanceSymbol: "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),

@@ -720,7 +720,7 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 				EID:             packet.DstEID,
 				Name:            "destination",
 				Family:          config.ChainFamilyEVM,
-				ChainID:         84532,
+				ChainID:         560048,
 				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
@@ -901,7 +901,7 @@ func testDVNPacket() db.PacketRecord {
 	return db.PacketRecord{
 		GUID:           common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
 		SrcEID:         40161,
-		DstEID:         40245,
+		DstEID:         40449,
 		Nonce:          big.NewInt(7),
 		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
@@ -947,7 +947,7 @@ func testEncodedPacket() []byte {
 	encoded = binary.BigEndian.AppendUint64(encoded, 7)
 	encoded = binary.BigEndian.AppendUint32(encoded, 40161)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x7777777777777777777777777777777777777777"))...)
-	encoded = binary.BigEndian.AppendUint32(encoded, 40245)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40449)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x8888888888888888888888888888888888888888"))...)
 	encoded = append(encoded, common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc").Bytes()...)
 	encoded = append(encoded, []byte("hello")...)

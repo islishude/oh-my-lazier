@@ -76,7 +76,7 @@ func TestExecutorJobFromAssignmentRejectsMismatchedSender(t *testing.T) {
 func testPacketRecord() db.PacketRecord {
 	return db.PacketRecord{
 		GUID:    common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-		DstEID:  40245,
+		DstEID:  40449,
 		Sender:  common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		SendLib: common.HexToAddress("0x9999999999999999999999999999999999999999"),
 	}

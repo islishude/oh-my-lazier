@@ -1,3 +1,4 @@
+import { ChainKey, EndpointId } from "@layerzerolabs/lz-definitions";
 import { getAddress, isAddressEqual, type Address } from "viem";
 
 export const DEPLOYMENTS_V2_URL =
@@ -16,7 +17,7 @@ export type ExpectedLayerZeroChain = {
   lzExecutor: Address;
   deadDVN: Address;
   layerZeroLabsDVN: Address;
-  layerZeroLabsReadDVN: Address;
+  layerZeroLabsReadDVN?: Address;
 };
 
 export type DeploymentRecord = {
@@ -43,9 +44,9 @@ export type DVNDeploymentRecord = {
 
 export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
   {
-    chainKey: "sepolia",
+    chainKey: ChainKey.SEPOLIA,
     nativeChainId: 11155111,
-    eid: "40161",
+    eid: String(EndpointId.SEPOLIA_V2_TESTNET),
     endpointV2: getAddress("0x6EDCE65403992e310A62460808c4b910D972f10f"),
     sendUln302: getAddress("0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE"),
     receiveUln302: getAddress("0xdAf00F5eE2158dD58E0d3857851c432E34A3A851"),
@@ -58,19 +59,16 @@ export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
     ),
   },
   {
-    chainKey: "base-sepolia",
-    nativeChainId: 84532,
-    eid: "40245",
-    endpointV2: getAddress("0x6EDCE65403992e310A62460808c4b910D972f10f"),
-    sendUln302: getAddress("0xC1868e054425D378095A003EcbA3823a5D0135C9"),
-    receiveUln302: getAddress("0x12523de19dc41c91F7d2093E0CFbB76b17012C8d"),
-    executor: getAddress("0x8A3D588D9f6AC041476b094f97FF94ec30169d3D"),
-    lzExecutor: getAddress("0xD8C74c92a59c2b5b6390eD54f13193C59249e561"),
-    deadDVN: getAddress("0x78551ADC2553EF1858a558F5300F7018Aad2FA7e"),
-    layerZeroLabsDVN: getAddress("0xe1a12515f9ab2764b887bf60b923ca494ebbb2d6"),
-    layerZeroLabsReadDVN: getAddress(
-      "0xbf6ff58f60606edb2f190769b951d825bcb214e2",
-    ),
+    chainKey: ChainKey.HOODI_TESTNET,
+    nativeChainId: 560048,
+    eid: String(EndpointId.HOODI_V2_TESTNET),
+    endpointV2: getAddress("0x3aCAAf60502791D199a5a5F0B173D78229eBFe32"),
+    sendUln302: getAddress("0x45841dd1ca50265Da7614fC43A361e526c0e6160"),
+    receiveUln302: getAddress("0xd682ECF100f6F4284138AA925348633B0611Ae21"),
+    executor: getAddress("0x701f3927871EfcEa1235dB722f9E608aE120d243"),
+    lzExecutor: getAddress("0x4Cf1B3Fa61465c2c907f82fC488B43223BA0CF93"),
+    deadDVN: getAddress("0x88B27057A9e00c5F05DDa29241027afF63f9e6e0"),
+    layerZeroLabsDVN: getAddress("0xa78a78a13074ed93ad447a26ec57121f29e8fec2"),
   },
 ] as const;
 
@@ -150,14 +148,16 @@ export function verifyLayerZeroAddresses(input: {
       pushDVN?.dvnAddress,
       chain.layerZeroLabsDVN,
     );
-    const readDVN = findLayerZeroLabsDVN(input.dvns, chain, true);
-    compareAddress(
-      errors,
-      chain.chainKey,
-      "LayerZero Labs lzRead DVN",
-      readDVN?.dvnAddress,
-      chain.layerZeroLabsReadDVN,
-    );
+    if (chain.layerZeroLabsReadDVN !== undefined) {
+      const readDVN = findLayerZeroLabsDVN(input.dvns, chain, true);
+      compareAddress(
+        errors,
+        chain.chainKey,
+        "LayerZero Labs lzRead DVN",
+        readDVN?.dvnAddress,
+        chain.layerZeroLabsReadDVN,
+      );
+    }
   }
 
   return errors;

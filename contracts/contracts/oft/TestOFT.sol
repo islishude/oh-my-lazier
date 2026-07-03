@@ -4,7 +4,7 @@ pragma solidity ^0.8.35;
 import {OFTPauseAndRateLimit} from "./OFTPauseAndRateLimit.sol";
 
 /// @title TestOFT
-/// @notice Mint/burn OFT used for the initial Sepolia/Base Sepolia pathway.
+/// @notice Mint/burn OFT used for the initial Sepolia/Hoodi pathway.
 contract TestOFT is OFTPauseAndRateLimit {
     /// @notice Deploys the test OFT and optionally mints initial supply.
     /// @param name_ ERC20 token name.

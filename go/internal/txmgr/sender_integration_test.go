@@ -933,7 +933,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 		t.Fatalf("EnqueueExecutorTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -948,7 +948,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1001,7 +1001,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 		t.Fatalf("EnqueueExecutorTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -1013,7 +1013,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1075,7 +1075,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 		t.Fatalf("EnqueueExecutorTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -1086,7 +1086,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1094,7 +1094,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	}
 	forceRetryDue(t, id)
 
-	retryID, err := manager.ProcessFailedRetry(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	retryID, err := manager.ProcessFailedRetry(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessFailedRetry() error = %v", err)
 	}
@@ -1116,7 +1116,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 		t.Fatalf("packet status = %q, want %q", restored.Status, packets.ExecutorLzReceiveTxEnqueued)
 	}
 
-	retryProcessedID, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	retryProcessedID, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext(retry) error = %v", err)
 	}
@@ -1136,7 +1136,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	client.receipts[retryTx.TxHash] = &types.Receipt{TxHash: retryTx.TxHash, Status: types.ReceiptStatusSuccessful}
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1189,7 +1189,7 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -1201,7 +1201,7 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1247,7 +1247,7 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
 
-	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(84532), signer, client, defaultFeePolicy()))
+	id, err := manager.ProcessNext(t.Context(), testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy()))
 	if err != nil {
 		t.Fatalf("ProcessNext() error = %v", err)
 	}
@@ -1259,7 +1259,7 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(84532),
+		ChainID:  big.NewInt(560048),
 		Signer:   signer,
 		Client:   client,
 	}, 1); err != nil {
@@ -1320,7 +1320,7 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 	}, []byte(`{"status":"ready"}`)); err != nil {
 		t.Fatalf("EnqueueDVNVerifyTx() error = %v", err)
 	}
-	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(560048))
 	job, err := store.GetDVNJob(t.Context(), packet.GUID)
 	if err != nil {
 		t.Fatalf("GetDVNJob() error = %v", err)
@@ -1346,7 +1346,7 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnqueueExecutorTx(commit) error = %v", err)
 	}
-	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(560048))
 	committed, err := store.GetPacket(t.Context(), packet.GUID)
 	if err != nil {
 		t.Fatalf("GetPacket() after commit error = %v", err)
@@ -1369,7 +1369,7 @@ func TestSyntheticActiveFlowVerifiesCommitsAndDelivers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("EnqueueExecutorTx(lzReceive) error = %v", err)
 	}
-	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(84532))
+	processQueuedSuccess(t, manager, store, client, signer, packet.DstEID, big.NewInt(560048))
 	delivered, err := store.GetPacket(t.Context(), packet.GUID)
 	if err != nil {
 		t.Fatalf("GetPacket() after delivery error = %v", err)
@@ -1503,7 +1503,7 @@ func testExecutorPacket(t *testing.T) db.PacketRecord {
 	return db.PacketRecord{
 		GUID:           guid,
 		SrcEID:         40161,
-		DstEID:         40245,
+		DstEID:         40449,
 		Nonce:          nonce,
 		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
@@ -1639,10 +1639,10 @@ func testChains() []config.ChainConfig {
 			},
 		},
 		{
-			EID:             40245,
-			Name:            "base-sepolia",
+			EID:             40449,
+			Name:            "hoodi",
 			Family:          config.ChainFamilyEVM,
-			ChainID:         84532,
+			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
@@ -1713,7 +1713,7 @@ func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
 			SrcEID:     40161,
-			DstEID:     40245,
+			DstEID:     40449,
 			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),

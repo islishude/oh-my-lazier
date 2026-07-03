@@ -125,7 +125,7 @@ test("rollback config batches reject mismatched DVN counts", () => {
   const snapshot: LzConfigSnapshot = {
     endpoint: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     oapp: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    remoteEid: 40245,
+    remoteEid: 40449,
     inspectedLibraries: {
       sendUln: "0x1111111111111111111111111111111111111111",
       receiveUln: "0x2222222222222222222222222222222222222222",
@@ -158,7 +158,7 @@ function rollbackSnapshot(): LzConfigSnapshot {
   return {
     endpoint: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     oapp: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    remoteEid: 40245,
+    remoteEid: 40449,
     inspectedLibraries: {
       sendUln: "0x1111111111111111111111111111111111111111",
       receiveUln: "0x2222222222222222222222222222222222222222",

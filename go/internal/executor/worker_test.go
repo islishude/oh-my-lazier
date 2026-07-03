@@ -578,10 +578,10 @@ func testRegistry(t *testing.T) *chain.Registry {
 			},
 		},
 		{
-			EID:             40245,
-			Name:            "base-sepolia",
+			EID:             40449,
+			Name:            "hoodi",
 			Family:          config.ChainFamilyEVM,
-			ChainID:         84532,
+			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
@@ -601,7 +601,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 	}, []config.PathwayConfig{
 		{
 			SrcEID:     40161,
-			DstEID:     40245,
+			DstEID:     40449,
 			SrcOApp:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 			DstOApp:    config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),

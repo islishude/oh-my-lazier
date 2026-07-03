@@ -48,7 +48,7 @@ func TestValidateProviderChainIDsAcceptsAllExpected(t *testing.T) {
 func TestValidateProviderChainIDsRejectsUnexpectedProviderChainID(t *testing.T) {
 	err := validateProviderChainIDs("testnet", big.NewInt(11155111), []providerChainID{
 		{URL: "provider-a", ChainID: big.NewInt(11155111)},
-		{URL: "provider-b", ChainID: big.NewInt(84532)},
+		{URL: "provider-b", ChainID: big.NewInt(560048)},
 	})
 	if err == nil {
 		t.Fatal("validateProviderChainIDs() error = nil, want mismatch")
@@ -56,7 +56,7 @@ func TestValidateProviderChainIDsRejectsUnexpectedProviderChainID(t *testing.T) 
 	if !IsChainIDMismatch(err) {
 		t.Fatalf("IsChainIDMismatch() = false for %T", err)
 	}
-	if !strings.Contains(err.Error(), "provider provider-b returned 84532") {
+	if !strings.Contains(err.Error(), "provider provider-b returned 560048") {
 		t.Fatalf("error = %q, want provider detail", err)
 	}
 }

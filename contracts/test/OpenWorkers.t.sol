@@ -86,7 +86,7 @@ contract ReceiveUlnMock {
 }
 
 contract OpenWorkersTest {
-    uint32 internal constant DST_EID = 40245;
+    uint32 internal constant DST_EID = 40449;
     address internal constant OAPP = address(0x2002);
 
     OpenExecutor internal executor;

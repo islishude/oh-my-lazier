@@ -51,7 +51,7 @@ function baseState(): OFTPathwayState {
   return {
     chainId: 11155111,
     testOFT: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    remoteEid: 40245,
+    remoteEid: 40449,
     sendPaused: false,
     receivePaused: false,
     outboundRateLimitConfigured: false,

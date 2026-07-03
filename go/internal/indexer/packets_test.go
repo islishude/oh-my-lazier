@@ -39,7 +39,7 @@ func TestPacketRecordFromSentLog(t *testing.T) {
 	if record.Nonce.Cmp(big.NewInt(7)) != 0 {
 		t.Fatalf("Nonce = %s", record.Nonce)
 	}
-	if record.SrcEID != 40161 || record.DstEID != 40245 {
+	if record.SrcEID != 40161 || record.DstEID != 40449 {
 		t.Fatalf("pathway = %d -> %d", record.SrcEID, record.DstEID)
 	}
 	if record.SendLib != sendLib {
@@ -59,7 +59,7 @@ func testEncodedPacket() []byte {
 	encoded = binary.BigEndian.AppendUint64(encoded, 7)
 	encoded = binary.BigEndian.AppendUint32(encoded, 40161)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x7777777777777777777777777777777777777777"))...)
-	encoded = binary.BigEndian.AppendUint32(encoded, 40245)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40449)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x8888888888888888888888888888888888888888"))...)
 	encoded = append(encoded, common.HexToHash("0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc").Bytes()...)
 	encoded = append(encoded, []byte("hello")...)

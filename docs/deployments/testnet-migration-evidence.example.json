@@ -1,7 +1,7 @@
 {
   "ticket": "MIG-TESTNET-001",
   "environment": "testnet",
-  "scope": "Ethereum Sepolia <-> Base Sepolia executor migration and required DVN join rehearsal",
+  "scope": "Ethereum Sepolia <-> Hoodi executor migration and required DVN join rehearsal",
   "operatorContacts": ["ops@example.com"],
   "ownerAccount": "0x1111111111111111111111111111111111111111",
   "signerAccount": "0x2222222222222222222222222222222222222222",
@@ -40,9 +40,9 @@
   },
   "directions": [
     {
-      "label": "Ethereum Sepolia to Base Sepolia",
+      "label": "Ethereum Sepolia to Hoodi",
       "srcEid": 40161,
-      "dstEid": 40245,
+      "dstEid": 40449,
       "sourceWorkers": {
         "openExecutor": "0x2222222222222222222222222222222222222222",
         "openDVN": "0x3333333333333333333333333333333333333333"
@@ -51,20 +51,20 @@
         "openDVN": "0x6666666666666666666666666666666666666666"
       },
       "configDiff": {
-        "ref": "artifacts/configdiff-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/configdiff-eth-sepolia-to-hoodi.json"
       },
       "deploymentPreflight": {
         "ref": "artifacts/deployment-preflight-eth-sepolia.json"
       },
       "lzConfigBefore": {
-        "ref": "artifacts/lz-config-eth-sepolia-to-base-sepolia.before.json"
+        "ref": "artifacts/lz-config-eth-sepolia-to-hoodi.before.json"
       },
       "lzConfigAfter": {
-        "ref": "artifacts/lz-config-eth-sepolia-to-base-sepolia.after.json"
+        "ref": "artifacts/lz-config-eth-sepolia-to-hoodi.after.json"
       },
       "priceConfigCheck": {
-        "ref": "artifacts/price-config-eth-sepolia-to-base-sepolia.json",
-        "dstEid": 40245,
+        "ref": "artifacts/price-config-eth-sepolia-to-hoodi.json",
+        "dstEid": 40449,
         "checkedAt": "1800000000",
         "maxAgeSeconds": "1800",
         "expectedStaleAfter": "1800",
@@ -80,13 +80,13 @@
         }
       },
       "drainCheckBeforeSwitch": {
-        "ref": "artifacts/drain-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/drain-eth-sepolia-to-hoodi.json"
       },
       "canarySourceReceipt": {
-        "ref": "artifacts/canary-source-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/canary-source-eth-sepolia-to-hoodi.json"
       },
       "canaryDestinationReceipt": {
-        "ref": "artifacts/canary-destination-eth-sepolia-to-base-sepolia.json"
+        "ref": "artifacts/canary-destination-eth-sepolia-to-hoodi.json"
       },
       "canary": {
         "amountLD": "1000000000000000",
@@ -94,13 +94,13 @@
         "recipientAccount": "0x4444444444444444444444444444444444444444",
         "minRecipientBalanceLD": "1000000000000000",
         "sourceReceipt": {
-          "ref": "artifacts/canary-source-eth-sepolia-to-base-sepolia.json"
+          "ref": "artifacts/canary-source-eth-sepolia-to-hoodi.json"
         },
         "destinationReceipt": {
-          "ref": "artifacts/canary-destination-eth-sepolia-to-base-sepolia.json"
+          "ref": "artifacts/canary-destination-eth-sepolia-to-hoodi.json"
         },
         "recipientBalanceCheck": {
-          "ref": "artifacts/canary-recipient-balance-eth-sepolia-to-base-sepolia.json"
+          "ref": "artifacts/canary-recipient-balance-eth-sepolia-to-hoodi.json"
         }
       },
       "dvnJoin": {
@@ -108,22 +108,22 @@
         "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
         "optionalDVNsDisabled": true,
         "configCheck": {
-          "ref": "artifacts/dvn-join-config-eth-sepolia-to-base-sepolia.json"
+          "ref": "artifacts/dvn-join-config-eth-sepolia-to-hoodi.json"
         }
       },
       "dvnVerificationReceipt": {
-        "ref": "artifacts/dvn-verification-eth-sepolia-to-base-sepolia.json",
+        "ref": "artifacts/dvn-verification-eth-sepolia-to-hoodi.json",
         "expectedPayloadHash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "expectedSrcEid": 40161,
-        "expectedDstEid": 40245,
+        "expectedDstEid": 40449,
         "expectedNonce": "1",
         "expectedSender": "0x3333333333333333333333333333333333333333",
         "expectedReceiver": "0x4444444444444444444444444444444444444444"
       }
     },
     {
-      "label": "Base Sepolia to Ethereum Sepolia",
-      "srcEid": 40245,
+      "label": "Hoodi to Ethereum Sepolia",
+      "srcEid": 40449,
       "dstEid": 40161,
       "sourceWorkers": {
         "openExecutor": "0x5555555555555555555555555555555555555555",
@@ -133,19 +133,19 @@
         "openDVN": "0x3333333333333333333333333333333333333333"
       },
       "configDiff": {
-        "ref": "artifacts/configdiff-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/configdiff-hoodi-to-eth-sepolia.json"
       },
       "deploymentPreflight": {
-        "ref": "artifacts/deployment-preflight-base-sepolia.json"
+        "ref": "artifacts/deployment-preflight-hoodi.json"
       },
       "lzConfigBefore": {
-        "ref": "artifacts/lz-config-base-sepolia-to-eth-sepolia.before.json"
+        "ref": "artifacts/lz-config-hoodi-to-eth-sepolia.before.json"
       },
       "lzConfigAfter": {
-        "ref": "artifacts/lz-config-base-sepolia-to-eth-sepolia.after.json"
+        "ref": "artifacts/lz-config-hoodi-to-eth-sepolia.after.json"
       },
       "priceConfigCheck": {
-        "ref": "artifacts/price-config-base-sepolia-to-eth-sepolia.json",
+        "ref": "artifacts/price-config-hoodi-to-eth-sepolia.json",
         "dstEid": 40161,
         "checkedAt": "1800000000",
         "maxAgeSeconds": "1800",
@@ -162,13 +162,13 @@
         }
       },
       "drainCheckBeforeSwitch": {
-        "ref": "artifacts/drain-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/drain-hoodi-to-eth-sepolia.json"
       },
       "canarySourceReceipt": {
-        "ref": "artifacts/canary-source-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/canary-source-hoodi-to-eth-sepolia.json"
       },
       "canaryDestinationReceipt": {
-        "ref": "artifacts/canary-destination-base-sepolia-to-eth-sepolia.json"
+        "ref": "artifacts/canary-destination-hoodi-to-eth-sepolia.json"
       },
       "canary": {
         "amountLD": "1000000000000000",
@@ -176,13 +176,13 @@
         "recipientAccount": "0x4444444444444444444444444444444444444444",
         "minRecipientBalanceLD": "1000000000000000",
         "sourceReceipt": {
-          "ref": "artifacts/canary-source-base-sepolia-to-eth-sepolia.json"
+          "ref": "artifacts/canary-source-hoodi-to-eth-sepolia.json"
         },
         "destinationReceipt": {
-          "ref": "artifacts/canary-destination-base-sepolia-to-eth-sepolia.json"
+          "ref": "artifacts/canary-destination-hoodi-to-eth-sepolia.json"
         },
         "recipientBalanceCheck": {
-          "ref": "artifacts/canary-recipient-balance-base-sepolia-to-eth-sepolia.json"
+          "ref": "artifacts/canary-recipient-balance-hoodi-to-eth-sepolia.json"
         }
       },
       "dvnJoin": {
@@ -190,13 +190,13 @@
         "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
         "optionalDVNsDisabled": true,
         "configCheck": {
-          "ref": "artifacts/dvn-join-config-base-sepolia-to-eth-sepolia.json"
+          "ref": "artifacts/dvn-join-config-hoodi-to-eth-sepolia.json"
         }
       },
       "dvnVerificationReceipt": {
-        "ref": "artifacts/dvn-verification-base-sepolia-to-eth-sepolia.json",
+        "ref": "artifacts/dvn-verification-hoodi-to-eth-sepolia.json",
         "expectedPayloadHash": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "expectedSrcEid": 40245,
+        "expectedSrcEid": 40449,
         "expectedDstEid": 40161,
         "expectedNonce": "1",
         "expectedSender": "0x3333333333333333333333333333333333333333",

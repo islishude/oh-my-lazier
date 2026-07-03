@@ -24,9 +24,9 @@ func TestDiffUsesSemanticKeysForLists(t *testing.T) {
 	}
 	want := []string{
 		"services",
-		"pricing.chains[40245]",
-		"pathways[40161:40245:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888]",
-		"pathways[40245:40161:0x8888888888888888888888888888888888888888:0x7777777777777777777777777777777777777777]",
+		"pricing.chains[40449]",
+		"pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888]",
+		"pathways[40449:40161:0x8888888888888888888888888888888888888888:0x7777777777777777777777777777777777777777]",
 	}
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("paths = %#v, want %#v", paths, want)
@@ -47,7 +47,7 @@ func TestRenderTextIncludesChangedPath(t *testing.T) {
 
 	output := RenderText(Diff(before, after))
 
-	if !strings.Contains(output, "pathways[40161:40245:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888]\n") {
+	if !strings.Contains(output, "pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888]\n") {
 		t.Fatalf("output missing pathway path:\n%s", output)
 	}
 	if !strings.Contains(output, `"Mode":"shadow"`) || !strings.Contains(output, `"Mode":"active"`) {
@@ -85,7 +85,7 @@ func validConfig() config.Config {
 					},
 				},
 				{
-					EID:           40245,
+					EID:           40449,
 					BinanceSymbol: "ETHUSDT",
 					Uniswap: config.UniswapPricingConfig{
 						QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
@@ -112,10 +112,10 @@ func validConfig() config.Config {
 				},
 			},
 			{
-				EID:             40245,
-				Name:            "base-sepolia",
+				EID:             40449,
+				Name:            "hoodi",
 				Family:          config.ChainFamilyEVM,
-				ChainID:         84532,
+				ChainID:         560048,
 				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
@@ -127,7 +127,7 @@ func validConfig() config.Config {
 		Pathways: []config.PathwayConfig{
 			{
 				SrcEID:     40161,
-				DstEID:     40245,
+				DstEID:     40449,
 				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
@@ -144,7 +144,7 @@ func validConfig() config.Config {
 				MaxMessageSize: 10000,
 			},
 			{
-				SrcEID:     40245,
+				SrcEID:     40449,
 				DstEID:     40161,
 				SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),

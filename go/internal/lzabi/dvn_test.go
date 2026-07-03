@@ -10,7 +10,7 @@ import (
 
 func TestDecodeDVNJobAssigned(t *testing.T) {
 	jobID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	dstEID := uint32(40245)
+	dstEID := uint32(40449)
 	sender := common.HexToAddress("0x7777777777777777777777777777777777777777")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	data, err := openDVNABI.Events["DVNJobAssigned"].Inputs.NonIndexed().Pack(sendLib, uint64(12), big.NewInt(42))

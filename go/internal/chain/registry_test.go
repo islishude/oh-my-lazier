@@ -31,7 +31,7 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	}
 	pathway, err := registry.Pathway(
 		40161,
-		40245,
+		40449,
 		common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		common.HexToAddress("0x8888888888888888888888888888888888888888"),
 	)
@@ -62,7 +62,7 @@ func TestRegistryRejectsUnknownPathway(t *testing.T) {
 	}
 	_, err = registry.Pathway(
 		40161,
-		40245,
+		40449,
 		common.HexToAddress("0x9999999999999999999999999999999999999999"),
 		common.HexToAddress("0x8888888888888888888888888888888888888888"),
 	)
@@ -93,10 +93,10 @@ func testChains() []config.ChainConfig {
 			},
 		},
 		{
-			EID:             40245,
-			Name:            "base-sepolia",
+			EID:             40449,
+			Name:            "hoodi",
 			Family:          config.ChainFamilyEVM,
-			ChainID:         84532,
+			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
@@ -124,7 +124,7 @@ func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
 			SrcEID:     40161,
-			DstEID:     40245,
+			DstEID:     40449,
 			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),

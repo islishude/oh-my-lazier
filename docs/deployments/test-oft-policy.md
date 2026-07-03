@@ -1,6 +1,6 @@
 # TestOFT Deployment Policy
 
-This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia and Base Sepolia rehearsal.
+This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia and Hoodi rehearsal.
 
 ## Token Identity
 
@@ -12,7 +12,7 @@ This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia
 
 ## Ownership
 
-`OWNER` must be the testnet operations owner for all three contracts deployed by `contracts/scripts/deploy-workers.ts`:
+`OWNER` must be the testnet operations owner for all three contracts deployed by the `TestOFTWorkers` Hardhat Ignition module:
 
 - `TestOFT`
 - `OpenExecutor`
@@ -37,9 +37,9 @@ Use a single constructor mint on Ethereum Sepolia:
 | Chain            | `INITIAL_SUPPLY`            | `INITIAL_RECIPIENT`                         |
 | ---------------- | --------------------------- | ------------------------------------------- |
 | Ethereum Sepolia | `1000000000000000000000000` | testnet operations owner or canary treasury |
-| Base Sepolia     | `0`                         | testnet operations owner or canary treasury |
+| Hoodi             | `0`                         | testnet operations owner or canary treasury |
 
-The value above is `1,000,000 OMLTOFT` with 18 decimals. Base Sepolia starts with zero supply so destination balances are created only by LayerZero receive-side minting during canary transfers. Reverse-direction canaries must first use tokens minted on Base Sepolia by a successful Ethereum Sepolia -> Base Sepolia transfer.
+The value above is `1,000,000 OMLTOFT` with 18 decimals. Hoodi starts with zero supply so destination balances are created only by LayerZero receive-side minting during canary transfers. Reverse-direction canaries must first use tokens minted on Hoodi by a successful Ethereum Sepolia -> Hoodi transfer.
 
 ## Minting Policy
 

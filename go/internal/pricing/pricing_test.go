@@ -110,7 +110,7 @@ func TestGasIncreaseBpsOnlyCountsUpwardMoves(t *testing.T) {
 
 func TestBuildSetPriceConfigCalldata(t *testing.T) {
 	config := testPriceConfig()
-	calldata, err := BuildSetPriceConfigCalldata(40245, config)
+	calldata, err := BuildSetPriceConfigCalldata(40449, config)
 	if err != nil {
 		t.Fatalf("BuildSetPriceConfigCalldata() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestBuildSetPriceConfigTx(t *testing.T) {
 	request, err := BuildSetPriceConfigTx(
 		40161,
 		common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		40245,
+		40449,
 		TxPurposeSetExecutorPriceConfig,
 		"0x9999999999999999999999999999999999999999",
 		testPriceConfig(),

@@ -67,8 +67,8 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "directions[0].dvnJoin.configCheck.ref must be a non-empty string",
     "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40161",
     "directions contains unsupported phase-1 direction 40161->40161",
-    "directions missing reciprocal direction 40161->40245",
-    "directions missing phase-1 direction 40161->40245",
+    "directions missing reciprocal direction 40161->40449",
+    "directions missing phase-1 direction 40161->40449",
     "rollback.dryRun.ref must be a non-empty string",
     "rollback.restoredConfigCheck.ref must be a non-empty string",
     "rollback.canaryAfterRollback.ref must be a non-empty string",
@@ -112,7 +112,7 @@ test("validateMigrationEvidenceRecord rejects duplicate directions", () => {
 
   const errors = validateMigrationEvidenceRecord(record);
 
-  assert.deepEqual(errors, ["directions[2] duplicates direction 40161->40245"]);
+  assert.deepEqual(errors, ["directions[2] duplicates direction 40161->40449"]);
 });
 
 test("validateMigrationEvidenceRecord rejects missing reciprocal direction", () => {
@@ -122,8 +122,8 @@ test("validateMigrationEvidenceRecord rejects missing reciprocal direction", () 
   const errors = validateMigrationEvidenceRecord(record);
 
   assert.deepEqual(errors, [
-    "directions missing reciprocal direction 40245->40161",
-    "directions missing phase-1 direction 40245->40161",
+    "directions missing reciprocal direction 40449->40161",
+    "directions missing phase-1 direction 40449->40161",
   ]);
 });
 
@@ -131,7 +131,7 @@ test("validateMigrationEvidenceRecord rejects unsupported phase-1 directions", (
   const record = baseRecord();
   record.directions[1] = {
     ...record.directions[1],
-    srcEid: 40245,
+    srcEid: 40449,
     dstEid: 99999,
   };
 
@@ -140,10 +140,10 @@ test("validateMigrationEvidenceRecord rejects unsupported phase-1 directions", (
   assert.deepEqual(errors, [
     "directions[1].priceConfigCheck.dstEid must equal direction dstEid 99999",
     "directions[1].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 99999",
-    "directions missing reciprocal direction 40245->40161",
-    "directions contains unsupported phase-1 direction 40245->99999",
-    "directions missing reciprocal direction 99999->40245",
-    "directions missing phase-1 direction 40245->40161",
+    "directions missing reciprocal direction 40449->40161",
+    "directions contains unsupported phase-1 direction 40449->99999",
+    "directions missing reciprocal direction 99999->40449",
+    "directions missing phase-1 direction 40449->40161",
   ]);
 });
 
@@ -152,7 +152,7 @@ test("validateMigrationEvidenceRecord rejects weak DVN verification packet ident
   record.directions[0].dvnVerificationReceipt = {
     ...record.directions[0].dvnVerificationReceipt,
     expectedPayloadHash: "0xabc",
-    expectedSrcEid: 40245,
+    expectedSrcEid: 40449,
     expectedDstEid: 40161,
     expectedNonce: "0",
     expectedSender: "0x0000000000000000000000000000000000000000",
@@ -164,7 +164,7 @@ test("validateMigrationEvidenceRecord rejects weak DVN verification packet ident
   assert.deepEqual(errors, [
     "directions[0].dvnVerificationReceipt.expectedPayloadHash must be a bytes32 hex string",
     "directions[0].dvnVerificationReceipt.expectedSrcEid must equal direction srcEid 40161",
-    "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40245",
+    "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40449",
     "directions[0].dvnVerificationReceipt.expectedNonce must be a positive decimal integer string",
     "directions[0].dvnVerificationReceipt.expectedSender must not be the zero address",
     "directions[0].dvnVerificationReceipt.expectedReceiver must be an EVM address",
@@ -194,7 +194,7 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price config e
   const errors = validateMigrationEvidenceRecord(record);
 
   assert.deepEqual(errors, [
-    "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40245",
+    "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40449",
     "directions[0].priceConfigCheck.executor.dstGasPriceInSrcToken must be a positive decimal integer string",
     "directions[0].priceConfigCheck.executor.updatedAt age exceeds 60s",
     "directions[0].priceConfigCheck.executor.staleAfter must equal expectedStaleAfter 1800",
@@ -206,7 +206,7 @@ function baseRecord(): MigrationEvidenceRecord {
   return {
     ticket: "MIG-001",
     environment: "testnet",
-    scope: "Ethereum Sepolia <-> Base Sepolia executor and DVN join rehearsal",
+    scope: "Ethereum Sepolia <-> Hoodi executor and DVN join rehearsal",
     operatorContacts: ["ops@example.com"],
     ownerAccount: "0x1111111111111111111111111111111111111111",
     signerAccount: "0x2222222222222222222222222222222222222222",
@@ -221,27 +221,33 @@ function baseRecord(): MigrationEvidenceRecord {
     securityReview: evidence("docs/security/security-review.md"),
     directions: [
       {
-	        label: "Ethereum Sepolia to Base Sepolia",
-	        srcEid: 40161,
-	        dstEid: 40245,
-	        sourceWorkers: {
-	          openExecutor: "0x2222222222222222222222222222222222222222",
-	          openDVN: "0x3333333333333333333333333333333333333333",
-	        },
-	        destinationWorkers: {
-	          openDVN: "0x6666666666666666666666666666666666666666",
-	        },
-	        configDiff: evidence("artifacts/configdiff-sepolia-base.json"),
-        deploymentPreflight: evidence("artifacts/preflight-sepolia.json"),
+        label: "Ethereum Sepolia to Hoodi",
+        srcEid: 40161,
+        dstEid: 40449,
+        sourceWorkers: {
+          openExecutor: "0x2222222222222222222222222222222222222222",
+          openDVN: "0x3333333333333333333333333333333333333333",
+        },
+        destinationWorkers: {
+          openDVN: "0x6666666666666666666666666666666666666666",
+        },
+        configDiff: evidence("artifacts/configdiff-eth-sepolia-to-hoodi.json"),
+        deploymentPreflight: evidence(
+          "artifacts/deployment-preflight-eth-sepolia.json",
+        ),
         lzConfigBefore: evidence(
-          "artifacts/lz-config-sepolia-base.before.json",
+          "artifacts/lz-config-eth-sepolia-to-hoodi.before.json",
         ),
-        lzConfigAfter: evidence("artifacts/lz-config-sepolia-base.after.json"),
+        lzConfigAfter: evidence(
+          "artifacts/lz-config-eth-sepolia-to-hoodi.after.json",
+        ),
         priceConfigCheck: priceConfigEvidence(
-          "artifacts/price-config-sepolia-base.json",
-          40245,
+          "artifacts/price-config-eth-sepolia-to-hoodi.json",
+          40449,
         ),
-        drainCheckBeforeSwitch: evidence("artifacts/drain-sepolia-base.json"),
+        drainCheckBeforeSwitch: evidence(
+          "artifacts/drain-eth-sepolia-to-hoodi.json",
+        ),
         canarySourceReceipt: evidence("artifacts/canary-source.json"),
         canaryDestinationReceipt: evidence("artifacts/canary-destination.json"),
         canary: {
@@ -264,31 +270,37 @@ function baseRecord(): MigrationEvidenceRecord {
         dvnVerificationReceipt: dvnVerification(
           "artifacts/dvn-verification.json",
           40161,
-          40245,
+          40449,
         ),
       },
       {
-	        label: "Base Sepolia to Ethereum Sepolia",
-	        srcEid: 40245,
-	        dstEid: 40161,
-	        sourceWorkers: {
-	          openExecutor: "0x5555555555555555555555555555555555555555",
-	          openDVN: "0x6666666666666666666666666666666666666666",
-	        },
-	        destinationWorkers: {
-	          openDVN: "0x3333333333333333333333333333333333333333",
-	        },
-	        configDiff: evidence("artifacts/configdiff-base-sepolia.json"),
-        deploymentPreflight: evidence("artifacts/preflight-base-sepolia.json"),
-        lzConfigBefore: evidence(
-          "artifacts/lz-config-base-sepolia.before.json",
+        label: "Hoodi to Ethereum Sepolia",
+        srcEid: 40449,
+        dstEid: 40161,
+        sourceWorkers: {
+          openExecutor: "0x5555555555555555555555555555555555555555",
+          openDVN: "0x6666666666666666666666666666666666666666",
+        },
+        destinationWorkers: {
+          openDVN: "0x3333333333333333333333333333333333333333",
+        },
+        configDiff: evidence("artifacts/configdiff-hoodi-to-eth-sepolia.json"),
+        deploymentPreflight: evidence(
+          "artifacts/deployment-preflight-hoodi.json",
         ),
-        lzConfigAfter: evidence("artifacts/lz-config-base-sepolia.after.json"),
+        lzConfigBefore: evidence(
+          "artifacts/lz-config-hoodi-to-eth-sepolia.before.json",
+        ),
+        lzConfigAfter: evidence(
+          "artifacts/lz-config-hoodi-to-eth-sepolia.after.json",
+        ),
         priceConfigCheck: priceConfigEvidence(
-          "artifacts/price-config-base-sepolia.json",
+          "artifacts/price-config-hoodi-to-eth-sepolia.json",
           40161,
         ),
-        drainCheckBeforeSwitch: evidence("artifacts/drain-base-sepolia.json"),
+        drainCheckBeforeSwitch: evidence(
+          "artifacts/drain-hoodi-to-eth-sepolia.json",
+        ),
         canarySourceReceipt: evidence("artifacts/canary-source-reverse.json"),
         canaryDestinationReceipt: evidence(
           "artifacts/canary-destination-reverse.json",
@@ -314,7 +326,7 @@ function baseRecord(): MigrationEvidenceRecord {
         },
         dvnVerificationReceipt: dvnVerification(
           "artifacts/dvn-verification-reverse.json",
-          40245,
+          40449,
           40161,
         ),
       },

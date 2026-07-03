@@ -21,7 +21,7 @@ func TestDecodePacketV1(t *testing.T) {
 	if packet.Nonce != 7 {
 		t.Fatalf("Nonce = %d, want 7", packet.Nonce)
 	}
-	if packet.SrcEID != 40161 || packet.DstEID != 40245 {
+	if packet.SrcEID != 40161 || packet.DstEID != 40449 {
 		t.Fatalf("pathway = %d -> %d", packet.SrcEID, packet.DstEID)
 	}
 	if packet.Sender != common.HexToAddress("0x7777777777777777777777777777777777777777") {
@@ -59,7 +59,7 @@ func testEncodedPacket() []byte {
 	encoded = binary.BigEndian.AppendUint64(encoded, 7)
 	encoded = binary.BigEndian.AppendUint32(encoded, 40161)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x7777777777777777777777777777777777777777"))...)
-	encoded = binary.BigEndian.AppendUint32(encoded, 40245)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40449)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x8888888888888888888888888888888888888888"))...)
 	encoded = append(encoded, common.HexToHash("0x9999999999999999999999999999999999999999999999999999999999999999").Bytes()...)
 	encoded = append(encoded, []byte("hello")...)

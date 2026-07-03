@@ -38,7 +38,7 @@ pricing:
         fee: 500
         amount_in_wei: "1000000000000000000"
         token_out_decimals: 6
-    - eid: 40245
+    - eid: 40449
       binance_symbol: ETHUSDT
       coinmarketcap_symbol: ETH
       coingecko_id: ethereum
@@ -70,10 +70,10 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
-  - eid: 40245
-    name: base-sepolia
+  - eid: 40449
+    name: hoodi
     family: evm
-    chain_id: 84532
+    chain_id: 560048
     endpoint_address: "0x4444444444444444444444444444444444444444"
     confirmations: 12
     start_block_number: 0
@@ -91,7 +91,7 @@ chains:
         max_priority_fee_per_gas_wei: "1000000000"
 pathways:
   - src_eid: 40161
-    dst_eid: 40245
+    dst_eid: 40449
     src_oapp: "0x7777777777777777777777777777777777777777"
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
@@ -107,7 +107,7 @@ pathways:
     max_message_size: 10000
     min_lz_receive_gas: 100000
     max_lz_receive_gas: 300000
-  - src_eid: 40245
+  - src_eid: 40449
     dst_eid: 40161
     src_oapp: "0x8888888888888888888888888888888888888888"
     dst_oapp: "0x7777777777777777777777777777777777777777"

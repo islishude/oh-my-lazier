@@ -1,0 +1,8 @@
+{
+  "TestOFTWorkers": {
+    "tokenName": "Oh My Lazier Test OFT",
+    "tokenSymbol": "OMLTOFT",
+    "endpoint": "0x3aCAAf60502791D199a5a5F0B173D78229eBFe32",
+    "initialSupply": "0n"
+  }
+}

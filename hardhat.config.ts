@@ -1,7 +1,7 @@
 import hardhatToolboxViemPlugin from "@nomicfoundation/hardhat-toolbox-viem";
-import type { HardhatUserConfig } from "hardhat/config";
+import { configVariable, defineConfig } from "hardhat/config";
 
-const config: HardhatUserConfig = {
+const config = defineConfig({
   plugins: [hardhatToolboxViemPlugin],
   solidity: {
     version: "0.8.35",
@@ -19,6 +19,22 @@ const config: HardhatUserConfig = {
     cache: "contracts/cache",
     artifacts: "contracts/artifacts",
   },
-};
+  networks: {
+    sepolia: {
+      type: "http",
+      chainType: "l1",
+      chainId: 11155111,
+      url: configVariable("SEPOLIA_RPC_URL"),
+      accounts: [configVariable("PRIVATE_KEY")],
+    },
+    hoodi: {
+      type: "http",
+      chainType: "l1",
+      chainId: 560048,
+      url: configVariable("HOODI_RPC_URL"),
+      accounts: [configVariable("PRIVATE_KEY")],
+    },
+  },
+});
 
 export default config;

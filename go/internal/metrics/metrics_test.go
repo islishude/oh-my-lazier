@@ -70,7 +70,7 @@ func TestHandlerReadyUsesRoleAwareReadiness(t *testing.T) {
 	snapshot := cleanSnapshotWith(func(snapshot *db.StatsSnapshot) {
 		snapshot.IndexerCursors = []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
-			{ChainEID: 40245, Stream: "executor_destination", LastBlock: 100},
+			{ChainEID: 40449, Stream: "executor_destination", LastBlock: 100},
 		}
 		snapshot.DVNJobs = []db.StatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
 	})
@@ -88,13 +88,13 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 	handler := Handler(fakeProvider{snapshot: db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true, Paused: true},
+			{EID: 40449, Name: "hoodi", Enabled: true, Paused: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true, Paused: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true, Paused: true},
 		},
 		Packets: []db.PacketStat{
-			{SrcEID: 40161, DstEID: 40245, Status: "MANUAL_REVIEW", Count: 2},
+			{SrcEID: 40161, DstEID: 40449, Status: "MANUAL_REVIEW", Count: 2},
 		},
 		ExecutorJobs: []db.StatusStat{
 			{Status: "LZ_RECEIVE_FAILED", Count: 1},
@@ -103,7 +103,7 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 			{Status: "QUORUM_CONFLICT", Count: 1},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: "failed", RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
+			{ChainEID: 40449, Status: "failed", RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "source", LastBlock: 123456},
@@ -120,12 +120,12 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 	for _, want := range []string{
 		`laz_worker_info 1`,
 		`laz_metrics_db_snapshot_available 1`,
-		`laz_chain_paused{eid="40245",name="base-sepolia"} 1`,
-		`laz_pathway_paused{src_eid="40161",dst_eid="40245"} 1`,
-		`laz_packets_total{src_eid="40161",dst_eid="40245",status="MANUAL_REVIEW"} 2`,
+		`laz_chain_paused{eid="40449",name="hoodi"} 1`,
+		`laz_pathway_paused{src_eid="40161",dst_eid="40449"} 1`,
+		`laz_packets_total{src_eid="40161",dst_eid="40449",status="MANUAL_REVIEW"} 2`,
 		`laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} 1`,
 		`laz_dvn_jobs_total{status="QUORUM_CONFLICT"} 1`,
-		`laz_tx_outbox_total{chain_eid="40245",status="failed",retry_state="exhausted"} 3`,
+		`laz_tx_outbox_total{chain_eid="40449",status="failed",retry_state="exhausted"} 3`,
 		`laz_indexer_cursor_last_block{chain_eid="40161",stream="source"} 123456`,
 	} {
 		if !strings.Contains(body, want) {
@@ -194,16 +194,16 @@ func cleanSnapshotWith(mutator func(*db.StatsSnapshot)) db.StatsSnapshot {
 	snapshot := db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
-			{ChainEID: 40245, Stream: "executor_destination", LastBlock: 100},
+			{ChainEID: 40449, Stream: "executor_destination", LastBlock: 100},
 			{ChainEID: 40161, Stream: "dvn_source", LastBlock: 100},
-			{ChainEID: 40245, Stream: "dvn_destination", LastBlock: 100},
+			{ChainEID: 40449, Stream: "dvn_destination", LastBlock: 100},
 		},
 	}
 	if mutator != nil {

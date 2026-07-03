@@ -18,7 +18,7 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	store := &fakeStore{}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
 	}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -56,7 +56,7 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	store := &fakeStore{}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
 	}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -77,7 +77,7 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas},
-		40245: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas},
 	}, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -171,10 +171,10 @@ func testRegistry(t *testing.T) *chain.Registry {
 			},
 		},
 		{
-			EID:             40245,
-			Name:            "base-sepolia",
+			EID:             40449,
+			Name:            "hoodi",
 			Family:          config.ChainFamilyEVM,
-			ChainID:         84532,
+			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
 			RPCURLs:         []string{"http://localhost:8546"},
@@ -185,7 +185,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 	}, []config.PathwayConfig{
 		{
 			SrcEID:     40161,
-			DstEID:     40245,
+			DstEID:     40449,
 			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
@@ -202,7 +202,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 			MaxMessageSize: 10000,
 		},
 		{
-			SrcEID:     40245,
+			SrcEID:     40449,
 			DstEID:     40161,
 			SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 			DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),

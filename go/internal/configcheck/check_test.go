@@ -35,13 +35,13 @@ func TestCheckWithClientsReportsMismatches(t *testing.T) {
 			delete(clients[40161].code, addr("0x9999999999999999999999999999999999999999"))
 		},
 		"peer": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].peers[addr("0x7777777777777777777777777777777777777777")][40245] = common.Hash{}
+			clients[40161].peers[addr("0x7777777777777777777777777777777777777777")][40449] = common.Hash{}
 		},
 		"sendLibrary": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].sendLibraries[pathKey(addr("0x7777777777777777777777777777777777777777"), 40245)] = addr("0x1212121212121212121212121212121212121212")
+			clients[40161].sendLibraries[pathKey(addr("0x7777777777777777777777777777777777777777"), 40449)] = addr("0x1212121212121212121212121212121212121212")
 		},
 		"requiredDVNs": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].ulnConfigs[configKey(addr("0x7777777777777777777777777777777777777777"), addr("0x9999999999999999999999999999999999999999"), 40245)] = ulnConfig{
+			clients[40161].ulnConfigs[configKey(addr("0x7777777777777777777777777777777777777777"), addr("0x9999999999999999999999999999999999999999"), 40449)] = ulnConfig{
 				Confirmations:        12,
 				RequiredDVNCount:     1,
 				OptionalDVNCount:     nilDVNCount,
@@ -50,9 +50,9 @@ func TestCheckWithClientsReportsMismatches(t *testing.T) {
 			}
 		},
 		"workerGas": func(clients map[uint32]*fakeChainClient) {
-			cfg := clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40245, addr("0x7777777777777777777777777777777777777777"))]
+			cfg := clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40449, addr("0x7777777777777777777777777777777777777777"))]
 			cfg.MaxLzReceiveGas = big.NewInt(1)
-			clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40245, addr("0x7777777777777777777777777777777777777777"))] = cfg
+			clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40449, addr("0x7777777777777777777777777777777777777777"))] = cfg
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -77,7 +77,7 @@ func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
 		err: &rpcquorum.ChainIDMismatchError{
 			ChainName: "ethereum-sepolia",
 			Expected:  big.NewInt(11155111),
-			Details:   []string{"provider http://wrong returned 84532"},
+			Details:   []string{"provider http://wrong returned 560048"},
 		},
 	}
 
@@ -94,7 +94,7 @@ func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
 	if report.Issues[0].Path != "chains[40161].rpc_urls" {
 		t.Fatalf("issue path = %q", report.Issues[0].Path)
 	}
-	if !strings.Contains(report.Issues[0].Message, "provider http://wrong returned 84532") {
+	if !strings.Contains(report.Issues[0].Message, "provider http://wrong returned 560048") {
 		t.Fatalf("issue message = %q", report.Issues[0].Message)
 	}
 }
@@ -153,7 +153,7 @@ func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Re
 	}
 	clients := map[uint32]*fakeChainClient{
 		40161: newFakeChainClient(11155111, 40161),
-		40245: newFakeChainClient(84532, 40245),
+		40449: newFakeChainClient(560048, 40449),
 	}
 	for _, configured := range registry.All() {
 		client := clients[configured.EID]
@@ -365,7 +365,7 @@ func externalDVN(eid uint32) common.Address {
 	switch eid {
 	case 40161:
 		return addr("0xdddddddddddddddddddddddddddddddddddddddd")
-	case 40245:
+	case 40449:
 		return addr("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	default:
 		return addr("0xffffffffffffffffffffffffffffffffffffffff")
@@ -389,10 +389,10 @@ func testConfig() config.Config {
 				},
 			},
 			{
-				EID:             40245,
-				Name:            "base-sepolia",
+				EID:             40449,
+				Name:            "hoodi",
 				Family:          config.ChainFamilyEVM,
-				ChainID:         84532,
+				ChainID:         560048,
 				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:   12,
 				RPCURLs:         []string{"http://localhost:8546"},
@@ -405,7 +405,7 @@ func testConfig() config.Config {
 		Pathways: []config.PathwayConfig{
 			{
 				SrcEID:     40161,
-				DstEID:     40245,
+				DstEID:     40449,
 				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
 				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
@@ -424,7 +424,7 @@ func testConfig() config.Config {
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:     40245,
+				SrcEID:     40449,
 				DstEID:     40161,
 				SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
 				DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),

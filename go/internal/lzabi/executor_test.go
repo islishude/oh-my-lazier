@@ -9,7 +9,7 @@ import (
 )
 
 func TestDecodeExecutorJobAssigned(t *testing.T) {
-	dstEID := uint32(40245)
+	dstEID := uint32(40449)
 	sender := common.HexToAddress("0x7777777777777777777777777777777777777777")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	data, err := openExecutorABI.Events["ExecutorJobAssigned"].Inputs.NonIndexed().Pack(

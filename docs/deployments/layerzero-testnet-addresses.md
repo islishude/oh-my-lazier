@@ -6,12 +6,12 @@ Latest refresh command:
 npm run check:lz-addresses
 ```
 
-Latest committed result: passed for Ethereum Sepolia `40161` and Base Sepolia `40245`.
+Latest committed result: passed for Ethereum Sepolia `40161` and Hoodi `40449`.
 
 Sources:
 
 - LayerZero chain page: `https://docs.layerzero.network/v2/deployments/chains/sepolia`
-- LayerZero chain page: `https://docs.layerzero.network/v2/deployments/chains/base-sepolia`
+- LayerZero chain page: `https://docs.layerzero.network/v2/deployments/chains/hoodi-testnet`
 - Protocol contract data: `https://docs.layerzero.network/public/data/deploymentsV2.json`
 - DVN data: `https://docs.layerzero.network/public/data/dvnDeployments.json`
 
@@ -41,40 +41,40 @@ Run this immediately before any funded testnet migration or mainnet proposal.
 
 Use `LayerZero Labs DVN`, not the lzRead DVN, for the phase-1 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration.
 
-## Base Sepolia
+## Hoodi
 
 | Field                                 | Value                                        |
 | ------------------------------------- | -------------------------------------------- |
-| Chain key                             | `base-sepolia`                               |
-| Native chain ID                       | `84532`                                      |
-| LayerZero EID                         | `40245`                                      |
-| EndpointV2                            | `0x6EDCE65403992e310A62460808c4b910D972f10f` |
-| SendUln302                            | `0xC1868e054425D378095A003EcbA3823a5D0135C9` |
-| ReceiveUln302                         | `0x12523de19dc41c91F7d2093E0CFbB76b17012C8d` |
-| LayerZero Executor                    | `0x8A3D588D9f6AC041476b094f97FF94ec30169d3D` |
-| LayerZero `lzExecutor` metadata entry | `0xD8C74c92a59c2b5b6390eD54f13193C59249e561` |
-| Dead DVN                              | `0x78551ADC2553EF1858a558F5300F7018Aad2FA7e` |
-| LayerZero Labs DVN                    | `0xe1a12515f9ab2764b887bf60b923ca494ebbb2d6` |
-| LayerZero Labs lzRead DVN             | `0xbf6ff58f60606edb2f190769b951d825bcb214e2` |
+| Chain key                             | `hoodi-testnet`                              |
+| Native chain ID                       | `560048`                                     |
+| LayerZero EID                         | `40449`                                      |
+| EndpointV2                            | `0x3aCAAf60502791D199a5a5F0B173D78229eBFe32` |
+| SendUln302                            | `0x45841dd1ca50265Da7614fC43A361e526c0e6160` |
+| ReceiveUln302                         | `0xd682ECF100f6F4284138AA925348633B0611Ae21` |
+| LayerZero Executor                    | `0x701f3927871EfcEa1235dB722f9E608aE120d243` |
+| LayerZero `lzExecutor` metadata entry | `0x4Cf1B3Fa61465c2c907f82fC488B43223BA0CF93` |
+| Dead DVN                              | `0x88B27057A9e00c5F05DDa29241027afF63f9e6e0` |
+| LayerZero Labs DVN                    | `0xa78a78a13074ed93ad447a26ec57121f29e8fec2` |
+| LayerZero Labs lzRead DVN             | not currently published in `dvnDeployments.json` |
 
 Use `LayerZero Labs DVN`, not the lzRead DVN, for the phase-1 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration.
 
 ## Direction Inputs
 
-For Ethereum Sepolia -> Base Sepolia:
+For Ethereum Sepolia -> Hoodi:
 
-- `REMOTE_EID=40245`
+- `REMOTE_EID=40449`
 - `ENDPOINT=0x6EDCE65403992e310A62460808c4b910D972f10f`
 - `SEND_ULN=0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE`
 - `RECEIVE_ULN=0xdAf00F5eE2158dD58E0d3857851c432E34A3A851`
 - `LAYERZERO_LABS_DVN=0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193`
 
-For Base Sepolia -> Ethereum Sepolia:
+For Hoodi -> Ethereum Sepolia:
 
 - `REMOTE_EID=40161`
-- `ENDPOINT=0x6EDCE65403992e310A62460808c4b910D972f10f`
-- `SEND_ULN=0xC1868e054425D378095A003EcbA3823a5D0135C9`
-- `RECEIVE_ULN=0x12523de19dc41c91F7d2093E0CFbB76b17012C8d`
-- `LAYERZERO_LABS_DVN=0xe1a12515f9ab2764b887bf60b923ca494ebbb2d6`
+- `ENDPOINT=0x3aCAAf60502791D199a5a5F0B173D78229eBFe32`
+- `SEND_ULN=0x45841dd1ca50265Da7614fC43A361e526c0e6160`
+- `RECEIVE_ULN=0xd682ECF100f6F4284138AA925348633B0611Ae21`
+- `LAYERZERO_LABS_DVN=0xa78a78a13074ed93ad447a26ec57121f29e8fec2`
 
 Re-check the source URLs immediately before any funded testnet migration or mainnet proposal; LayerZero metadata is external operational state.

@@ -1,6 +1,6 @@
 # Contract Scripts
 
-These scripts use the compiled Hardhat artifacts and `viem`. They require `npm run compile` before execution and read all network-specific values from environment variables.
+These scripts use the compiled Hardhat artifacts and `viem`. They require `npm run compile` before execution and read all network-specific values from environment variables. Deployment uses the Hardhat Ignition `TestOFTWorkers` module; the scripts in this directory handle post-deploy configuration, inspection, evidence checks, canaries, and rollback.
 
 Before any funded testnet migration, confirm the committed LayerZero address list still matches current official metadata:
 
@@ -46,24 +46,29 @@ MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json \
 npm run check:migration-evidence
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Base Sepolia `40245`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Hoodi `40449`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
-Deploy the local pathway contracts:
+Deploy the local pathway contracts with Hardhat Ignition:
 
 ```bash
-RPC_URL=... \
-CHAIN_ID=11155111 \
+SEPOLIA_RPC_URL=... \
 PRIVATE_KEY=... \
-ENDPOINT=... \
-OWNER=... \
-TOKEN_NAME="Oh My Lazier Test OFT" \
-TOKEN_SYMBOL=OMLTOFT \
-INITIAL_RECIPIENT=<owner-or-canary-treasury> \
-INITIAL_SUPPLY=1000000000000000000000000 \
-npm run deploy:workers
+npm run deploy:workers -- \
+  --network sepolia \
+  --parameters ignition/parameters/sepolia.json \
+  --deployment-id sepolia-test-oft-workers
 ```
 
-Use `docs/deployments/test-oft-policy.md` for the approved TestOFT name, symbol, owner, constructor mint, and minting policy. For Base Sepolia deployment, keep the same `TOKEN_NAME` and `TOKEN_SYMBOL` but set `INITIAL_SUPPLY=0`.
+```bash
+HOODI_RPC_URL=... \
+PRIVATE_KEY=... \
+npm run deploy:workers -- \
+  --network hoodi \
+  --parameters ignition/parameters/hoodi.json \
+  --deployment-id hoodi-test-oft-workers
+```
+
+Use `docs/deployments/test-oft-policy.md` for the approved TestOFT name, symbol, owner, constructor mint, and minting policy. The committed parameter files default `OWNER` and `INITIAL_RECIPIENT` to the deploying account; include explicit `owner` and `initialRecipient` module parameters when the approved operations owner or canary treasury differs from the deployer.
 
 After deployment, check that the deployed contracts are still controlled by the expected operations owner and, when used, that the canary treasury has enough native token and TestOFT balance for the planned transfer:
 
@@ -82,7 +87,7 @@ EXPECTED_TOTAL_SUPPLY=1000000000000000000000000 \
 npm run check:deployment-preflight
 ```
 
-`CANARY_TREASURY`, `MIN_CANARY_NATIVE_BALANCE`, `MIN_CANARY_TOKEN_BALANCE`, and `EXPECTED_TOTAL_SUPPLY` are optional. Use `EXPECTED_TOTAL_SUPPLY=0` on Base Sepolia when checking the initial zero-supply deployment before any inbound canary mint.
+`CANARY_TREASURY`, `MIN_CANARY_NATIVE_BALANCE`, `MIN_CANARY_TOKEN_BALANCE`, and `EXPECTED_TOTAL_SUPPLY` are optional. Use `EXPECTED_TOTAL_SUPPLY=0` on Hoodi when checking the initial zero-supply deployment before any inbound canary mint.
 
 Inspect or update one TestOFT pathway pause/rate-limit state during migration:
 
@@ -90,7 +95,7 @@ Inspect or update one TestOFT pathway pause/rate-limit state during migration:
 RPC_URL=... \
 CHAIN_ID=11155111 \
 TEST_OFT=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 OFT_PATHWAY_ACTION=inspect \
 npm run oft:pathway
 ```
@@ -102,7 +107,7 @@ RPC_URL=... \
 CHAIN_ID=11155111 \
 PRIVATE_KEY=... \
 TEST_OFT=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 OFT_PATHWAY_ACTION=drain \
 npm run oft:pathway
 ```
@@ -116,7 +121,7 @@ PRIVATE_KEY=... \
 TEST_OFT=... \
 OPEN_EXECUTOR=... \
 OPEN_DVN=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 REMOTE_OFT=... \
 SEND_LIB=... \
 MAX_MESSAGE_SIZE=10000 \
@@ -138,7 +143,7 @@ RPC_URL=... \
 CHAIN_ID=11155111 \
 ENDPOINT=... \
 OAPP=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 SEND_ULN=... \
 RECEIVE_ULN=... \
 npm run inspect:lz-config
@@ -151,10 +156,10 @@ RPC_URL=... \
 CHAIN_ID=11155111 \
 ENDPOINT=... \
 OAPP=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 SEND_ULN=... \
 RECEIVE_ULN=... \
-npm run inspect:lz-config > sepolia-to-base-lz-config.before.json
+npm run inspect:lz-config > sepolia-to-hoodi-lz-config.before.json
 ```
 
 Switch the source send library executor config to OpenExecutor:
@@ -165,7 +170,7 @@ CHAIN_ID=11155111 \
 PRIVATE_KEY=... \
 ENDPOINT=... \
 OAPP=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 SEND_ULN=... \
 OPEN_EXECUTOR=... \
 EXECUTOR_MAX_MESSAGE_SIZE=10000 \
@@ -180,7 +185,7 @@ CHAIN_ID=11155111 \
 PRIVATE_KEY=... \
 ENDPOINT=... \
 OAPP=... \
-REMOTE_EID=40245 \
+REMOTE_EID=40449 \
 SEND_ULN=... \
 RECEIVE_ULN=... \
 OPEN_DVN=... \
@@ -195,7 +200,7 @@ Restore a previously inspected LayerZero config snapshot:
 RPC_URL=... \
 CHAIN_ID=11155111 \
 PRIVATE_KEY=... \
-LZ_CONFIG_SNAPSHOT=sepolia-to-base-lz-config.before.json \
+LZ_CONFIG_SNAPSHOT=sepolia-to-hoodi-lz-config.before.json \
 npm run configure:lz-rollback
 ```
 
@@ -208,7 +213,7 @@ RPC_URL=... \
 CHAIN_ID=11155111 \
 PRIVATE_KEY=... \
 TEST_OFT=... \
-DST_EID=40245 \
+DST_EID=40449 \
 RECIPIENT=... \
 AMOUNT_LD=1000000000000000 \
 MIN_AMOUNT_LD=1000000000000000 \
@@ -236,7 +241,7 @@ After the destination delivery transaction is known, run the same command agains
 
 ```bash
 RPC_URL=... \
-CHAIN_ID=84532 \
+CHAIN_ID=560048 \
 ENDPOINT=... \
 DESTINATION_TX_HASH=... \
 DESTINATION_ENDPOINT=... \
@@ -254,7 +259,7 @@ After DVN join, check a destination-chain verification receipt for both required
 
 ```bash
 RPC_URL=... \
-CHAIN_ID=84532 \
+CHAIN_ID=560048 \
 TX_HASH=... \
 RECEIVE_ULN=... \
 OPEN_DVN=... \

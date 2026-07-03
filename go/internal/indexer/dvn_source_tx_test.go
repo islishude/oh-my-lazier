@@ -167,7 +167,7 @@ func testDVNJobAssignedLog(t *testing.T, txHash common.Hash, dvn, sendLib common
 		Topics: []common.Hash{
 			lzabi.DVNJobAssignedTopic(),
 			common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
-			common.BigToHash(new(big.Int).SetUint64(40245)),
+			common.BigToHash(new(big.Int).SetUint64(40449)),
 			common.BytesToHash(common.HexToAddress("0x7777777777777777777777777777777777777777").Bytes()),
 		},
 		Data:        data,

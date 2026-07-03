@@ -47,7 +47,7 @@ test("assertDVNVerificationReceipt verifies both required DVNs and Endpoint Pack
     expectedPayloadHash: payloadHash,
     expectedPacket: {
       srcEid: 40161,
-      dstEid: 40245,
+      dstEid: 40449,
       nonce: 1n,
       sender: getAddress("0x5555555555555555555555555555555555555555"),
       receiver: getAddress("0x7777777777777777777777777777777777777777"),
@@ -121,7 +121,7 @@ test("assertDVNVerificationReceipt rejects mismatched expected packet header", (
         minConfirmations: 12n,
         receiveUlnAbi,
         expectedPayloadHash: payloadHash,
-        expectedPacket: { srcEid: 40245 },
+        expectedPacket: { srcEid: 40449 },
       }),
     /missing ReceiveUln302 PayloadVerified/,
   );
@@ -154,7 +154,7 @@ function payloadVerifiedLog(input: {
         packetHeader({
           nonce: 1n,
           srcEid: 40161,
-          dstEid: 40245,
+          dstEid: 40449,
           sender: getAddress("0x5555555555555555555555555555555555555555"),
           receiver: getAddress("0x7777777777777777777777777777777777777777"),
         }),

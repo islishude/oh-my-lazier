@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
+import { EndpointId } from "@layerzerolabs/lz-definitions";
 import { jsonStringify, requiredEnv } from "./lib.js";
 
-const phase1DirectionKeys = new Set(["40161->40245", "40245->40161"]);
+const sepoliaEid = EndpointId.SEPOLIA_V2_TESTNET;
+const hoodiEid = EndpointId.HOODI_V2_TESTNET;
+const phase1DirectionKeys = new Set([
+  `${sepoliaEid}->${hoodiEid}`,
+  `${hoodiEid}->${sepoliaEid}`,
+]);
 
 export type EvidenceRef = {
   ref: string;
@@ -157,7 +163,11 @@ function validateDirections(
     if (direction.srcEid === direction.dstEid) {
       errors.push(`${prefix}.srcEid and ${prefix}.dstEid must differ`);
     }
-    validateSourceWorkers(errors, direction.sourceWorkers, `${prefix}.sourceWorkers`);
+    validateSourceWorkers(
+      errors,
+      direction.sourceWorkers,
+      `${prefix}.sourceWorkers`,
+    );
     validateDestinationWorkers(
       errors,
       direction.destinationWorkers,

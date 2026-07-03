@@ -19,7 +19,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 
 ## Non-Negotiable Phase 1 Scope
 
-- Ethereum Sepolia <-> Base Sepolia rehearsal must complete before mainnet.
+- Ethereum Sepolia <-> Hoodi rehearsal must complete before mainnet.
 - No `composeMsg`.
 - No `lzCompose`.
 - No native drop.

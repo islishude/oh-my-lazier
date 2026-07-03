@@ -274,7 +274,7 @@ func testDestinationPacketRecord() db.PacketRecord {
 	return db.PacketRecord{
 		GUID:           common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		SrcEID:         40161,
-		DstEID:         40245,
+		DstEID:         40449,
 		Nonce:          big.NewInt(7),
 		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),

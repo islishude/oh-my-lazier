@@ -111,7 +111,7 @@ func testEncodedPacketWithNonceAndGUID(nonce uint64, guid common.Hash) []byte {
 	encoded = binary.BigEndian.AppendUint64(encoded, nonce)
 	encoded = binary.BigEndian.AppendUint32(encoded, 40161)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x7777777777777777777777777777777777777777"))...)
-	encoded = binary.BigEndian.AppendUint32(encoded, 40245)
+	encoded = binary.BigEndian.AppendUint32(encoded, 40449)
 	encoded = append(encoded, addressToBytes32(common.HexToAddress("0x8888888888888888888888888888888888888888"))...)
 	encoded = append(encoded, guid.Bytes()...)
 	encoded = append(encoded, []byte("hello")...)
@@ -146,7 +146,7 @@ func testExecutorJobAssignedLogWithOptions(t *testing.T, txHash common.Hash, exe
 		Address: executor,
 		Topics: []common.Hash{
 			lzabi.ExecutorJobAssignedTopic(),
-			common.BigToHash(new(big.Int).SetUint64(40245)),
+			common.BigToHash(new(big.Int).SetUint64(40449)),
 			common.BytesToHash(common.HexToAddress("0x7777777777777777777777777777777777777777").Bytes()),
 			common.BytesToHash(sendLib.Bytes()),
 		},

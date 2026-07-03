@@ -11,19 +11,19 @@ func TestEvaluateAcceptsCleanActiveState(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: db.TxStatusConfirmed, Count: 2},
+			{ChainEID: 40449, Status: db.TxStatusConfirmed, Count: 2},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: executorDestStream, LastBlock: 100},
 			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -39,19 +39,19 @@ func TestEvaluateRejectsPausedActiveStateAndFailedOutbox(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true, Paused: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true, Paused: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true, Paused: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
+			{ChainEID: 40449, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: executorDestStream, LastBlock: 100},
 			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -73,20 +73,20 @@ func TestEvaluateIgnoresRetryingFailedOutbox(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
-			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateRetrying, Count: 2},
-			{ChainEID: 40245, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateSuperseded, Count: 1},
+			{ChainEID: 40449, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateRetrying, Count: 2},
+			{ChainEID: 40449, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateSuperseded, Count: 1},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: executorDestStream, LastBlock: 100},
 			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -99,15 +99,15 @@ func TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
-			{SrcEID: 40245, DstEID: 40161, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
+			{SrcEID: 40449, DstEID: 40161, Enabled: true},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 0},
+			{ChainEID: 40449, Stream: executorDestStream, LastBlock: 0},
 		},
 	})
 
@@ -130,13 +130,13 @@ func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
 		Packets: []db.PacketStat{
-			{SrcEID: 40161, DstEID: 40245, Status: string(packets.ExecutorManualReview), Count: 2},
+			{SrcEID: 40161, DstEID: 40449, Status: string(packets.ExecutorManualReview), Count: 2},
 		},
 		ExecutorJobs: []db.StatusStat{
 			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
@@ -149,9 +149,9 @@ func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: executorDestStream, LastBlock: 100},
 			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -180,10 +180,10 @@ func TestEvaluateWithServicesRequiresOnlyEnabledRoleState(t *testing.T) {
 	snapshot := db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
-			{EID: 40245, Name: "base-sepolia", Enabled: true},
+			{EID: 40449, Name: "hoodi", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
 		ExecutorJobs: []db.StatusStat{
 			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
@@ -193,7 +193,7 @@ func TestEvaluateWithServicesRequiresOnlyEnabledRoleState(t *testing.T) {
 		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
-			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+			{ChainEID: 40449, Stream: dvnDestStream, LastBlock: 100},
 		},
 	}
 
@@ -216,10 +216,10 @@ func TestEvaluateIgnoresDisabledState(t *testing.T) {
 	report := Evaluate(db.StatsSnapshot{
 		Chains: []db.ChainStat{
 			{EID: 40161, Name: "disabled-source", Enabled: false, Paused: true},
-			{EID: 40245, Name: "active-destination", Enabled: true},
+			{EID: 40449, Name: "active-destination", Enabled: true},
 		},
 		Pathways: []db.PathwayStat{
-			{SrcEID: 40161, DstEID: 40245, Enabled: true, Paused: true},
+			{SrcEID: 40161, DstEID: 40449, Enabled: true, Paused: true},
 		},
 		TxOutbox: []db.TxOutboxStat{
 			{ChainEID: 40161, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 3},

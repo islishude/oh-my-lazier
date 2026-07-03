@@ -163,7 +163,7 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
 	}
 	indexer := NewWithClient(
-		testIndexerChain(packet.DstEID, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
@@ -196,7 +196,7 @@ func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 		destinationLogs: []gethtypes.Log{testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))},
 	}
 	indexer := NewWithClient(
-		testIndexerChain(packet.DstEID, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
@@ -379,7 +379,7 @@ func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 37}
-	configuredChain := testIndexerChain(40245, "base-sepolia", common.HexToAddress("0x5555555555555555555555555555555555555555"))
+	configuredChain := testIndexerChain(40449, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555"))
 	configuredChain.IndexerQueryBlockRange = 10
 	indexer := NewWithClient(
 		configuredChain,
@@ -406,8 +406,8 @@ func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.
 	if !slices.Equal(got, want) {
 		t.Fatalf("destination query ranges = %v, want %v", got, want)
 	}
-	if store.cursors[cursorKey(40245, executorDestStream)] != 25 {
-		t.Fatalf("destination cursor = %d, want 25", store.cursors[cursorKey(40245, executorDestStream)])
+	if store.cursors[cursorKey(40449, executorDestStream)] != 25 {
+		t.Fatalf("destination cursor = %d, want 25", store.cursors[cursorKey(40449, executorDestStream)])
 	}
 }
 
@@ -1000,7 +1000,7 @@ func testIndexerChain(eid uint32, name string, executor common.Address) chain.Ch
 func testIndexerPathway() chain.Pathway {
 	return chain.Pathway{
 		SrcEID:     40161,
-		DstEID:     40245,
+		DstEID:     40449,
 		SrcOApp:    common.HexToAddress("0x7777777777777777777777777777777777777777"),
 		DstOApp:    common.HexToAddress("0x8888888888888888888888888888888888888888"),
 		SendLib:    common.HexToAddress("0x9999999999999999999999999999999999999999"),
