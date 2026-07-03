@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"maps"
 	"math/big"
+	"reflect"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -30,6 +32,8 @@ const loopInterval = 5 * time.Second
 const (
 	// TxPurposeVerify identifies OpenDVN.submitVerification outbox requests.
 	TxPurposeVerify = "dvn_verify"
+
+	nilDVNCount = uint8(255)
 )
 
 var (
@@ -184,6 +188,9 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 			w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
 			return true, nil
 		}
+		if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
+			return false, err
+		}
 		headReader := w.head(item.Packet.SrcEID)
 		if headReader == nil {
 			return false, fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID)
@@ -244,7 +251,15 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 		}
 		return false, err
 	}
-	report, err := verifySourceReceipt(item.Packet, receipt)
+	endpoint := common.Address{}
+	if w.registry != nil {
+		srcChain, err := w.registry.Get(item.Packet.SrcEID)
+		if err != nil {
+			return false, err
+		}
+		endpoint = srcChain.EndpointAddress
+	}
+	report, err := verifySourceReceiptForEndpoint(item.Packet, receipt, endpoint)
 	if err != nil {
 		return true, w.markQuorumConflict(ctx, item.Packet, err)
 	}
@@ -337,11 +352,51 @@ func (w *Worker) verificationAlreadyComplete(ctx context.Context, packet db.Pack
 	if payloadHash == packet.PayloadHash {
 		return true, nil
 	}
+	if err := validateDestinationVerificationConfig(ctx, caller, dstChain.EndpointAddress, packet, pathway, confirmations); err != nil {
+		return false, err
+	}
 	submitted, observedConfirmations, err := callHashLookup(ctx, caller, pathway.ReceiveLib, crypto.Keccak256Hash(packet.PacketHeader), packet.PayloadHash, pathway.DestinationWorkers.OpenDVN)
 	if err != nil {
 		return false, err
 	}
 	return submitted && observedConfirmations >= confirmations, nil
+}
+
+func (w *Worker) validateActiveDestinationConfig(ctx context.Context, packet db.PacketRecord, confirmations uint64) error {
+	if w.registry == nil {
+		return nil
+	}
+	pathway, err := w.registry.Pathway(packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver)
+	if err != nil {
+		return err
+	}
+	if pathway.DVNMode != config.DVNModeActive {
+		return nil
+	}
+	dstChain, err := w.registry.Get(packet.DstEID)
+	if err != nil {
+		return err
+	}
+	caller := w.caller(packet.DstEID)
+	if caller == nil {
+		return fmt.Errorf("missing destination caller for eid %d", packet.DstEID)
+	}
+	return validateDestinationVerificationConfig(ctx, caller, dstChain.EndpointAddress, packet, pathway, confirmations)
+}
+
+func validateDestinationVerificationConfig(ctx context.Context, caller ContractCaller, endpoint common.Address, packet db.PacketRecord, pathway chain.Pathway, confirmations uint64) error {
+	receiveLib, err := callReceiveLibrary(ctx, caller, endpoint, packet.Receiver, packet.SrcEID)
+	if err != nil {
+		return err
+	}
+	if receiveLib != pathway.ReceiveLib {
+		return fmt.Errorf("destination receive library %s does not match configured %s", receiveLib, pathway.ReceiveLib)
+	}
+	config, err := callReceiveUlnConfig(ctx, caller, pathway.ReceiveLib, packet.Receiver, packet.SrcEID)
+	if err != nil {
+		return err
+	}
+	return validateReceiveUlnConfig(config, confirmations, pathway.DestinationWorkers.OpenDVN)
 }
 
 func callInboundPayloadHash(ctx context.Context, caller ContractCaller, endpoint common.Address, packet db.PacketRecord) (common.Hash, error) {
@@ -374,6 +429,117 @@ func callInboundPayloadHash(ctx context.Context, caller ContractCaller, endpoint
 		return common.Hash{}, fmt.Errorf("inboundPayloadHash returned %T, want bytes32", values[0])
 	}
 	return common.BytesToHash(value[:]), nil
+}
+
+func callReceiveLibrary(ctx context.Context, caller ContractCaller, endpoint, receiver common.Address, srcEID uint32) (common.Address, error) {
+	if endpoint == (common.Address{}) {
+		return common.Address{}, errors.New("endpoint address is required")
+	}
+	if receiver == (common.Address{}) {
+		return common.Address{}, errors.New("receiver address is required")
+	}
+	data, err := endpointViewABI.Pack("getReceiveLibrary", receiver, srcEID)
+	if err != nil {
+		return common.Address{}, err
+	}
+	result, err := caller.CallContract(ctx, ethereum.CallMsg{To: &endpoint, Data: data}, nil)
+	if err != nil {
+		return common.Address{}, err
+	}
+	values, err := endpointViewABI.Unpack("getReceiveLibrary", result)
+	if err != nil {
+		return common.Address{}, err
+	}
+	if len(values) != 2 {
+		return common.Address{}, fmt.Errorf("getReceiveLibrary returned %d values, want 2", len(values))
+	}
+	receiveLib, ok := values[0].(common.Address)
+	if !ok {
+		return common.Address{}, fmt.Errorf("getReceiveLibrary lib returned %T, want address", values[0])
+	}
+	return receiveLib, nil
+}
+
+type receiveUlnConfig struct {
+	Confirmations        uint64           `abi:"confirmations"`
+	RequiredDVNCount     uint8            `abi:"requiredDVNCount"`
+	OptionalDVNCount     uint8            `abi:"optionalDVNCount"`
+	OptionalDVNThreshold uint8            `abi:"optionalDVNThreshold"`
+	RequiredDVNs         []common.Address `abi:"requiredDVNs"`
+	OptionalDVNs         []common.Address `abi:"optionalDVNs"`
+}
+
+func callReceiveUlnConfig(ctx context.Context, caller ContractCaller, receiveLib, receiver common.Address, srcEID uint32) (receiveUlnConfig, error) {
+	if receiveLib == (common.Address{}) {
+		return receiveUlnConfig{}, errors.New("receive lib address is required")
+	}
+	if receiver == (common.Address{}) {
+		return receiveUlnConfig{}, errors.New("receiver address is required")
+	}
+	data, err := receiveUlnViewABI.Pack("getUlnConfig", receiver, srcEID)
+	if err != nil {
+		return receiveUlnConfig{}, err
+	}
+	result, err := caller.CallContract(ctx, ethereum.CallMsg{To: &receiveLib, Data: data}, nil)
+	if err != nil {
+		return receiveUlnConfig{}, err
+	}
+	values, err := receiveUlnViewABI.Unpack("getUlnConfig", result)
+	if err != nil {
+		return receiveUlnConfig{}, err
+	}
+	if len(values) != 1 {
+		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig returned %d values, want 1", len(values))
+	}
+	return receiveUlnConfigFromABI(values[0])
+}
+
+func receiveUlnConfigFromABI(value any) (receiveUlnConfig, error) {
+	reflected := reflect.ValueOf(value)
+	if reflected.Kind() != reflect.Struct {
+		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig returned %T, want tuple struct", value)
+	}
+	requiredDVNs, ok := reflected.FieldByName("RequiredDVNs").Interface().([]common.Address)
+	if !ok {
+		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig requiredDVNs has type %T", reflected.FieldByName("RequiredDVNs").Interface())
+	}
+	optionalDVNs, ok := reflected.FieldByName("OptionalDVNs").Interface().([]common.Address)
+	if !ok {
+		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig optionalDVNs has type %T", reflected.FieldByName("OptionalDVNs").Interface())
+	}
+	return receiveUlnConfig{
+		Confirmations:        reflected.FieldByName("Confirmations").Uint(),
+		RequiredDVNCount:     uint8(reflected.FieldByName("RequiredDVNCount").Uint()),
+		OptionalDVNCount:     uint8(reflected.FieldByName("OptionalDVNCount").Uint()),
+		OptionalDVNThreshold: uint8(reflected.FieldByName("OptionalDVNThreshold").Uint()),
+		RequiredDVNs:         append([]common.Address(nil), requiredDVNs...),
+		OptionalDVNs:         append([]common.Address(nil), optionalDVNs...),
+	}, nil
+}
+
+func validateReceiveUlnConfig(config receiveUlnConfig, confirmations uint64, openDVN common.Address) error {
+	if config.Confirmations != confirmations {
+		return fmt.Errorf("receive uln confirmations %d does not match assigned confirmations %d", config.Confirmations, confirmations)
+	}
+	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
+		return fmt.Errorf("receive uln requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
+	}
+	if config.OptionalDVNCount != 0 && config.OptionalDVNCount != nilDVNCount {
+		return fmt.Errorf("receive uln optionalDVNCount %d is not disabled", config.OptionalDVNCount)
+	}
+	if config.OptionalDVNThreshold != 0 {
+		return fmt.Errorf("receive uln optionalDVNThreshold %d is not zero", config.OptionalDVNThreshold)
+	}
+	if len(config.OptionalDVNs) != 0 {
+		return fmt.Errorf("receive uln optional DVNs are configured: %v", config.OptionalDVNs)
+	}
+	if len(config.RequiredDVNs) < 2 {
+		return fmt.Errorf("receive uln required DVNs must include OpenDVN plus at least one independent DVN, got %v", config.RequiredDVNs)
+	}
+	if !slices.Contains(config.RequiredDVNs, openDVN) {
+		return fmt.Errorf("receive uln required DVNs %v do not include configured OpenDVN %s", config.RequiredDVNs, openDVN)
+	}
+	return nil
 }
 
 func callHashLookup(ctx context.Context, caller ContractCaller, receiveLib common.Address, headerHash, payloadHash common.Hash, dvn common.Address) (bool, uint64, error) {
@@ -497,7 +663,7 @@ type QuorumReport struct {
 	PayloadHash string `json:"payload_hash"`
 }
 
-func verifySourceReceipt(packet db.PacketRecord, receipt *gethtypes.Receipt) (QuorumReport, error) {
+func verifySourceReceiptForEndpoint(packet db.PacketRecord, receipt *gethtypes.Receipt, endpoint common.Address) (QuorumReport, error) {
 	if receipt == nil {
 		return QuorumReport{}, errors.New("source receipt is missing")
 	}
@@ -510,6 +676,9 @@ func verifySourceReceipt(packet db.PacketRecord, receipt *gethtypes.Receipt) (Qu
 	for _, log := range receipt.Logs {
 		if log == nil || log.Index != packet.SrcLogIndex {
 			continue
+		}
+		if endpoint != (common.Address{}) && log.Address != endpoint {
+			return QuorumReport{}, fmt.Errorf("source receipt PacketSent address %s does not match endpoint %s", log.Address, endpoint)
 		}
 		record, err := indexer.PacketRecordFromSentLog(*log)
 		if err != nil {

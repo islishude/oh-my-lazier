@@ -442,7 +442,7 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 }
 
 func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {
-	records, err := DVNSourceTxRecordsFromLogs(txLogs)
+	records, err := DVNSourceTxRecordsFromLogsForEndpoint(txLogs, i.chain.EndpointAddress)
 	if err != nil {
 		return 0, err
 	}

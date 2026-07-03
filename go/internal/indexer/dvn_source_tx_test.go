@@ -114,6 +114,20 @@ func TestDVNSourceTxRecordsFromLogsRejectsSendLibraryMismatch(t *testing.T) {
 	}
 }
 
+func TestDVNSourceTxRecordsFromLogsForEndpointRejectsWrongPacketSentAddress(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	logs := testDVNSourceLogs(t, dvn, sendLib, big.NewInt(42))
+
+	_, err := DVNSourceTxRecordsFromLogsForEndpoint(logs, common.HexToAddress("0x1212121212121212121212121212121212121212"))
+	if err == nil {
+		t.Fatal("DVNSourceTxRecordsFromLogsForEndpoint() error = nil, want endpoint mismatch")
+	}
+	if !strings.Contains(err.Error(), "PacketSent address") {
+		t.Fatalf("DVNSourceTxRecordsFromLogsForEndpoint() error = %v, want PacketSent address mismatch", err)
+	}
+}
+
 func testDVNSourceLogs(t *testing.T, dvn, sendLib common.Address, fee *big.Int) []gethtypes.Log {
 	t.Helper()
 	txHash := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")

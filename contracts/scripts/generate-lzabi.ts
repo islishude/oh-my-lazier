@@ -42,6 +42,12 @@ const outputs: AbiOutput[] = [
         artifact:
           "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
         type: "function",
+        name: "getReceiveLibrary",
+      },
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+        type: "function",
         name: "isValidReceiveLibrary",
       },
       {

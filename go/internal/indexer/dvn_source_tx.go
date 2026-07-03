@@ -21,6 +21,11 @@ type DVNSourceTxRecords struct {
 
 // DVNSourceTxRecordsFromLogs decodes and cross-checks source-chain DVN logs from one transaction.
 func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]DVNSourceTxRecords, error) {
+	return DVNSourceTxRecordsFromLogsForEndpoint(logs, common.Address{})
+}
+
+// DVNSourceTxRecordsFromLogsForEndpoint decodes source-chain DVN logs and requires PacketSent from endpoint when set.
+func DVNSourceTxRecordsFromLogsForEndpoint(logs []gethtypes.Log, endpoint common.Address) ([]DVNSourceTxRecords, error) {
 	ordered, err := orderedSourceTxLogs(logs)
 	if err != nil {
 		return nil, err
@@ -44,6 +49,9 @@ func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]DVNSourceTxRecords, err
 			}
 			feeEvents = append(feeEvents, dvnFeeEvent{Log: log, Event: event})
 		case logHasTopic(log, lzabi.PacketSentTopic()):
+			if endpoint != (common.Address{}) && log.Address != endpoint {
+				return nil, fmt.Errorf("source tx PacketSent address %s does not match endpoint %s", log.Address, endpoint)
+			}
 			packet, err := PacketRecordFromSentLog(log)
 			if err != nil {
 				return nil, err

@@ -1,5 +1,18 @@
 [
   {
+    "name": "getReceiveLibrary",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "_receiver", "type": "address" },
+      { "name": "_eid", "type": "uint32" }
+    ],
+    "outputs": [
+      { "name": "lib", "type": "address" },
+      { "name": "isDefault", "type": "bool" }
+    ]
+  },
+  {
     "name": "isValidReceiveLibrary",
     "type": "function",
     "stateMutability": "view",

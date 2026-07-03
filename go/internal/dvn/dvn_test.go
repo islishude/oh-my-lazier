@@ -76,6 +76,44 @@ func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
 	}
 }
 
+func TestProcessConfirmationsOnceActiveChecksDestinationConfigBeforeHead(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNAssigned),
+			},
+		}},
+	}
+	ulnConfig := defaultReceiveUlnConfig()
+	ulnConfig.Confirmations = 15
+	worker := NewWithClientsSettingsAndCallers(
+		store,
+		testRegistry(t, packet, config.DVNModeActive),
+		nil,
+		nil,
+		nil,
+		map[uint32]ContractCaller{
+			packet.DstEID: fakeDVNReconcileCaller{ulnConfig: ulnConfig},
+		},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessConfirmationsOnce(context.Background())
+	if err == nil {
+		t.Fatal("ProcessConfirmationsOnce() error = nil, want destination config mismatch")
+	}
+	if !strings.Contains(err.Error(), "receive uln confirmations") {
+		t.Fatalf("ProcessConfirmationsOnce() error = %v, want receive uln confirmations mismatch", err)
+	}
+	if processed {
+		t.Fatal("processed = true, want false")
+	}
+}
+
 func TestProcessConfirmationsOncePausesChainOnHeadConflict(t *testing.T) {
 	packet := testDVNPacket()
 	store := &fakeStore{
@@ -276,6 +314,98 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	}
 }
 
+func TestProcessReadyToVerifyOnceActiveRejectsReceiveLibraryDrift(t *testing.T) {
+	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReadyToVerify),
+				QuorumResult:          report,
+			},
+		}},
+	}
+	worker := NewWithClientsSettingsAndCallers(
+		store,
+		testRegistry(t, packet, config.DVNModeActive),
+		map[uint32]Settings{
+			packet.DstEID: {
+				SignerID: "0x8888888888888888888888888888888888888888",
+			},
+		},
+		nil,
+		nil,
+		map[uint32]ContractCaller{
+			packet.DstEID: fakeDVNReconcileCaller{receiveLib: common.HexToAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")},
+		},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+	if err == nil {
+		t.Fatal("ProcessReadyToVerifyOnce() error = nil, want receive library mismatch")
+	}
+	if !strings.Contains(err.Error(), "destination receive library") {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v, want receive library mismatch", err)
+	}
+	if processed {
+		t.Fatal("processed = true, want false")
+	}
+	if store.verifyRequest.Purpose != "" {
+		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
+	}
+}
+
+func TestProcessReadyToVerifyOnceActiveRejectsReceiveUlnConfigDrift(t *testing.T) {
+	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReadyToVerify),
+				QuorumResult:          report,
+			},
+		}},
+	}
+	ulnConfig := defaultReceiveUlnConfig()
+	ulnConfig.Confirmations = 15
+	worker := NewWithClientsSettingsAndCallers(
+		store,
+		testRegistry(t, packet, config.DVNModeActive),
+		map[uint32]Settings{
+			packet.DstEID: {
+				SignerID: "0x8888888888888888888888888888888888888888",
+			},
+		},
+		nil,
+		nil,
+		map[uint32]ContractCaller{
+			packet.DstEID: fakeDVNReconcileCaller{ulnConfig: ulnConfig},
+		},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+	if err == nil {
+		t.Fatal("ProcessReadyToVerifyOnce() error = nil, want receive uln config mismatch")
+	}
+	if !strings.Contains(err.Error(), "receive uln confirmations") {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v, want receive uln confirmations mismatch", err)
+	}
+	if processed {
+		t.Fatal("processed = true, want false")
+	}
+	if store.verifyRequest.Purpose != "" {
+		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
+	}
+}
+
 func TestProcessReadyToVerifyOnceActiveMarksVerifiedWhenAlreadyCompleteOnChain(t *testing.T) {
 	packet := testDVNPacket()
 	report := []byte(`{"status":"ready"}`)
@@ -466,6 +596,20 @@ func TestProcessQuorumOnceMarksReorgWhenReceiptDisappears(t *testing.T) {
 	}
 	if len(store.quorumResult) == 0 {
 		t.Fatal("quorum result is empty")
+	}
+}
+
+func TestVerifySourceReceiptForEndpointRejectsWrongPacketSentAddress(t *testing.T) {
+	packet := testDVNPacket()
+	receipt := testSourceReceipt(t, packet)
+	receipt.Logs[0].Address = common.HexToAddress("0x1212121212121212121212121212121212121212")
+
+	_, err := verifySourceReceiptForEndpoint(packet, receipt, common.HexToAddress("0x1111111111111111111111111111111111111111"))
+	if err == nil {
+		t.Fatal("verifySourceReceiptForEndpoint() error = nil, want endpoint mismatch")
+	}
+	if !strings.Contains(err.Error(), "PacketSent address") {
+		t.Fatalf("verifySourceReceiptForEndpoint() error = %v, want PacketSent address mismatch", err)
 	}
 }
 
@@ -682,6 +826,8 @@ func (r fakeReceiptNotFoundReader) TransactionReceipt(context.Context, common.Ha
 
 type fakeDVNReconcileCaller struct {
 	endpointPayloadHash     common.Hash
+	receiveLib              common.Address
+	ulnConfig               receiveUlnConfig
 	hashLookupSubmitted     bool
 	hashLookupConfirmations uint64
 }
@@ -694,10 +840,35 @@ func (c fakeDVNReconcileCaller) CallContract(_ context.Context, call ethereum.Ca
 	switch method.Name {
 	case "inboundPayloadHash":
 		return method.Outputs.Pack(c.endpointPayloadHash)
+	case "getReceiveLibrary":
+		receiveLib := c.receiveLib
+		if receiveLib == (common.Address{}) {
+			receiveLib = common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+		}
+		return method.Outputs.Pack(receiveLib, false)
+	case "getUlnConfig":
+		config := c.ulnConfig
+		if config.Confirmations == 0 && len(config.RequiredDVNs) == 0 {
+			config = defaultReceiveUlnConfig()
+		}
+		return method.Outputs.Pack(config)
 	case "hashLookup":
 		return method.Outputs.Pack(c.hashLookupSubmitted, c.hashLookupConfirmations)
 	default:
 		return nil, fmt.Errorf("unexpected method %s", method.Name)
+	}
+}
+
+func defaultReceiveUlnConfig() receiveUlnConfig {
+	return receiveUlnConfig{
+		Confirmations:        12,
+		RequiredDVNCount:     2,
+		OptionalDVNCount:     nilDVNCount,
+		OptionalDVNThreshold: 0,
+		RequiredDVNs: []common.Address{
+			common.HexToAddress("0x6666666666666666666666666666666666666666"),
+			common.HexToAddress("0xdddddddddddddddddddddddddddddddddddddddd"),
+		},
 	}
 }
 
