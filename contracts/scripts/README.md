@@ -16,9 +16,9 @@ Run the local dual-Anvil E2E from the repository root:
 make e2e-local
 ```
 
-The target writes all generated files under `tmp/e2e`, starts isolated
-Postgres, Anvil, and worker services through `docker-compose.e2e.yml`, runs
-`npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
+The target writes all generated files under `tmp/e2e`, starts disposable
+Postgres, isolated Anvil, and worker services through `docker-compose.e2e.yml`,
+runs `npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
 ReceiveUln302, TestOFT, OpenExecutor, a primary OpenDVN, and a secondary
 OpenDVN on both chains, generates a worker keystore, runs `configcheck`, and
 then runs `npm run e2e:run-local`. The local runner sends OFT canaries in both

@@ -1,7 +1,6 @@
 SHELL := /bin/sh
 
 INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compose.integration.yml
-INTEGRATION_TMP_DIR = tmp/integration
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 E2E_COMPOSE = docker compose -p oh-my-lazier-e2e -f docker-compose.e2e.yml
@@ -56,19 +55,15 @@ test-kms-rustack:
 	go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
 
 integration-up:
-	mkdir -p $(INTEGRATION_TMP_DIR)/postgres
 	$(INTEGRATION_COMPOSE) up -d --wait
 
 integration-down:
 	-$(INTEGRATION_COMPOSE) down -v --remove-orphans
-	rm -rf $(INTEGRATION_TMP_DIR)
 
 test-integration:
-	mkdir -p $(INTEGRATION_TMP_DIR)/postgres
 	@set -e; \
 	cleanup() { \
 		$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
-		rm -rf $(INTEGRATION_TMP_DIR); \
 	}; \
 	trap cleanup EXIT INT TERM; \
 	$(INTEGRATION_COMPOSE) up -d --wait; \
@@ -76,20 +71,18 @@ test-integration:
 	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
 
 e2e-up:
-	mkdir -p $(E2E_TMP_DIR)/postgres
 	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b
 
 e2e-down:
 	-$(E2E_COMPOSE) --profile worker down -v --remove-orphans
-	rm -rf $(E2E_TMP_DIR)/postgres
 
 e2e-local:
 	rm -rf $(E2E_TMP_DIR)
-	mkdir -p $(E2E_TMP_DIR)/postgres
+	mkdir -p $(E2E_TMP_DIR)
 	@set -e; \
 	cleanup() { \
 		$(E2E_COMPOSE) --profile worker down -v --remove-orphans; \
-		rm -rf $(E2E_TMP_DIR)/postgres; \
+		rm -rf $(E2E_TMP_DIR); \
 	}; \
 	trap cleanup EXIT INT TERM; \
 	npm run compile; \
@@ -97,7 +90,7 @@ e2e-local:
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" npm run e2e:deploy-local; \
 	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
-	$(E2E_COMPOSE) --profile worker up --build -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
+	$(E2E_COMPOSE) --profile worker up -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local
 
 security-check:

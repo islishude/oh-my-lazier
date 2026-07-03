@@ -7,8 +7,6 @@ services:
       POSTGRES_PASSWORD: laz_worker
     ports:
       - "55432:5432"
-    volumes:
-      - ./tmp/integration/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U laz_worker -d laz_worker"]
       interval: 2s

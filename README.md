@@ -87,16 +87,17 @@ make e2e-local
 ```
 
 The E2E target uses `docker-compose.e2e.yml` with isolated ports and
-`tmp/e2e` artifacts, starts Postgres, two Anvil chains, and the worker, deploys
-local EndpointV2, SendUln302, ReceiveUln302, TestOFT, OpenExecutor, primary
-OpenDVN, and secondary OpenDVN contracts, writes a generated worker config and
-keystore, skips the price bot, and uses fresh hard-coded price configs. The
-canary runner sends OFT messages in both directions and requires source
+`tmp/e2e` artifacts, starts disposable Postgres, two Anvil chains, and the
+worker, deploys local EndpointV2, SendUln302, ReceiveUln302, TestOFT,
+OpenExecutor, primary OpenDVN, and secondary OpenDVN contracts, writes a
+generated worker config and keystore, skips the price bot, and uses fresh
+hard-coded price configs. The canary runner sends OFT messages in both
+directions and requires source
 `PacketSent`/worker fee events, destination `PayloadVerified` events from both
 OpenDVNs, `PacketDelivered`, and the recipient TestOFT balance increase.
 Set `ANVIL_IMAGE` to use a prebuilt local Foundry image, or set
 `E2E_WORKER_UP_FLAGS=--no-build` after tagging a compatible
-`oh-my-lazier-worker:e2e` image, when registry access is unavailable.
+`oh-my-lazier-worker:e2e` image to reuse it instead of rebuilding the worker.
 
 The example worker config is [config/example.yaml](config/example.yaml). `DATABASE_URL` can override the configured database URL at runtime.
 
