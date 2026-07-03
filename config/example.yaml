@@ -1,6 +1,11 @@
 database_url: postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable
 metrics:
   listen_address: :9090
+services:
+  executor:
+    enabled: true
+  dvn:
+    enabled: true
 signers:
   - id: "0x9999999999999999999999999999999999999999"
     type: keystore

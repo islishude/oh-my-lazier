@@ -22,6 +22,7 @@ func Diff(before, after config.Config) []Change {
 	var changes []Change
 	compare(&changes, "database_url", before.DatabaseURL, after.DatabaseURL)
 	compare(&changes, "metrics", before.Metrics, after.Metrics)
+	compare(&changes, "services", services(before), services(after))
 	compare(&changes, "pricing", pricingGlobal(before.Pricing), pricingGlobal(after.Pricing))
 	diffMaps(&changes, "pricing.chains", pricingChains(before.Pricing.Chains), pricingChains(after.Pricing.Chains))
 	diffMaps(&changes, "chains", chains(before.Chains), chains(after.Chains))
@@ -120,6 +121,18 @@ type pricingConfigGlobal struct {
 	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
 	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
 	CoinGeckoBaseURL        string `json:"coingecko_base_url"`
+}
+
+type servicesConfig struct {
+	ExecutorEnabled bool `json:"executor_enabled"`
+	DVNEnabled      bool `json:"dvn_enabled"`
+}
+
+func services(cfg config.Config) servicesConfig {
+	return servicesConfig{
+		ExecutorEnabled: cfg.ExecutorEnabled(),
+		DVNEnabled:      cfg.DVNEnabled(),
+	}
 }
 
 func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {

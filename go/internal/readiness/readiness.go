@@ -10,7 +10,15 @@ import (
 const (
 	executorSourceStream = "executor_source"
 	executorDestStream   = "executor_destination"
+	dvnSourceStream      = "dvn_source"
+	dvnDestStream        = "dvn_destination"
 )
+
+// Services selects which worker role state should be evaluated for this process.
+type Services struct {
+	ExecutorEnabled bool
+	DVNEnabled      bool
+}
 
 // Issue is one failed pre-migration readiness check.
 type Issue struct {
@@ -27,6 +35,11 @@ type Report struct {
 
 // Evaluate checks worker durable state against the mainnet readiness runbook gates.
 func Evaluate(snapshot db.StatsSnapshot) Report {
+	return EvaluateWithServices(snapshot, Services{ExecutorEnabled: true, DVNEnabled: true})
+}
+
+// EvaluateWithServices checks worker durable state for the roles enabled in this process.
+func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 	var issues []Issue
 	activeChains := make(map[uint32]struct{})
 	requiredCursors := make(map[uint32]map[string]struct{})
@@ -52,8 +65,14 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 		if _, ok := activeChains[pathway.DstEID]; !ok {
 			continue
 		}
-		requireCursor(requiredCursors, pathway.SrcEID, executorSourceStream)
-		requireCursor(requiredCursors, pathway.DstEID, executorDestStream)
+		if services.ExecutorEnabled {
+			requireCursor(requiredCursors, pathway.SrcEID, executorSourceStream)
+			requireCursor(requiredCursors, pathway.DstEID, executorDestStream)
+		}
+		if services.DVNEnabled {
+			requireCursor(requiredCursors, pathway.SrcEID, dvnSourceStream)
+			requireCursor(requiredCursors, pathway.DstEID, dvnDestStream)
+		}
 		if pathway.Paused {
 			issues = append(issues, Issue{
 				Code:    "pathway_paused",
@@ -91,43 +110,47 @@ func Evaluate(snapshot db.StatsSnapshot) Report {
 			Message: fmt.Sprintf("pathway %d -> %d has %d packets requiring manual review", packet.SrcEID, packet.DstEID, packet.Count),
 		})
 	}
-	for _, job := range snapshot.ExecutorJobs {
-		if job.Count == 0 {
-			continue
-		}
-		switch job.Status {
-		case string(packets.ExecutorLzReceiveFailed):
-			issues = append(issues, Issue{
-				Code:    "executor_lz_receive_failed",
-				Message: fmt.Sprintf("executor has %d failed lzReceive jobs", job.Count),
-			})
-		case string(packets.ExecutorManualReview):
-			issues = append(issues, Issue{
-				Code:    "executor_manual_review",
-				Message: fmt.Sprintf("executor has %d jobs requiring manual review", job.Count),
-			})
+	if services.ExecutorEnabled {
+		for _, job := range snapshot.ExecutorJobs {
+			if job.Count == 0 {
+				continue
+			}
+			switch job.Status {
+			case string(packets.ExecutorLzReceiveFailed):
+				issues = append(issues, Issue{
+					Code:    "executor_lz_receive_failed",
+					Message: fmt.Sprintf("executor has %d failed lzReceive jobs", job.Count),
+				})
+			case string(packets.ExecutorManualReview):
+				issues = append(issues, Issue{
+					Code:    "executor_manual_review",
+					Message: fmt.Sprintf("executor has %d jobs requiring manual review", job.Count),
+				})
+			}
 		}
 	}
-	for _, job := range snapshot.DVNJobs {
-		if job.Count == 0 {
-			continue
-		}
-		switch job.Status {
-		case string(packets.DVNQuorumConflict):
-			issues = append(issues, Issue{
-				Code:    "dvn_quorum_conflict",
-				Message: fmt.Sprintf("dvn has %d quorum conflict jobs", job.Count),
-			})
-		case string(packets.DVNReorgDetected):
-			issues = append(issues, Issue{
-				Code:    "dvn_reorg_detected",
-				Message: fmt.Sprintf("dvn has %d jobs waiting for reorg rollback", job.Count),
-			})
-		case string(packets.DVNManualReview):
-			issues = append(issues, Issue{
-				Code:    "dvn_manual_review",
-				Message: fmt.Sprintf("dvn has %d jobs requiring manual review", job.Count),
-			})
+	if services.DVNEnabled {
+		for _, job := range snapshot.DVNJobs {
+			if job.Count == 0 {
+				continue
+			}
+			switch job.Status {
+			case string(packets.DVNQuorumConflict):
+				issues = append(issues, Issue{
+					Code:    "dvn_quorum_conflict",
+					Message: fmt.Sprintf("dvn has %d quorum conflict jobs", job.Count),
+				})
+			case string(packets.DVNReorgDetected):
+				issues = append(issues, Issue{
+					Code:    "dvn_reorg_detected",
+					Message: fmt.Sprintf("dvn has %d jobs waiting for reorg rollback", job.Count),
+				})
+			case string(packets.DVNManualReview):
+				issues = append(issues, Issue{
+					Code:    "dvn_manual_review",
+					Message: fmt.Sprintf("dvn has %d jobs requiring manual review", job.Count),
+				})
+			}
 		}
 	}
 	cursorProgress := make(map[uint32]map[string]uint64)

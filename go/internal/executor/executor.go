@@ -19,7 +19,9 @@ type Store interface {
 	ListExecutorWork(ctx context.Context, status string, limit int) ([]db.ExecutorWorkItem, error)
 	MarkExecutorWaitingDVNVerification(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkExecutorVerifiable(ctx context.Context, guid common.Hash, expectedStatus string) error
+	MarkExecutorCommittedFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkExecutorExecutable(ctx context.Context, guid common.Hash) error
+	MarkExecutorDeliveredFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error
 	EnqueueExecutorTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest) (int64, error)
 }
 
@@ -90,11 +92,19 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ready, err := IsCommitVerifiable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
+	state, err := CheckCommitState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
 	if err != nil {
 		return false, err
 	}
-	if !ready {
+	switch state {
+	case CommitCommitted:
+		if err := w.store.MarkExecutorCommittedFromChain(ctx, item.Packet.GUID, string(packets.ExecutorVerifiable)); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID)
+		return true, nil
+	case CommitVerifiable:
+	default:
 		return false, nil
 	}
 	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID)
@@ -126,16 +136,24 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 	if err != nil {
 		return false, err
 	}
-	ready, err := IsCommitVerifiable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
+	state, err := CheckCommitState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
 	if err != nil {
 		return false, err
 	}
-	if ready {
+	switch state {
+	case CommitCommitted:
+		if err := w.store.MarkExecutorCommittedFromChain(ctx, item.Packet.GUID, status); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID)
+		return true, nil
+	case CommitVerifiable:
 		if err := w.store.MarkExecutorVerifiable(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
 		w.logger.Info("executor job became commit-verifiable", "guid", item.Packet.GUID)
 		return true, nil
+	case CommitNotVerifiable:
 	}
 	if status == string(packets.ExecutorAssigned) {
 		if err := w.store.MarkExecutorWaitingDVNVerification(ctx, item.Packet.GUID, status); err != nil {
@@ -168,11 +186,19 @@ func (w *Worker) processExecutableReadiness(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ready, err := IsLzReceiveExecutable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
+	state, err := CheckDeliveryState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
 	if err != nil {
 		return false, err
 	}
-	if !ready {
+	switch state {
+	case DeliveryDelivered:
+		if err := w.store.MarkExecutorDeliveredFromChain(ctx, item.Packet.GUID, string(packets.ExecutorCommitted)); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID)
+		return true, nil
+	case DeliveryExecutable:
+	default:
 		return false, nil
 	}
 	if err := w.store.MarkExecutorExecutable(ctx, item.Packet.GUID); err != nil {
@@ -192,11 +218,19 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	if err != nil {
 		return false, err
 	}
-	ready, err := IsLzReceiveExecutable(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
+	state, err := CheckDeliveryState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
 	if err != nil {
 		return false, err
 	}
-	if !ready {
+	switch state {
+	case DeliveryDelivered:
+		if err := w.store.MarkExecutorDeliveredFromChain(ctx, item.Packet.GUID, status); err != nil {
+			return false, err
+		}
+		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID)
+		return true, nil
+	case DeliveryExecutable:
+	default:
 		return false, nil
 	}
 	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)

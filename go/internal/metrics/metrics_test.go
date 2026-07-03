@@ -11,6 +11,7 @@ import (
 
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
+	"github.com/islishude/oh-my-lazier/go/internal/readiness"
 )
 
 func TestHandlerHealthDoesNotRequireStats(t *testing.T) {
@@ -62,6 +63,24 @@ func TestHandlerReadyAcceptsCleanSnapshot(t *testing.T) {
 	}
 	if recorder.Body.String() != "ready\n" {
 		t.Fatalf("body = %q, want ready", recorder.Body.String())
+	}
+}
+
+func TestHandlerReadyUsesRoleAwareReadiness(t *testing.T) {
+	snapshot := cleanSnapshotWith(func(snapshot *db.StatsSnapshot) {
+		snapshot.IndexerCursors = []db.IndexerCursorStat{
+			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
+			{ChainEID: 40245, Stream: "executor_destination", LastBlock: 100},
+		}
+		snapshot.DVNJobs = []db.StatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
+	})
+	handler := HandlerWithReadiness(fakeProvider{snapshot: snapshot}, readiness.Services{ExecutorEnabled: true})
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
 
@@ -183,6 +202,8 @@ func cleanSnapshotWith(mutator func(*db.StatsSnapshot)) db.StatsSnapshot {
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
 			{ChainEID: 40245, Stream: "executor_destination", LastBlock: 100},
+			{ChainEID: 40161, Stream: "dvn_source", LastBlock: 100},
+			{ChainEID: 40245, Stream: "dvn_destination", LastBlock: 100},
 		},
 	}
 	if mutator != nil {

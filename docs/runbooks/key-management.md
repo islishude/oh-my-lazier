@@ -18,7 +18,7 @@ For each deployment environment, record:
 
 The configured signer address must match the expected address in worker config and migration tickets. Never infer approval from a successful transaction alone.
 
-Worker config keeps a top-level `signers` inventory. `chains[].tx_roles.executor.signer`, active `chains[].tx_roles.dvn.signer`, and `pricing.signer` must reference those signer IDs, and signer IDs are EVM 20-byte hex addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. KMS entries configure key ID, region, address, and optional AWS-compatible endpoint only; AWS credentials are not part of worker YAML and are resolved by the AWS SDK default configuration chain.
+Worker config keeps a top-level `signers` inventory. `chains[].tx_roles.executor.signer` must reference a configured signer only when `services.executor.enabled` is true. `chains[].tx_roles.dvn.signer` must reference a configured signer only when `services.dvn.enabled` is true and at least one pathway is `dvn.mode: active`. `pricing.signer` must reference a configured signer only when `pricing.enabled` is true. If executor, active DVN, and pricing are all disabled for this process, `signers` may be empty. Signer IDs are EVM 20-byte hex addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. KMS entries configure key ID, region, address, and optional AWS-compatible endpoint only; AWS credentials are not part of worker YAML and are resolved by the AWS SDK default configuration chain.
 
 ## AWS KMS Requirements
 
@@ -34,8 +34,8 @@ Required controls:
 
 Implementation evidence:
 
-- `go/internal/config.Config.Validate` rejects unknown executor, active DVN, and pricing signer references.
-- `go/internal/app.App.txTargets` loads configured signers and creates one tx manager target per required signer per chain, with per-purpose fee policy so executor, DVN, and pricing caps do not overwrite each other when they share a signer.
+- `go/internal/config.Config.Validate` rejects unknown signer references only for roles enabled in this process: executor, active DVN, and pricing.
+- `go/internal/app.App.txTargets` loads configured signers only when at least one enabled role can submit transactions, and creates one tx manager target per required signer per chain with per-purpose fee policy so executor, DVN, and pricing caps do not overwrite each other when they share a signer.
 - `go/internal/db` stores per-chain signer nonce cursors in Postgres. The tx manager initializes a missing cursor from RPC pending nonce on first use, then increments only the local cursor. Automatic failed-transaction retry follows the same cursor: replacement keeps the assigned nonce, while fresh receipt retry consumes the next local nonce. After bootstrap, do not use the same signer account from another broadcaster.
 - `go/internal/app.loadKMSAWSConfig` uses the AWS SDK `config.LoadDefaultConfig` path with the configured region.
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
@@ -68,7 +68,7 @@ Implementation evidence:
 - When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.
-- Confirm each configured signer has native gas on its assigned chains.
+- Confirm each configured signer has native gas on the chains assigned to enabled executor, active DVN, or pricing purposes.
 - Confirm break-glass operators can pause OFT sends and worker assignments without needing private key material from the worker host.
 
 ## Rotation Procedure

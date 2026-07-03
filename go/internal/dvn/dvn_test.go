@@ -224,7 +224,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 		}},
 	}
 	registry := testRegistry(t, packet, config.DVNModeActive)
-	worker := NewWithClientsAndSettings(
+	worker := NewWithClientsSettingsAndCallers(
 		store,
 		registry,
 		map[uint32]Settings{
@@ -234,6 +234,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 		},
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		nil,
+		map[uint32]ContractCaller{packet.DstEID: fakeDVNReconcileCaller{}},
 		discardLogger(),
 	)
 
@@ -265,6 +266,69 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	}
 	if !bytes.Equal(store.quorumResult, report) {
 		t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
+	}
+}
+
+func TestProcessReadyToVerifyOnceActiveMarksVerifiedWhenAlreadyCompleteOnChain(t *testing.T) {
+	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
+	tests := []struct {
+		name   string
+		caller fakeDVNReconcileCaller
+	}{
+		{
+			name:   "endpoint payload hash",
+			caller: fakeDVNReconcileCaller{endpointPayloadHash: packet.PayloadHash},
+		},
+		{
+			name:   "dvn hash lookup confirmations",
+			caller: fakeDVNReconcileCaller{hashLookupSubmitted: true, hashLookupConfirmations: 12},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeStore{
+				work: []db.DVNWorkItem{{
+					Packet: packet,
+					Job: db.DVNJobRecord{
+						GUID:                  packet.GUID,
+						ConfirmationsRequired: 12,
+						Status:                string(packets.DVNReadyToVerify),
+						QuorumResult:          report,
+					},
+				}},
+			}
+			worker := NewWithClientsSettingsAndCallers(
+				store,
+				testRegistry(t, packet, config.DVNModeActive),
+				map[uint32]Settings{
+					packet.DstEID: {
+						SignerID: "0x8888888888888888888888888888888888888888",
+					},
+				},
+				nil,
+				nil,
+				map[uint32]ContractCaller{packet.DstEID: test.caller},
+				discardLogger(),
+			)
+
+			processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+			if err != nil {
+				t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
+			}
+			if !processed {
+				t.Fatal("processed = false, want true")
+			}
+			if store.verifiedFromChainGUID != packet.GUID {
+				t.Fatalf("verified-from-chain guid = %s, want %s", store.verifiedFromChainGUID, packet.GUID)
+			}
+			if store.verifyRequest.Purpose != "" {
+				t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
+			}
+			if !bytes.Equal(store.quorumResult, report) {
+				t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
+			}
+		})
 	}
 }
 
@@ -400,6 +464,7 @@ type fakeStore struct {
 	readyGUID             common.Hash
 	wouldVerifyGUID       common.Hash
 	verifyGUID            common.Hash
+	verifiedFromChainGUID common.Hash
 	verifyRequest         db.TxRequest
 	conflictGUID          common.Hash
 	conflictReason        string
@@ -447,6 +512,12 @@ func (s *fakeStore) EnqueueDVNVerifyTx(_ context.Context, guid common.Hash, _, _
 	s.verifyRequest = request
 	s.quorumResult = bytes.Clone(quorumResult)
 	return 42, nil
+}
+
+func (s *fakeStore) MarkDVNVerifiedFromChain(_ context.Context, guid common.Hash, _ string, quorumResult []byte) error {
+	s.verifiedFromChainGUID = guid
+	s.quorumResult = bytes.Clone(quorumResult)
+	return nil
 }
 
 func (s *fakeStore) MarkDVNQuorumConflict(_ context.Context, guid common.Hash, _, reason string, quorumResult []byte) error {
@@ -591,6 +662,51 @@ type fakeReceiptNotFoundReader struct{}
 
 func (r fakeReceiptNotFoundReader) TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error) {
 	return nil, ethereum.NotFound
+}
+
+type fakeDVNReconcileCaller struct {
+	endpointPayloadHash     common.Hash
+	hashLookupSubmitted     bool
+	hashLookupConfirmations uint64
+}
+
+func (c fakeDVNReconcileCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	method, err := dvnMethodBySelector(call.Data)
+	if err != nil {
+		return nil, err
+	}
+	switch method.Name {
+	case "inboundPayloadHash":
+		return method.Outputs.Pack(c.endpointPayloadHash)
+	case "hashLookup":
+		return method.Outputs.Pack(c.hashLookupSubmitted, c.hashLookupConfirmations)
+	default:
+		return nil, fmt.Errorf("unexpected method %s", method.Name)
+	}
+}
+
+func dvnMethodBySelector(data []byte) (dvnMethodView, error) {
+	if len(data) < 4 {
+		return dvnMethodView{}, fmt.Errorf("call data length %d is shorter than selector", len(data))
+	}
+	for _, method := range endpointViewABI.Methods {
+		if string(method.ID) == string(data[:4]) {
+			return dvnMethodView{Name: method.Name, Outputs: method.Outputs}, nil
+		}
+	}
+	for _, method := range receiveUlnViewABI.Methods {
+		if string(method.ID) == string(data[:4]) {
+			return dvnMethodView{Name: method.Name, Outputs: method.Outputs}, nil
+		}
+	}
+	return dvnMethodView{}, fmt.Errorf("unknown selector %x", data[:4])
+}
+
+type dvnMethodView struct {
+	Name    string
+	Outputs interface {
+		Pack(args ...any) ([]byte, error)
+	}
 }
 
 func testDVNPacket() db.PacketRecord {

@@ -23,6 +23,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
 	"github.com/islishude/oh-my-lazier/go/internal/metrics"
 	"github.com/islishude/oh-my-lazier/go/internal/pricing"
+	"github.com/islishude/oh-my-lazier/go/internal/readiness"
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/kms"
@@ -89,18 +90,28 @@ func (a *App) Run(ctx context.Context) error {
 
 	runtimeMetrics := metrics.NewRegistry()
 	pathways := registry.Pathways()
+	indexerStreams := indexer.StreamsForRoles(a.cfg.ExecutorEnabled(), a.cfg.DVNEnabled())
 	txTargets, err := a.txTargets(ctx, registry)
 	if err != nil {
 		return err
 	}
-	executorWorker := executor.New(store, registry, a.logger)
-	dvnWorker, err := a.dvnWorker(store, registry)
-	if err != nil {
-		return err
+	var executorWorker *executor.Worker
+	if a.cfg.ExecutorEnabled() {
+		executorWorker = executor.New(store, registry, a.logger)
 	}
-	priceBot, err := a.priceBot(store, registry)
-	if err != nil {
-		return err
+	var dvnWorker *dvn.Worker
+	if a.cfg.DVNEnabled() {
+		dvnWorker, err = a.dvnWorker(store, registry)
+		if err != nil {
+			return err
+		}
+	}
+	var priceBot *pricing.Bot
+	if a.cfg.Pricing.Enabled {
+		priceBot, err = a.priceBot(store, registry)
+		if err != nil {
+			return err
+		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -119,15 +130,28 @@ func (a *App) Run(ctx context.Context) error {
 		})
 	}
 
-	start("metrics", metrics.New(a.cfg.Metrics.ListenAddress, store, a.logger, runtimeMetrics).Run)
-	for _, c := range registry.All() {
-		start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).WithMetrics(runtimeMetrics).Run)
+	start("metrics", metrics.NewWithReadiness(a.cfg.Metrics.ListenAddress, store, a.logger, readiness.Services{
+		ExecutorEnabled: a.cfg.ExecutorEnabled(),
+		DVNEnabled:      a.cfg.DVNEnabled(),
+	}, runtimeMetrics).Run)
+	if !indexerStreams.Empty() {
+		for _, c := range registry.All() {
+			start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).WithStreams(indexerStreams).WithMetrics(runtimeMetrics).Run)
+		}
 	}
-	start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
-	start("executor.committer", executorWorker.RunCommitter)
-	start("executor.deliverer", executorWorker.RunDeliverer)
-	start("dvn", dvnWorker.Run)
-	start("pricing", priceBot.Run)
+	if len(txTargets) > 0 {
+		start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
+	}
+	if a.cfg.ExecutorEnabled() {
+		start("executor.committer", executorWorker.RunCommitter)
+		start("executor.deliverer", executorWorker.RunDeliverer)
+	}
+	if a.cfg.DVNEnabled() {
+		start("dvn", dvnWorker.Run)
+	}
+	if a.cfg.Pricing.Enabled {
+		start("pricing", priceBot.Run)
+	}
 
 	select {
 	case <-ctx.Done():
@@ -332,10 +356,6 @@ func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker,
 }
 
 func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.Target, error) {
-	signers, err := a.loadSigners(ctx)
-	if err != nil {
-		return nil, err
-	}
 	type targetKey struct {
 		chainEID uint32
 		signerID string
@@ -349,12 +369,14 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		required[key][purpose] = policy
 	}
 	for _, configuredChain := range registry.All() {
-		executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
-		if err != nil {
-			return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
+		if a.cfg.ExecutorEnabled() {
+			executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
+			}
+			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy)
+			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy)
 		}
-		addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy)
-		addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy)
 		if a.cfg.Pricing.Enabled {
 			pricingPolicy, err := feePolicy(a.cfg.Pricing.MaxFeePerGasWei, a.cfg.Pricing.MaxPriorityFeePerGasWei)
 			if err != nil {
@@ -364,19 +386,28 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetDVNPriceConfig, pricingPolicy)
 		}
 	}
-	for _, pathway := range registry.Pathways() {
-		if pathway.DVNMode != config.DVNModeActive {
-			continue
+	if a.cfg.DVNEnabled() {
+		for _, pathway := range registry.Pathways() {
+			if pathway.DVNMode != config.DVNModeActive {
+				continue
+			}
+			dstChain, err := registry.Get(pathway.DstEID)
+			if err != nil {
+				return nil, err
+			}
+			dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
+			}
+			addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy)
 		}
-		dstChain, err := registry.Get(pathway.DstEID)
-		if err != nil {
-			return nil, err
-		}
-		dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
-		if err != nil {
-			return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
-		}
-		addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy)
+	}
+	if len(required) == 0 {
+		return nil, nil
+	}
+	signers, err := a.loadSigners(ctx)
+	if err != nil {
+		return nil, err
 	}
 	targets := make([]txmgr.Target, 0, len(required))
 	for key, policies := range required {

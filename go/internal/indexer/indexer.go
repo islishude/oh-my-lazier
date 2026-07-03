@@ -24,9 +24,60 @@ const (
 	defaultPollInterval    = 5 * time.Second
 	defaultBackfillRange   = uint64(500)
 	defaultQueryBlockRange = uint64(500)
-	executorSourceStream   = "executor_source"
-	executorDestStream     = "executor_destination"
 )
+
+const (
+	// ExecutorSourceStream tracks source-chain OpenExecutor assignments.
+	ExecutorSourceStream = "executor_source"
+	// ExecutorDestinationStream tracks destination-chain executor outcomes.
+	ExecutorDestinationStream = "executor_destination"
+	// DVNSourceStream tracks source-chain OpenDVN assignments.
+	DVNSourceStream = "dvn_source"
+	// DVNDestinationStream tracks destination-chain OpenDVN verification outcomes.
+	DVNDestinationStream = "dvn_destination"
+
+	executorSourceStream = ExecutorSourceStream
+	executorDestStream   = ExecutorDestinationStream
+	dvnSourceStream      = DVNSourceStream
+	dvnDestStream        = DVNDestinationStream
+)
+
+const (
+	sourceRoleExecutor = "executor"
+	sourceRoleDVN      = "dvn"
+)
+
+// StreamSet selects the durable indexer streams this process advances.
+type StreamSet struct {
+	ExecutorSource      bool
+	ExecutorDestination bool
+	DVNSource           bool
+	DVNDestination      bool
+}
+
+// StreamsForRoles returns the indexer streams required by enabled worker roles.
+func StreamsForRoles(executorEnabled, dvnEnabled bool) StreamSet {
+	return StreamSet{
+		ExecutorSource:      executorEnabled,
+		ExecutorDestination: executorEnabled,
+		DVNSource:           dvnEnabled,
+		DVNDestination:      dvnEnabled,
+	}
+}
+
+// Empty reports whether no indexer stream is enabled.
+func (s StreamSet) Empty() bool {
+	return !s.ExecutorSource && !s.ExecutorDestination && !s.DVNSource && !s.DVNDestination
+}
+
+func allStreams() StreamSet {
+	return StreamSet{
+		ExecutorSource:      true,
+		ExecutorDestination: true,
+		DVNSource:           true,
+		DVNDestination:      true,
+	}
+}
 
 // Store persists indexed executor source records and destination outcomes.
 type Store interface {
@@ -62,6 +113,7 @@ type Indexer struct {
 	queryBlockRange     uint64
 	logger              *slog.Logger
 	metrics             MetricsRecorder
+	streams             StreamSet
 }
 
 // New creates an indexer for one configured chain.
@@ -96,7 +148,14 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		backfillRange:       defaultBackfillRange,
 		queryBlockRange:     queryBlockRange,
 		logger:              logger,
+		streams:             allStreams(),
 	}
+}
+
+// WithStreams selects the durable streams this indexer advances.
+func (i *Indexer) WithStreams(streams StreamSet) *Indexer {
+	i.streams = streams
+	return i
 }
 
 // WithMetrics records process-local indexer polling metrics.
@@ -128,34 +187,87 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	}
 	confirmedTo := head - i.chain.Confirmations
 	result := ProcessResult{ConfirmedToBlock: confirmedTo, ObservedHeadBlock: head}
-	if from, to, ok, err := i.cursorWindow(ctx, executorSourceStream, confirmedTo); err != nil {
-		return ProcessResult{}, err
-	} else if ok {
-		source, dvn, err := i.processSourceWindow(ctx, from, to)
+	sourceWindowSet := false
+	destinationWindowSet := false
+	if i.streams.ExecutorSource {
+		from, to, ok, err := i.cursorWindow(ctx, executorSourceStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
-		if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSourceStream, to); err != nil {
-			return ProcessResult{}, err
+		if ok {
+			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleExecutor)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSourceStream, to); err != nil {
+				return ProcessResult{}, err
+			}
+			result.SourceFromBlock = from
+			result.SourceToBlock = to
+			sourceWindowSet = true
+			result.SourceTransactions += source
+			result.DVNTransactions += dvn
 		}
-		result.SourceFromBlock = from
-		result.SourceToBlock = to
-		result.SourceTransactions = source
-		result.DVNTransactions = dvn
 	}
-	if from, to, ok, err := i.cursorWindow(ctx, executorDestStream, confirmedTo); err != nil {
-		return ProcessResult{}, err
-	} else if ok {
-		destination, err := i.processDestinationWindow(ctx, from, to)
+	if i.streams.DVNSource {
+		from, to, ok, err := i.cursorWindow(ctx, dvnSourceStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
-		if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorDestStream, to); err != nil {
+		if ok {
+			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleDVN)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnSourceStream, to); err != nil {
+				return ProcessResult{}, err
+			}
+			if !sourceWindowSet {
+				result.SourceFromBlock = from
+				result.SourceToBlock = to
+			}
+			result.SourceTransactions += source
+			result.DVNTransactions += dvn
+		}
+	}
+	if i.streams.ExecutorDestination {
+		from, to, ok, err := i.cursorWindow(ctx, executorDestStream, confirmedTo)
+		if err != nil {
 			return ProcessResult{}, err
 		}
-		result.DestinationFromBlock = from
-		result.DestinationToBlock = to
-		result.DestinationLogs = destination
+		if ok {
+			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleExecutor)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorDestStream, to); err != nil {
+				return ProcessResult{}, err
+			}
+			result.DestinationFromBlock = from
+			result.DestinationToBlock = to
+			destinationWindowSet = true
+			result.DestinationLogs += destination
+		}
+	}
+	if i.streams.DVNDestination {
+		from, to, ok, err := i.cursorWindow(ctx, dvnDestStream, confirmedTo)
+		if err != nil {
+			return ProcessResult{}, err
+		}
+		if ok {
+			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleDVN)
+			if err != nil {
+				return ProcessResult{}, err
+			}
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnDestStream, to); err != nil {
+				return ProcessResult{}, err
+			}
+			if !destinationWindowSet {
+				result.DestinationFromBlock = from
+				result.DestinationToBlock = to
+			}
+			result.DestinationLogs += destination
+		}
 	}
 	return result, nil
 }
@@ -173,7 +285,7 @@ type ProcessResult struct {
 	DestinationLogs      int
 }
 
-func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64) (int, int, error) {
+func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64, role string) (int, int, error) {
 	if len(i.sourcePathways) == 0 {
 		return 0, 0, nil
 	}
@@ -187,19 +299,13 @@ func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64) (int
 		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
 			FromBlock: blockNumber(chunkFrom),
 			ToBlock:   blockNumber(chunkTo),
-			Addresses: i.sourceAddresses(),
-			Topics: [][]common.Hash{{
-				lzabi.PacketSentTopic(),
-				lzabi.ExecutorFeePaidTopic(),
-				lzabi.ExecutorJobAssignedTopic(),
-				lzabi.DVNFeePaidTopic(),
-				lzabi.DVNJobAssignedTopic(),
-			}},
+			Addresses: i.sourceAddresses(role),
+			Topics:    [][]common.Hash{i.sourceTopics(role)},
 		})
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
-		executor, dvn, err := i.processSourceLogs(ctx, logs)
+		executor, dvn, err := i.processSourceLogs(ctx, logs, role)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
@@ -213,7 +319,7 @@ func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64) (int
 	return executorProcessed, dvnProcessed, nil
 }
 
-func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log) (int, int, error) {
+func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log, role string) (int, int, error) {
 	var current sourceTxLogs
 	executorProcessed := 0
 	dvnProcessed := 0
@@ -222,7 +328,7 @@ func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log) (
 			return 0, 0, err
 		}
 		if len(current.logs) > 0 && current.txHash != log.TxHash {
-			executor, dvn, err := i.processSourceTxLogs(ctx, current)
+			executor, dvn, err := i.processSourceTxLogs(ctx, current, role)
 			if err != nil {
 				return executorProcessed, dvnProcessed, err
 			}
@@ -235,18 +341,18 @@ func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log) (
 	if len(current.logs) == 0 {
 		return executorProcessed, dvnProcessed, nil
 	}
-	executor, dvn, err := i.processSourceTxLogs(ctx, current)
+	executor, dvn, err := i.processSourceTxLogs(ctx, current, role)
 	if err != nil {
 		return executorProcessed, dvnProcessed, err
 	}
 	return executorProcessed + executor, dvnProcessed + dvn, nil
 }
 
-func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs) (int, int, error) {
+func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role string) (int, int, error) {
 	executorProcessed := 0
 	dvnProcessed := 0
 	// PacketSent and fee logs are decoder context; assignment logs anchor job processing.
-	if tx.hasExecutorAssignment {
+	if role == sourceRoleExecutor && tx.hasExecutorAssignment {
 		didProcess, err := i.processExecutorSourceTx(ctx, tx.logs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
@@ -255,7 +361,7 @@ func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs) (int
 			executorProcessed++
 		}
 	}
-	if tx.hasDVNAssignment {
+	if role == sourceRoleDVN && tx.hasDVNAssignment {
 		didProcess, err := i.processDVNSourceTx(ctx, tx.logs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
@@ -362,33 +468,32 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 	return true, nil
 }
 
-func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64) (int, error) {
+func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (int, error) {
 	applied := 0
 	for chunkFrom := from; chunkFrom <= to; {
 		chunkTo := i.chunkToBlock(chunkFrom, to)
 		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
 			FromBlock: blockNumber(chunkFrom),
 			ToBlock:   blockNumber(chunkTo),
-			Addresses: i.destinationAddresses(),
-			Topics: [][]common.Hash{{
-				lzabi.PacketVerifiedTopic(),
-				lzabi.PacketDeliveredTopic(),
-				lzabi.LzReceiveAlertTopic(),
-				lzabi.PayloadVerifiedTopic(),
-			}},
+			Addresses: i.destinationAddresses(role),
+			Topics:    [][]common.Hash{i.destinationTopics(role)},
 		})
 		if err != nil {
 			return applied, err
 		}
-		executorApplied, err := ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
-		applied += executorApplied
-		if err != nil {
-			return applied, err
-		}
-		dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs)
-		applied += dvnApplied
-		if err != nil {
-			return applied, err
+		switch role {
+		case sourceRoleExecutor:
+			executorApplied, err := ApplyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs)
+			applied += executorApplied
+			if err != nil {
+				return applied, err
+			}
+		case sourceRoleDVN:
+			dvnApplied, err := ApplyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs)
+			applied += dvnApplied
+			if err != nil {
+				return applied, err
+			}
 		}
 		if chunkTo == to {
 			break
@@ -452,12 +557,15 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 	return nil
 }
 
-func (i *Indexer) destinationAddresses() []common.Address {
-	seen := map[common.Address]struct{}{
-		i.chain.EndpointAddress: {},
-	}
-	for _, pathway := range i.destinationPathways {
-		seen[pathway.ReceiveLib] = struct{}{}
+func (i *Indexer) destinationAddresses(role string) []common.Address {
+	seen := make(map[common.Address]struct{})
+	switch role {
+	case sourceRoleExecutor:
+		seen[i.chain.EndpointAddress] = struct{}{}
+	case sourceRoleDVN:
+		for _, pathway := range i.destinationPathways {
+			seen[pathway.ReceiveLib] = struct{}{}
+		}
 	}
 	addresses := make([]common.Address, 0, len(seen))
 	for address := range seen {
@@ -469,14 +577,18 @@ func (i *Indexer) destinationAddresses() []common.Address {
 	return addresses
 }
 
-func (i *Indexer) sourceAddresses() []common.Address {
+func (i *Indexer) sourceAddresses(role string) []common.Address {
 	seen := map[common.Address]struct{}{
 		i.chain.EndpointAddress: {},
 	}
 	for _, pathway := range i.sourcePathways {
 		seen[pathway.SendLib] = struct{}{}
-		seen[pathway.SourceWorkers.OpenExecutor] = struct{}{}
-		seen[pathway.SourceWorkers.OpenDVN] = struct{}{}
+		switch role {
+		case sourceRoleExecutor:
+			seen[pathway.SourceWorkers.OpenExecutor] = struct{}{}
+		case sourceRoleDVN:
+			seen[pathway.SourceWorkers.OpenDVN] = struct{}{}
+		}
 	}
 	addresses := make([]common.Address, 0, len(seen))
 	for address := range seen {
@@ -486,6 +598,42 @@ func (i *Indexer) sourceAddresses() []common.Address {
 		return hex.EncodeToString(addresses[a].Bytes()) < hex.EncodeToString(addresses[b].Bytes())
 	})
 	return addresses
+}
+
+func (i *Indexer) sourceTopics(role string) []common.Hash {
+	switch role {
+	case sourceRoleExecutor:
+		return []common.Hash{
+			lzabi.PacketSentTopic(),
+			lzabi.ExecutorFeePaidTopic(),
+			lzabi.ExecutorJobAssignedTopic(),
+		}
+	case sourceRoleDVN:
+		return []common.Hash{
+			lzabi.PacketSentTopic(),
+			lzabi.DVNFeePaidTopic(),
+			lzabi.DVNJobAssignedTopic(),
+		}
+	default:
+		return nil
+	}
+}
+
+func (i *Indexer) destinationTopics(role string) []common.Hash {
+	switch role {
+	case sourceRoleExecutor:
+		return []common.Hash{
+			lzabi.PacketVerifiedTopic(),
+			lzabi.PacketDeliveredTopic(),
+			lzabi.LzReceiveAlertTopic(),
+		}
+	case sourceRoleDVN:
+		return []common.Hash{
+			lzabi.PayloadVerifiedTopic(),
+		}
+	default:
+		return nil
+	}
 }
 
 func (i *Indexer) sourcePathway(packet db.PacketRecord) (chain.Pathway, bool) {

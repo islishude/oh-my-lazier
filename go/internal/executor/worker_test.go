@@ -151,6 +151,40 @@ func TestProcessCommitterOnceMarksWaitingVerifiable(t *testing.T) {
 	}
 }
 
+func TestProcessCommitterOnceMarksCommittedWhenEndpointAlreadyHasPayload(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorVerifiable)
+	store := &fakeStore{
+		work: []db.ExecutorWorkItem{{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorVerifiable)},
+		}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeCommitAlreadyCommittedCaller{payloadHash: packet.PayloadHash}},
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessCommitterOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessCommitterOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorVerifiable) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorVerifiable)
+	}
+	if store.nextStatus != string(packets.ExecutorCommitted) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorCommitted)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
+	}
+}
+
 func TestIsCommitVerifiableRejectsEmptyPayloadHash(t *testing.T) {
 	packet := testPacketRecord()
 	packet.PayloadHash = common.Hash{}
@@ -306,6 +340,40 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	}
 }
 
+func TestProcessDelivererOnceMarksDeliveredWhenEndpointPayloadCleared(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorExecutable)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorExecutable)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: common.Hash{}, inboundNonce: 7, lazyInboundNonce: 7}},
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessDelivererOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessDelivererOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.expectedStatus != string(packets.ExecutorExecutable) {
+		t.Fatalf("expected status = %q, want %q", store.expectedStatus, packets.ExecutorExecutable)
+	}
+	if store.nextStatus != string(packets.ExecutorDelivered) {
+		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorDelivered)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
+	}
+}
+
 type fakeStore struct {
 	work           []db.ExecutorWorkItem
 	workByStatus   map[string][]db.ExecutorWorkItem
@@ -342,10 +410,24 @@ func (s *fakeStore) MarkExecutorVerifiable(_ context.Context, guid common.Hash, 
 	return nil
 }
 
+func (s *fakeStore) MarkExecutorCommittedFromChain(_ context.Context, guid common.Hash, expectedStatus string) error {
+	s.guid = guid
+	s.expectedStatus = expectedStatus
+	s.nextStatus = string(packets.ExecutorCommitted)
+	return nil
+}
+
 func (s *fakeStore) MarkExecutorExecutable(_ context.Context, guid common.Hash) error {
 	s.guid = guid
 	s.expectedStatus = string(packets.ExecutorCommitted)
 	s.nextStatus = string(packets.ExecutorExecutable)
+	return nil
+}
+
+func (s *fakeStore) MarkExecutorDeliveredFromChain(_ context.Context, guid common.Hash, expectedStatus string) error {
+	s.guid = guid
+	s.expectedStatus = expectedStatus
+	s.nextStatus = string(packets.ExecutorDelivered)
 	return nil
 }
 
@@ -371,6 +453,8 @@ func (fakeCommitReadyCaller) CallContract(_ context.Context, call ethereum.CallM
 		return nil, err
 	}
 	switch method.Name {
+	case "inboundPayloadHash":
+		return method.Outputs.Pack(common.Hash{})
 	case "isValidReceiveLibrary", "verifiable":
 		return method.Outputs.Pack(true)
 	case "getUlnConfig":
@@ -386,6 +470,23 @@ func (fakeCommitReadyCaller) CallContract(_ context.Context, call ethereum.CallM
 	}
 }
 
+type fakeCommitAlreadyCommittedCaller struct {
+	payloadHash common.Hash
+}
+
+func (c fakeCommitAlreadyCommittedCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	method, err := methodBySelector(call.Data)
+	if err != nil {
+		return nil, err
+	}
+	switch method.Name {
+	case "inboundPayloadHash":
+		return method.Outputs.Pack(c.payloadHash)
+	default:
+		return nil, fmt.Errorf("unexpected method %s", method.Name)
+	}
+}
+
 type fakeCommitNotReadyCaller struct{}
 
 func (fakeCommitNotReadyCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
@@ -394,6 +495,8 @@ func (fakeCommitNotReadyCaller) CallContract(_ context.Context, call ethereum.Ca
 		return nil, err
 	}
 	switch method.Name {
+	case "inboundPayloadHash":
+		return method.Outputs.Pack(common.Hash{})
 	case "isValidReceiveLibrary":
 		return method.Outputs.Pack(true)
 	case "verifiable":
@@ -404,8 +507,9 @@ func (fakeCommitNotReadyCaller) CallContract(_ context.Context, call ethereum.Ca
 }
 
 type fakeExecutableCaller struct {
-	payloadHash  common.Hash
-	inboundNonce uint64
+	payloadHash      common.Hash
+	inboundNonce     uint64
+	lazyInboundNonce uint64
 }
 
 func (c fakeExecutableCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
@@ -419,7 +523,7 @@ func (c fakeExecutableCaller) CallContract(_ context.Context, call ethereum.Call
 	case "inboundNonce":
 		return method.Outputs.Pack(c.inboundNonce)
 	case "lazyInboundNonce":
-		return method.Outputs.Pack(uint64(0))
+		return method.Outputs.Pack(c.lazyInboundNonce)
 	default:
 		return nil, fmt.Errorf("unexpected method %s", method.Name)
 	}

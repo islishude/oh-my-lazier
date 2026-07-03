@@ -35,6 +35,7 @@ const (
 type Config struct {
 	DatabaseURL string          `yaml:"database_url"`
 	Metrics     MetricsConfig   `yaml:"metrics"`
+	Services    ServicesConfig  `yaml:"services"`
 	Pricing     PricingConfig   `yaml:"pricing"`
 	Signers     []SignerConfig  `yaml:"signers"`
 	Chains      []ChainConfig   `yaml:"chains"`
@@ -44,6 +45,35 @@ type Config struct {
 // MetricsConfig controls the worker HTTP metrics and health endpoint.
 type MetricsConfig struct {
 	ListenAddress string `yaml:"listen_address"`
+}
+
+// ServicesConfig selects which durable worker roles this process runs.
+type ServicesConfig struct {
+	Executor ServiceToggleConfig `yaml:"executor"`
+	DVN      ServiceToggleConfig `yaml:"dvn"`
+}
+
+// ServiceToggleConfig controls one optional worker role.
+type ServiceToggleConfig struct {
+	Enabled *bool `yaml:"enabled"`
+}
+
+// EnabledOrDefault returns the configured service state or the supplied default.
+func (s ServiceToggleConfig) EnabledOrDefault(defaultEnabled bool) bool {
+	if s.Enabled == nil {
+		return defaultEnabled
+	}
+	return *s.Enabled
+}
+
+// ExecutorEnabled reports whether this process should run executor workflows.
+func (c Config) ExecutorEnabled() bool {
+	return c.Services.Executor.EnabledOrDefault(true)
+}
+
+// DVNEnabled reports whether this process should run DVN workflows.
+func (c Config) DVNEnabled() bool {
+	return c.Services.DVN.EnabledOrDefault(true)
 }
 
 // ExecutorTxRoleConfig controls executor transaction submission on one chain.
@@ -258,11 +288,15 @@ func (c Config) Validate() error {
 		if chain.EndpointAddress.IsZero() {
 			return fmt.Errorf("chain %s endpoint_address is required", chain.Name)
 		}
-		if err := validateExecutorTxRole(chain.Name, chain.TxRoles.Executor, signers); err != nil {
-			return err
+		if c.ExecutorEnabled() {
+			if err := validateExecutorTxRole(chain.Name, chain.TxRoles.Executor, signers); err != nil {
+				return err
+			}
 		}
-		if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
-			return err
+		if c.DVNEnabled() {
+			if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
+				return err
+			}
 		}
 		if chain.Confirmations != 12 {
 			return fmt.Errorf("chain %s confirmations must be 12 in phase 1", chain.Name)
@@ -336,10 +370,12 @@ func (c Config) Validate() error {
 		}
 		pathways[key] = struct{}{}
 	}
-	for eid := range activeDVNDestinations {
-		chain := chains[eid]
-		if err := validateRequiredDVNTxRole(chain.Name, chain.TxRoles.DVN, signers); err != nil {
-			return err
+	if c.DVNEnabled() {
+		for eid := range activeDVNDestinations {
+			chain := chains[eid]
+			if err := validateRequiredDVNTxRole(chain.Name, chain.TxRoles.DVN, signers); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -397,9 +433,6 @@ func validateRPCURL(raw string) error {
 }
 
 func (c Config) validateSigners() (map[string]struct{}, error) {
-	if len(c.Signers) == 0 {
-		return nil, errors.New("at least one signer is required")
-	}
 	seen := make(map[string]struct{}, len(c.Signers))
 	for _, signer := range c.Signers {
 		if signer.ID.IsZero() {

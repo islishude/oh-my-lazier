@@ -152,6 +152,12 @@ const outputs: AbiOutput[] = [
       {
         artifact:
           "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json",
+        type: "function",
+        name: "hashLookup",
+      },
+      {
+        artifact:
+          "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json",
         type: "event",
         name: "PayloadVerified",
       },

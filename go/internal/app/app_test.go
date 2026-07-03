@@ -95,6 +95,89 @@ func TestTxTargetsRejectsDynamicFeeChainWithoutPriorityCap(t *testing.T) {
 	}
 }
 
+func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
+	stubReadTxHeader(t, &gethtypes.Header{})
+
+	dir := t.TempDir()
+	const password = "test-password"
+	account, err := gethkeystore.StoreKey(dir, password, gethkeystore.StandardScryptN, gethkeystore.StandardScryptP)
+	if err != nil {
+		t.Fatalf("StoreKey() error = %v", err)
+	}
+	t.Setenv("KEYSTORE_PASSWORD", password)
+
+	tests := []struct {
+		name         string
+		mutate       func(*config.Config)
+		wantPurposes map[uint32][]string
+	}{
+		{
+			name: "executor only by default",
+			wantPurposes: map[uint32][]string{
+				40161: {"executor_commit_verification", "executor_lz_receive"},
+				40245: {"executor_commit_verification", "executor_lz_receive"},
+			},
+		},
+		{
+			name: "dvn only active",
+			mutate: func(cfg *config.Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Pathways[0].DVN.Mode = config.DVNModeActive
+				cfg.Chains[1].TxRoles.DVN = testDVNRole(config.MustEVMAddress(account.Address.Hex()))
+			},
+			wantPurposes: map[uint32][]string{
+				40245: {"dvn_verify"},
+			},
+		},
+		{
+			name: "pricing only",
+			mutate: func(cfg *config.Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Pricing = testPricingConfig()
+				cfg.Pricing.Signer = config.MustEVMAddress(account.Address.Hex())
+			},
+			wantPurposes: map[uint32][]string{
+				40161: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
+				40245: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
+			},
+		},
+		{
+			name: "no tx targets",
+			mutate: func(cfg *config.Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Signers = nil
+			},
+			wantPurposes: map[uint32][]string{},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := testConfig(account.Address.Hex(), filepath.Clean(account.URL.Path))
+			if test.mutate != nil {
+				test.mutate(&cfg)
+			}
+			registry, err := chain.NewRegistry(cfg.Chains, cfg.Pathways)
+			if err != nil {
+				t.Fatalf("NewRegistry() error = %v", err)
+			}
+			worker, err := New(cfg, discardLogger())
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			targets, err := worker.txTargets(t.Context(), registry)
+			if err != nil {
+				t.Fatalf("txTargets() error = %v", err)
+			}
+			got := purposesByChain(targets)
+			if !equalPurposeSets(got, test.wantPurposes) {
+				t.Fatalf("purposes = %#v, want %#v", got, test.wantPurposes)
+			}
+		})
+	}
+}
+
 func TestNewRejectsNilLogger(t *testing.T) {
 	_, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), nil)
 	if err == nil {
@@ -333,6 +416,14 @@ func testExecutorRole(signer config.EVMAddress) config.ExecutorTxRoleConfig {
 	}
 }
 
+func testDVNRole(signer config.EVMAddress) config.DVNTxRoleConfig {
+	return config.DVNTxRoleConfig{
+		Signer:                  signer,
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+	}
+}
+
 func testPricingConfig() config.PricingConfig {
 	return config.PricingConfig{
 		Enabled:                 true,
@@ -351,4 +442,52 @@ func testPricingConfig() config.PricingConfig {
 			{EID: 40245, BinanceSymbol: "ETHUSDT"},
 		},
 	}
+}
+
+func purposesByChain(targets []txmgr.Target) map[uint32][]string {
+	out := make(map[uint32][]string, len(targets))
+	for _, target := range targets {
+		for purpose := range target.FeePolicies {
+			out[target.ChainEID] = append(out[target.ChainEID], purpose)
+		}
+	}
+	for eid := range out {
+		sortStrings(out[eid])
+	}
+	return out
+}
+
+func equalPurposeSets(a, b map[uint32][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for eid, aPurposes := range a {
+		bPurposes, ok := b[eid]
+		if !ok {
+			return false
+		}
+		sortStrings(bPurposes)
+		if len(aPurposes) != len(bPurposes) {
+			return false
+		}
+		for idx := range aPurposes {
+			if aPurposes[idx] != bPurposes[idx] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func sortStrings(values []string) {
+	for i := 1; i < len(values); i++ {
+		for j := i; j > 0 && values[j] < values[j-1]; j-- {
+			values[j], values[j-1] = values[j-1], values[j]
+		}
+	}
+}
+
+//go:fix inline
+func boolPtr(value bool) *bool {
+	return new(value)
 }

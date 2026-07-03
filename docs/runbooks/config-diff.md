@@ -33,6 +33,7 @@ go run ./go/cmd/configdiff \
 Review checklist:
 
 - Confirm both configs validate successfully.
+- Confirm `services.executor.enabled` and `services.dvn.enabled` changes are intentional. These are process-level switches for loops, signer requirements, tx targets, and indexer streams; pathway worker contract addresses still remain required in every config.
 - Confirm chain `eid`, `family`, `chain_id`, endpoint, transaction roles, and RPC changes are intentional. Phase-1 configs must use `family: evm`.
 - Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, source worker contracts, DVN mode, enablement, and max message size changes are intentional.
 - Confirm pathway `min_lz_receive_gas` and `max_lz_receive_gas` changes match the OpenExecutor/OpenDVN on-chain pathway settings.

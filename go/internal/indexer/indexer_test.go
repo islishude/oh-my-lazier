@@ -61,14 +61,20 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 			t.Fatalf("assigned fee = %s, want 42", store.jobs[guid].AssignedFee)
 		}
 	}
-	if len(client.queries) != 2 {
-		t.Fatalf("queries = %d, want source and destination queries", len(client.queries))
+	if len(client.queries) != 4 {
+		t.Fatalf("queries = %d, want four role-specific queries", len(client.queries))
 	}
 	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
 		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
 	}
 	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
 		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+	if store.cursors[cursorKey(40161, dvnSourceStream)] != 188 {
+		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, dvnSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, dvnDestStream)] != 188 {
+		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, dvnDestStream)])
 	}
 }
 
@@ -263,7 +269,7 @@ func TestIndexerProcessOnceFiltersUnexpectedDVNWorker(t *testing.T) {
 		store,
 		client,
 		discardLogger(),
-	)
+	).WithStreams(StreamSet{ExecutorSource: true})
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -346,7 +352,7 @@ func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 		store,
 		client,
 		discardLogger(),
-	)
+	).WithStreams(StreamSet{ExecutorSource: true})
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -381,7 +387,7 @@ func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.
 		store,
 		client,
 		discardLogger(),
-	)
+	).WithStreams(StreamSet{ExecutorDestination: true})
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -468,6 +474,86 @@ func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.
 	}
 	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
 		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+}
+
+func TestIndexerProcessOnceExecutorOnlyStreamsDoNotWriteDVNJobs(t *testing.T) {
+	dvn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: testDVNSourceLogs(t, dvn, sendLib, big.NewInt(42)),
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamsForRoles(true, false))
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DVNTransactions != 0 {
+		t.Fatalf("DVNTransactions = %d, want 0", result.DVNTransactions)
+	}
+	if len(store.dvnJobs) != 0 {
+		t.Fatalf("dvn jobs = %d, want 0", len(store.dvnJobs))
+	}
+	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
+		t.Fatalf("executor source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
+		t.Fatalf("executor destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	}
+	if _, ok := store.cursors[cursorKey(40161, dvnSourceStream)]; ok {
+		t.Fatal("dvn source cursor advanced in executor-only mode")
+	}
+	if _, ok := store.cursors[cursorKey(40161, dvnDestStream)]; ok {
+		t.Fatal("dvn destination cursor advanced in executor-only mode")
+	}
+}
+
+func TestIndexerProcessOnceDVNOnlyStreamsDoNotWriteExecutorJobs(t *testing.T) {
+	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:       200,
+		sourceLogs: testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42)),
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", executor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamsForRoles(false, true))
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.SourceTransactions != 0 {
+		t.Fatalf("SourceTransactions = %d, want 0", result.SourceTransactions)
+	}
+	if len(store.jobs) != 0 {
+		t.Fatalf("executor jobs = %d, want 0", len(store.jobs))
+	}
+	if store.cursors[cursorKey(40161, dvnSourceStream)] != 188 {
+		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, dvnSourceStream)])
+	}
+	if store.cursors[cursorKey(40161, dvnDestStream)] != 188 {
+		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, dvnDestStream)])
+	}
+	if _, ok := store.cursors[cursorKey(40161, executorSourceStream)]; ok {
+		t.Fatal("executor source cursor advanced in dvn-only mode")
+	}
+	if _, ok := store.cursors[cursorKey(40161, executorDestStream)]; ok {
+		t.Fatal("executor destination cursor advanced in dvn-only mode")
 	}
 }
 
@@ -737,6 +823,9 @@ func (c *fakeLogClient) FilterLogs(_ context.Context, query ethereum.FilterQuery
 		return append([]gethtypes.Log(nil), c.sourceLogs...), nil
 	}
 	if queryHasTopic(query, lzabi.PacketVerifiedTopic()) {
+		return append([]gethtypes.Log(nil), c.destinationLogs...), nil
+	}
+	if queryHasTopic(query, lzabi.PayloadVerifiedTopic()) {
 		return append([]gethtypes.Log(nil), c.destinationLogs...), nil
 	}
 	return nil, nil

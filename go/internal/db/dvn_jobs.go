@@ -254,6 +254,19 @@ func (s *Store) MarkDVNVerified(ctx context.Context, guid, txHash common.Hash) e
 	})
 }
 
+// MarkDVNVerifiedFromChain records that ReceiveUln302 already has this DVN verification without a local tx hash.
+func (s *Store) MarkDVNVerifiedFromChain(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error {
+	if len(quorumResult) == 0 {
+		return errors.New("dvn quorum result is required")
+	}
+	return s.updateDVNStatus(ctx, dvnStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.DVNVerified),
+		QuorumResult:   quorumResult,
+	})
+}
+
 // MarkDVNQuorumConflict records a quorum verification conflict requiring operator review.
 func (s *Store) MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error {
 	if reason == "" {

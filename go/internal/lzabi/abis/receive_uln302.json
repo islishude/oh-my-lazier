@@ -66,6 +66,20 @@
     "outputs": [{ "name": "", "type": "bool" }]
   },
   {
+    "name": "hashLookup",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [
+      { "name": "headerHash", "type": "bytes32" },
+      { "name": "payloadHash", "type": "bytes32" },
+      { "name": "dvn", "type": "address" }
+    ],
+    "outputs": [
+      { "name": "submitted", "type": "bool" },
+      { "name": "confirmations", "type": "uint64" }
+    ]
+  },
+  {
     "anonymous": false,
     "inputs": [
       {

@@ -10,6 +10,7 @@ import (
 func TestDiffUsesSemanticKeysForLists(t *testing.T) {
 	before := validConfig()
 	after := validConfig()
+	after.Services.Executor.Enabled = new(false)
 	after.Pathways[1].SourceWorkers.OpenExecutor = config.MustEVMAddress("0x7777777777777777777777777777777777777777")
 	after.Pathways[0].MaxMessageSize = 20000
 	after.Pricing = validPricingConfig()
@@ -22,6 +23,7 @@ func TestDiffUsesSemanticKeysForLists(t *testing.T) {
 		paths = append(paths, change.Path)
 	}
 	want := []string{
+		"services",
 		"pricing.chains[40245]",
 		"pathways[40161:40245:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888]",
 		"pathways[40245:40161:0x8888888888888888888888888888888888888888:0x7777777777777777777777777777777777777777]",
@@ -168,4 +170,9 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 func validPricingConfig() config.PricingConfig {
 	cfg := validConfig()
 	return cfg.Pricing
+}
+
+//go:fix inline
+func boolPtr(value bool) *bool {
+	return new(value)
 }

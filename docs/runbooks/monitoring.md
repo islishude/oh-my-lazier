@@ -37,6 +37,7 @@ Active worker status paths:
 - DVN active verification: `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`.
 - Executor delivery: `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`.
 - Shadow DVN verification stops at `WOULD_VERIFY`; it must not enqueue `dvn_verify` transactions.
+- Destination-chain reconciliation can skip transaction enqueue and move a DVN job directly from `READY_TO_VERIFY` to `VERIFIED`, an executor job from `VERIFIABLE` to `COMMITTED`, or an executor job from `COMMITTED`/`EXECUTABLE`/`LZ_RECEIVE_FAILED` to `DELIVERED` when the matching on-chain completion state is already observable.
 - `QUORUM_CONFLICT`, `REORG_DETECTED`, `MANUAL_REVIEW`, persistent `LZ_RECEIVE_FAILED`, and `tx_outbox.status="failed"` with `retry_state="exhausted"` are operator-action states, not healthy terminal states.
 
 Before any migration approval, run the DB-backed readiness gate and attach the JSON output:
@@ -45,7 +46,7 @@ Before any migration approval, run the DB-backed readiness gate and attach the J
 go run ./go/cmd/readinesscheck -config <worker.yaml> -format json
 ```
 
-The readiness gate fails if an enabled chain is paused, an enabled pathway between enabled chains is paused, an active chain has exhausted failed `tx_outbox` rows, a packet/job is in a manual-review or failed/conflict/reorg state, or an enabled pathway's required source/destination indexer cursor is missing or has not advanced past block `0`.
+The readiness gate fails if an enabled chain is paused, an enabled pathway between enabled chains is paused, an active chain has exhausted failed `tx_outbox` rows, a packet/job for an enabled service is in a manual-review or failed/conflict/reorg state, or an enabled pathway's required role-specific indexer cursor is missing or has not advanced past block `0`. Executor-enabled processes require `executor_source` on the source chain and `executor_destination` on the destination chain. DVN-enabled processes require `dvn_source` on the source chain and `dvn_destination` on the destination chain.
 
 Migration dashboard panels:
 
@@ -55,13 +56,14 @@ Migration dashboard panels:
 - Executor job count by status.
 - DVN job count by status.
 - Tx outbox count by chain, status, and retry state.
-- Indexer cursor last block by chain and stream.
+- Indexer cursor last block by chain and stream: `executor_source`, `executor_destination`, `dvn_source`, and `dvn_destination`.
 - Indexer poll success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain.
 - Worker loop retry count and last retry timestamp by loop name.
 
 Operational assumptions:
 
 - Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status and worker loop retry metrics are process-local and reset on restart.
+- `services.executor.enabled` and `services.dvn.enabled` are process-level switches. A deployment that runs only one role should page on that role's streams and job states, while the other role's durable cursors may be absent in that process.
 - Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. `txretry` remains the manual override for exhausted rows or operator-reviewed replacement, but it is no longer the default path for ordinary failed rows.
 - If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.

@@ -89,7 +89,8 @@ RPC quorum and safety:
 - Receipt and log conflicts pause pathways.
 - Pause state is exposed through `/metrics`.
 - Readiness checks reject paused chains/pathways, failed active outbox rows, and
-  missing or unstarted required indexer cursors.
+  missing or unstarted indexer cursors required by the process's enabled
+  executor/DVN services.
 
 Operational readiness:
 

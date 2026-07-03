@@ -144,6 +144,98 @@ func TestValidateRejectsIncompleteExecutorFeePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateRoleAwareSignerRequirements(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+	}{
+		{
+			name: "executor disabled allows missing executor signer and fees",
+			mutate: func(cfg *Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				for i := range cfg.Chains {
+					cfg.Chains[i].TxRoles.Executor = ExecutorTxRoleConfig{}
+				}
+			},
+		},
+		{
+			name: "dvn disabled allows active pathway without dvn signer and fees",
+			mutate: func(cfg *Config) {
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Pathways[0].DVN.Mode = DVNModeActive
+				for i := range cfg.Chains {
+					cfg.Chains[i].TxRoles.DVN = DVNTxRoleConfig{}
+				}
+			},
+		},
+		{
+			name: "empty signers allowed when no enabled service needs signing",
+			mutate: func(cfg *Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Signers = nil
+				for i := range cfg.Chains {
+					cfg.Chains[i].TxRoles.Executor = ExecutorTxRoleConfig{}
+					cfg.Chains[i].TxRoles.DVN = DVNTxRoleConfig{}
+				}
+			},
+		},
+		{
+			name: "empty signers rejected for executor",
+			mutate: func(cfg *Config) {
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Signers = nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty signers rejected for active dvn",
+			mutate: func(cfg *Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Pathways[0].DVN.Mode = DVNModeActive
+				cfg.Signers = nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty signers rejected for pricing",
+			mutate: func(cfg *Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Pricing = validPricingConfig()
+				cfg.Signers = nil
+			},
+			wantErr: true,
+		},
+		{
+			name: "pricing only allows missing worker tx roles with pricing signer",
+			mutate: func(cfg *Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Pricing = validPricingConfig()
+				for i := range cfg.Chains {
+					cfg.Chains[i].TxRoles.Executor = ExecutorTxRoleConfig{}
+					cfg.Chains[i].TxRoles.DVN = DVNTxRoleConfig{}
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			test.mutate(&cfg)
+			err := cfg.Validate()
+			if test.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsActiveDVNConfig(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pathways[0].DVN.Mode = DVNModeActive
@@ -373,6 +465,9 @@ pathways:
 	if staticConfig.Pathways[0].DVN.Mode != DVNModeShadow {
 		t.Fatalf("LoadStatic() pathway dvn mode = %q, want %q", staticConfig.Pathways[0].DVN.Mode, DVNModeShadow)
 	}
+	if !staticConfig.ExecutorEnabled() || !staticConfig.DVNEnabled() {
+		t.Fatal("LoadStatic() omitted services should default executor and dvn to enabled")
+	}
 	workerConfig, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -520,4 +615,9 @@ func validPricingConfig() PricingConfig {
 			},
 		},
 	}
+}
+
+//go:fix inline
+func boolPtr(value bool) *bool {
+	return new(value)
 }

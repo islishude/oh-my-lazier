@@ -45,7 +45,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "load stats: %v\n", err)
 		os.Exit(1)
 	}
-	report := readiness.Evaluate(stats)
+	report := readiness.EvaluateWithServices(stats, readiness.Services{
+		ExecutorEnabled: cfg.ExecutorEnabled(),
+		DVNEnabled:      cfg.DVNEnabled(),
+	})
 	switch *format {
 	case "text":
 		fmt.Print(renderText(report))

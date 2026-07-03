@@ -29,79 +29,132 @@ type ContractCaller interface {
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
 
+// CommitState describes destination-chain commitVerification readiness.
+type CommitState int
+
+const (
+	// CommitNotVerifiable means commitVerification is not ready and not already completed.
+	CommitNotVerifiable CommitState = iota
+	// CommitVerifiable means commitVerification can be enqueued.
+	CommitVerifiable
+	// CommitCommitted means the endpoint already stores the packet payload hash.
+	CommitCommitted
+)
+
+// DeliveryState describes destination-chain lzReceive readiness.
+type DeliveryState int
+
+const (
+	// DeliveryNotExecutable means lzReceive is not ready and not already delivered.
+	DeliveryNotExecutable DeliveryState = iota
+	// DeliveryExecutable means lzReceive can be enqueued.
+	DeliveryExecutable
+	// DeliveryDelivered means the endpoint already cleared the packet payload.
+	DeliveryDelivered
+)
+
 // IsCommitVerifiable checks the EndpointV2 and ReceiveUln302 readiness gates before commit enqueue.
 func IsCommitVerifiable(ctx context.Context, caller ContractCaller, endpoint, receiveLib common.Address, packet db.PacketRecord) (bool, error) {
+	state, err := CheckCommitState(ctx, caller, endpoint, receiveLib, packet)
+	return state == CommitVerifiable, err
+}
+
+// CheckCommitState reconciles on-chain commit state before deciding whether commitVerification should be enqueued.
+func CheckCommitState(ctx context.Context, caller ContractCaller, endpoint, receiveLib common.Address, packet db.PacketRecord) (CommitState, error) {
 	if err := packet.Validate(); err != nil {
-		return false, err
+		return CommitNotVerifiable, err
 	}
 	if caller == nil {
-		return false, errors.New("contract caller is required")
+		return CommitNotVerifiable, errors.New("contract caller is required")
 	}
 	if endpoint == (common.Address{}) {
-		return false, errors.New("endpoint address is required")
+		return CommitNotVerifiable, errors.New("endpoint address is required")
 	}
 	if receiveLib == (common.Address{}) {
-		return false, errors.New("receive lib address is required")
+		return CommitNotVerifiable, errors.New("receive lib address is required")
 	}
 	if packet.PayloadHash == emptyPayloadHash {
-		return false, nil
+		return CommitNotVerifiable, nil
 	}
 	origin := originFromPacket(packet)
+	payloadHash, err := callEndpointHash(ctx, caller, endpoint, "inboundPayloadHash", packet.Receiver, packet.SrcEID, origin.Sender, origin.Nonce)
+	if err != nil {
+		return CommitNotVerifiable, err
+	}
+	if payloadHash == packet.PayloadHash {
+		return CommitCommitted, nil
+	}
 	validReceiveLib, err := callBool(ctx, caller, endpointViewABI, endpoint, "isValidReceiveLibrary", packet.Receiver, packet.SrcEID, receiveLib)
 	if err != nil {
-		return false, err
+		return CommitNotVerifiable, err
 	}
 	if !validReceiveLib {
-		return false, nil
+		return CommitNotVerifiable, nil
 	}
 	endpointVerifiable, err := callBool(ctx, caller, endpointViewABI, endpoint, "verifiable", origin, packet.Receiver)
 	if err != nil {
-		return false, err
+		return CommitNotVerifiable, err
 	}
 	if !endpointVerifiable {
-		return false, nil
+		return CommitNotVerifiable, nil
 	}
 	config, err := callUlnConfig(ctx, caller, receiveLib, packet.Receiver, packet.SrcEID)
 	if err != nil {
-		return false, err
+		return CommitNotVerifiable, err
 	}
-	return callBool(ctx, caller, receiveUlnViewABI, receiveLib, "verifiable", config, crypto.Keccak256Hash(packet.PacketHeader), packet.PayloadHash)
+	verifiable, err := callBool(ctx, caller, receiveUlnViewABI, receiveLib, "verifiable", config, crypto.Keccak256Hash(packet.PacketHeader), packet.PayloadHash)
+	if err != nil || !verifiable {
+		return CommitNotVerifiable, err
+	}
+	return CommitVerifiable, nil
 }
 
 // IsLzReceiveExecutable checks whether EndpointV2 state allows this packet to be delivered.
 func IsLzReceiveExecutable(ctx context.Context, caller ContractCaller, endpoint common.Address, packet db.PacketRecord) (bool, error) {
+	state, err := CheckDeliveryState(ctx, caller, endpoint, packet)
+	return state == DeliveryExecutable, err
+}
+
+// CheckDeliveryState reconciles on-chain delivery state before deciding whether lzReceive should be enqueued.
+func CheckDeliveryState(ctx context.Context, caller ContractCaller, endpoint common.Address, packet db.PacketRecord) (DeliveryState, error) {
 	if err := packet.Validate(); err != nil {
-		return false, err
+		return DeliveryNotExecutable, err
 	}
 	if caller == nil {
-		return false, errors.New("contract caller is required")
+		return DeliveryNotExecutable, errors.New("contract caller is required")
 	}
 	if endpoint == (common.Address{}) {
-		return false, errors.New("endpoint address is required")
+		return DeliveryNotExecutable, errors.New("endpoint address is required")
 	}
 	origin := originFromPacket(packet)
-	payloadHash, err := callHash(ctx, caller, endpoint, "inboundPayloadHash", packet.Receiver, packet.SrcEID, origin.Sender, origin.Nonce)
+	payloadHash, err := callEndpointHash(ctx, caller, endpoint, "inboundPayloadHash", packet.Receiver, packet.SrcEID, origin.Sender, origin.Nonce)
 	if err != nil {
-		return false, err
-	}
-	if payloadHash != packet.PayloadHash {
-		return false, nil
-	}
-	if payloadHash == emptyPayloadHash || payloadHash == nilPayloadHash {
-		return false, nil
-	}
-	inboundNonce, err := callUint64(ctx, caller, endpoint, "inboundNonce", packet.Receiver, packet.SrcEID, origin.Sender)
-	if err != nil {
-		return false, err
-	}
-	if origin.Nonce > inboundNonce {
-		return false, nil
+		return DeliveryNotExecutable, err
 	}
 	lazyInboundNonce, err := callUint64(ctx, caller, endpoint, "lazyInboundNonce", packet.Receiver, packet.SrcEID, origin.Sender)
 	if err != nil {
-		return false, err
+		return DeliveryNotExecutable, err
 	}
-	return origin.Nonce > lazyInboundNonce, nil
+	if payloadHash == emptyPayloadHash && origin.Nonce <= lazyInboundNonce {
+		return DeliveryDelivered, nil
+	}
+	if payloadHash != packet.PayloadHash {
+		return DeliveryNotExecutable, nil
+	}
+	if payloadHash == emptyPayloadHash || payloadHash == nilPayloadHash {
+		return DeliveryNotExecutable, nil
+	}
+	inboundNonce, err := callUint64(ctx, caller, endpoint, "inboundNonce", packet.Receiver, packet.SrcEID, origin.Sender)
+	if err != nil {
+		return DeliveryNotExecutable, err
+	}
+	if origin.Nonce > inboundNonce {
+		return DeliveryNotExecutable, nil
+	}
+	if origin.Nonce <= lazyInboundNonce {
+		return DeliveryDelivered, nil
+	}
+	return DeliveryExecutable, nil
 }
 
 type ulnConfig struct {
@@ -186,7 +239,7 @@ func callBool(ctx context.Context, caller ContractCaller, contractABI abiLike, t
 	return value, nil
 }
 
-func callHash(ctx context.Context, caller ContractCaller, to common.Address, method string, args ...any) (common.Hash, error) {
+func callEndpointHash(ctx context.Context, caller ContractCaller, to common.Address, method string, args ...any) (common.Hash, error) {
 	values, err := callAndUnpack(ctx, caller, endpointViewABI, to, method, args...)
 	if err != nil {
 		return common.Hash{}, err

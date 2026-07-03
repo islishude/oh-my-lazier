@@ -22,6 +22,8 @@ func TestEvaluateAcceptsCleanActiveState(t *testing.T) {
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
 			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -48,6 +50,8 @@ func TestEvaluateRejectsPausedActiveStateAndFailedOutbox(t *testing.T) {
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
 			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -81,6 +85,8 @@ func TestEvaluateIgnoresRetryingFailedOutbox(t *testing.T) {
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
 			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -112,8 +118,8 @@ func TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors(t *testing.T) {
 	for _, issue := range report.Issues {
 		gotCodes[issue.Code]++
 	}
-	if gotCodes["indexer_cursor_missing"] != 2 {
-		t.Fatalf("missing cursor issues = %d, want 2; issues = %+v", gotCodes["indexer_cursor_missing"], report.Issues)
+	if gotCodes["indexer_cursor_missing"] != 6 {
+		t.Fatalf("missing cursor issues = %d, want 6; issues = %+v", gotCodes["indexer_cursor_missing"], report.Issues)
 	}
 	if gotCodes["indexer_cursor_unstarted"] != 1 {
 		t.Fatalf("unstarted cursor issues = %d, want 1; issues = %+v", gotCodes["indexer_cursor_unstarted"], report.Issues)
@@ -144,6 +150,8 @@ func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: executorSourceStream, LastBlock: 100},
 			{ChainEID: 40245, Stream: executorDestStream, LastBlock: 100},
+			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
 		},
 	})
 
@@ -165,6 +173,42 @@ func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
 		if gotCodes[want] != 1 {
 			t.Fatalf("issue %q count = %d, want 1; issues = %+v", want, gotCodes[want], report.Issues)
 		}
+	}
+}
+
+func TestEvaluateWithServicesRequiresOnlyEnabledRoleState(t *testing.T) {
+	snapshot := db.StatsSnapshot{
+		Chains: []db.ChainStat{
+			{EID: 40161, Name: "ethereum-sepolia", Enabled: true},
+			{EID: 40245, Name: "base-sepolia", Enabled: true},
+		},
+		Pathways: []db.PathwayStat{
+			{SrcEID: 40161, DstEID: 40245, Enabled: true},
+		},
+		ExecutorJobs: []db.StatusStat{
+			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
+		},
+		DVNJobs: []db.StatusStat{
+			{Status: string(packets.DVNQuorumConflict), Count: 1},
+		},
+		IndexerCursors: []db.IndexerCursorStat{
+			{ChainEID: 40161, Stream: dvnSourceStream, LastBlock: 100},
+			{ChainEID: 40245, Stream: dvnDestStream, LastBlock: 100},
+		},
+	}
+
+	report := EvaluateWithServices(snapshot, Services{DVNEnabled: true})
+	if report.Ready {
+		t.Fatal("ready = true, want dvn conflict issue")
+	}
+	if len(report.Issues) != 1 || report.Issues[0].Code != "dvn_quorum_conflict" {
+		t.Fatalf("issues = %+v, want only dvn conflict", report.Issues)
+	}
+
+	snapshot.DVNJobs = nil
+	report = EvaluateWithServices(snapshot, Services{DVNEnabled: true})
+	if !report.Ready {
+		t.Fatalf("ready = false, issues = %+v", report.Issues)
 	}
 }
 

@@ -70,9 +70,9 @@ Required runtime checks:
 - `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, indexer cursor, and indexer polling metrics.
 - No chain or pathway is paused before the migration begins.
 - No active-chain tx outbox row is stuck in `failed` with `retry_state="exhausted"`.
-- No DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
-- No executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
-- Every enabled pathway has advanced `executor_source` and `executor_destination` indexer cursors on the relevant active chains.
+- For deployments with `services.dvn.enabled: true`, no DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
+- For deployments with `services.executor.enabled: true`, no executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
+- Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
 ## Contract / LayerZero Checks

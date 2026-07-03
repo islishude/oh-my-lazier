@@ -167,7 +167,12 @@ type Server struct {
 
 // New creates a metrics HTTP server.
 func New(listenAddress string, provider StatsProvider, logger *slog.Logger, runtime ...RuntimeProvider) *Server {
-	handler := Handler(provider, runtime...)
+	return NewWithReadiness(listenAddress, provider, logger, readiness.Services{ExecutorEnabled: true, DVNEnabled: true}, runtime...)
+}
+
+// NewWithReadiness creates a metrics HTTP server with role-aware readiness checks.
+func NewWithReadiness(listenAddress string, provider StatsProvider, logger *slog.Logger, services readiness.Services, runtime ...RuntimeProvider) *Server {
+	handler := HandlerWithReadiness(provider, services, runtime...)
 	return &Server{
 		server:   &http.Server{Addr: listenAddress, Handler: handler},
 		logger:   logger,
@@ -177,6 +182,11 @@ func New(listenAddress string, provider StatsProvider, logger *slog.Logger, runt
 
 // Handler builds the health and metrics HTTP handler.
 func Handler(provider StatsProvider, runtime ...RuntimeProvider) http.Handler {
+	return HandlerWithReadiness(provider, readiness.Services{ExecutorEnabled: true, DVNEnabled: true}, runtime...)
+}
+
+// HandlerWithReadiness builds the health and metrics HTTP handler with role-aware readiness.
+func HandlerWithReadiness(provider StatsProvider, services readiness.Services, runtime ...RuntimeProvider) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -188,7 +198,7 @@ func Handler(provider StatsProvider, runtime ...RuntimeProvider) http.Handler {
 			http.Error(w, "not ready\n", http.StatusServiceUnavailable)
 			return
 		}
-		report := readiness.Evaluate(snapshot)
+		report := readiness.EvaluateWithServices(snapshot, services)
 		if !report.Ready {
 			http.Error(w, "not ready\n", http.StatusServiceUnavailable)
 			return

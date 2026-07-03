@@ -260,6 +260,15 @@ func (s *Store) MarkExecutorCommitted(ctx context.Context, guid, txHash common.H
 	})
 }
 
+// MarkExecutorCommittedFromChain records commitVerification already completed on chain without a local tx hash.
+func (s *Store) MarkExecutorCommittedFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error {
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.ExecutorCommitted),
+	})
+}
+
 // MarkExecutorExecutable records that endpoint state allows lzReceive delivery.
 func (s *Store) MarkExecutorExecutable(ctx context.Context, guid common.Hash) error {
 	return s.updateExecutorStatus(ctx, executorStatusUpdate{
@@ -279,6 +288,15 @@ func (s *Store) MarkExecutorDelivered(ctx context.Context, guid, txHash common.H
 		ExpectedStatus:     string(packets.ExecutorLzReceiveTxEnqueued),
 		NextStatus:         string(packets.ExecutorDelivered),
 		ReceiveTxHashBytes: txHash.Bytes(),
+	})
+}
+
+// MarkExecutorDeliveredFromChain records lzReceive already completed on chain without a local tx hash.
+func (s *Store) MarkExecutorDeliveredFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error {
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.ExecutorDelivered),
 	})
 }
 
