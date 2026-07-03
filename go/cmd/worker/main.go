@@ -16,7 +16,7 @@ func main() {
 	configPath := flag.String("config", "config/example.yaml", "worker config path")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		logger.Error("load config", "error", err)
