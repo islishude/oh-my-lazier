@@ -1,10 +1,12 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
@@ -18,6 +20,7 @@ import (
 func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorVerifiable)
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := &fakeStore{
 		work: []db.ExecutorWorkItem{{
 			Packet: packet,
@@ -28,7 +31,7 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
-		slog.Default(),
+		logger,
 	)
 
 	processed, err := worker.ProcessCommitterOnce(context.Background())
@@ -53,6 +56,15 @@ func TestProcessCommitterOnceEnqueuesCommitTx(t *testing.T) {
 	if store.request.SignerID != "0x8888888888888888888888888888888888888888" {
 		t.Fatalf("signer = %q, want destination executor signer", store.request.SignerID)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="enqueued executor commit tx"`,
+		`guid=0x`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`from_status=VERIFIABLE`,
+		`to_status=COMMIT_TX_ENQUEUED`,
+		`tx_outbox_id=123`,
+	)
 }
 
 func TestProcessCommitterOnceMarksAssignedWaitingWhenNotVerifiable(t *testing.T) {
@@ -315,6 +327,7 @@ func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
 func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)
+	logger, logs := captureLogger(slog.LevelDebug)
 	store := &fakeStore{
 		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
 			Packet: packet,
@@ -325,7 +338,7 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 		store,
 		testRegistry(t),
 		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 6}},
-		slog.Default(),
+		logger,
 	)
 
 	processed, err := worker.ProcessDelivererOnce(context.Background())
@@ -338,6 +351,16 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	if store.request.Purpose != "" {
 		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
 	}
+	assertLogContains(t, logs.String(),
+		`level=DEBUG`,
+		`msg="skipped executor delivery workflow"`,
+		`reason=delivery_not_executable`,
+		`guid=0x`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`status=EXECUTABLE`,
+		`delivery_state=not_executable`,
+	)
 }
 
 func TestProcessDelivererOnceMarksDeliveredWhenEndpointPayloadCleared(t *testing.T) {
@@ -622,4 +645,18 @@ func testRegistry(t *testing.T) *chain.Registry {
 		t.Fatalf("NewRegistry() error = %v", err)
 	}
 	return registry
+}
+
+func captureLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level})), &logs
+}
+
+func assertLogContains(t *testing.T, output string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
 }

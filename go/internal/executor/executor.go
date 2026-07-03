@@ -86,6 +86,7 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if !pathway.Enabled {
+		w.logger.Debug("skipped executor commit workflow", "reason", "pathway_disabled", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status)
 		return false, nil
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
@@ -101,10 +102,11 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 		if err := w.store.MarkExecutorCommittedFromChain(ctx, item.Packet.GUID, string(packets.ExecutorVerifiable)); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID)
+		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.ExecutorVerifiable), "to_status", string(packets.ExecutorCommitted))
 		return true, nil
 	case CommitVerifiable:
 	default:
+		w.logger.Debug("skipped executor commit workflow", "reason", "commit_not_verifiable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status, "commit_state", commitStateLabel(state))
 		return false, nil
 	}
 	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID)
@@ -115,7 +117,7 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	w.logger.Info("enqueued executor commit tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
+	w.logger.Info("enqueued executor commit tx", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.ExecutorVerifiable), "to_status", string(packets.ExecutorCommitTxEnqueued), "tx_outbox_id", id)
 	return true, nil
 }
 
@@ -130,6 +132,7 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 		return false, err
 	}
 	if !pathway.Enabled {
+		w.logger.Debug("skipped executor commit readiness", "reason", "pathway_disabled", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status)
 		return false, nil
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
@@ -145,13 +148,13 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 		if err := w.store.MarkExecutorCommittedFromChain(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID)
+		w.logger.Info("executor commit already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorCommitted))
 		return true, nil
 	case CommitVerifiable:
 		if err := w.store.MarkExecutorVerifiable(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor job became commit-verifiable", "guid", item.Packet.GUID)
+		w.logger.Info("executor job became commit-verifiable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorVerifiable))
 		return true, nil
 	case CommitNotVerifiable:
 	}
@@ -159,9 +162,10 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 		if err := w.store.MarkExecutorWaitingDVNVerification(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor job waiting for dvn verification", "guid", item.Packet.GUID)
+		w.logger.Info("executor job waiting for dvn verification", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorWaitingDVNVerification))
 		return true, nil
 	}
+	w.logger.Debug("skipped executor commit readiness", "reason", "commit_not_verifiable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "commit_state", commitStateLabel(state))
 	return false, nil
 }
 
@@ -195,16 +199,17 @@ func (w *Worker) processExecutableReadiness(ctx context.Context) (bool, error) {
 		if err := w.store.MarkExecutorDeliveredFromChain(ctx, item.Packet.GUID, string(packets.ExecutorCommitted)); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID)
+		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.ExecutorCommitted), "to_status", string(packets.ExecutorDelivered))
 		return true, nil
 	case DeliveryExecutable:
 	default:
+		w.logger.Debug("skipped executor executable readiness", "reason", "delivery_not_executable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status, "delivery_state", deliveryStateLabel(state))
 		return false, nil
 	}
 	if err := w.store.MarkExecutorExecutable(ctx, item.Packet.GUID); err != nil {
 		return false, err
 	}
-	w.logger.Info("executor job became lzReceive-executable", "guid", item.Packet.GUID)
+	w.logger.Info("executor job became lzReceive-executable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.ExecutorCommitted), "to_status", string(packets.ExecutorExecutable))
 	return true, nil
 }
 
@@ -227,10 +232,11 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 		if err := w.store.MarkExecutorDeliveredFromChain(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
-		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID)
+		w.logger.Info("executor lzReceive already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorDelivered))
 		return true, nil
 	case DeliveryExecutable:
 	default:
+		w.logger.Debug("skipped executor delivery workflow", "reason", "delivery_not_executable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "delivery_state", deliveryStateLabel(state))
 		return false, nil
 	}
 	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)
@@ -241,8 +247,34 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	if err != nil {
 		return false, err
 	}
-	w.logger.Info("enqueued executor lzReceive tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
+	w.logger.Info("enqueued executor lzReceive tx", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorLzReceiveTxEnqueued), "tx_outbox_id", id)
 	return true, nil
+}
+
+func commitStateLabel(state CommitState) string {
+	switch state {
+	case CommitNotVerifiable:
+		return "not_verifiable"
+	case CommitVerifiable:
+		return "verifiable"
+	case CommitCommitted:
+		return "committed"
+	default:
+		return "unknown"
+	}
+}
+
+func deliveryStateLabel(state DeliveryState) string {
+	switch state {
+	case DeliveryNotExecutable:
+		return "not_executable"
+	case DeliveryExecutable:
+		return "executable"
+	case DeliveryDelivered:
+		return "delivered"
+	default:
+		return "unknown"
+	}
 }
 
 func (w *Worker) runLoop(ctx context.Context, process func(context.Context) (bool, error)) error {

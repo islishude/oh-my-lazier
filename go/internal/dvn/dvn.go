@@ -185,7 +185,7 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 			if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
 				return false, err
 			}
-			w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+			w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations))
 			return true, nil
 		}
 		if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
@@ -201,7 +201,7 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 				if pauseErr := w.store.PauseChain(ctx, item.Packet.SrcEID); pauseErr != nil {
 					return false, pauseErr
 				}
-				w.logger.Warn("dvn head quorum conflict paused chain", "src_eid", item.Packet.SrcEID, "error", err.Error())
+				w.logger.Warn("dvn head quorum conflict paused chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", err.Error())
 				return true, nil
 			}
 			return false, err
@@ -215,13 +215,16 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 				if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
 					return false, err
 				}
+				w.logger.Info("dvn job waiting for source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
+			} else {
+				w.logger.Debug("skipped dvn confirmations", "reason", "insufficient_confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
 			}
 			return true, nil
 		}
 		if err := w.store.MarkDVNQuorumChecking(ctx, item.Packet.GUID, status); err != nil {
 			return false, err
 		}
-		w.logger.Info("dvn job reached source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+		w.logger.Info("dvn job reached source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNQuorumChecking), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
 		return true, nil
 	}
 	return false, nil
@@ -270,7 +273,7 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 	if err := w.store.MarkDVNReadyToVerify(ctx, item.Packet.GUID, string(packets.DVNQuorumChecking), payload); err != nil {
 		return false, err
 	}
-	w.logger.Info("dvn job ready to verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+	w.logger.Info("dvn job ready to verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNQuorumChecking), "to_status", string(packets.DVNReadyToVerify))
 	return true, nil
 }
 
@@ -299,7 +302,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		if err := w.store.MarkDVNWouldVerify(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
 			return false, err
 		}
-		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID)
+		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNWouldVerify))
 	case config.DVNModeActive:
 		complete, err := w.verificationAlreadyComplete(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired)
 		if err != nil {
@@ -309,7 +312,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 			if err := w.store.MarkDVNVerifiedFromChain(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
 				return false, err
 			}
-			w.logger.Info("dvn verification already completed on chain", "guid", item.Packet.GUID)
+			w.logger.Info("dvn verification already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerified))
 			return true, nil
 		}
 		request, err := w.buildVerifyTx(item.Packet, pathway, item.Job.ConfirmationsRequired)
@@ -320,7 +323,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "tx_outbox_id", id)
+		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerifyTxEnqueued), "tx_outbox_id", id)
 	default:
 		return false, workerloop.Fatal(fmt.Errorf("unsupported dvn mode %q", pathway.DVNMode))
 	}
@@ -603,7 +606,7 @@ func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord,
 	if err := w.store.PausePathwayForPacket(ctx, packet.GUID); err != nil {
 		return err
 	}
-	w.logger.Warn("dvn quorum conflict paused pathway", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "error", err.Error())
+	w.logger.Warn("dvn quorum conflict paused pathway", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "from_status", string(packets.DVNQuorumChecking), "to_status", string(packets.DVNQuorumConflict), "error", err.Error())
 	return nil
 }
 
@@ -618,7 +621,7 @@ func (w *Worker) markReorgDetected(ctx context.Context, packet db.PacketRecord, 
 	if err := w.store.MarkDVNReorgDetected(ctx, packet.GUID, string(packets.DVNQuorumChecking), err.Error(), payload); err != nil {
 		return err
 	}
-	w.logger.Warn("dvn source reorg detected", "guid", packet.GUID, "src_eid", packet.SrcEID, "tx_hash", packet.SrcTxHash)
+	w.logger.Warn("dvn source reorg detected", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "from_status", string(packets.DVNQuorumChecking), "to_status", string(packets.DVNReorgDetected), "tx_hash", packet.SrcTxHash)
 	return nil
 }
 

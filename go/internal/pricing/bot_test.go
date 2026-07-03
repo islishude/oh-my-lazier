@@ -1,10 +1,12 @@
 package pricing
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,10 +18,11 @@ import (
 func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
+	logger, logs := captureLogger(slog.LevelInfo)
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
 		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
-	}, discardLogger())
+	}, logger)
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
 	}
@@ -49,6 +52,14 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 			t.Fatalf("purpose %s remaining count = %d", purpose, remaining)
 		}
 	}
+	assertLogContains(t, logs.String(),
+		`msg="price update tx enqueued"`,
+		`tx_outbox_id=1`,
+		`purpose=pricing_set_executor_price_config`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`worker=0x2222222222222222222222222222222222222222`,
+	)
 }
 
 func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
@@ -75,10 +86,11 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	store := &fakeStore{}
 	sourceGas := &mutableGas{price: big.NewInt(1_000_000_000)}
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
+	logger, logs := captureLogger(slog.LevelInfo)
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas},
 		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas},
-	}, discardLogger())
+	}, logger)
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
 	}
@@ -106,6 +118,14 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	if len(store.requests) != 6 {
 		t.Fatalf("above-threshold enqueued requests = %d, want 6", len(store.requests))
 	}
+	assertLogContains(t, logs.String(),
+		`msg="price bot enqueued gas-spike update"`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`previous_gas_wei=2000000000`,
+		`current_gas_wei=2300000000`,
+		`tx_outbox_ids=`,
+	)
 }
 
 type fakeStore struct {
@@ -236,4 +256,18 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func captureLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level})), &logs
+}
+
+func assertLogContains(t *testing.T, output string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
 }

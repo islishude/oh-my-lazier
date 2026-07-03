@@ -72,12 +72,15 @@ go run ./go/cmd/configcheck -config config/example.yaml
 Useful operator commands:
 
 ```bash
+go run ./go/cmd/worker -config <worker.yaml> -log-level debug
 go run ./go/cmd/configdiff -from <approved.yaml> -to <proposed.yaml>
 go run ./go/cmd/readinesscheck -config <worker.yaml> -format json
-go run ./go/cmd/pricebot-once -config <worker.yaml>
+go run ./go/cmd/pricebot-once -config <worker.yaml> -log-level debug
 go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json
 go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>
 ```
+
+Worker binaries default to `-log-level info`. Use `-log-level debug` when investigating normal skip/defer reasons such as indexer caught-up windows, disabled pathways, not-yet-confirmed DVN jobs, or deferred tx manager work.
 
 ## Phase 1 Scope
 

@@ -27,6 +27,7 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	sourceLogs := testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42))
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
 		head:       200,
@@ -37,7 +38,7 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
-		discardLogger(),
+		logger,
 	)
 	indexer.pollInterval = time.Millisecond
 
@@ -77,6 +78,16 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	if store.cursors[cursorKey(40161, dvnDestStream)] != 188 {
 		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, dvnDestStream)])
 	}
+	assertLogContains(t, logs.String(),
+		`msg="indexed executor source assignment"`,
+		`guid=0x`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`tx_hash=0x`,
+		`block_number=123`,
+		`log_index=2`,
+		`status=ASSIGNED`,
+	)
 }
 
 func TestIndexerProcessOnceMarksUnsupportedExecutorOptionsManualReview(t *testing.T) {
@@ -125,6 +136,7 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 	configuredExecutor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	otherExecutor := common.HexToAddress("0x2323232323232323232323232323232323232323")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	logger, logs := captureLogger(slog.LevelDebug)
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
 		head:       200,
@@ -135,7 +147,7 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
-		discardLogger(),
+		logger,
 	)
 
 	result, err := indexer.ProcessOnce(context.Background())
@@ -148,11 +160,19 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 	if len(store.packets) != 0 || len(store.jobs) != 0 {
 		t.Fatalf("stored packets/jobs = %d/%d, want 0/0", len(store.packets), len(store.jobs))
 	}
+	assertLogContains(t, logs.String(),
+		`level=DEBUG`,
+		`msg="skipped executor source assignment"`,
+		`reason=unexpected_worker`,
+		`worker=0x2323232323232323232323232323232323232323`,
+		`expected_worker=0x2222222222222222222222222222222222222222`,
+	)
 }
 
 func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	packet.Status = string(packets.ExecutorCommitTxEnqueued)
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.packets[packet.GUID] = packet
 	store.jobs[packet.GUID] = db.ExecutorJobRecord{
@@ -168,7 +188,7 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
-		discardLogger(),
+		logger,
 	)
 
 	result, err := indexer.ProcessOnce(context.Background())
@@ -181,10 +201,19 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	if store.committedGUID != packet.GUID {
 		t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="indexed executor destination event"`,
+		`event=PacketVerified`,
+		`guid=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`to_status=COMMITTED`,
+	)
 }
 
 func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 	packet := testDestinationPacketRecord()
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.packets[packet.GUID] = packet
 	store.dvnJobs[packet.GUID] = db.DVNJobRecord{
@@ -201,7 +230,7 @@ func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
-		discardLogger(),
+		logger,
 	)
 
 	result, err := indexer.ProcessOnce(context.Background())
@@ -217,6 +246,12 @@ func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 	if !queriesHaveAddress(client.queries, testIndexerPathway().ReceiveLib) {
 		t.Fatal("destination query does not include receive lib")
 	}
+	assertLogContains(t, logs.String(),
+		`msg="indexed dvn destination event"`,
+		`event=PayloadVerified`,
+		`guid=0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		`to_status=VERIFIED`,
+	)
 }
 
 func TestIndexerProcessOnceBackfillsDVNAssignment(t *testing.T) {
@@ -647,8 +682,7 @@ func TestIndexerProcessOnceFailureDoesNotAdvanceCursor(t *testing.T) {
 }
 
 func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, executorSourceStream)] = 40
 	client := &fakeLogClient{head: 65}
@@ -1076,6 +1110,20 @@ func queriesHaveAddress(queries []ethereum.FilterQuery, address common.Address) 
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func captureLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level})), &logs
+}
+
+func assertLogContains(t *testing.T, output string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
 }
 
 func cursorKey(chainEID uint32, stream string) string {

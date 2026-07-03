@@ -84,6 +84,9 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 	}
 	quote, err := quoteFee(ctx, queued, policy, target.Client)
 	if err != nil {
+		if errors.Is(err, ErrTxDeferred) {
+			m.logger.Debug("deferred tx outbox row", "reason", "fee_cap", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose)
+		}
 		return 0, err
 	}
 	gasLimit, err := estimateGas(ctx, queued, target.Signer.Address(), target.Client)
@@ -92,8 +95,10 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 			if markErr := m.store.MarkTxFailed(ctx, queued.ID, fmt.Errorf("estimate gas reverted: %w", err), db.TxFailureEstimateGasRevert); markErr != nil {
 				return 0, markErr
 			}
+			m.logger.Warn("failed tx gas estimate", "reason", "estimate_gas_revert", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "failure_kind", db.TxFailureEstimateGasRevert, "error", err.Error())
 			return queued.ID, nil
 		}
+		m.logger.Debug("deferred tx outbox row", "reason", "estimate_gas_error", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "error", err.Error())
 		return 0, fmt.Errorf("%w: estimate gas for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
 	}
 	claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
@@ -105,6 +110,7 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 		if _, nonceErr := m.store.BootstrapTxNonceCursor(ctx, target.ChainEID, signerID, rpcNonce); nonceErr != nil {
 			return 0, nonceErr
 		}
+		m.logger.Info("bootstrapped tx nonce cursor", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "rpc_nonce", rpcNonce)
 		claimed, err = m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -113,6 +119,7 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 	if err != nil {
 		return 0, err
 	}
+	m.logger.Info("claimed tx nonce", "id", claimed.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "nonce", claimed.Nonce)
 	outboxTx, err := m.store.GetOutboxTx(ctx, claimed.ID)
 	if err != nil {
 		return 0, err
@@ -122,20 +129,24 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 		if markErr := m.store.MarkTxFailed(ctx, outboxTx.ID, err, db.TxFailureSignFailed); markErr != nil {
 			return 0, markErr
 		}
+		m.logger.Warn("failed tx signing", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "failure_kind", db.TxFailureSignFailed, "error", err.Error())
 		return outboxTx.ID, nil
 	}
 	if err := m.store.MarkTxSignedWithGasAndFees(ctx, outboxTx.ID, signed.Hash(), gasLimit, quote.MaxFeePerGas, quote.MaxPriorityFeePerGas); err != nil {
 		return 0, err
 	}
+	m.logger.Info("signed tx outbox row", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", signed.Hash(), "gas_limit", gasLimit, "dynamic_fee", quote.Dynamic)
 	if err := target.Client.SendTransaction(ctx, signed); err != nil {
 		if markErr := m.store.MarkTxFailed(ctx, outboxTx.ID, err, db.TxFailureBroadcastFailed); markErr != nil {
 			return 0, markErr
 		}
+		m.logger.Warn("failed tx broadcast", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", signed.Hash(), "failure_kind", db.TxFailureBroadcastFailed, "error", err.Error())
 		return outboxTx.ID, nil
 	}
 	if err := m.store.MarkTxBroadcast(ctx, outboxTx.ID, signed.Hash()); err != nil {
 		return 0, err
 	}
+	m.logger.Info("broadcast tx outbox row", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", signed.Hash())
 	return outboxTx.ID, nil
 }
 
@@ -166,6 +177,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 			if err := m.store.MarkTxConfirmed(ctx, outboxTx.ID, outboxTx.TxHash); err != nil {
 				return 0, err
 			}
+			m.logger.Info("confirmed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status)
 			return outboxTx.ID, nil
 		}
 		if err := m.applyWorkflowReceipt(ctx, outboxTx, false); err != nil {
@@ -174,6 +186,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status), db.TxFailureReceiptFailed); err != nil {
 			return 0, err
 		}
+		m.logger.Warn("failed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status, "failure_kind", db.TxFailureReceiptFailed)
 		return outboxTx.ID, nil
 	}
 	return 0, ErrNoReceiptUpdate

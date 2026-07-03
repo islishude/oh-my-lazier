@@ -170,8 +170,13 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b.now == nil {
 		b.now = time.Now
 	}
-	for _, pathway := range b.uniquePathways() {
-		if _, err := b.enqueuePathway(ctx, pathway); err != nil {
+	pathways := b.uniquePathways()
+	if len(pathways) == 0 {
+		b.logger.Debug("skipped price update batch", "reason", "no_pathways")
+		return nil
+	}
+	for _, pathway := range pathways {
+		if _, _, err := b.enqueuePathway(ctx, pathway); err != nil {
 			return err
 		}
 	}
@@ -186,7 +191,12 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
-	for _, pathway := range b.uniquePathways() {
+	pathways := b.uniquePathways()
+	if len(pathways) == 0 {
+		b.logger.Debug("skipped price gas-spike check", "reason", "no_pathways")
+		return nil
+	}
+	for _, pathway := range pathways {
 		key := pathwayKey(pathway)
 		current, err := b.currentDstGasPrice(ctx, pathway.DstEID)
 		if err != nil {
@@ -200,11 +210,11 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
 			continue
 		}
-		enqueuedGas, err := b.enqueuePathway(ctx, pathway)
+		enqueuedGas, txOutboxIDs, err := b.enqueuePathway(ctx, pathway)
 		if err != nil {
 			return err
 		}
-		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", pathway.SrcEID, "dst_eid", pathway.DstEID, "previous_gas_wei", previous, "current_gas_wei", current)
+		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", pathway.SrcEID, "dst_eid", pathway.DstEID, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_ids", txOutboxIDs)
 		b.lastGasPrices[key] = bigutil.Clone(enqueuedGas)
 	}
 	return nil
@@ -217,26 +227,26 @@ type pricedPathway struct {
 	OpenDVN      common.Address
 }
 
-func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.Int, error) {
+func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.Int, []int64, error) {
 	srcChain, err := b.registry.Get(pathway.SrcEID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dstChain, err := b.registry.Get(pathway.DstEID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	srcPrice, err := b.chainPrice(ctx, pathway.SrcEID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dstPrice, err := b.chainPrice(ctx, pathway.DstEID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	dstGasPrice, err := b.currentDstGasPrice(ctx, pathway.DstEID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	config, err := BuildPriceConfig(PriceInputs{
 		SrcNativeUSD:      srcPrice,
@@ -248,8 +258,9 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	txOutboxIDs := make([]int64, 0, 2)
 	for _, request := range []struct {
 		worker  common.Address
 		purpose string
@@ -259,18 +270,21 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 	} {
 		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		if _, err := b.store.EnqueueTx(ctx, tx); err != nil {
-			return nil, err
+		id, err := b.store.EnqueueTx(ctx, tx)
+		if err != nil {
+			return nil, nil, err
 		}
+		txOutboxIDs = append(txOutboxIDs, id)
+		b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", request.purpose, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "worker", request.worker)
 	}
 	key := pathwayKey(pathway)
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
 	b.lastGasPrices[key] = bigutil.Clone(dstGasPrice)
-	return dstGasPrice, nil
+	return dstGasPrice, txOutboxIDs, nil
 }
 
 func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {

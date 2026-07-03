@@ -17,7 +17,7 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 Run one price calculation and enqueue the resulting worker transactions:
 
 ```bash
-go run ./go/cmd/pricebot-once -config <worker.yaml>
+go run ./go/cmd/pricebot-once -config <worker.yaml> -log-level debug
 ```
 
 The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenExecutor, source OpenDVN, destination OpenDVN code, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads the configured primary source, CoinMarketCap/CoinGecko sanity sources when configured, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique `(src_eid, dst_eid, source_workers.open_executor, source_workers.open_dvn)` pair. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.

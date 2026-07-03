@@ -26,6 +26,7 @@ import (
 
 func TestProcessConfirmationsOnceWaitsForSourceConfirmations(t *testing.T) {
 	packet := testDVNPacket()
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
 			Packet: packet,
@@ -36,7 +37,7 @@ func TestProcessConfirmationsOnceWaitsForSourceConfirmations(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 10}}, discardLogger())
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 10}}, logger)
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -48,10 +49,22 @@ func TestProcessConfirmationsOnceWaitsForSourceConfirmations(t *testing.T) {
 	if store.waitingGUID != packet.GUID {
 		t.Fatalf("waiting guid = %s, want %s", store.waitingGUID, packet.GUID)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="dvn job waiting for source confirmations"`,
+		`guid=0x`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`from_status=ASSIGNED`,
+		`to_status=WAITING_CONFIRMATIONS`,
+		`src_block_number=123`,
+		`observed_head_block=133`,
+		`confirmations_required=12`,
+	)
 }
 
-func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
+func TestProcessConfirmationsOnceLogsInsufficientConfirmationsWithoutStatusChange(t *testing.T) {
 	packet := testDVNPacket()
+	logger, logs := captureLogger(slog.LevelDebug)
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
 			Packet: packet,
@@ -62,7 +75,41 @@ func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
 			},
 		}},
 	}
-	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 11}}, discardLogger())
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 10}}, logger)
+
+	processed, err := worker.ProcessConfirmationsOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessConfirmationsOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.waitingGUID != (common.Hash{}) {
+		t.Fatalf("waiting guid = %s, want zero", store.waitingGUID)
+	}
+	assertLogContains(t, logs.String(),
+		`level=DEBUG`,
+		`msg="skipped dvn confirmations"`,
+		`reason=insufficient_confirmations`,
+		`status=WAITING_CONFIRMATIONS`,
+		`observed_head_block=133`,
+	)
+}
+
+func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
+	packet := testDVNPacket()
+	logger, logs := captureLogger(slog.LevelInfo)
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNWaitingConfirmations),
+			},
+		}},
+	}
+	worker := NewWithHeads(store, map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 11}}, logger)
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
 	if err != nil {
@@ -74,6 +121,12 @@ func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
 	if store.quorumGUID != packet.GUID {
 		t.Fatalf("quorum guid = %s, want %s", store.quorumGUID, packet.GUID)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="dvn job reached source confirmations"`,
+		`from_status=WAITING_CONFIRMATIONS`,
+		`to_status=QUORUM_CHECKING`,
+		`observed_head_block=134`,
+	)
 }
 
 func TestProcessConfirmationsOnceActiveChecksDestinationConfigBeforeHead(t *testing.T) {
@@ -171,6 +224,7 @@ func TestProcessConfirmationsOnceRollsReorgBackToWaiting(t *testing.T) {
 
 func TestProcessQuorumOnceMarksReadyToVerify(t *testing.T) {
 	packet := testDVNPacket()
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
 			Packet: packet,
@@ -185,7 +239,7 @@ func TestProcessQuorumOnceMarksReadyToVerify(t *testing.T) {
 		store,
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptReader{receipt: testSourceReceipt(t, packet)}},
-		discardLogger(),
+		logger,
 	)
 
 	processed, err := worker.ProcessQuorumOnce(context.Background())
@@ -214,6 +268,14 @@ func TestProcessQuorumOnceMarksReadyToVerify(t *testing.T) {
 	if report.TxHash != packet.SrcTxHash.Hex() {
 		t.Fatalf("report tx hash = %s, want %s", report.TxHash, packet.SrcTxHash.Hex())
 	}
+	assertLogContains(t, logs.String(),
+		`msg="dvn job ready to verify"`,
+		`guid=0x`,
+		`src_eid=40161`,
+		`dst_eid=40449`,
+		`from_status=QUORUM_CHECKING`,
+		`to_status=READY_TO_VERIFY`,
+	)
 }
 
 func TestProcessReadyToVerifyOnceMarksWouldVerify(t *testing.T) {
@@ -250,6 +312,7 @@ func TestProcessReadyToVerifyOnceMarksWouldVerify(t *testing.T) {
 func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	packet := testDVNPacket()
 	report := []byte(`{"status":"ready"}`)
+	logger, logs := captureLogger(slog.LevelInfo)
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
 			Packet: packet,
@@ -273,7 +336,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
 		nil,
 		map[uint32]ContractCaller{packet.DstEID: fakeDVNReconcileCaller{}},
-		discardLogger(),
+		logger,
 	)
 
 	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
@@ -312,6 +375,13 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	if !bytes.Equal(store.quorumResult, report) {
 		t.Fatalf("quorum result = %s, want %s", store.quorumResult, report)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="enqueued dvn verify tx"`,
+		`guid=0x`,
+		`from_status=READY_TO_VERIFY`,
+		`to_status=VERIFY_TX_ENQUEUED`,
+		`tx_outbox_id=42`,
+	)
 }
 
 func TestProcessReadyToVerifyOnceActiveRejectsReceiveLibraryDrift(t *testing.T) {
@@ -962,4 +1032,18 @@ func addressToBytes32(address common.Address) []byte {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func captureLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level})), &logs
+}
+
+func assertLogContains(t *testing.T, output string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
 }

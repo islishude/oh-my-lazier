@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +30,8 @@ func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)
 	client := &fakeChainClient{pendingNonce: 10, estimatedGas: 123_456, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(1_000_000_000)}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelInfo)
+	manager := New(store, logger)
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID: 40161,
@@ -98,6 +101,16 @@ func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
 	if outboxTx.GasLimit != 123_456 {
 		t.Fatalf("recorded gas limit = %d, want estimated gas", outboxTx.GasLimit)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="bootstrapped tx nonce cursor"`,
+		`msg="claimed tx nonce"`,
+		`nonce=10`,
+		`msg="signed tx outbox row"`,
+		`gas_limit=123456`,
+		`dynamic_fee=true`,
+		`msg="broadcast tx outbox row"`,
+		`purpose=commit-verification`,
+	)
 }
 
 func TestProcessNextSignsLegacyTxWithSuggestedGasPrice(t *testing.T) {
@@ -297,7 +310,8 @@ func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *test
 		header:             dynamicHeader(),
 		suggestedGasTipCap: big.NewInt(1_000_000_000),
 	}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelDebug)
+	manager := New(store, logger)
 
 	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID: 40161,
@@ -335,6 +349,12 @@ func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *test
 		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
 	}
 	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+	assertLogContains(t, logs.String(),
+		`level=DEBUG`,
+		`msg="deferred tx outbox row"`,
+		`reason=estimate_gas_error`,
+		`error="rpc unavailable"`,
+	)
 }
 
 func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing.T) {
@@ -457,7 +477,8 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 		suggestedGasTipCap: big.NewInt(1_000_000_000),
 		sendErr:            errors.New("broadcast timeout"),
 	}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelInfo)
+	manager := New(store, logger)
 
 	firstID, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID: 40161,
@@ -503,6 +524,11 @@ func TestProcessNextSendFailureConsumesNonceAndNextTxUsesCursor(t *testing.T) {
 	if len(client.sent) != 1 {
 		t.Fatalf("sent tx count = %d, want 1", len(client.sent))
 	}
+	assertLogContains(t, logs.String(),
+		`msg="failed tx broadcast"`,
+		`failure_kind=broadcast_failed`,
+		`error="broadcast timeout"`,
+	)
 
 	client.sendErr = nil
 	secondID, err := store.EnqueueTx(t.Context(), db.TxRequest{
@@ -647,7 +673,8 @@ func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
 		header:             dynamicHeader(),
 		suggestedGasTipCap: big.NewInt(1_000_000_000),
 	}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelInfo)
+	manager := New(store, logger)
 
 	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID: 40161,
@@ -693,6 +720,11 @@ func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
 	if len(client.sent) != 0 {
 		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
 	}
+	assertLogContains(t, logs.String(),
+		`msg="failed tx signing"`,
+		`failure_kind=sign_failed`,
+		`error="sign tx failed"`,
+	)
 }
 
 func TestPrepareReplacementTxPreservesNonceAndBumpsFees(t *testing.T) {
@@ -848,7 +880,8 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 		pendingNonce: 33,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelInfo)
+	manager := New(store, logger)
 
 	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
 		ChainEID: 40161,
@@ -893,6 +926,12 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	if confirmed.Status != db.TxStatusConfirmed {
 		t.Fatalf("status = %q, want %q", confirmed.Status, db.TxStatusConfirmed)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="confirmed tx receipt"`,
+		`chain_eid=40161`,
+		`purpose=lz-receive`,
+		`receipt_status=1`,
+	)
 }
 
 func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
@@ -970,7 +1009,8 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 		pendingNonce: 55,
 		receipts:     make(map[common.Hash]*types.Receipt),
 	}
-	manager := New(store, discardLogger())
+	logger, logs := captureLogger(slog.LevelInfo)
+	manager := New(store, logger)
 	packet := testExecutorPacket(t)
 	packet.Status = string(packets.ExecutorExecutable)
 	if err := store.UpsertPacket(t.Context(), packet); err != nil {
@@ -1033,6 +1073,12 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	if failedTx.Status != db.TxStatusFailed {
 		t.Fatalf("tx status = %q, want %q", failedTx.Status, db.TxStatusFailed)
 	}
+	assertLogContains(t, logs.String(),
+		`msg="failed tx receipt"`,
+		`purpose=executor_lz_receive`,
+		`receipt_status=0`,
+		`failure_kind=receipt_failed`,
+	)
 }
 
 func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *testing.T) {
@@ -1622,6 +1668,20 @@ func (s failingSigner) SignTx(context.Context, *types.Transaction, *big.Int) (*t
 
 func (s failingSigner) Type() string {
 	return "failing"
+}
+
+func captureLogger(level slog.Leveler) (*slog.Logger, *bytes.Buffer) {
+	var logs bytes.Buffer
+	return slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: level})), &logs
+}
+
+func assertLogContains(t *testing.T, output string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
 }
 
 func testChains() []config.ChainConfig {

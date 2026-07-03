@@ -43,8 +43,19 @@ type DestinationStore interface {
 	DVNDestinationStore
 }
 
+type destinationLogObserver struct {
+	executorApplied func(packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log)
+	executorSkipped func(reason string, packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log)
+	dvnApplied      func(packet db.PacketRecord, job db.DVNJobRecord, log gethtypes.Log)
+	dvnSkipped      func(reason string, packet db.PacketRecord, job db.DVNJobRecord, log gethtypes.Log)
+}
+
 // ApplyExecutorDestinationLogs applies known EndpointV2 destination logs for one destination chain.
 func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, logs []gethtypes.Log) (int, error) {
+	return applyExecutorDestinationLogs(ctx, store, dstEID, logs, destinationLogObserver{})
+}
+
+func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, logs []gethtypes.Log, observer destinationLogObserver) (int, error) {
 	if store == nil {
 		return 0, fmt.Errorf("executor destination store is required")
 	}
@@ -55,12 +66,18 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 	for _, log := range logs {
 		packet, ok, err := packetForDestinationLog(ctx, store, dstEID, log)
 		if errors.Is(err, pgx.ErrNoRows) {
+			if observer.executorSkipped != nil {
+				observer.executorSkipped("unknown_packet", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+			}
 			continue
 		}
 		if err != nil {
 			return applied, err
 		}
 		if !ok {
+			if observer.executorSkipped != nil {
+				observer.executorSkipped("unsupported_event", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+			}
 			continue
 		}
 		if packet.DstEID != dstEID {
@@ -68,11 +85,17 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		}
 		job, err := store.GetExecutorJob(ctx, packet.GUID)
 		if errors.Is(err, pgx.ErrNoRows) {
+			if observer.executorSkipped != nil {
+				observer.executorSkipped("missing_executor_job", packet, db.ExecutorJobRecord{}, log)
+			}
 			continue
 		} else if err != nil {
 			return applied, err
 		}
 		if executorDestinationLogAlreadyApplied(job.Status, log.Topics[0]) {
+			if observer.executorSkipped != nil {
+				observer.executorSkipped("already_applied", packet, job, log)
+			}
 			continue
 		}
 		didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, log)
@@ -80,6 +103,9 @@ func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 			return applied, err
 		}
 		if didApply {
+			if observer.executorApplied != nil {
+				observer.executorApplied(packet, job, log)
+			}
 			applied++
 		}
 	}
@@ -107,6 +133,10 @@ func executorDestinationLogAlreadyApplied(status string, topic common.Hash) bool
 
 // ApplyDVNDestinationLogs applies ReceiveUln302 PayloadVerified logs for configured pathway OpenDVNs.
 func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dstEID uint32, pathways []chain.Pathway, logs []gethtypes.Log) (int, error) {
+	return applyDVNDestinationLogs(ctx, store, dstEID, pathways, logs, destinationLogObserver{})
+}
+
+func applyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dstEID uint32, pathways []chain.Pathway, logs []gethtypes.Log, observer destinationLogObserver) (int, error) {
 	if store == nil {
 		return 0, fmt.Errorf("dvn destination store is required")
 	}
@@ -116,6 +146,9 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 	applied := 0
 	for _, log := range logs {
 		if len(log.Topics) == 0 || log.Topics[0] != lzabi.PayloadVerifiedTopic() {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("unsupported_event", db.PacketRecord{}, db.DVNJobRecord{}, log)
+			}
 			continue
 		}
 		event, err := lzabi.DecodePayloadVerified(log)
@@ -124,6 +157,9 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		}
 		packet, err := store.GetPacketByVerification(ctx, dstEID, event.Header, event.ProofHash)
 		if errors.Is(err, pgx.ErrNoRows) {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("unknown_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
+			}
 			continue
 		}
 		if err != nil {
@@ -134,9 +170,15 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		}
 		pathway, ok := pathwayForPacket(pathways, packet)
 		if !ok {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("unknown_pathway", packet, db.DVNJobRecord{}, log)
+			}
 			continue
 		}
 		if event.DVN != pathway.DestinationWorkers.OpenDVN {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("unexpected_worker", packet, db.DVNJobRecord{}, log)
+			}
 			continue
 		}
 		if err := validatePayloadVerified(packet, event); err != nil {
@@ -144,16 +186,25 @@ func ApplyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		}
 		job, err := store.GetDVNJob(ctx, packet.GUID)
 		if errors.Is(err, pgx.ErrNoRows) {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("missing_dvn_job", packet, db.DVNJobRecord{}, log)
+			}
 			continue
 		}
 		if err != nil {
 			return applied, err
 		}
 		if job.Status == string(packets.DVNVerified) {
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("already_applied", packet, job, log)
+			}
 			continue
 		}
 		if err := store.MarkDVNVerified(ctx, packet.GUID, log.TxHash); err != nil {
 			return applied, err
+		}
+		if observer.dvnApplied != nil {
+			observer.dvnApplied(packet, job, log)
 		}
 		applied++
 	}
@@ -170,6 +221,39 @@ func pathwayForPacket(pathways []chain.Pathway, packet db.PacketRecord) (chain.P
 		}
 	}
 	return chain.Pathway{}, false
+}
+
+func executorDestinationEventName(topic common.Hash) string {
+	switch topic {
+	case lzabi.PacketVerifiedTopic():
+		return "PacketVerified"
+	case lzabi.PacketDeliveredTopic():
+		return "PacketDelivered"
+	case lzabi.LzReceiveAlertTopic():
+		return "LzReceiveAlert"
+	default:
+		return "unknown"
+	}
+}
+
+func executorDestinationTargetStatus(topic common.Hash) string {
+	switch topic {
+	case lzabi.PacketVerifiedTopic():
+		return string(packets.ExecutorCommitted)
+	case lzabi.PacketDeliveredTopic():
+		return string(packets.ExecutorDelivered)
+	case lzabi.LzReceiveAlertTopic():
+		return string(packets.ExecutorLzReceiveFailed)
+	default:
+		return ""
+	}
+}
+
+func logTopic(log gethtypes.Log) common.Hash {
+	if len(log.Topics) == 0 {
+		return common.Hash{}
+	}
+	return log.Topics[0]
 }
 
 // ApplyExecutorDestinationLog applies one validated destination EndpointV2 log to executor state.
