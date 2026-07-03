@@ -207,6 +207,7 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			sourceWindowSet = true
 			result.SourceTransactions += source
 			result.DVNTransactions += dvn
+			result.addStreamProgress(executorSourceStream, from, to, source, dvn, 0)
 		}
 	}
 	if i.streams.DVNSource {
@@ -228,6 +229,7 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			}
 			result.SourceTransactions += source
 			result.DVNTransactions += dvn
+			result.addStreamProgress(dvnSourceStream, from, to, source, dvn, 0)
 		}
 	}
 	if i.streams.ExecutorDestination {
@@ -247,6 +249,7 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			result.DestinationToBlock = to
 			destinationWindowSet = true
 			result.DestinationLogs += destination
+			result.addStreamProgress(executorDestStream, from, to, 0, 0, destination)
 		}
 	}
 	if i.streams.DVNDestination {
@@ -267,6 +270,7 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 				result.DestinationToBlock = to
 			}
 			result.DestinationLogs += destination
+			result.addStreamProgress(dvnDestStream, from, to, 0, 0, destination)
 		}
 	}
 	return result, nil
@@ -283,6 +287,32 @@ type ProcessResult struct {
 	SourceTransactions   int
 	DVNTransactions      int
 	DestinationLogs      int
+	streamProgress       [4]streamProgress
+	streamProgressCount  int
+}
+
+type streamProgress struct {
+	stream             string
+	fromBlock          uint64
+	toBlock            uint64
+	sourceTransactions int
+	dvnTransactions    int
+	destinationLogs    int
+}
+
+func (r *ProcessResult) addStreamProgress(stream string, from, to uint64, sourceTransactions, dvnTransactions, destinationLogs int) {
+	if r.streamProgressCount >= len(r.streamProgress) {
+		return
+	}
+	r.streamProgress[r.streamProgressCount] = streamProgress{
+		stream:             stream,
+		fromBlock:          from,
+		toBlock:            to,
+		sourceTransactions: sourceTransactions,
+		dvnTransactions:    dvnTransactions,
+		destinationLogs:    destinationLogs,
+	}
+	r.streamProgressCount++
 }
 
 func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64, role string) (int, int, error) {
@@ -552,13 +582,62 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 		)
 	}
 	if err == nil {
+		i.logPollSuccess(result, duration)
 		return nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	i.logger.Warn("indexer poll failed; retrying on next interval", "chain", i.chain.Name, "eid", i.chain.EID, "error", err)
+	i.logger.Warn("indexer poll failed; retrying on next interval", "chain", i.chain.Name, "eid", i.chain.EID, "duration", duration, "error", err)
 	return nil
+}
+
+func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
+	if result.ObservedHeadBlock < i.chain.Confirmations {
+		i.logger.Info(
+			"indexer poll waiting for confirmations",
+			"chain", i.chain.Name,
+			"eid", i.chain.EID,
+			"observed_head_block", result.ObservedHeadBlock,
+			"confirmations", i.chain.Confirmations,
+			"duration", duration,
+		)
+		return
+	}
+	for _, progress := range result.streamProgress[:result.streamProgressCount] {
+		i.logger.Info(
+			"indexer stream advanced",
+			"chain", i.chain.Name,
+			"eid", i.chain.EID,
+			"stream", progress.stream,
+			"from_block", progress.fromBlock,
+			"to_block", progress.toBlock,
+			"confirmed_to_block", result.ConfirmedToBlock,
+			"lag_blocks", lagBlocks(result.ConfirmedToBlock, progress.toBlock),
+			"source_transactions", progress.sourceTransactions,
+			"dvn_transactions", progress.dvnTransactions,
+			"destination_logs", progress.destinationLogs,
+		)
+	}
+	i.logger.Info(
+		"indexer poll completed",
+		"chain", i.chain.Name,
+		"eid", i.chain.EID,
+		"observed_head_block", result.ObservedHeadBlock,
+		"confirmed_to_block", result.ConfirmedToBlock,
+		"streams_advanced", result.streamProgressCount,
+		"source_transactions", result.SourceTransactions,
+		"dvn_transactions", result.DVNTransactions,
+		"destination_logs", result.DestinationLogs,
+		"duration", duration,
+	)
+}
+
+func lagBlocks(confirmedTo, indexedTo uint64) uint64 {
+	if indexedTo >= confirmedTo {
+		return 0
+	}
+	return confirmedTo - indexedTo
 }
 
 func (i *Indexer) destinationAddresses(role string) []common.Address {

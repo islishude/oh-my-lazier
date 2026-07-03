@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -642,6 +643,43 @@ func TestIndexerProcessOnceFailureDoesNotAdvanceCursor(t *testing.T) {
 	}
 	if len(store.cursors) != 0 {
 		t.Fatalf("cursors = %d, want none after failed poll", len(store.cursors))
+	}
+}
+
+func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	client := &fakeLogClient{head: 65}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		logger,
+	).WithStreams(StreamSet{ExecutorSource: true})
+	indexer.backfillRange = 10
+
+	if err := indexer.pollOnce(context.Background()); err != nil {
+		t.Fatalf("pollOnce() error = %v", err)
+	}
+	output := logs.String()
+	for _, want := range []string{
+		`msg="indexer stream advanced"`,
+		`chain=ethereum-sepolia`,
+		`eid=40161`,
+		`stream=executor_source`,
+		`from_block=41`,
+		`to_block=50`,
+		`confirmed_to_block=53`,
+		`lag_blocks=3`,
+		`msg="indexer poll completed"`,
+		`streams_advanced=1`,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
 	}
 }
 

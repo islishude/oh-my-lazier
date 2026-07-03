@@ -63,6 +63,7 @@ Migration dashboard panels:
 Operational assumptions:
 
 - Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status and worker loop retry metrics are process-local and reset on restart.
+- Indexer logs emit one `indexer stream advanced` entry per advanced stream with `from_block`, `to_block`, `confirmed_to_block`, `lag_blocks`, and processed item counts, followed by an `indexer poll completed` summary for the chain.
 - `services.executor.enabled` and `services.dvn.enabled` are process-level switches. A deployment that runs only one role should page on that role's streams and job states, while the other role's durable cursors may be absent in that process.
 - Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. `txretry` remains the manual override for exhausted rows or operator-reviewed replacement, but it is no longer the default path for ordinary failed rows.
 - If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
