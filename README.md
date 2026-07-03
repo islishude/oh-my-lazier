@@ -53,8 +53,8 @@ make fmt-sol        # format solidity files
 
 `npm run check` remains available for compile plus tests without the Go linter.
 CI mirrors the local gates with contract/script/runbook/migration-evidence
-checks, Go tests and lint, Docker image build validation, and a dedicated
-`make security-check` job.
+checks, Go tests and lint, Docker image build validation, a dedicated
+`make e2e-local` dual-Anvil job, and a dedicated `make security-check` job.
 
 The Go worker embeds compact LayerZero ABI JSON from `go/internal/lzabi/abis`
 and on-chain config-check ABI JSON from `go/internal/configcheck/abis`.
