@@ -73,7 +73,7 @@ services:
       retries: 30
 
   localstack:
-    image: localstack/localstack:3.8.1
+    image: localstack/localstack:4.14.0
     environment:
       SERVICES: kms
     ports:

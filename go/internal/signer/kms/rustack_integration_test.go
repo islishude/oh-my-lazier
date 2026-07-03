@@ -7,7 +7,6 @@ import (
 	"errors"
 	"math/big"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,9 +40,6 @@ func TestRustackKMSIntegrationSignsEthereumTransaction(t *testing.T) {
 		KeyUsage: kmstypes.KeyUsageTypeSignVerify,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "ECC_SECG_P256K1 is not supported") {
-			t.Skip("Rustack KMS does not currently support ECC_SECG_P256K1")
-		}
 		t.Fatalf("CreateKey() error = %v", err)
 	}
 	if createOut.KeyMetadata == nil || createOut.KeyMetadata.KeyId == nil {

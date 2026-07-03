@@ -14,8 +14,8 @@ services:
       start_period: 1s
       retries: 30
 
-  rustack:
-    image: ghcr.io/tyrchen/rustack:0.9.1
+  localstack:
+    image: localstack/localstack:4.14.0
     environment:
       SERVICES: kms
     ports:
