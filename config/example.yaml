@@ -16,14 +16,6 @@ pricing:
   enabled: false
   signer: "0x9999999999999999999999999999999999999999"
   interval_seconds: 300
-  executor_fee:
-    base_fee_wei: "1000"
-    dst_gas_overhead: 50000
-    margin_bps: 100
-  dvn_fee:
-    base_fee_wei: "2000"
-    dst_gas_overhead: 150000
-    margin_bps: 200
   stale_after_seconds: 1800
   max_deviation_bps: 500
   gas_spike_bps: 1000
@@ -114,6 +106,15 @@ pathways:
       open_dvn: "0x6666666666666666666666666666666666666666"
     dvn:
       mode: shadow
+    pricing:
+      executor_fee:
+        fixed_fee_wei: "1000"
+        dst_gas_overhead: 50000
+        margin_bps: 100
+      dvn_fee:
+        fixed_fee_wei: "2000"
+        dst_gas_overhead: 150000
+        margin_bps: 200
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000
@@ -131,6 +132,15 @@ pathways:
       open_dvn: "0x3333333333333333333333333333333333333333"
     dvn:
       mode: shadow
+    pricing:
+      executor_fee:
+        fixed_fee_wei: "1000"
+        dst_gas_overhead: 50000
+        margin_bps: 100
+      dvn_fee:
+        fixed_fee_wei: "2000"
+        dst_gas_overhead: 150000
+        margin_bps: 200
     enabled: true
     max_message_size: 10000
     min_lz_receive_gas: 100000

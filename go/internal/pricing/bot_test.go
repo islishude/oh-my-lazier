@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
@@ -19,10 +20,7 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
 	logger, logs := captureLogger(slog.LevelInfo)
-	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
-	}, logger)
+	bot, err := NewWithDependencies(store, registry, testSettings(), testSources(), logger)
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
 	}
@@ -60,15 +58,30 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 		`dst_eid=40449`,
 		`worker=0x2222222222222222222222222222222222222222`,
 	)
+	assertRequestMatchesConfig(t, store.requests, common.HexToAddress("0x2222222222222222222222222222222222222222"), TxPurposeSetExecutorPriceConfig, 40449, PriceConfig{
+		BaseFee:               big.NewInt(1000),
+		DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
+		DstGasOverhead:        50_000,
+		MarginBps:             100,
+		UpdatedAt:             1_700_000_000,
+		StaleAfter:            1800,
+	})
+	assertRequestMatchesConfig(t, store.requests, common.HexToAddress("0x3333333333333333333333333333333333333333"), TxPurposeSetDVNPriceConfig, 40449, PriceConfig{
+		BaseFee:               big.NewInt(2000),
+		DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
+		DstGasOverhead:        150_000,
+		MarginBps:             200,
+		UpdatedAt:             1_700_000_000,
+		StaleAfter:            1800,
+	})
 }
 
 func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
-	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
-	}, discardLogger())
+	sources := testSources()
+	sources[40161] = ChainSources{Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}}
+	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
 	}
@@ -124,8 +137,85 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 		`dst_eid=40449`,
 		`previous_gas_wei=2000000000`,
 		`current_gas_wei=2300000000`,
-		`tx_outbox_ids=`,
+		`tx_outbox_id=`,
 	)
+}
+
+func TestBotEnqueueOnceDeduplicatesSharedRoleIndependently(t *testing.T) {
+	pathways := testPathways()
+	duplicate := pathways[0]
+	duplicate.SrcOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999998")
+	duplicate.DstOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999997")
+	duplicate.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
+	duplicate.Pricing.DVNFee = config.WorkerFeeModelConfig{FixedFeeWei: "3000", DstGasOverhead: 250_000, MarginBps: 300}
+	pathways = []config.PathwayConfig{pathways[0], duplicate}
+	registry := testRegistryWithPathways(t, pathways)
+	store := &fakeStore{}
+	bot, err := NewWithDependencies(store, registry, testSettings(), testSources(), discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 3 {
+		t.Fatalf("enqueued requests = %d, want 3", len(store.requests))
+	}
+	if got := countRequests(store.requests, TxPurposeSetExecutorPriceConfig); got != 1 {
+		t.Fatalf("executor requests = %d, want 1", got)
+	}
+	if got := countRequests(store.requests, TxPurposeSetDVNPriceConfig); got != 2 {
+		t.Fatalf("dvn requests = %d, want 2", got)
+	}
+}
+
+func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*config.PathwayConfig)
+	}{
+		{
+			name: "executor",
+			mutate: func(pathway *config.PathwayConfig) {
+				pathway.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
+				pathway.Pricing.ExecutorFee.FixedFeeWei = "9999"
+			},
+		},
+		{
+			name: "dvn",
+			mutate: func(pathway *config.PathwayConfig) {
+				pathway.SourceWorkers.OpenExecutor = config.MustEVMAddress("0x9999999999999999999999999999999999999995")
+				pathway.Pricing.DVNFee.MarginBps = 999
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pathways := testPathways()
+			duplicate := pathways[0]
+			duplicate.SrcOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999998")
+			duplicate.DstOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999997")
+			test.mutate(&duplicate)
+			registry := testRegistryWithPathways(t, []config.PathwayConfig{pathways[0], duplicate})
+			store := &fakeStore{}
+			bot, err := NewWithDependencies(store, registry, testSettings(), testSources(), discardLogger())
+			if err != nil {
+				t.Fatalf("NewWithDependencies() error = %v", err)
+			}
+
+			err = bot.EnqueueOnce(context.Background())
+			if err == nil {
+				t.Fatal("EnqueueOnce() error = nil, want conflicting fee model error")
+			}
+			if !strings.Contains(err.Error(), "conflicting pricing_set_") {
+				t.Fatalf("EnqueueOnce() error = %v, want conflicting fee model", err)
+			}
+			if len(store.requests) != 0 {
+				t.Fatalf("enqueued requests = %d, want 0", len(store.requests))
+			}
+		})
+	}
 }
 
 type fakeStore struct {
@@ -166,8 +256,6 @@ func testSettings() Settings {
 		Enabled:             true,
 		SignerID:            "0x9999999999999999999999999999999999999999",
 		Interval:            time.Minute,
-		ExecutorFee:         FeeModel{BaseFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
-		DVNFee:              FeeModel{BaseFee: big.NewInt(2000), DstGasOverhead: 150_000, MarginBps: 200},
 		StaleAfter:          30 * time.Minute,
 		MaxDeviation:        500,
 		GasSpikeBps:         1000,
@@ -176,6 +264,11 @@ func testSettings() Settings {
 }
 
 func testRegistry(t *testing.T) *chain.Registry {
+	t.Helper()
+	return testRegistryWithPathways(t, testPathways())
+}
+
+func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *chain.Registry {
 	t.Helper()
 	registry, err := chain.NewRegistry([]config.ChainConfig{
 		{
@@ -202,7 +295,15 @@ func testRegistry(t *testing.T) *chain.Registry {
 				Executor: testExecutorRole(),
 			},
 		},
-	}, []config.PathwayConfig{
+	}, pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	return registry
+}
+
+func testPathways() []config.PathwayConfig {
+	return []config.PathwayConfig{
 		{
 			SrcEID:     40161,
 			DstEID:     40449,
@@ -218,6 +319,7 @@ func testRegistry(t *testing.T) *chain.Registry {
 				OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 			},
 			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+			Pricing:        testPathwayPricingConfig("1000", 50_000, 100, "2000", 150_000, 200),
 			Enabled:        true,
 			MaxMessageSize: 10000,
 		},
@@ -236,14 +338,25 @@ func testRegistry(t *testing.T) *chain.Registry {
 				OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 			},
 			DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+			Pricing:        testPathwayPricingConfig("4000", 80_000, 400, "5000", 180_000, 500),
 			Enabled:        true,
 			MaxMessageSize: 10000,
 		},
-	})
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
 	}
-	return registry
+}
+
+func testPathwayPricingConfig(executorBase string, executorOverhead uint64, executorMargin uint16, dvnBase string, dvnOverhead uint64, dvnMargin uint16) config.PathwayPricingConfig {
+	return config.PathwayPricingConfig{
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: executorBase, DstGasOverhead: executorOverhead, MarginBps: executorMargin},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: dvnBase, DstGasOverhead: dvnOverhead, MarginBps: dvnMargin},
+	}
+}
+
+func testSources() map[uint32]ChainSources {
+	return map[uint32]ChainSources{
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+	}
 }
 
 func testExecutorRole() config.ExecutorTxRoleConfig {
@@ -270,4 +383,31 @@ func assertLogContains(t *testing.T, output string, wants ...string) {
 			t.Fatalf("logs missing %q in:\n%s", want, output)
 		}
 	}
+}
+
+func assertRequestMatchesConfig(t *testing.T, requests []db.TxRequest, worker common.Address, purpose string, dstEID uint32, config PriceConfig) {
+	t.Helper()
+	want, err := BuildSetPriceConfigCalldata(dstEID, config)
+	if err != nil {
+		t.Fatalf("BuildSetPriceConfigCalldata() error = %v", err)
+	}
+	for _, request := range requests {
+		if request.To == worker && request.Purpose == purpose {
+			if !bytes.Equal(request.Calldata, want) {
+				t.Fatalf("%s calldata for %s does not match expected config", purpose, worker)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s request for %s", purpose, worker)
+}
+
+func countRequests(requests []db.TxRequest, purpose string) int {
+	count := 0
+	for _, request := range requests {
+		if request.Purpose == purpose {
+			count++
+		}
+	}
+	return count
 }

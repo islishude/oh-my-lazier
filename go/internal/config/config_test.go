@@ -340,6 +340,61 @@ func TestValidateAcceptsEnabledPricing(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsEnabledPricingWithoutPathwayFees(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pathways[0].Pricing = PathwayPricingConfig{}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing pathway pricing error")
+	}
+}
+
+func TestValidateRejectsInvalidPathwayPricingFeeModel(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*PathwayPricingConfig)
+	}{
+		{
+			name: "negative fixed fee",
+			mutate: func(pricing *PathwayPricingConfig) {
+				pricing.ExecutorFee.FixedFeeWei = "-1"
+			},
+		},
+		{
+			name: "invalid fixed fee",
+			mutate: func(pricing *PathwayPricingConfig) {
+				pricing.ExecutorFee.FixedFeeWei = "abc"
+			},
+		},
+		{
+			name: "margin too high",
+			mutate: func(pricing *PathwayPricingConfig) {
+				pricing.DVNFee.MarginBps = 10_001
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Pricing = validPricingConfig()
+			test.mutate(&cfg.Pathways[0].Pricing)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want invalid pathway pricing error")
+			}
+		})
+	}
+}
+
+func TestValidateAllowsOmittedPathwayPricingWhenPricingDisabled(t *testing.T) {
+	cfg := validConfig()
+	for i := range cfg.Pathways {
+		cfg.Pathways[i].Pricing = PathwayPricingConfig{}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestValidateRejectsIncompletePricingChains(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
@@ -570,6 +625,7 @@ func validConfig() Config {
 					OpenDVN: MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
+				Pricing:         validPathwayPricingConfig(),
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
@@ -590,6 +646,7 @@ func validConfig() Config {
 					OpenDVN: MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:             PathwayDVNConfig{Mode: DVNModeShadow},
+				Pricing:         validPathwayPricingConfig(),
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
@@ -620,8 +677,6 @@ func validPricingConfig() PricingConfig {
 		Enabled:                 true,
 		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		IntervalSeconds:         300,
-		ExecutorFee:             WorkerFeeModelConfig{BaseFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
-		DVNFee:                  WorkerFeeModelConfig{BaseFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
 		StaleAfterSeconds:       1800,
 		MaxDeviationBps:         500,
 		GasSpikeBps:             1000,
@@ -658,5 +713,12 @@ func validPricingConfig() PricingConfig {
 				},
 			},
 		},
+	}
+}
+
+func validPathwayPricingConfig() PathwayPricingConfig {
+	return PathwayPricingConfig{
+		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
+		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
 	}
 }

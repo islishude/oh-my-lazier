@@ -9,9 +9,10 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 - Every configured pricing chain declares `primary_source`, `sanity_sources`, a Uniswap V3 sanity route, and at least one healthy RPC URL.
 - Supported primary sources are `binance`, `coinmarketcap`, and `coingecko`. `sanity_sources` may use those sources plus `uniswap`, must include `uniswap`, and must not duplicate the primary source.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap` is used as a primary or sanity source; do not put API keys in worker YAML.
-- `executor_fee`, `dvn_fee`, `stale_after_seconds`, `gas_spike_bps`, and configured gas price/fee caps are approved for the target environment. The fee model fields are worker quote inputs, not EIP-1559 block header base fees; the tx manager derives legacy versus dynamic-fee signing and estimates outer transaction gas from RPC before broadcast.
-- `executor_fee` and `dvn_fee` are independent. Each has `base_fee_wei`, `dst_gas_overhead`, and `margin_bps`; the bot converts destination gas price into source native-token units and writes the resulting `priceConfig(dstEid)` to the matching worker.
+- `pathways[].pricing.executor_fee`, `pathways[].pricing.dvn_fee`, `pricing.stale_after_seconds`, `pricing.gas_spike_bps`, and configured gas price/fee caps are approved for the target environment. The fee model fields are worker quote inputs, not EIP-1559 block header base fees; the tx manager derives legacy versus dynamic-fee signing and estimates outer transaction gas from RPC before broadcast.
+- Each pathway fee model has `fixed_fee_wei`, `dst_gas_overhead`, and `margin_bps`; the bot converts destination gas price into source native-token units and writes the resulting `priceConfig(dstEid)` to the matching worker.
 - `pathways[].source_workers`, `pathways[].destination_workers.open_dvn`, and pathway EIDs match the latest deployment record.
+- Pathways that share the same source-chain worker contract and destination EID must use the same fee model for that worker role; the worker contract stores one `priceConfig(dstEid)` per role and rejects conflicting local config before enqueue.
 
 ## One-Shot Update
 
@@ -21,18 +22,18 @@ Run one price calculation and enqueue the resulting worker transactions:
 go run ./go/cmd/pricebot-once -config <worker.yaml> -log-level debug
 ```
 
-The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenExecutor, source OpenDVN, destination OpenDVN code, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads each chain's configured primary feed, configured sanity feeds, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique `(src_eid, dst_eid, source_workers.open_executor, source_workers.open_dvn)` pair. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
+The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenExecutor, source OpenDVN, destination OpenDVN code, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads each chain's configured primary feed, configured sanity feeds, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique executor `(src_eid, dst_eid, source_workers.open_executor)` and DVN `(src_eid, dst_eid, source_workers.open_dvn)` role key. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
 
 ## Expected Outbox Effects
 
-For each unique source/destination/source-worker pair, the command should enqueue:
+For each unique source/destination/source-worker role key, the command should enqueue:
 
-- one `pricing_set_executor_price_config` transaction to the source-chain OpenExecutor using `pricing.executor_fee`
-- one `pricing_set_dvn_price_config` transaction to the source-chain OpenDVN using `pricing.dvn_fee`
+- one `pricing_set_executor_price_config` transaction to the source-chain OpenExecutor using the matching `pathways[].pricing.executor_fee`
+- one `pricing_set_dvn_price_config` transaction to the source-chain OpenDVN using the matching `pathways[].pricing.dvn_fee`
 
 If the primary source and any configured sanity source deviate beyond `max_deviation_bps`, no price update should be enqueued and the command should exit non-zero.
 
-During the long-running worker loop, the bot also tracks the last destination gas price used for each unique source/destination/source-worker pair. If a later destination gas read increases by at least `gas_spike_bps`, it enqueues a fresh OpenExecutor/OpenDVN price update before the next scheduled interval.
+During the long-running worker loop, the bot also tracks the last destination gas price used for each unique source/destination/source-worker role key. If a later destination gas read increases by at least `gas_spike_bps`, it enqueues a fresh price update for that role before the next scheduled interval.
 
 ## Verification
 

@@ -33,28 +33,39 @@ const (
 
 // Config is the startup configuration for the single-process worker.
 type Config struct {
-	DatabaseURL string          `yaml:"database_url"`
-	Metrics     MetricsConfig   `yaml:"metrics"`
-	Services    ServicesConfig  `yaml:"services"`
-	Pricing     PricingConfig   `yaml:"pricing"`
-	Signers     []SignerConfig  `yaml:"signers"`
-	Chains      []ChainConfig   `yaml:"chains"`
-	Pathways    []PathwayConfig `yaml:"pathways"`
+	// DatabaseURL is the Postgres connection string; Load may override it with DATABASE_URL.
+	DatabaseURL string `yaml:"database_url"`
+	// Metrics controls the local HTTP listener used for worker metrics and health probes.
+	Metrics MetricsConfig `yaml:"metrics"`
+	// Services controls which durable worker loops this process starts; omitted roles default to enabled.
+	Services ServicesConfig `yaml:"services"`
+	// Pricing controls the optional price bot that enqueues worker price-config updates.
+	Pricing PricingConfig `yaml:"pricing"`
+	// Signers lists local signing backends referenced by pricing and chain transaction roles.
+	Signers []SignerConfig `yaml:"signers"`
+	// Chains defines LayerZero endpoint chains, RPC access, and local tx submission policy.
+	Chains []ChainConfig `yaml:"chains"`
+	// Pathways defines source-to-destination OApp routes, workers, limits, and worker fee models.
+	Pathways []PathwayConfig `yaml:"pathways"`
 }
 
 // MetricsConfig controls the worker HTTP metrics and health endpoint.
 type MetricsConfig struct {
+	// ListenAddress is the metrics HTTP bind address; it defaults to :9090 when omitted.
 	ListenAddress string `yaml:"listen_address"`
 }
 
 // ServicesConfig selects which durable worker roles this process runs.
 type ServicesConfig struct {
+	// Executor enables the executor loop and its local transaction requirements.
 	Executor ServiceToggleConfig `yaml:"executor"`
-	DVN      ServiceToggleConfig `yaml:"dvn"`
+	// DVN enables the DVN verification loop; active submission still depends on pathway mode.
+	DVN ServiceToggleConfig `yaml:"dvn"`
 }
 
 // ServiceToggleConfig controls one optional worker role.
 type ServiceToggleConfig struct {
+	// Enabled is tri-state so omitted YAML can use the caller-supplied default.
 	Enabled *bool `yaml:"enabled"`
 }
 
@@ -78,140 +89,224 @@ func (c Config) DVNEnabled() bool {
 
 // ExecutorTxRoleConfig controls executor transaction submission on one chain.
 type ExecutorTxRoleConfig struct {
-	Signer                  EVMAddress `yaml:"signer"`
-	MaxFeePerGasWei         string     `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string     `yaml:"max_priority_fee_per_gas_wei"`
+	// Signer references a configured signer used for executor destination transactions on this chain.
+	Signer EVMAddress `yaml:"signer"`
+	// MaxFeePerGasWei caps txmgr send-time gas pricing for executor transactions.
+	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
+	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips; legacy transactions may leave it empty.
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // DVNTxRoleConfig controls active DVN verification transaction submission on one chain.
 type DVNTxRoleConfig struct {
-	Signer                  EVMAddress `yaml:"signer"`
-	MaxFeePerGasWei         string     `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string     `yaml:"max_priority_fee_per_gas_wei"`
+	// Signer references a configured signer used only when a pathway requires active DVN submission.
+	Signer EVMAddress `yaml:"signer"`
+	// MaxFeePerGasWei caps txmgr send-time gas pricing for DVN verification transactions.
+	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
+	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips; shadow-only DVN configs may omit all role fields.
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
 }
 
 // ChainTxRolesConfig configures local transaction roles for one chain.
 type ChainTxRolesConfig struct {
+	// Executor is the local transaction policy for executor deliveries on this destination chain.
 	Executor ExecutorTxRoleConfig `yaml:"executor"`
-	DVN      DVNTxRoleConfig      `yaml:"dvn"`
+	// DVN is the local transaction policy for active DVN verification on this destination chain.
+	DVN DVNTxRoleConfig `yaml:"dvn"`
 }
 
 // PricingConfig controls optional price update generation.
 type PricingConfig struct {
-	Enabled                 bool                 `yaml:"enabled"`
-	Signer                  EVMAddress           `yaml:"signer"`
-	IntervalSeconds         uint64               `yaml:"interval_seconds"`
-	ExecutorFee             WorkerFeeModelConfig `yaml:"executor_fee"`
-	DVNFee                  WorkerFeeModelConfig `yaml:"dvn_fee"`
-	StaleAfterSeconds       uint64               `yaml:"stale_after_seconds"`
-	MaxDeviationBps         uint64               `yaml:"max_deviation_bps"`
-	GasSpikeBps             uint64               `yaml:"gas_spike_bps"`
-	AllowSanityFallback     bool                 `yaml:"allow_sanity_fallback"`
-	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string               `yaml:"max_priority_fee_per_gas_wei"`
-	BinanceBaseURL          string               `yaml:"binance_base_url"`
-	CoinMarketCapBaseURL    string               `yaml:"coinmarketcap_base_url"`
-	CoinMarketCapAPIKeyEnv  string               `yaml:"coinmarketcap_api_key_env"`
-	CoinGeckoBaseURL        string               `yaml:"coingecko_base_url"`
-	Chains                  []PricingChainConfig `yaml:"chains"`
+	// Enabled turns on price-bot startup validation and setPriceConfig transaction generation.
+	Enabled bool `yaml:"enabled"`
+	// Signer references the local signer used for price-config update transactions.
+	Signer EVMAddress `yaml:"signer"`
+	// IntervalSeconds is the scheduled full refresh interval; it defaults to 300 when pricing is enabled.
+	IntervalSeconds uint64 `yaml:"interval_seconds"`
+	// StaleAfterSeconds is written into worker PriceConfig and defaults to 1800 when pricing is enabled.
+	StaleAfterSeconds uint64 `yaml:"stale_after_seconds"`
+	// MaxDeviationBps is the allowed primary-vs-sanity feed deviation; it defaults to 500.
+	MaxDeviationBps uint64 `yaml:"max_deviation_bps"`
+	// GasSpikeBps triggers early updates when destination gas rises past the previous quoted price.
+	GasSpikeBps uint64 `yaml:"gas_spike_bps"`
+	// AllowSanityFallback lets the bot use a healthy sanity source only when the primary source is unhealthy.
+	AllowSanityFallback bool `yaml:"allow_sanity_fallback"`
+	// MaxFeePerGasWei caps txmgr send-time gas pricing for price-config update transactions.
+	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
+	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price-config update transactions.
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	// BinanceBaseURL optionally overrides the Binance HTTP API endpoint.
+	BinanceBaseURL string `yaml:"binance_base_url"`
+	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTP API endpoint.
+	CoinMarketCapBaseURL string `yaml:"coinmarketcap_base_url"`
+	// CoinMarketCapAPIKeyEnv names the environment variable containing the CoinMarketCap API key.
+	CoinMarketCapAPIKeyEnv string `yaml:"coinmarketcap_api_key_env"`
+	// CoinGeckoBaseURL optionally overrides the CoinGecko HTTP API endpoint.
+	CoinGeckoBaseURL string `yaml:"coingecko_base_url"`
+	// Chains configures native-asset price feeds for every chain when pricing is enabled.
+	Chains []PricingChainConfig `yaml:"chains"`
 }
 
 // WorkerFeeModelConfig controls one worker role's source-chain service fee model.
 type WorkerFeeModelConfig struct {
-	BaseFeeWei     string `yaml:"base_fee_wei"`
+	// FixedFeeWei is the fixed source-chain native-token fee component for this worker role.
+	FixedFeeWei string `yaml:"fixed_fee_wei"`
+	// DstGasOverhead is the fixed destination gas unit component added before price conversion.
 	DstGasOverhead uint64 `yaml:"dst_gas_overhead"`
-	MarginBps      uint16 `yaml:"margin_bps"`
+	// MarginBps is applied after fixed fee plus destination gas cost; it must not exceed 10000.
+	MarginBps uint16 `yaml:"margin_bps"`
 }
 
 // PricingChainConfig configures price sources for one chain's native asset.
 type PricingChainConfig struct {
-	EID                 uint32               `yaml:"eid"`
-	PrimarySource       string               `yaml:"primary_source"`
-	SanitySources       []string             `yaml:"sanity_sources"`
-	BinanceSymbol       string               `yaml:"binance_symbol"`
-	CoinMarketCapSymbol string               `yaml:"coinmarketcap_symbol"`
-	CoinGeckoID         string               `yaml:"coingecko_id"`
-	Uniswap             UniswapPricingConfig `yaml:"uniswap"`
+	// EID links this feed config to one configured ChainConfig endpoint ID.
+	EID uint32 `yaml:"eid"`
+	// PrimarySource is the price source the bot quotes from; supported values exclude uniswap.
+	PrimarySource string `yaml:"primary_source"`
+	// SanitySources cross-check the primary source and must include uniswap without duplicating the primary.
+	SanitySources []string `yaml:"sanity_sources"`
+	// BinanceSymbol is required when binance is selected as primary or sanity source.
+	BinanceSymbol string `yaml:"binance_symbol"`
+	// CoinMarketCapSymbol is required when coinmarketcap is selected as primary or sanity source.
+	CoinMarketCapSymbol string `yaml:"coinmarketcap_symbol"`
+	// CoinGeckoID is required when coingecko is selected as primary or sanity source.
+	CoinGeckoID string `yaml:"coingecko_id"`
+	// Uniswap configures the on-chain V3 sanity route for this chain's native asset.
+	Uniswap UniswapPricingConfig `yaml:"uniswap"`
 }
 
 // UniswapPricingConfig configures one V3 quoter sanity route.
 type UniswapPricingConfig struct {
-	QuoterAddress    EVMAddress `yaml:"quoter_address"`
-	TokenIn          EVMAddress `yaml:"token_in"`
-	TokenOut         EVMAddress `yaml:"token_out"`
-	Fee              uint32     `yaml:"fee"`
-	AmountInWei      string     `yaml:"amount_in_wei"`
-	TokenOutDecimals uint8      `yaml:"token_out_decimals"`
+	// QuoterAddress is the Uniswap V3 quoter contract used for sanity pricing.
+	QuoterAddress EVMAddress `yaml:"quoter_address"`
+	// TokenIn is the chain-native or wrapped-native token being priced.
+	TokenIn EVMAddress `yaml:"token_in"`
+	// TokenOut is the reference token returned by the quoter, usually a stablecoin.
+	TokenOut EVMAddress `yaml:"token_out"`
+	// Fee is the Uniswap V3 pool fee tier encoded as a uint24-compatible value.
+	Fee uint32 `yaml:"fee"`
+	// AmountInWei is the positive token-in amount used for the sanity quote.
+	AmountInWei string `yaml:"amount_in_wei"`
+	// TokenOutDecimals converts the quoted token-out amount into USD/native units.
+	TokenOutDecimals uint8 `yaml:"token_out_decimals"`
 }
 
 // SignerConfig configures one local signing backend without embedding raw secret material.
 type SignerConfig struct {
-	ID       EVMAddress           `yaml:"id"`
-	Type     string               `yaml:"type"`
+	// ID is the address other config sections reference as a local signer.
+	ID EVMAddress `yaml:"id"`
+	// Type selects the signer backend; supported values are keystore and kms.
+	Type string `yaml:"type"`
+	// Keystore configures a local geth keystore backend when Type is keystore.
 	Keystore KeystoreSignerConfig `yaml:"keystore"`
-	KMS      KMSSignerConfig      `yaml:"kms"`
+	// KMS configures an AWS-compatible KMS backend when Type is kms.
+	KMS KMSSignerConfig `yaml:"kms"`
 }
 
 // KeystoreSignerConfig points at an encrypted geth keystore and its password source.
 type KeystoreSignerConfig struct {
-	Path         string `yaml:"path"`
-	PasswordEnv  string `yaml:"password_env"`
+	// Path is the encrypted geth keystore JSON path available to the worker process.
+	Path string `yaml:"path"`
+	// PasswordEnv names the environment variable containing the keystore password.
+	PasswordEnv string `yaml:"password_env"`
+	// PasswordFile points at a file containing the keystore password; use exactly one password source.
 	PasswordFile string `yaml:"password_file"`
 }
 
 // KMSSignerConfig points at an AWS-compatible KMS signing key.
 type KMSSignerConfig struct {
-	KeyID    string     `yaml:"key_id"`
-	Region   string     `yaml:"region"`
-	Address  EVMAddress `yaml:"address"`
-	Endpoint string     `yaml:"endpoint"`
+	// KeyID identifies the KMS key used for secp256k1 signing.
+	KeyID string `yaml:"key_id"`
+	// Region selects the AWS region for the KMS client.
+	Region string `yaml:"region"`
+	// Address is the EVM account controlled by the KMS key and must match the signer ID.
+	Address EVMAddress `yaml:"address"`
+	// Endpoint optionally targets a compatible local or managed KMS endpoint.
+	Endpoint string `yaml:"endpoint"`
 }
 
 // ChainConfig defines one LayerZero endpoint chain watched by the worker.
 type ChainConfig struct {
-	EID                    uint32             `yaml:"eid"`
-	Name                   string             `yaml:"name"`
-	Family                 ChainFamily        `yaml:"family"`
-	ChainID                uint64             `yaml:"chain_id"`
-	EndpointAddress        EVMAddress         `yaml:"endpoint_address"`
-	Confirmations          uint64             `yaml:"confirmations"`
-	StartBlockNumber       uint64             `yaml:"start_block_number"`
-	IndexerQueryBlockRange uint64             `yaml:"indexer_query_block_range"`
-	RPCURLs                []string           `yaml:"rpc_urls"`
-	TxRoles                ChainTxRolesConfig `yaml:"tx_roles"`
+	// EID is the LayerZero endpoint ID and is the stable key used by pathways and pricing.
+	EID uint32 `yaml:"eid"`
+	// Name is a human-readable chain label used in logs and validation errors.
+	Name string `yaml:"name"`
+	// Family must be evm in phase 1; non-EVM chain families are intentionally unsupported.
+	Family ChainFamily `yaml:"family"`
+	// ChainID is the EVM chain ID every configured RPC endpoint must report.
+	ChainID uint64 `yaml:"chain_id"`
+	// EndpointAddress is the LayerZero EndpointV2 contract address on this chain.
+	EndpointAddress EVMAddress `yaml:"endpoint_address"`
+	// Confirmations is the minimum confirmation depth before indexed source events are trusted.
+	Confirmations uint64 `yaml:"confirmations"`
+	// StartBlockNumber seeds the first indexer backfill when no durable cursor exists; omitted means 0.
+	StartBlockNumber uint64 `yaml:"start_block_number"`
+	// IndexerQueryBlockRange bounds each FilterLogs window and defaults to 500 when omitted.
+	IndexerQueryBlockRange uint64 `yaml:"indexer_query_block_range"`
+	// RPCURLs lists every RPC endpoint in the quorum; http(s), ws(s), and absolute IPC paths are supported.
+	RPCURLs []string `yaml:"rpc_urls"`
+	// TxRoles defines local send-time tx policies for worker submissions on this chain.
+	TxRoles ChainTxRolesConfig `yaml:"tx_roles"`
 }
 
 // WorkerContractsConfig identifies the self-hosted worker contracts selected for one source pathway.
 type WorkerContractsConfig struct {
+	// OpenExecutor is the source-chain executor configured for this pathway.
 	OpenExecutor EVMAddress `yaml:"open_executor"`
-	OpenDVN      EVMAddress `yaml:"open_dvn"`
+	// OpenDVN is the source-chain DVN configured in the source SendUln required DVNs.
+	OpenDVN EVMAddress `yaml:"open_dvn"`
 }
 
 // DestinationWorkerContractsConfig identifies target-chain worker contracts selected for a pathway.
 type DestinationWorkerContractsConfig struct {
+	// OpenDVN is the destination-chain OpenDVN whose verifier authorization is checked for active DVN flow.
 	OpenDVN EVMAddress `yaml:"open_dvn"`
 }
 
 // PathwayDVNConfig controls DVN behavior for one source-to-destination pathway.
 type PathwayDVNConfig struct {
+	// Mode defaults to shadow; active mode enqueues destination-chain DVN verification transactions.
 	Mode DVNMode `yaml:"mode"`
+}
+
+// PathwayPricingConfig controls price updates for one source-to-destination pathway.
+type PathwayPricingConfig struct {
+	// ExecutorFee is the source-chain worker quote model for the pathway's OpenExecutor.
+	ExecutorFee WorkerFeeModelConfig `yaml:"executor_fee"`
+	// DVNFee is the source-chain worker quote model for the pathway's OpenDVN.
+	DVNFee WorkerFeeModelConfig `yaml:"dvn_fee"`
 }
 
 // PathwayConfig defines an allowed source-to-destination message pathway.
 type PathwayConfig struct {
-	SrcEID             uint32                           `yaml:"src_eid"`
-	DstEID             uint32                           `yaml:"dst_eid"`
-	SrcOApp            EVMAddress                       `yaml:"src_oapp"`
-	DstOApp            EVMAddress                       `yaml:"dst_oapp"`
-	SendLib            EVMAddress                       `yaml:"send_lib"`
-	ReceiveLib         EVMAddress                       `yaml:"receive_lib"`
-	SourceWorkers      WorkerContractsConfig            `yaml:"source_workers"`
+	// SrcEID is the source LayerZero endpoint ID and part of the pathway identity.
+	SrcEID uint32 `yaml:"src_eid"`
+	// DstEID is the destination LayerZero endpoint ID and part of the pathway identity.
+	DstEID uint32 `yaml:"dst_eid"`
+	// SrcOApp is the source-chain OApp address and part of the pathway identity.
+	SrcOApp EVMAddress `yaml:"src_oapp"`
+	// DstOApp is the destination-chain OApp peer address and part of the pathway identity.
+	DstOApp EVMAddress `yaml:"dst_oapp"`
+	// SendLib is the source-chain LayerZero send library expected for this pathway.
+	SendLib EVMAddress `yaml:"send_lib"`
+	// ReceiveLib is the destination-chain LayerZero receive library expected for this pathway.
+	ReceiveLib EVMAddress `yaml:"receive_lib"`
+	// SourceWorkers selects the source-chain OpenExecutor and OpenDVN contracts for this route.
+	SourceWorkers WorkerContractsConfig `yaml:"source_workers"`
+	// DestinationWorkers selects destination-side worker contracts used for verification checks.
 	DestinationWorkers DestinationWorkerContractsConfig `yaml:"destination_workers"`
-	DVN                PathwayDVNConfig                 `yaml:"dvn"`
-	Enabled            bool                             `yaml:"enabled"`
-	MaxMessageSize     uint64                           `yaml:"max_message_size"`
-	MinLzReceiveGas    uint64                           `yaml:"min_lz_receive_gas"`
-	MaxLzReceiveGas    uint64                           `yaml:"max_lz_receive_gas"`
+	// DVN controls whether the local DVN stays in shadow mode or actively submits verification.
+	DVN PathwayDVNConfig `yaml:"dvn"`
+	// Pricing holds pathway-scoped worker quote models; it is required only when pricing is enabled.
+	Pricing PathwayPricingConfig `yaml:"pricing"`
+	// Enabled is the expected on-chain worker pathway enablement, not the process service toggle.
+	Enabled bool `yaml:"enabled"`
+	// MaxMessageSize is the maximum source message payload size accepted by the workers.
+	MaxMessageSize uint64 `yaml:"max_message_size"`
+	// MinLzReceiveGas is the minimum executor lzReceive gas accepted for this pathway.
+	MinLzReceiveGas uint64 `yaml:"min_lz_receive_gas"`
+	// MaxLzReceiveGas is the maximum executor lzReceive gas accepted for this pathway.
+	MaxLzReceiveGas uint64 `yaml:"max_lz_receive_gas"`
 }
 
 // Load reads a YAML config file, applies environment overrides, and validates the result.
@@ -379,6 +474,11 @@ func (c Config) Validate() error {
 		if pathway.MinLzReceiveGas > pathway.MaxLzReceiveGas {
 			return fmt.Errorf("pathway %d -> %d min_lz_receive_gas exceeds max_lz_receive_gas", pathway.SrcEID, pathway.DstEID)
 		}
+		if c.Pricing.Enabled {
+			if err := validatePathwayPricing(pathway); err != nil {
+				return err
+			}
+		}
 		key := fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)
 		if _, ok := pathways[key]; ok {
 			return fmt.Errorf("duplicate pathway %s", key)
@@ -514,12 +614,6 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.GasSpikeBps == 0 {
 		return errors.New("pricing gas_spike_bps is required")
 	}
-	if err := validateWorkerFeeModel("pricing.executor_fee", c.Pricing.ExecutorFee); err != nil {
-		return err
-	}
-	if err := validateWorkerFeeModel("pricing.dvn_fee", c.Pricing.DVNFee); err != nil {
-		return err
-	}
 	if err := validateTxFeePolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei); err != nil {
 		return err
 	}
@@ -542,13 +636,24 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	return nil
 }
 
-func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
-	if model.BaseFeeWei == "" {
-		return fmt.Errorf("%s.base_fee_wei is required", prefix)
+func validatePathwayPricing(pathway PathwayConfig) error {
+	prefix := fmt.Sprintf("pathway %d -> %d pricing", pathway.SrcEID, pathway.DstEID)
+	if err := validateWorkerFeeModel(prefix+".executor_fee", pathway.Pricing.ExecutorFee); err != nil {
+		return err
 	}
-	baseFee, ok := new(big.Int).SetString(model.BaseFeeWei, 10)
-	if !ok || baseFee.Sign() < 0 {
-		return fmt.Errorf("%s.base_fee_wei must be a non-negative integer", prefix)
+	if err := validateWorkerFeeModel(prefix+".dvn_fee", pathway.Pricing.DVNFee); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
+	if model.FixedFeeWei == "" {
+		return fmt.Errorf("%s.fixed_fee_wei is required", prefix)
+	}
+	fixedFee, ok := new(big.Int).SetString(model.FixedFeeWei, 10)
+	if !ok || fixedFee.Sign() < 0 {
+		return fmt.Errorf("%s.fixed_fee_wei must be a non-negative integer", prefix)
 	}
 	if model.MarginBps > 10_000 {
 		return fmt.Errorf("%s.margin_bps exceeds 10000", prefix)

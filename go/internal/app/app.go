@@ -290,20 +290,10 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	if !a.cfg.Pricing.Enabled {
 		return pricing.New(a.logger), nil
 	}
-	executorFee, err := pricingFeeModel(a.cfg.Pricing.ExecutorFee)
-	if err != nil {
-		return nil, err
-	}
-	dvnFee, err := pricingFeeModel(a.cfg.Pricing.DVNFee)
-	if err != nil {
-		return nil, err
-	}
 	settings := pricing.Settings{
 		Enabled:             true,
 		SignerID:            a.cfg.Pricing.Signer.Hex(),
 		Interval:            time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
-		ExecutorFee:         executorFee,
-		DVNFee:              dvnFee,
 		StaleAfter:          time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
 		MaxDeviation:        a.cfg.Pricing.MaxDeviationBps,
 		GasSpikeBps:         a.cfg.Pricing.GasSpikeBps,
@@ -312,6 +302,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
 	var coinMarketCapClient *pricing.CoinMarketCapClient
 	if pricingUsesSource(a.cfg.Pricing.Chains, "coinmarketcap") {
+		var err error
 		coinMarketCapClient, err = pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
 		if err != nil {
 			return nil, err
@@ -539,18 +530,6 @@ func parseBigInt(value string) (*big.Int, error) {
 		return nil, errors.New("invalid integer")
 	}
 	return parsed, nil
-}
-
-func pricingFeeModel(cfg config.WorkerFeeModelConfig) (pricing.FeeModel, error) {
-	baseFee, err := parseBigInt(cfg.BaseFeeWei)
-	if err != nil {
-		return pricing.FeeModel{}, err
-	}
-	return pricing.FeeModel{
-		BaseFee:        baseFee,
-		DstGasOverhead: cfg.DstGasOverhead,
-		MarginBps:      cfg.MarginBps,
-	}, nil
 }
 
 func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy, error) {

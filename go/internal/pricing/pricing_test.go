@@ -66,7 +66,7 @@ func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) 
 		SrcNativeUSD:      big.NewRat(2000, 1),
 		DstNativeUSD:      big.NewRat(1000, 1),
 		DstGasPriceWei:    big.NewInt(2_000_000_000),
-		Fee:               FeeModel{BaseFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
+		Fee:               FeeModel{FixedFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
 		UpdatedAtUnix:     1_700_000_000,
 		StaleAfterSeconds: 1800,
 	})
@@ -92,7 +92,7 @@ func TestBuildPriceConfigRoundsUpFractionalWei(t *testing.T) {
 		SrcNativeUSD:      big.NewRat(3, 1),
 		DstNativeUSD:      big.NewRat(2, 1),
 		DstGasPriceWei:    big.NewInt(10),
-		Fee:               FeeModel{BaseFee: big.NewInt(0)},
+		Fee:               FeeModel{FixedFee: big.NewInt(0)},
 		UpdatedAtUnix:     1,
 		StaleAfterSeconds: 2,
 	})

@@ -8,12 +8,14 @@ import (
 	"log/slog"
 	"maps"
 	"math/big"
+	"sort"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
 
@@ -118,8 +120,6 @@ type Settings struct {
 	Enabled             bool
 	SignerID            string
 	Interval            time.Duration
-	ExecutorFee         FeeModel
-	DVNFee              FeeModel
 	StaleAfter          time.Duration
 	MaxDeviation        uint64
 	GasSpikeBps         uint64
@@ -128,7 +128,7 @@ type Settings struct {
 
 // FeeModel controls one worker role's source-chain quote inputs.
 type FeeModel struct {
-	BaseFee        *big.Int
+	FixedFee       *big.Int
 	DstGasOverhead uint64
 	MarginBps      uint16
 }
@@ -144,12 +144,6 @@ func (s Settings) Validate() error {
 	if s.Interval <= 0 {
 		return errors.New("pricing interval must be positive")
 	}
-	if err := s.ExecutorFee.Validate("pricing executor fee"); err != nil {
-		return err
-	}
-	if err := s.DVNFee.Validate("pricing dvn fee"); err != nil {
-		return err
-	}
 	if s.StaleAfter <= 0 {
 		return errors.New("pricing stale_after must be positive")
 	}
@@ -164,8 +158,8 @@ func (s Settings) Validate() error {
 
 // Validate checks one worker fee model.
 func (m FeeModel) Validate(prefix string) error {
-	if m.BaseFee == nil || m.BaseFee.Sign() < 0 {
-		return fmt.Errorf("%s base fee must be non-negative", prefix)
+	if m.FixedFee == nil || m.FixedFee.Sign() < 0 {
+		return fmt.Errorf("%s fixed fee must be non-negative", prefix)
 	}
 	if m.MarginBps > 10_000 {
 		return fmt.Errorf("%s margin bps exceeds 10000", prefix)
@@ -188,13 +182,16 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b.now == nil {
 		b.now = time.Now
 	}
-	pathways := b.uniquePathways()
-	if len(pathways) == 0 {
+	updates, err := b.uniquePriceUpdates()
+	if err != nil {
+		return err
+	}
+	if len(updates) == 0 {
 		b.logger.Debug("skipped price update batch", "reason", "no_pathways")
 		return nil
 	}
-	for _, pathway := range pathways {
-		if _, _, err := b.enqueuePathway(ctx, pathway); err != nil {
+	for _, update := range updates {
+		if _, _, err := b.enqueuePriceUpdate(ctx, update); err != nil {
 			return err
 		}
 	}
@@ -209,14 +206,17 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
-	pathways := b.uniquePathways()
-	if len(pathways) == 0 {
+	updates, err := b.uniquePriceUpdates()
+	if err != nil {
+		return err
+	}
+	if len(updates) == 0 {
 		b.logger.Debug("skipped price gas-spike check", "reason", "no_pathways")
 		return nil
 	}
-	for _, pathway := range pathways {
-		key := pathwayKey(pathway)
-		current, err := b.currentDstGasPrice(ctx, pathway.DstEID)
+	for _, update := range updates {
+		key := priceUpdateKey(update)
+		current, err := b.currentDstGasPrice(ctx, update.DstEID)
 		if err != nil {
 			return err
 		}
@@ -228,92 +228,71 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
 			continue
 		}
-		enqueuedGas, txOutboxIDs, err := b.enqueuePathway(ctx, pathway)
+		enqueuedGas, txOutboxID, err := b.enqueuePriceUpdate(ctx, update)
 		if err != nil {
 			return err
 		}
-		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", pathway.SrcEID, "dst_eid", pathway.DstEID, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_ids", txOutboxIDs)
+		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "purpose", update.Purpose, "worker", update.Worker, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_id", txOutboxID)
 		b.lastGasPrices[key] = bigutil.Clone(enqueuedGas)
 	}
 	return nil
 }
 
-type pricedPathway struct {
-	SrcEID       uint32
-	DstEID       uint32
-	OpenExecutor common.Address
-	OpenDVN      common.Address
+type pricedUpdate struct {
+	SrcEID  uint32
+	DstEID  uint32
+	Worker  common.Address
+	Purpose string
+	Fee     FeeModel
 }
 
-func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.Int, []int64, error) {
-	srcChain, err := b.registry.Get(pathway.SrcEID)
+func (b *Bot) enqueuePriceUpdate(ctx context.Context, update pricedUpdate) (*big.Int, int64, error) {
+	srcChain, err := b.registry.Get(update.SrcEID)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	dstChain, err := b.registry.Get(pathway.DstEID)
+	dstChain, err := b.registry.Get(update.DstEID)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	srcPrice, err := b.chainPrice(ctx, pathway.SrcEID)
+	srcPrice, err := b.chainPrice(ctx, update.SrcEID)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	dstPrice, err := b.chainPrice(ctx, pathway.DstEID)
+	dstPrice, err := b.chainPrice(ctx, update.DstEID)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	dstGasPrice, err := b.currentDstGasPrice(ctx, pathway.DstEID)
+	dstGasPrice, err := b.currentDstGasPrice(ctx, update.DstEID)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
 	config, err := BuildPriceConfig(PriceInputs{
 		SrcNativeUSD:      srcPrice,
 		DstNativeUSD:      dstPrice,
 		DstGasPriceWei:    dstGasPrice,
-		Fee:               b.settings.ExecutorFee,
+		Fee:               update.Fee,
 		UpdatedAtUnix:     uint64(b.now().Unix()),
 		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	dvnConfig, err := BuildPriceConfig(PriceInputs{
-		SrcNativeUSD:      srcPrice,
-		DstNativeUSD:      dstPrice,
-		DstGasPriceWei:    dstGasPrice,
-		Fee:               b.settings.DVNFee,
-		UpdatedAtUnix:     uint64(b.now().Unix()),
-		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
-	})
+	tx, err := BuildSetPriceConfigTx(srcChain.EID, update.Worker, dstChain.EID, update.Purpose, b.settings.SignerID, config)
 	if err != nil {
-		return nil, nil, err
+		return nil, 0, err
 	}
-	txOutboxIDs := make([]int64, 0, 2)
-	for _, request := range []struct {
-		worker  common.Address
-		purpose string
-		config  PriceConfig
-	}{
-		{worker: pathway.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig, config: config},
-		{worker: pathway.OpenDVN, purpose: TxPurposeSetDVNPriceConfig, config: dvnConfig},
-	} {
-		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, request.config)
-		if err != nil {
-			return nil, nil, err
-		}
-		id, err := b.store.EnqueueTx(ctx, tx)
-		if err != nil {
-			return nil, nil, err
-		}
-		txOutboxIDs = append(txOutboxIDs, id)
-		b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", request.purpose, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "worker", request.worker)
+	id, err := b.store.EnqueueTx(ctx, tx)
+	if err != nil {
+		return nil, 0, err
 	}
-	key := pathwayKey(pathway)
+	b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", update.Purpose, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "worker", update.Worker)
+	key := priceUpdateKey(update)
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
 	b.lastGasPrices[key] = bigutil.Clone(dstGasPrice)
-	return dstGasPrice, txOutboxIDs, nil
+	return dstGasPrice, id, nil
 }
 
 func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
@@ -356,31 +335,71 @@ func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, 
 	return dstGasPrice, nil
 }
 
-func (b *Bot) uniquePathways() []pricedPathway {
+func (b *Bot) uniquePriceUpdates() ([]pricedUpdate, error) {
 	if b == nil || b.registry == nil {
-		return nil
+		return nil, nil
 	}
-	seen := make(map[string]struct{})
-	pathways := make([]pricedPathway, 0)
+	seen := make(map[string]pricedUpdate)
 	for _, pathway := range b.registry.Pathways() {
-		item := pricedPathway{
-			SrcEID:       pathway.SrcEID,
-			DstEID:       pathway.DstEID,
-			OpenExecutor: pathway.SourceWorkers.OpenExecutor,
-			OpenDVN:      pathway.SourceWorkers.OpenDVN,
+		executorFee, err := feeModelFromConfig(pathway.Pricing.ExecutorFee)
+		if err != nil {
+			return nil, fmt.Errorf("pathway %d -> %d pricing.executor_fee: %w", pathway.SrcEID, pathway.DstEID, err)
 		}
-		key := pathwayKey(item)
-		if _, ok := seen[key]; ok {
-			continue
+		dvnFee, err := feeModelFromConfig(pathway.Pricing.DVNFee)
+		if err != nil {
+			return nil, fmt.Errorf("pathway %d -> %d pricing.dvn_fee: %w", pathway.SrcEID, pathway.DstEID, err)
 		}
-		seen[key] = struct{}{}
-		pathways = append(pathways, item)
+		updates := []pricedUpdate{
+			{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID, Worker: pathway.SourceWorkers.OpenExecutor, Purpose: TxPurposeSetExecutorPriceConfig, Fee: executorFee},
+			{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID, Worker: pathway.SourceWorkers.OpenDVN, Purpose: TxPurposeSetDVNPriceConfig, Fee: dvnFee},
+		}
+		for _, update := range updates {
+			key := priceUpdateKey(update)
+			if existing, ok := seen[key]; ok {
+				if !feeModelsEqual(existing.Fee, update.Fee) {
+					return nil, fmt.Errorf("conflicting %s fee model for %d -> %d worker %s", update.Purpose, update.SrcEID, update.DstEID, update.Worker)
+				}
+				continue
+			}
+			seen[key] = update
+		}
 	}
-	return pathways
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	updates := make([]pricedUpdate, 0, len(keys))
+	for _, key := range keys {
+		updates = append(updates, seen[key])
+	}
+	return updates, nil
 }
 
-func pathwayKey(pathway pricedPathway) string {
-	return fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, pathway.OpenExecutor, pathway.OpenDVN)
+func priceUpdateKey(update pricedUpdate) string {
+	return fmt.Sprintf("%d:%d:%s:%s", update.SrcEID, update.DstEID, update.Purpose, update.Worker)
+}
+
+func feeModelFromConfig(cfg config.WorkerFeeModelConfig) (FeeModel, error) {
+	if cfg.FixedFeeWei == "" {
+		return FeeModel{}, errors.New("fixed_fee_wei is required")
+	}
+	fixedFee, ok := new(big.Int).SetString(cfg.FixedFeeWei, 10)
+	if !ok || fixedFee.Sign() < 0 {
+		return FeeModel{}, errors.New("fixed_fee_wei must be a non-negative integer")
+	}
+	model := FeeModel{FixedFee: fixedFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}
+	if err := model.Validate("fee model"); err != nil {
+		return FeeModel{}, err
+	}
+	return model, nil
+}
+
+func feeModelsEqual(left, right FeeModel) bool {
+	if left.FixedFee == nil || right.FixedFee == nil {
+		return left.FixedFee == right.FixedFee && left.DstGasOverhead == right.DstGasOverhead && left.MarginBps == right.MarginBps
+	}
+	return left.FixedFee.Cmp(right.FixedFee) == 0 && left.DstGasOverhead == right.DstGasOverhead && left.MarginBps == right.MarginBps
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.
@@ -490,7 +509,7 @@ func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
 	return PriceConfig{
-		BaseFee:               new(big.Int).Set(inputs.Fee.BaseFee),
+		BaseFee:               new(big.Int).Set(inputs.Fee.FixedFee),
 		DstGasPriceInSrcToken: ceilRat(dstGasPriceInSrcToken),
 		DstGasOverhead:        inputs.Fee.DstGasOverhead,
 		MarginBps:             inputs.Fee.MarginBps,

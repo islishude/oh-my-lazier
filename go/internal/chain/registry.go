@@ -64,6 +64,7 @@ type Pathway struct {
 	SourceWorkers      WorkerContracts
 	DestinationWorkers DestinationWorkerContracts
 	DVNMode            config.DVNMode
+	Pricing            config.PathwayPricingConfig
 	Enabled            bool
 	MaxMessageSize     uint64
 	MinLzReceiveGas    uint64
@@ -122,6 +123,7 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 				OpenDVN: cfg.DestinationWorkers.OpenDVN.Common(),
 			},
 			DVNMode:         cfg.DVN.Mode,
+			Pricing:         cfg.Pricing,
 			Enabled:         cfg.Enabled,
 			MaxMessageSize:  cfg.MaxMessageSize,
 			MinLzReceiveGas: cfg.MinLzReceiveGas,

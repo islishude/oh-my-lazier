@@ -63,8 +63,6 @@ func validConfig() config.Config {
 			Enabled:                 true,
 			Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 			IntervalSeconds:         300,
-			ExecutorFee:             config.WorkerFeeModelConfig{BaseFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
-			DVNFee:                  config.WorkerFeeModelConfig{BaseFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
 			StaleAfterSeconds:       1800,
 			MaxDeviationBps:         500,
 			GasSpikeBps:             1000,
@@ -144,6 +142,7 @@ func validConfig() config.Config {
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+				Pricing:        testPathwayPricingConfig(),
 				Enabled:        true,
 				MaxMessageSize: 10000,
 			},
@@ -162,6 +161,7 @@ func validConfig() config.Config {
 					OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:            config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+				Pricing:        testPathwayPricingConfig(),
 				Enabled:        true,
 				MaxMessageSize: 10000,
 			},
@@ -180,4 +180,11 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 func validPricingConfig() config.PricingConfig {
 	cfg := validConfig()
 	return cfg.Pricing
+}
+
+func testPathwayPricingConfig() config.PathwayPricingConfig {
+	return config.PathwayPricingConfig{
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
+	}
 }

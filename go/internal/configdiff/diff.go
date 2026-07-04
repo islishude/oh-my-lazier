@@ -105,21 +105,19 @@ func pricingChains(items []config.PricingChainConfig) map[string]config.PricingC
 }
 
 type pricingConfigGlobal struct {
-	Enabled                 bool                        `json:"enabled"`
-	Signer                  string                      `json:"signer"`
-	IntervalSeconds         uint64                      `json:"interval_seconds"`
-	ExecutorFee             config.WorkerFeeModelConfig `json:"executor_fee"`
-	DVNFee                  config.WorkerFeeModelConfig `json:"dvn_fee"`
-	StaleAfterSeconds       uint64                      `json:"stale_after_seconds"`
-	MaxDeviationBps         uint64                      `json:"max_deviation_bps"`
-	GasSpikeBps             uint64                      `json:"gas_spike_bps"`
-	AllowSanityFallback     bool                        `json:"allow_sanity_fallback"`
-	MaxFeePerGasWei         string                      `json:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string                      `json:"max_priority_fee_per_gas_wei"`
-	BinanceBaseURL          string                      `json:"binance_base_url"`
-	CoinMarketCapBaseURL    string                      `json:"coinmarketcap_base_url"`
-	CoinMarketCapAPIKeyEnv  string                      `json:"coinmarketcap_api_key_env"`
-	CoinGeckoBaseURL        string                      `json:"coingecko_base_url"`
+	Enabled                 bool   `json:"enabled"`
+	Signer                  string `json:"signer"`
+	IntervalSeconds         uint64 `json:"interval_seconds"`
+	StaleAfterSeconds       uint64 `json:"stale_after_seconds"`
+	MaxDeviationBps         uint64 `json:"max_deviation_bps"`
+	GasSpikeBps             uint64 `json:"gas_spike_bps"`
+	AllowSanityFallback     bool   `json:"allow_sanity_fallback"`
+	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei string `json:"max_priority_fee_per_gas_wei"`
+	BinanceBaseURL          string `json:"binance_base_url"`
+	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
+	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
+	CoinGeckoBaseURL        string `json:"coingecko_base_url"`
 }
 
 type servicesConfig struct {
@@ -139,8 +137,6 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		Enabled:                 pricing.Enabled,
 		Signer:                  pricing.Signer.Hex(),
 		IntervalSeconds:         pricing.IntervalSeconds,
-		ExecutorFee:             pricing.ExecutorFee,
-		DVNFee:                  pricing.DVNFee,
 		StaleAfterSeconds:       pricing.StaleAfterSeconds,
 		MaxDeviationBps:         pricing.MaxDeviationBps,
 		GasSpikeBps:             pricing.GasSpikeBps,
