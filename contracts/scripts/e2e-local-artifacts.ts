@@ -11,6 +11,7 @@ export type LocalChainDeployment = {
   sendUln: Address;
   receiveUln: Address;
   oft: Address;
+  priceFeed: Address;
   openExecutor: Address;
   primaryOpenDVN: Address;
   secondaryOpenDVN: Address;
@@ -112,6 +113,7 @@ function validateChain(value: unknown, path: string, key: "a" | "b") {
     "sendUln",
     "receiveUln",
     "oft",
+    "priceFeed",
     "openExecutor",
     "primaryOpenDVN",
     "secondaryOpenDVN",

@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
 
@@ -285,12 +286,29 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 }
 
 func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
-	for label, worker := range map[string]common.Address{
-		"open_executor": pathway.SourceWorkers.OpenExecutor,
-		"open_dvn":      pathway.SourceWorkers.OpenDVN,
-	} {
+	if err := c.requireCode(ctx, srcClient, base+".source_workers.price_feed", srcChain.EID, pathway.SourceWorkers.PriceFeed); err != nil {
+		return err
+	}
+	workers := []struct {
+		label string
+		addr  common.Address
+		fee   config.WorkerFeeModelConfig
+	}{
+		{label: "open_executor", addr: pathway.SourceWorkers.OpenExecutor, fee: pathway.Pricing.ExecutorFee},
+		{label: "open_dvn", addr: pathway.SourceWorkers.OpenDVN, fee: pathway.Pricing.DVNFee},
+	}
+	for _, selected := range workers {
+		label := selected.label
+		worker := selected.addr
 		if err := c.requireCode(ctx, srcClient, base+".source_workers."+label, srcChain.EID, worker); err != nil {
 			return err
+		}
+		priceFeed, err := callAddress(ctx, srcClient, workerABI, worker, "priceFeed")
+		if err != nil {
+			return fmt.Errorf("read %s priceFeed for %s: %w", label, base, err)
+		}
+		if priceFeed != pathway.SourceWorkers.PriceFeed {
+			c.add(base+".source_workers."+label+".price_feed", "%s priceFeed %s does not match configured %s", label, priceFeed, pathway.SourceWorkers.PriceFeed)
 		}
 		allowed, err := callBool(ctx, srcClient, workerABI, worker, "allowedSendLib", pathway.SendLib)
 		if err != nil {
@@ -314,6 +332,13 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 		}
 		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
 			c.add(base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+		}
+		if selected.fee.FixedFeeWei != "" {
+			actualFee, err := callFeeModel(ctx, srcClient, worker, pathway.DstEID)
+			if err != nil {
+				return fmt.Errorf("read %s feeModel for %s: %w", label, base, err)
+			}
+			c.compareFeeModel(base+".source_workers."+label+".fee_model", actualFee, selected.fee)
 		}
 	}
 	if err := c.requireCode(ctx, dstClient, base+".destination_workers.open_dvn", dstChain.EID, pathway.DestinationWorkers.OpenDVN); err != nil {
@@ -428,6 +453,12 @@ type pathwayConfig struct {
 	MaxLzReceiveGas *big.Int
 }
 
+type feeModel struct {
+	BaseFee        *big.Int
+	DstGasOverhead uint64
+	MarginBps      uint16
+}
+
 func callPathwayConfig(ctx context.Context, caller ChainClient, to common.Address, dstEID uint32, sender common.Address) (pathwayConfig, error) {
 	values, err := callValues(ctx, caller, workerABI, to, "pathwayConfig", dstEID, sender)
 	if err != nil {
@@ -458,6 +489,46 @@ func callPathwayConfig(ctx context.Context, caller ChainClient, to common.Addres
 		MinLzReceiveGas: minGas,
 		MaxLzReceiveGas: maxGas,
 	}, nil
+}
+
+func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, dstEID uint32) (feeModel, error) {
+	values, err := callValues(ctx, caller, workerABI, to, "feeModel", dstEID)
+	if err != nil {
+		return feeModel{}, err
+	}
+	if len(values) != 3 {
+		return feeModel{}, fmt.Errorf("feeModel returned %d values, want 3", len(values))
+	}
+	baseFee, ok := values[0].(*big.Int)
+	if !ok {
+		return feeModel{}, fmt.Errorf("feeModel baseFee returned %T, want *big.Int", values[0])
+	}
+	overhead, ok := uint64Value(values[1])
+	if !ok {
+		return feeModel{}, fmt.Errorf("feeModel dstGasOverhead returned %T, want uint64", values[1])
+	}
+	margin, ok := uint16Value(values[2])
+	if !ok {
+		return feeModel{}, fmt.Errorf("feeModel marginBps returned %T, want uint16", values[2])
+	}
+	return feeModel{BaseFee: baseFee, DstGasOverhead: overhead, MarginBps: margin}, nil
+}
+
+func (c *checker) compareFeeModel(path string, actual feeModel, expected config.WorkerFeeModelConfig) {
+	expectedBaseFee, ok := new(big.Int).SetString(expected.FixedFeeWei, 10)
+	if !ok {
+		c.add(path+".base_fee", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
+		return
+	}
+	if actual.BaseFee == nil || actual.BaseFee.Cmp(expectedBaseFee) != 0 {
+		c.add(path+".base_fee", "worker base fee %s does not match configured %s", bigString(actual.BaseFee), expectedBaseFee)
+	}
+	if actual.DstGasOverhead != expected.DstGasOverhead {
+		c.add(path+".dst_gas_overhead", "worker destination gas overhead %d does not match configured %d", actual.DstGasOverhead, expected.DstGasOverhead)
+	}
+	if actual.MarginBps != expected.MarginBps {
+		c.add(path+".margin_bps", "worker margin bps %d does not match configured %d", actual.MarginBps, expected.MarginBps)
+	}
 }
 
 func decodeExecutorConfig(data []byte) (executorConfig, error) {
@@ -589,6 +660,39 @@ func callValues(ctx context.Context, caller ChainClient, contractABI abi.ABI, to
 		return nil, fmt.Errorf("%s returned no values", method)
 	}
 	return values, nil
+}
+
+func uint64Value(value any) (uint64, bool) {
+	switch typed := value.(type) {
+	case uint64:
+		return typed, true
+	case *big.Int:
+		if typed == nil || !typed.IsUint64() {
+			return 0, false
+		}
+		return typed.Uint64(), true
+	default:
+		return 0, false
+	}
+}
+
+func uint16Value(value any) (uint16, bool) {
+	switch typed := value.(type) {
+	case uint16:
+		return typed, true
+	case uint64:
+		if typed > ^uint64(0)>>48 {
+			return 0, false
+		}
+		return uint16(typed), true
+	case *big.Int:
+		if typed == nil || !typed.IsUint64() || typed.Uint64() > ^uint64(0)>>48 {
+			return 0, false
+		}
+		return uint16(typed.Uint64()), true
+	default:
+		return 0, false
+	}
 }
 
 func addressesString(addresses []common.Address) string {

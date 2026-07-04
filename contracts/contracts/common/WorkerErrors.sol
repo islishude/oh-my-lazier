@@ -8,7 +8,8 @@ library WorkerErrors {
     error UnauthorizedVerifier(address verifier);
     error PathwayDisabled(uint32 dstEid, address sender);
     error MessageTooLarge(uint256 size, uint256 maxSize);
-    error PriceConfigStale(uint32 dstEid, uint256 updatedAt, uint256 staleAfter);
+    error InvalidPriceSnapshot(uint32 dstEid);
+    error PriceSnapshotStale(uint32 dstEid, uint256 updatedAt, uint256 staleAfter);
     error InsufficientFee(uint256 required, uint256 supplied);
     error InvalidBps(uint16 bps);
     error InvalidDstGasPrice(uint256 gasUnits);

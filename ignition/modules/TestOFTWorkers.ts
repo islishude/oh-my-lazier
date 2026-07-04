@@ -17,10 +17,11 @@ const TestOFTWorkersModule = buildModule("TestOFTWorkers", (m) => {
     initialRecipient,
     initialSupply,
   ]);
-  const openExecutor = m.contract("OpenExecutor", [owner]);
-  const openDVN = m.contract("OpenDVN", [owner]);
+  const priceFeed = m.contract("OpenPriceFeed", [owner]);
+  const openExecutor = m.contract("OpenExecutor", [owner, priceFeed]);
+  const openDVN = m.contract("OpenDVN", [owner, priceFeed]);
 
-  return { testOFT, openExecutor, openDVN };
+  return { testOFT, priceFeed, openExecutor, openDVN };
 });
 
 export default TestOFTWorkersModule;

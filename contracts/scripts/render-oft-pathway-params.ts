@@ -7,7 +7,10 @@ import {
   optionalBigInt,
   optionalUint64,
 } from "./lib.js";
-import type { WorkerPriceConfigInput } from "./oft-pathway-ignition.js";
+import type {
+  PriceSnapshotInput,
+  WorkerFeeModelInput,
+} from "./oft-pathway-ignition.js";
 import { buildTestOFTPathwayConfigParameters } from "./oft-pathway-ignition.js";
 
 const maxMessageSizeValue = envBigInt("EXECUTOR_MAX_MESSAGE_SIZE");
@@ -32,31 +35,35 @@ const parameters = buildTestOFTPathwayConfigParameters({
   receiveUln: envAddress("RECEIVE_ULN"),
   openExecutor: envAddress("OPEN_EXECUTOR"),
   openDVN: envAddress("OPEN_DVN"),
+  priceFeed: envAddress("PRICE_FEED"),
   layerZeroLabsDVN: envAddress("LAYERZERO_LABS_DVN"),
   confirmations: envBigInt("CONFIRMATIONS"),
   maxMessageSize: Number(maxMessageSizeValue),
   minLzReceiveGas,
   maxLzReceiveGas: envBigInt("MAX_LZ_RECEIVE_GAS"),
-  executorPriceConfig: workerPriceConfig("EXECUTOR", priceUpdatedAt),
-  dvnPriceConfig: workerPriceConfig("DVN", priceUpdatedAt),
+  priceSnapshot: priceSnapshot(priceUpdatedAt),
+  executorFeeModel: workerFeeModel("EXECUTOR"),
+  dvnFeeModel: workerFeeModel("DVN"),
   dvnVerifier,
   enforcedLzReceiveGas,
 });
 
 console.log(jsonStringify(parameters));
 
-function workerPriceConfig(
-  prefix: "EXECUTOR" | "DVN",
-  defaultUpdatedAt: bigint,
-): WorkerPriceConfigInput {
+function priceSnapshot(defaultUpdatedAt: bigint): PriceSnapshotInput {
   return {
-    baseFee: envBigInt(`${prefix}_PRICE_BASE_FEE`),
     dstGasPriceInSrcToken: envBigInt(
-      `${prefix}_PRICE_DST_GAS_PRICE_IN_SRC_TOKEN`,
+      "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
     ),
-    dstGasOverhead: envBigInt(`${prefix}_PRICE_DST_GAS_OVERHEAD`),
-    marginBps: envBigInt(`${prefix}_PRICE_MARGIN_BPS`),
-    updatedAt: optionalUint64(`${prefix}_PRICE_UPDATED_AT`, defaultUpdatedAt),
-    staleAfter: envBigInt(`${prefix}_PRICE_STALE_AFTER`),
+    updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
+    staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
+  };
+}
+
+function workerFeeModel(prefix: "EXECUTOR" | "DVN"): WorkerFeeModelInput {
+  return {
+    baseFee: envBigInt(`${prefix}_FEE_BASE_FEE`),
+    dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
+    marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
   };
 }

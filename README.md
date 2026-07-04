@@ -4,7 +4,7 @@ Self-hosted LayerZero V2 Executor and DVN worker stack.
 
 The repo contains:
 
-- Solidity contracts for `TestOFT`, `OpenExecutor`, `OpenDVN`, worker options, access control, and price config.
+- Solidity contracts for `TestOFT`, `OpenPriceFeed`, `OpenExecutor`, `OpenDVN`, worker options, access control, shared price snapshots, and worker fee models.
 - TypeScript scripts for deployment, LayerZero config, canaries, local E2E, ABI generation, runbook checks, and migration evidence checks.
 - Go worker services for config validation, indexing, executor delivery, DVN verification, pricing, tx management, readiness, and metrics.
 - Docker Compose setups for local Postgres, integration dependencies, and the dual-Anvil E2E.
@@ -98,7 +98,7 @@ Phase 1 is EVM-only.
 - `composeMsg`, `lzCompose`, native drop, ordered execution, self-only DVN, and non-EVM chains are out of scope.
 - Executor options must contain exactly one zero-value executor `lzReceive` option.
 - `OpenDVN` rejects non-empty DVN options.
-- Price config must be fresh.
+- Shared price snapshots must be fresh.
 
 `OpenExecutor` remains compatible with the pinned nonpayable `ILayerZeroExecutor.assignJob` interface. It quotes and emits assignment price information without collecting native fee there. `OpenDVN` is payable and requires `msg.value >= fee`.
 

@@ -247,7 +247,7 @@ func waitLoopRestart(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-// RunPriceOnce computes current price configs and enqueues one update batch.
+// RunPriceOnce computes current shared price snapshots and enqueues one update batch.
 func (a *App) RunPriceOnce(ctx context.Context) error {
 	if !a.cfg.Pricing.Enabled {
 		return errors.New("pricing is disabled")
@@ -431,8 +431,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			if err != nil {
 				return nil, fmt.Errorf("pricing fee policy: %w", err)
 			}
-			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetExecutorPriceConfig, pricingPolicy)
-			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetDVNPriceConfig, pricingPolicy)
+			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy)
 		}
 	}
 	if a.cfg.DVNEnabled() {

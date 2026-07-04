@@ -33,13 +33,13 @@ type AbiOutput = {
 
 const outputs: AbiOutput[] = [
   {
-    path: "go/internal/pricing/abis/price_config.json",
+    path: "go/internal/pricing/abis/price_snapshot.json",
     selections: [
       {
         artifact:
-          "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+          "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
         type: "function",
-        name: "setPriceConfig",
+        name: "setPriceSnapshot",
       },
     ],
   },

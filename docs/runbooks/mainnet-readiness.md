@@ -11,7 +11,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - DB-backed readiness output from `go run ./go/cmd/readinesscheck -config <worker.yaml> -format json`.
 - `inspect:lz-config` output for every configured direction.
 - Signer inventory and key-management review.
-- Price bot runbook evidence for the latest OpenExecutor/OpenDVN price config update.
+- Price bot runbook evidence for the latest OpenPriceFeed shared price snapshot update and worker fee-model check.
 - Rate-limit and pause review for every OFT pathway.
 - Monitoring dashboard and alert proof.
 - Runbook review output from `npm run check:runbooks`.
@@ -95,7 +95,7 @@ Required state:
 - Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same independent LayerZero Labs DVN only during the DVN join step.
 - Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
-- OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence, including each worker's `baseFee`, `dstGasOverhead`, `marginBps`, `dstGasPriceInSrcToken`, and stale window.
+- Source OpenPriceFeed `priceSnapshot(dstEid)` is fresh, OpenExecutor/OpenDVN `priceFeed()` both point to the configured feed, and each worker's `feeModel(dstEid)` matches the approved price evidence.
 
 ## Rollback Approval
 
@@ -121,7 +121,7 @@ Reject mainnet readiness if:
 - required DVNs do not include an independent LayerZero Labs DVN
 - confirmations are missing, zero, or do not match the approved LayerZero ULN configuration
 - signer inventory or rollback signer is missing
-- price config evidence is missing, stale, or not produced through the approved pricing path
+- price snapshot evidence is missing, stale, or not produced through the approved pricing path
 - rate-limit capacity/refill is not documented per pathway
 - monitoring alerts are not active
 - `make security-check` fails

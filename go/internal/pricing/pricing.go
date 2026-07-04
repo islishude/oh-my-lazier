@@ -20,20 +20,18 @@ import (
 )
 
 const (
-	// TxPurposeSetExecutorPriceConfig identifies OpenExecutor.setPriceConfig updates.
-	TxPurposeSetExecutorPriceConfig = "pricing_set_executor_price_config"
-	// TxPurposeSetDVNPriceConfig identifies OpenDVN.setPriceConfig updates.
-	TxPurposeSetDVNPriceConfig = "pricing_set_dvn_price_config"
+	// TxPurposeSetPriceSnapshot identifies OpenPriceFeed.setPriceSnapshot updates.
+	TxPurposeSetPriceSnapshot = "pricing_set_price_snapshot"
 )
 
 var (
-	//go:embed abis/price_config.json
-	priceConfigABIJSON string
+	//go:embed abis/price_snapshot.json
+	priceSnapshotABIJSON string
 
-	priceConfigABI = abiutil.MustParse(priceConfigABIJSON)
+	priceSnapshotABI = abiutil.MustParse(priceSnapshotABIJSON)
 )
 
-// Bot updates worker contract price configuration.
+// Bot updates shared worker price snapshots.
 type Bot struct {
 	store         Store
 	registry      *chain.Registry
@@ -174,7 +172,7 @@ type ChainSources struct {
 	Gas     GasPriceReader
 }
 
-// EnqueueOnce computes current price configs and enqueues worker updates for each pathway.
+// EnqueueOnce computes current price snapshots and enqueues shared price-feed updates for each pathway.
 func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b == nil || !b.settings.Enabled {
 		return nil
@@ -232,18 +230,16 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "purpose", update.Purpose, "worker", update.Worker, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_id", txOutboxID)
+		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "price_feed", update.PriceFeed, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_id", txOutboxID)
 		b.lastGasPrices[key] = bigutil.Clone(enqueuedGas)
 	}
 	return nil
 }
 
 type pricedUpdate struct {
-	SrcEID  uint32
-	DstEID  uint32
-	Worker  common.Address
-	Purpose string
-	Fee     FeeModel
+	SrcEID    uint32
+	DstEID    uint32
+	PriceFeed common.Address
 }
 
 func (b *Bot) enqueuePriceUpdate(ctx context.Context, update pricedUpdate) (*big.Int, int64, error) {
@@ -267,18 +263,17 @@ func (b *Bot) enqueuePriceUpdate(ctx context.Context, update pricedUpdate) (*big
 	if err != nil {
 		return nil, 0, err
 	}
-	config, err := BuildPriceConfig(PriceInputs{
+	snapshot, err := BuildPriceSnapshot(PriceInputs{
 		SrcNativeUSD:      srcPrice,
 		DstNativeUSD:      dstPrice,
 		DstGasPriceWei:    dstGasPrice,
-		Fee:               update.Fee,
 		UpdatedAtUnix:     uint64(b.now().Unix()),
 		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-	tx, err := BuildSetPriceConfigTx(srcChain.EID, update.Worker, dstChain.EID, update.Purpose, b.settings.SignerID, config)
+	tx, err := BuildSetPriceSnapshotTx(srcChain.EID, update.PriceFeed, dstChain.EID, b.settings.SignerID, snapshot)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -286,7 +281,7 @@ func (b *Bot) enqueuePriceUpdate(ctx context.Context, update pricedUpdate) (*big
 	if err != nil {
 		return nil, 0, err
 	}
-	b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", update.Purpose, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "worker", update.Worker)
+	b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", TxPurposeSetPriceSnapshot, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "price_feed", update.PriceFeed)
 	key := priceUpdateKey(update)
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
@@ -340,6 +335,7 @@ func (b *Bot) uniquePriceUpdates() ([]pricedUpdate, error) {
 		return nil, nil
 	}
 	seen := make(map[string]pricedUpdate)
+	seenFeeModels := make(map[string]FeeModel)
 	for _, pathway := range b.registry.Pathways() {
 		executorFee, err := feeModelFromConfig(pathway.Pricing.ExecutorFee)
 		if err != nil {
@@ -349,20 +345,18 @@ func (b *Bot) uniquePriceUpdates() ([]pricedUpdate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("pathway %d -> %d pricing.dvn_fee: %w", pathway.SrcEID, pathway.DstEID, err)
 		}
-		updates := []pricedUpdate{
-			{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID, Worker: pathway.SourceWorkers.OpenExecutor, Purpose: TxPurposeSetExecutorPriceConfig, Fee: executorFee},
-			{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID, Worker: pathway.SourceWorkers.OpenDVN, Purpose: TxPurposeSetDVNPriceConfig, Fee: dvnFee},
+		if err := rememberFeeModel(seenFeeModels, pathway.SrcEID, pathway.DstEID, "executor", pathway.SourceWorkers.OpenExecutor, executorFee); err != nil {
+			return nil, err
 		}
-		for _, update := range updates {
-			key := priceUpdateKey(update)
-			if existing, ok := seen[key]; ok {
-				if !feeModelsEqual(existing.Fee, update.Fee) {
-					return nil, fmt.Errorf("conflicting %s fee model for %d -> %d worker %s", update.Purpose, update.SrcEID, update.DstEID, update.Worker)
-				}
-				continue
-			}
-			seen[key] = update
+		if err := rememberFeeModel(seenFeeModels, pathway.SrcEID, pathway.DstEID, "dvn", pathway.SourceWorkers.OpenDVN, dvnFee); err != nil {
+			return nil, err
 		}
+		update := pricedUpdate{SrcEID: pathway.SrcEID, DstEID: pathway.DstEID, PriceFeed: pathway.SourceWorkers.PriceFeed}
+		key := priceUpdateKey(update)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = update
 	}
 	keys := make([]string, 0, len(seen))
 	for key := range seen {
@@ -377,7 +371,19 @@ func (b *Bot) uniquePriceUpdates() ([]pricedUpdate, error) {
 }
 
 func priceUpdateKey(update pricedUpdate) string {
-	return fmt.Sprintf("%d:%d:%s:%s", update.SrcEID, update.DstEID, update.Purpose, update.Worker)
+	return fmt.Sprintf("%d:%d:%s", update.SrcEID, update.DstEID, update.PriceFeed)
+}
+
+func rememberFeeModel(seen map[string]FeeModel, srcEID, dstEID uint32, role string, worker common.Address, fee FeeModel) error {
+	key := fmt.Sprintf("%d:%d:%s:%s", srcEID, dstEID, role, worker)
+	if existing, ok := seen[key]; ok {
+		if !feeModelsEqual(existing, fee) {
+			return fmt.Errorf("conflicting %s fee model for %d -> %d worker %s", role, srcEID, dstEID, worker)
+		}
+		return nil
+	}
+	seen[key] = fee
+	return nil
 }
 
 func feeModelFromConfig(cfg config.WorkerFeeModelConfig) (FeeModel, error) {
@@ -465,114 +471,95 @@ func DeviationBps(left, right *big.Rat) uint64 {
 	return ceilRat(diff).Uint64()
 }
 
-// PriceInputs are the source data used to construct WorkerTypes.PriceConfig.
+// PriceInputs are the source data used to construct WorkerTypes.PriceSnapshot.
 type PriceInputs struct {
 	SrcNativeUSD      *big.Rat
 	DstNativeUSD      *big.Rat
 	DstGasPriceWei    *big.Int
-	Fee               FeeModel
 	UpdatedAtUnix     uint64
 	StaleAfterSeconds uint64
 }
 
-// PriceConfig mirrors WorkerTypes.PriceConfig for ABI encoding.
-type PriceConfig struct {
-	BaseFee               *big.Int `abi:"baseFee"`
+// PriceSnapshot mirrors WorkerTypes.PriceSnapshot for ABI encoding.
+type PriceSnapshot struct {
 	DstGasPriceInSrcToken *big.Int `abi:"dstGasPriceInSrcToken"`
-	DstGasOverhead        uint64   `abi:"dstGasOverhead"`
-	MarginBps             uint16   `abi:"marginBps"`
 	UpdatedAt             uint64   `abi:"updatedAt"`
 	StaleAfter            uint64   `abi:"staleAfter"`
 }
 
-// BuildPriceConfig converts destination gas cost into source native-token units.
-func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
+// BuildPriceSnapshot converts destination gas cost into source native-token units.
+func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	if inputs.SrcNativeUSD == nil || inputs.SrcNativeUSD.Sign() <= 0 {
-		return PriceConfig{}, errors.New("source native USD price must be positive")
+		return PriceSnapshot{}, errors.New("source native USD price must be positive")
 	}
 	if inputs.DstNativeUSD == nil || inputs.DstNativeUSD.Sign() <= 0 {
-		return PriceConfig{}, errors.New("destination native USD price must be positive")
+		return PriceSnapshot{}, errors.New("destination native USD price must be positive")
 	}
 	if inputs.DstGasPriceWei == nil || inputs.DstGasPriceWei.Sign() <= 0 {
-		return PriceConfig{}, errors.New("destination gas price must be positive")
-	}
-	if err := inputs.Fee.Validate("fee model"); err != nil {
-		return PriceConfig{}, err
+		return PriceSnapshot{}, errors.New("destination gas price must be positive")
 	}
 	if inputs.UpdatedAtUnix == 0 {
-		return PriceConfig{}, errors.New("updated_at is required")
+		return PriceSnapshot{}, errors.New("updated_at is required")
 	}
 	if inputs.StaleAfterSeconds == 0 {
-		return PriceConfig{}, errors.New("stale_after is required")
+		return PriceSnapshot{}, errors.New("stale_after is required")
 	}
 	dstGasPriceInSrcToken := new(big.Rat).SetInt(inputs.DstGasPriceWei)
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
-	return PriceConfig{
-		BaseFee:               new(big.Int).Set(inputs.Fee.FixedFee),
+	return PriceSnapshot{
 		DstGasPriceInSrcToken: ceilRat(dstGasPriceInSrcToken),
-		DstGasOverhead:        inputs.Fee.DstGasOverhead,
-		MarginBps:             inputs.Fee.MarginBps,
 		UpdatedAt:             inputs.UpdatedAtUnix,
 		StaleAfter:            inputs.StaleAfterSeconds,
 	}, nil
 }
 
-// BuildSetPriceConfigCalldata ABI-encodes OpenExecutor/OpenDVN setPriceConfig.
-func BuildSetPriceConfigCalldata(dstEID uint32, config PriceConfig) ([]byte, error) {
+// BuildSetPriceSnapshotCalldata ABI-encodes OpenPriceFeed setPriceSnapshot.
+func BuildSetPriceSnapshotCalldata(dstEID uint32, snapshot PriceSnapshot) ([]byte, error) {
 	if dstEID == 0 {
 		return nil, errors.New("destination eid is required")
 	}
-	if err := config.Validate(); err != nil {
+	if err := snapshot.Validate(); err != nil {
 		return nil, err
 	}
-	return priceConfigABI.Pack("setPriceConfig", dstEID, config)
+	return priceSnapshotABI.Pack("setPriceSnapshot", dstEID, snapshot)
 }
 
-// BuildSetPriceConfigTx creates an outbox transaction for a worker setPriceConfig call.
-func BuildSetPriceConfigTx(chainEID uint32, worker common.Address, dstEID uint32, purpose, signerID string, config PriceConfig) (db.TxRequest, error) {
+// BuildSetPriceSnapshotTx creates an outbox transaction for a shared price feed update.
+func BuildSetPriceSnapshotTx(chainEID uint32, priceFeed common.Address, dstEID uint32, signerID string, snapshot PriceSnapshot) (db.TxRequest, error) {
 	if chainEID == 0 {
 		return db.TxRequest{}, errors.New("chain eid is required")
 	}
-	if worker == (common.Address{}) {
-		return db.TxRequest{}, errors.New("worker address is required")
-	}
-	if purpose != TxPurposeSetExecutorPriceConfig && purpose != TxPurposeSetDVNPriceConfig {
-		return db.TxRequest{}, fmt.Errorf("unsupported price config purpose %q", purpose)
+	if priceFeed == (common.Address{}) {
+		return db.TxRequest{}, errors.New("price feed address is required")
 	}
 	if signerID == "" {
 		return db.TxRequest{}, errors.New("signer id is required")
 	}
-	calldata, err := BuildSetPriceConfigCalldata(dstEID, config)
+	calldata, err := BuildSetPriceSnapshotCalldata(dstEID, snapshot)
 	if err != nil {
 		return db.TxRequest{}, err
 	}
 	return db.TxRequest{
 		ChainEID: chainEID,
-		Purpose:  purpose,
-		To:       worker,
+		Purpose:  TxPurposeSetPriceSnapshot,
+		To:       priceFeed,
 		Calldata: calldata,
 		Value:    new(big.Int),
 		SignerID: signerID,
 	}, nil
 }
 
-// Validate checks the on-chain price config invariants the worker can know before sending.
-func (c PriceConfig) Validate() error {
-	if c.BaseFee == nil || c.BaseFee.Sign() < 0 {
-		return errors.New("price config base fee must be non-negative")
+// Validate checks the on-chain price snapshot invariants the worker can know before sending.
+func (s PriceSnapshot) Validate() error {
+	if s.DstGasPriceInSrcToken == nil || s.DstGasPriceInSrcToken.Sign() <= 0 {
+		return errors.New("price snapshot destination gas price must be positive")
 	}
-	if c.DstGasPriceInSrcToken == nil || c.DstGasPriceInSrcToken.Sign() <= 0 {
-		return errors.New("price config destination gas price must be positive")
+	if s.UpdatedAt == 0 {
+		return errors.New("price snapshot updated_at is required")
 	}
-	if c.MarginBps > 10_000 {
-		return errors.New("price config margin bps exceeds 10000")
-	}
-	if c.UpdatedAt == 0 {
-		return errors.New("price config updated_at is required")
-	}
-	if c.StaleAfter == 0 {
-		return errors.New("price config stale_after is required")
+	if s.StaleAfter == 0 {
+		return errors.New("price snapshot stale_after is required")
 	}
 	return nil
 }

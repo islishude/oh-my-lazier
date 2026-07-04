@@ -39,7 +39,7 @@ type Config struct {
 	Metrics MetricsConfig `yaml:"metrics"`
 	// Services controls which durable worker loops this process starts; omitted roles default to enabled.
 	Services ServicesConfig `yaml:"services"`
-	// Pricing controls the optional price bot that enqueues worker price-config updates.
+	// Pricing controls the optional price bot that enqueues shared price snapshot updates.
 	Pricing PricingConfig `yaml:"pricing"`
 	// Signers lists local signing backends referenced by pricing and chain transaction roles.
 	Signers []SignerConfig `yaml:"signers"`
@@ -117,13 +117,13 @@ type ChainTxRolesConfig struct {
 
 // PricingConfig controls optional price update generation.
 type PricingConfig struct {
-	// Enabled turns on price-bot startup validation and setPriceConfig transaction generation.
+	// Enabled turns on price-bot startup validation and setPriceSnapshot transaction generation.
 	Enabled bool `yaml:"enabled"`
-	// Signer references the local signer used for price-config update transactions.
+	// Signer references the local signer used for price snapshot update transactions.
 	Signer EVMAddress `yaml:"signer"`
 	// IntervalSeconds is the scheduled full refresh interval; it defaults to 300 when pricing is enabled.
 	IntervalSeconds uint64 `yaml:"interval_seconds"`
-	// StaleAfterSeconds is written into worker PriceConfig and defaults to 1800 when pricing is enabled.
+	// StaleAfterSeconds is written into price snapshots and defaults to 1800 when pricing is enabled.
 	StaleAfterSeconds uint64 `yaml:"stale_after_seconds"`
 	// MaxDeviationBps is the allowed primary-vs-sanity feed deviation; it defaults to 500.
 	MaxDeviationBps uint64 `yaml:"max_deviation_bps"`
@@ -131,9 +131,9 @@ type PricingConfig struct {
 	GasSpikeBps uint64 `yaml:"gas_spike_bps"`
 	// AllowSanityFallback lets the bot use a healthy sanity source only when the primary source is unhealthy.
 	AllowSanityFallback bool `yaml:"allow_sanity_fallback"`
-	// MaxFeePerGasWei caps txmgr send-time gas pricing for price-config update transactions.
+	// MaxFeePerGasWei caps txmgr send-time gas pricing for price snapshot update transactions.
 	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
-	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price-config update transactions.
+	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price snapshot update transactions.
 	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
 	// BinanceBaseURL optionally overrides the Binance HTTP API endpoint.
 	BinanceBaseURL string `yaml:"binance_base_url"`
@@ -255,6 +255,8 @@ type WorkerContractsConfig struct {
 	OpenExecutor EVMAddress `yaml:"open_executor"`
 	// OpenDVN is the source-chain DVN configured in the source SendUln required DVNs.
 	OpenDVN EVMAddress `yaml:"open_dvn"`
+	// PriceFeed is the source-chain shared price feed used by OpenExecutor and OpenDVN.
+	PriceFeed EVMAddress `yaml:"price_feed"`
 }
 
 // DestinationWorkerContractsConfig identifies target-chain worker contracts selected for a pathway.
@@ -449,6 +451,7 @@ func (c Config) Validate() error {
 			"receive_lib":                  pathway.ReceiveLib,
 			"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
 			"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
+			"source_workers.price_feed":    pathway.SourceWorkers.PriceFeed,
 			"destination_workers.open_dvn": pathway.DestinationWorkers.OpenDVN,
 		} {
 			if value.IsZero() {

@@ -19,12 +19,16 @@ const openExecutorArtifact = loadArtifact(
 const openDVNArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
 );
+const openPriceFeedArtifact = loadArtifact(
+  "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+);
 
 const { account, publicClient, walletClient } = createClients();
 
 const testOFT = envAddress("TEST_OFT");
 const openExecutor = envAddress("OPEN_EXECUTOR");
 const openDVN = envAddress("OPEN_DVN");
+const priceFeed = envAddress("PRICE_FEED");
 const remoteEid = envUint32("REMOTE_EID");
 const sendLib = envAddress("SEND_LIB");
 const srcOApp = optionalAddress("SRC_OAPP") ?? testOFT;
@@ -37,8 +41,9 @@ const pathwayConfig = {
 };
 
 const now = BigInt(Math.floor(Date.now() / 1000));
-const executorPriceConfig = workerPriceConfig("EXECUTOR", now);
-const dvnPriceConfig = workerPriceConfig("DVN", now);
+const sharedPriceSnapshot = priceSnapshot(now);
+const executorFeeModel = workerFeeModel("EXECUTOR");
+const dvnFeeModel = workerFeeModel("DVN");
 
 const rateLimitCapacity = optionalBigInt("RATE_LIMIT_CAPACITY");
 const rateLimitRefillPerSecond = optionalBigInt("RATE_LIMIT_REFILL_PER_SECOND");
@@ -70,6 +75,19 @@ if (rateLimitCapacity !== undefined || rateLimitRefillPerSecond !== undefined) {
     }),
   );
 }
+
+await waitForTx(
+  publicClient,
+  "OpenPriceFeed.setPriceSnapshot",
+  await walletClient.writeContract({
+    address: priceFeed,
+    abi: openPriceFeedArtifact.abi,
+    functionName: "setPriceSnapshot",
+    args: [remoteEid, sharedPriceSnapshot],
+    account,
+    chain: null,
+  }),
+);
 
 for (const [label, address, abi] of [
   ["OpenExecutor", openExecutor, openExecutorArtifact.abi],
@@ -103,15 +121,12 @@ for (const [label, address, abi] of [
 
   await waitForTx(
     publicClient,
-    `${label}.setPriceConfig`,
+    `${label}.setFeeModel`,
     await walletClient.writeContract({
       address,
       abi,
-      functionName: "setPriceConfig",
-      args: [
-        remoteEid,
-        label === "OpenExecutor" ? executorPriceConfig : dvnPriceConfig,
-      ],
+      functionName: "setFeeModel",
+      args: [remoteEid, label === "OpenExecutor" ? executorFeeModel : dvnFeeModel],
       account,
       chain: null,
     }),
@@ -126,6 +141,7 @@ console.log(
       testOFT,
       openExecutor,
       openDVN,
+      priceFeed,
       remoteEid,
       sendLib,
       srcOApp,
@@ -135,15 +151,20 @@ console.log(
   ),
 );
 
-function workerPriceConfig(prefix: "EXECUTOR" | "DVN", defaultUpdatedAt: bigint) {
+function priceSnapshot(defaultUpdatedAt: bigint) {
   return {
-    baseFee: envBigInt(`${prefix}_PRICE_BASE_FEE`),
     dstGasPriceInSrcToken: envBigInt(
-      `${prefix}_PRICE_DST_GAS_PRICE_IN_SRC_TOKEN`,
+      "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
     ),
-    dstGasOverhead: envBigInt(`${prefix}_PRICE_DST_GAS_OVERHEAD`),
-    marginBps: envBigInt(`${prefix}_PRICE_MARGIN_BPS`),
-    updatedAt: optionalUint64(`${prefix}_PRICE_UPDATED_AT`, defaultUpdatedAt),
-    staleAfter: envBigInt(`${prefix}_PRICE_STALE_AFTER`),
+    updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
+    staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
+  };
+}
+
+function workerFeeModel(prefix: "EXECUTOR" | "DVN") {
+  return {
+    baseFee: envBigInt(`${prefix}_FEE_BASE_FEE`),
+    dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
+    marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
   };
 }

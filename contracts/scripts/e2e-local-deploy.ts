@@ -67,6 +67,9 @@ const receiveUlnArtifact = loadArtifact(
 const oftArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
 );
+const openPriceFeedArtifact = loadArtifact(
+  "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+);
 const openExecutorArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
 );
@@ -214,13 +217,18 @@ async function deployChain(
       spec.key === "a" ? initialSupply : 0n,
     ],
   });
+  const priceFeed = await deployContract(clients, `${spec.name} OpenPriceFeed`, {
+    abi: openPriceFeedArtifact.abi,
+    bytecode: openPriceFeedArtifact.bytecode,
+    args: [deployer.address],
+  });
   const openExecutor = await deployContract(
     clients,
     `${spec.name} OpenExecutor`,
     {
       abi: openExecutorArtifact.abi,
       bytecode: openExecutorArtifact.bytecode,
-      args: [deployer.address],
+      args: [deployer.address, priceFeed],
     },
   );
   const primaryOpenDVN = await deployContract(
@@ -229,7 +237,7 @@ async function deployChain(
     {
       abi: openDVNArtifact.abi,
       bytecode: openDVNArtifact.bytecode,
-      args: [deployer.address],
+      args: [deployer.address, priceFeed],
     },
   );
   const secondaryOpenDVN = await deployContract(
@@ -238,7 +246,7 @@ async function deployChain(
     {
       abi: openDVNArtifact.abi,
       bytecode: openDVNArtifact.bytecode,
-      args: [deployer.address],
+      args: [deployer.address, priceFeed],
     },
   );
 
@@ -248,6 +256,7 @@ async function deployChain(
     sendUln,
     receiveUln,
     oft,
+    priceFeed,
     openExecutor,
     primaryOpenDVN,
     secondaryOpenDVN,
@@ -398,22 +407,29 @@ async function configureSourceWorkers(
   const timestamp = BigInt(
     (await clients.publicClient.getBlock()).timestamp,
   );
-  const executorPriceConfig = {
+  const priceSnapshot = {
+    dstGasPriceInSrcToken: 1n,
+    updatedAt: timestamp,
+    staleAfter: 86_400n,
+  };
+  const executorFeeModel = {
     baseFee: 1n,
-    dstGasPriceInSrcToken: 1n,
     dstGasOverhead: 0n,
     marginBps: 0,
-    updatedAt: timestamp,
-    staleAfter: 86_400n,
   };
-  const dvnPriceConfig = {
+  const dvnFeeModel = {
     baseFee: 0n,
-    dstGasPriceInSrcToken: 1n,
     dstGasOverhead: 0n,
     marginBps: 0,
-    updatedAt: timestamp,
-    staleAfter: 86_400n,
   };
+  await writeTx(
+    clients,
+    `${source.name} OpenPriceFeed.setPriceSnapshot`,
+    source.priceFeed,
+    openPriceFeedArtifact.abi,
+    "setPriceSnapshot",
+    [destination.eid, priceSnapshot],
+  );
   for (const workerAddress of [
     source.openExecutor,
     source.primaryOpenDVN,
@@ -441,15 +457,15 @@ async function configureSourceWorkers(
     );
     await writeTx(
       clients,
-      `${source.name} worker.setPriceConfig ${workerAddress}`,
+      `${source.name} worker.setFeeModel ${workerAddress}`,
       workerAddress,
       abi,
-      "setPriceConfig",
+      "setFeeModel",
       [
         destination.eid,
         workerAddress === source.openExecutor
-          ? executorPriceConfig
-          : dvnPriceConfig,
+          ? executorFeeModel
+          : dvnFeeModel,
       ],
     );
   }
@@ -634,6 +650,7 @@ ${pathways
     source_workers:
       open_executor: "${source.openExecutor}"
       open_dvn: "${source.primaryOpenDVN}"
+      price_feed: "${source.priceFeed}"
     destination_workers:
       open_dvn: "${destination.primaryOpenDVN}"
     dvn:

@@ -7,13 +7,19 @@ import {WorkerAccess} from "../common/WorkerAccess.sol";
 import {WorkerErrors} from "../common/WorkerErrors.sol";
 import {WorkerFeeLib} from "../common/WorkerFeeLib.sol";
 import {WorkerTypes} from "../common/WorkerTypes.sol";
-import {PriceFeedStore} from "../common/PriceFeedStore.sol";
+import {IPriceFeed} from "../common/IPriceFeed.sol";
 
 /// @title OpenDVN
 /// @notice First-phase LayerZero DVN worker contract with strict pathway validation.
-contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
+contract OpenDVN is ILayerZeroDVN, WorkerAccess {
+    /// @notice Shared source-chain price feed used for destination market price snapshots.
+    IPriceFeed public immutable priceFeed;
+
     /// @notice Per-destination and per-OApp pathway configuration.
     mapping(uint32 dstEid => mapping(address sender => WorkerTypes.PathwayConfig config)) public pathwayConfig;
+
+    /// @notice Per-destination DVN fee model.
+    mapping(uint32 dstEid => WorkerTypes.FeeModel model) public feeModel;
 
     /// @notice Addresses allowed to submit ReceiveUln302 verification through this DVN contract.
     mapping(address verifier => bool allowed) public verifiers;
@@ -40,6 +46,11 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
     /// @param config New pathway configuration.
     event PathwayConfigSet(uint32 indexed dstEid, address indexed sender, WorkerTypes.PathwayConfig config);
 
+    /// @notice Emitted when a DVN fee model changes.
+    /// @param dstEid Destination endpoint ID.
+    /// @param model New DVN fee model.
+    event FeeModelSet(uint32 indexed dstEid, WorkerTypes.FeeModel model);
+
     /// @notice Emitted when verifier authorization changes.
     /// @param verifier Verifier address whose authorization changed.
     /// @param allowed Whether the verifier is allowed to submit verification.
@@ -61,7 +72,11 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
 
     /// @notice Initializes DVN ownership.
     /// @param initialOwner Initial owner address.
-    constructor(address initialOwner) WorkerAccess(initialOwner) {}
+    /// @param sharedPriceFeed Shared price feed contract.
+    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner) {
+        require(sharedPriceFeed != address(0), "price feed required");
+        priceFeed = IPriceFeed(sharedPriceFeed);
+    }
 
     /// @notice Sets pathway controls for a destination and source OApp.
     /// @param dstEid Destination endpoint ID.
@@ -75,11 +90,12 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
         emit PathwayConfigSet(dstEid, sender, config);
     }
 
-    /// @notice Sets destination fee inputs.
+    /// @notice Sets DVN fee model inputs.
     /// @param dstEid Destination endpoint ID.
-    /// @param config Price configuration.
-    function setPriceConfig(uint32 dstEid, WorkerTypes.PriceConfig calldata config) external onlyOwner {
-        _setPriceConfig(dstEid, config);
+    /// @param model Fee model.
+    function setFeeModel(uint32 dstEid, WorkerTypes.FeeModel calldata model) external onlyOwner {
+        feeModel[dstEid] = model;
+        emit FeeModelSet(dstEid, model);
     }
 
     /// @notice Sets whether an address may submit destination verification through this DVN.
@@ -161,6 +177,6 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess, PriceFeedStore {
             revert WorkerErrors.MessageTooLarge(messageSize, pathway.maxMessageSize);
         }
 
-        return WorkerFeeLib.quoteDVN(dstEid, priceConfig[dstEid]);
+        return WorkerFeeLib.quoteDVN(dstEid, priceFeed.priceSnapshot(dstEid), feeModel[dstEid]);
     }
 }

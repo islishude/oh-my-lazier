@@ -1,6 +1,6 @@
 # Price Bot Runbook
 
-This runbook covers the phase-1 price config update path for OpenExecutor and OpenDVN.
+This runbook covers the phase-1 shared price snapshot update path for source-chain OpenPriceFeed contracts used by OpenExecutor and OpenDVN.
 
 ## Preconditions
 
@@ -10,9 +10,9 @@ This runbook covers the phase-1 price config update path for OpenExecutor and Op
 - Supported primary sources are `binance`, `coinmarketcap`, and `coingecko`. `sanity_sources` may use those sources plus `uniswap`, must include `uniswap`, and must not duplicate the primary source.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap` is used as a primary or sanity source; do not put API keys in worker YAML.
 - `pathways[].pricing.executor_fee`, `pathways[].pricing.dvn_fee`, `pricing.stale_after_seconds`, `pricing.gas_spike_bps`, and configured gas price/fee caps are approved for the target environment. The fee model fields are worker quote inputs, not EIP-1559 block header base fees; the tx manager derives legacy versus dynamic-fee signing and estimates outer transaction gas from RPC before broadcast.
-- Each pathway fee model has `fixed_fee_wei`, `dst_gas_overhead`, and `margin_bps`; the bot converts destination gas price into source native-token units and writes the resulting `priceConfig(dstEid)` to the matching worker.
-- `pathways[].source_workers`, `pathways[].destination_workers.open_dvn`, and pathway EIDs match the latest deployment record.
-- Pathways that share the same source-chain worker contract and destination EID must use the same fee model for that worker role; the worker contract stores one `priceConfig(dstEid)` per role and rejects conflicting local config before enqueue.
+- Each pathway fee model has `fixed_fee_wei`, `dst_gas_overhead`, and `margin_bps`; the bot validates those fee models for shared-worker conflicts, but only writes the high-frequency market price snapshot to `pathways[].source_workers.price_feed`.
+- `pathways[].source_workers`, including `source_workers.price_feed`, `pathways[].destination_workers.open_dvn`, and pathway EIDs match the latest deployment record.
+- Pathways that share the same source-chain worker contract and destination EID must use the same fee model for that worker role; configcheck verifies `feeModel(dstEid)` on each worker when pricing is enabled.
 
 ## One-Shot Update
 
@@ -22,18 +22,17 @@ Run one price calculation and enqueue the resulting worker transactions:
 go run ./go/cmd/pricebot-once -config <worker.yaml> -log-level debug
 ```
 
-The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenExecutor, source OpenDVN, destination OpenDVN code, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads each chain's configured primary feed, configured sanity feeds, Uniswap sanity prices, and destination gas prices from RPC, then enqueues `setPriceConfig` transactions for each unique executor `(src_eid, dst_eid, source_workers.open_executor)` and DVN `(src_eid, dst_eid, source_workers.open_dvn)` role key. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
+The command checks the loaded chain/pathway config against on-chain Endpoint, OApp, SendLib, ReceiveLib, source and destination ULN required DVNs, OpenPriceFeed, OpenExecutor, source OpenDVN, destination OpenDVN code, worker `priceFeed()` bindings, worker `feeModel(dstEid)` values when pricing is enabled, and active destination OpenDVN verifier authorization before database sync. It then runs DB migrations, syncs the validated chain/pathway config, reads each chain's configured primary feed, configured sanity feeds, Uniswap sanity prices, and destination gas prices from RPC, then enqueues one `setPriceSnapshot` transaction for each unique `(src_eid, dst_eid, source_workers.price_feed)` key. It does not bypass the normal transaction manager or signer boundary; the tx manager still signs, broadcasts, replaces, and records receipts from the Postgres outbox.
 
 ## Expected Outbox Effects
 
-For each unique source/destination/source-worker role key, the command should enqueue:
+For each unique source/destination/source price-feed key, the command should enqueue:
 
-- one `pricing_set_executor_price_config` transaction to the source-chain OpenExecutor using the matching `pathways[].pricing.executor_fee`
-- one `pricing_set_dvn_price_config` transaction to the source-chain OpenDVN using the matching `pathways[].pricing.dvn_fee`
+- one `pricing_set_price_snapshot` transaction to the source-chain OpenPriceFeed using the calculated `PriceSnapshot`
 
 If the primary source and any configured sanity source deviate beyond `max_deviation_bps`, no price update should be enqueued and the command should exit non-zero.
 
-During the long-running worker loop, the bot also tracks the last destination gas price used for each unique source/destination/source-worker role key. If a later destination gas read increases by at least `gas_spike_bps`, it enqueues a fresh price update for that role before the next scheduled interval.
+During the long-running worker loop, the bot also tracks the last destination gas price used for each unique source/destination/source price-feed key. If a later destination gas read increases by at least `gas_spike_bps`, it enqueues a fresh snapshot update for that feed before the next scheduled interval.
 
 ## Verification
 
@@ -42,7 +41,7 @@ After the tx manager broadcasts and confirms the queued transactions:
 1. Confirm the tx outbox rows for the pricing signer reached a terminal confirmed status.
 2. Run `npm run check:price-config` on the source chain for the target `DST_EID`.
 3. Confirm `updatedAt` is recent and `staleAfter` matches the approved config.
-4. Confirm `dstGasPriceInSrcToken`, `dstGasOverhead`, `marginBps`, and `baseFee` match the approved executor/DVN fee models and recorded gas/price inputs.
+4. Confirm shared `dstGasPriceInSrcToken` and stale window match the recorded gas/price inputs, and each worker's `dstGasOverhead`, `marginBps`, and `baseFee` match the approved executor/DVN fee models.
 5. Confirm `gas_spike_bps` matches the approved config and is included in config-diff review evidence.
 6. Confirm `getFee`/`getFeeOnSend` succeeds before the stale window expires.
 7. Confirm stale configs still cause worker quote/assignment reverts in tests before enabling mainnet use.
@@ -53,6 +52,7 @@ Example:
 npm run check:price-config -- \
   --rpc-url ... \
   --chain-id 11155111 \
+  --price-feed ... \
   --open-executor ... \
   --open-dvn ... \
   --dst-eid 40449 \
@@ -62,9 +62,9 @@ npm run check:price-config -- \
 
 ## Rollback
 
-If the newly submitted price config is wrong:
+If the newly submitted price snapshot is wrong:
 
 1. Pause sends for affected pathways when pricing could undercharge execution.
-2. Restore the previous approved config values with `contracts/scripts/configure-workers.ts` or a manually reviewed owner transaction.
+2. Restore the previous approved snapshot with `contracts/scripts/configure-workers.ts` or a manually reviewed owner transaction; only use worker fee-model updates when the low-frequency model itself was wrong.
 3. Restart the worker after updating config files; phase 1 does not support hot reload.
 4. Let txmgr automatic retry handle classified pricing outbox failures. Use `txretry` only after automatic retry is exhausted or after the signer, fee caps, and calldata have been reviewed for an operator override.

@@ -3,6 +3,7 @@ pragma solidity ^0.8.35;
 
 import {OpenDVN} from "../contracts/workers/OpenDVN.sol";
 import {OpenExecutor} from "../contracts/workers/OpenExecutor.sol";
+import {OpenPriceFeed} from "../contracts/common/OpenPriceFeed.sol";
 import {TestOFT} from "../contracts/oft/TestOFT.sol";
 import {WorkerErrors} from "../contracts/common/WorkerErrors.sol";
 import {WorkerTypes} from "../contracts/common/WorkerTypes.sol";
@@ -69,6 +70,18 @@ contract SendLibCaller {
     {
         return dvn.assignJob{value: msg.value}(param, options);
     }
+
+    function setPriceSnapshot(OpenPriceFeed feed, uint32 dstEid, WorkerTypes.PriceSnapshot calldata snapshot) external {
+        feed.setPriceSnapshot(dstEid, snapshot);
+    }
+}
+
+contract PriceFeedMock {
+    mapping(uint32 dstEid => WorkerTypes.PriceSnapshot snapshot) public priceSnapshot;
+
+    function setPriceSnapshot(uint32 dstEid, WorkerTypes.PriceSnapshot calldata snapshot) external {
+        priceSnapshot[dstEid] = snapshot;
+    }
 }
 
 contract ReceiveUlnMock {
@@ -91,34 +104,34 @@ contract OpenWorkersTest {
 
     OpenExecutor internal executor;
     OpenDVN internal dvn;
+    OpenPriceFeed internal priceFeed;
     SendLibCaller internal sendLib;
     TestOFTHarness internal oft;
 
     function setUp() public {
-        executor = new OpenExecutor(address(this));
-        dvn = new OpenDVN(address(this));
+        priceFeed = new OpenPriceFeed(address(this));
+        executor = new OpenExecutor(address(this), address(priceFeed));
+        dvn = new OpenDVN(address(this), address(priceFeed));
         sendLib = new SendLibCaller();
         oft = new TestOFTHarness(address(new EndpointMock()), address(this), address(this), 1_000_000 ether);
 
         WorkerTypes.PathwayConfig memory pathway = WorkerTypes.PathwayConfig({
             enabled: true, maxMessageSize: 1024, minLzReceiveGas: 50_000, maxLzReceiveGas: 500_000
         });
-        WorkerTypes.PriceConfig memory price = WorkerTypes.PriceConfig({
-            baseFee: 1 ether,
-            dstGasPriceInSrcToken: 10 gwei,
-            dstGasOverhead: 1000,
-            marginBps: 3000,
-            updatedAt: uint64(block.timestamp),
-            staleAfter: 30 minutes
+        WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
         });
+        WorkerTypes.FeeModel memory fee =
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000});
+        priceFeed.setPriceSnapshot(DST_EID, snapshot);
 
         executor.setAllowedSendLib(address(sendLib), true);
         executor.setPathwayConfig(DST_EID, OAPP, pathway);
-        executor.setPriceConfig(DST_EID, price);
+        executor.setFeeModel(DST_EID, fee);
 
         dvn.setAllowedSendLib(address(sendLib), true);
         dvn.setPathwayConfig(DST_EID, OAPP, pathway);
-        dvn.setPriceConfig(DST_EID, price);
+        dvn.setFeeModel(DST_EID, fee);
     }
 
     function test_executorFeeSuccess() public view {
@@ -126,21 +139,93 @@ contract OpenWorkersTest {
         require(fee == 1.301313 ether, "executor fee mismatch");
     }
 
-    function test_executorRejectsStalePrice() public {
-        WorkerTypes.PriceConfig memory stale = WorkerTypes.PriceConfig({
-            baseFee: 1 ether,
-            dstGasPriceInSrcToken: 10 gwei,
-            dstGasOverhead: 1000,
-            marginBps: 3000,
-            updatedAt: 0,
-            staleAfter: 30 minutes
+    function test_priceFeedRejectsUnauthorizedUpdate() public {
+        WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
         });
-        executor.setPriceConfig(DST_EID, stale);
+        expectAnyRevert(address(sendLib), abi.encodeCall(sendLib.setPriceSnapshot, (priceFeed, DST_EID, snapshot)));
+    }
+
+    function test_priceFeedRejectsInvalidSnapshot() public {
+        WorkerTypes.PriceSnapshot memory invalid = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 0, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+        });
+        expectRevert(
+            address(priceFeed),
+            abi.encodeCall(priceFeed.setPriceSnapshot, (DST_EID, invalid)),
+            WorkerErrors.InvalidPriceSnapshot.selector
+        );
+    }
+
+    function test_sharedPriceFeedUpdateChangesExecutorAndDVNQuotes() public {
+        WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 20 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+        });
+        priceFeed.setPriceSnapshot(DST_EID, snapshot);
+
+        uint256 executorFee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
+        uint256 dvnFee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
+        require(executorFee == 1.302626 ether, "executor fee did not use shared price");
+        require(dvnFee == 1.300026 ether, "dvn fee did not use shared price");
+    }
+
+    function test_workerFeeModelsStayIndependent() public {
+        executor.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 2 ether, dstGasOverhead: 1000, marginBps: 3000}));
+
+        uint256 executorFee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
+        uint256 dvnFee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
+        require(executorFee == 2.601313 ether, "executor fee model not applied");
+        require(dvnFee == 1.300013 ether, "dvn fee model leaked");
+    }
+
+    function test_executorRejectsStalePrice() public {
+        WorkerTypes.PriceSnapshot memory stale =
+            WorkerTypes.PriceSnapshot({dstGasPriceInSrcToken: 10 gwei, updatedAt: 0, staleAfter: 30 minutes});
+        PriceFeedMock staleFeed = new PriceFeedMock();
+        staleFeed.setPriceSnapshot(DST_EID, stale);
+        OpenExecutor staleExecutor = new OpenExecutor(address(this), address(staleFeed));
+        staleExecutor.setAllowedSendLib(address(sendLib), true);
+        staleExecutor.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
+        staleExecutor.setFeeModel(
+            DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000})
+        );
+
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.executorFee, (staleExecutor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0))),
+            WorkerErrors.PriceSnapshotStale.selector
+        );
+    }
+
+    function test_executorRejectsInvalidBps() public {
+        executor.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 10_001}));
 
         expectRevert(
             address(sendLib),
             abi.encodeCall(sendLib.executorFee, (executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0))),
-            WorkerErrors.PriceConfigStale.selector
+            WorkerErrors.InvalidBps.selector
+        );
+    }
+
+    function test_executorRejectsZeroGasPriceWithNonZeroGasUnits() public {
+        PriceFeedMock zeroGasFeed = new PriceFeedMock();
+        zeroGasFeed.setPriceSnapshot(
+            DST_EID,
+            WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 0, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            })
+        );
+        OpenExecutor zeroGasExecutor = new OpenExecutor(address(this), address(zeroGasFeed));
+        zeroGasExecutor.setAllowedSendLib(address(sendLib), true);
+        zeroGasExecutor.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
+        zeroGasExecutor.setFeeModel(
+            DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000})
+        );
+
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.executorFee, (zeroGasExecutor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0))),
+            WorkerErrors.InvalidDstGasPrice.selector
         );
     }
 
@@ -267,20 +352,19 @@ contract OpenWorkersTest {
     }
 
     function test_dvnRejectsStalePrice() public {
-        WorkerTypes.PriceConfig memory stale = WorkerTypes.PriceConfig({
-            baseFee: 1 ether,
-            dstGasPriceInSrcToken: 10 gwei,
-            dstGasOverhead: 1000,
-            marginBps: 3000,
-            updatedAt: 0,
-            staleAfter: 30 minutes
-        });
-        dvn.setPriceConfig(DST_EID, stale);
+        WorkerTypes.PriceSnapshot memory stale =
+            WorkerTypes.PriceSnapshot({dstGasPriceInSrcToken: 10 gwei, updatedAt: 0, staleAfter: 30 minutes});
+        PriceFeedMock staleFeed = new PriceFeedMock();
+        staleFeed.setPriceSnapshot(DST_EID, stale);
+        OpenDVN staleDVN = new OpenDVN(address(this), address(staleFeed));
+        staleDVN.setAllowedSendLib(address(sendLib), true);
+        staleDVN.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
+        staleDVN.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000}));
 
         expectRevert(
             address(sendLib),
-            abi.encodeCall(sendLib.dvnFee, (dvn, DST_EID, 12, OAPP, "")),
-            WorkerErrors.PriceConfigStale.selector
+            abi.encodeCall(sendLib.dvnFee, (staleDVN, DST_EID, 12, OAPP, "")),
+            WorkerErrors.PriceSnapshotStale.selector
         );
     }
 
@@ -477,6 +561,17 @@ contract OpenWorkersTest {
         (bool ok, bytes memory data) = target.call(callData);
         require(!ok, "expected revert");
         require(bytes4(data) == selector, "unexpected revert");
+    }
+
+    function expectAnyRevert(address target, bytes memory callData) internal {
+        (bool ok,) = target.call(callData);
+        require(!ok, "expected revert");
+    }
+
+    function defaultPathwayConfig() internal pure returns (WorkerTypes.PathwayConfig memory) {
+        return WorkerTypes.PathwayConfig({
+            enabled: true, maxMessageSize: 1024, minLzReceiveGas: 50_000, maxLzReceiveGas: 500_000
+        });
     }
 
     function lzReceiveOption(uint128 gasLimit, uint128 value) internal pure returns (bytes memory) {

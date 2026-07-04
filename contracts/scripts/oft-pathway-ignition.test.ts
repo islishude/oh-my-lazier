@@ -22,26 +22,26 @@ function basePathwayInput() {
     receiveUln: "0x6666666666666666666666666666666666666666",
     openExecutor: "0x7777777777777777777777777777777777777777",
     openDVN: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    priceFeed: "0xcccccccccccccccccccccccccccccccccccccccc",
     layerZeroLabsDVN: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     confirmations: 12n,
     maxMessageSize: 10_000,
     minLzReceiveGas: 200_000n,
     maxLzReceiveGas: 1_000_000n,
-    executorPriceConfig: {
-      baseFee: 1000n,
+    priceSnapshot: {
       dstGasPriceInSrcToken: 2n,
-      dstGasOverhead: 50_000n,
-      marginBps: 1000,
       updatedAt: 1_700_000_000n,
       staleAfter: 1800n,
     },
-    dvnPriceConfig: {
+    executorFeeModel: {
+      baseFee: 1000n,
+      dstGasOverhead: 50_000n,
+      marginBps: 1000,
+    },
+    dvnFeeModel: {
       baseFee: 2000n,
-      dstGasPriceInSrcToken: 3n,
       dstGasOverhead: 150_000n,
       marginBps: 500n,
-      updatedAt: 1_700_000_001n,
-      staleAfter: 1801n,
     },
     enforcedLzReceiveGas: 200_000n,
   } as const;
@@ -69,6 +69,7 @@ test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () =
   );
   assert.equal(rendered.openExecutor, "0x7777777777777777777777777777777777777777");
   assert.equal(rendered.openDVN, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(rendered.priceFeed, "0xcccccccccccccccccccccccccccccccccccccccc");
   assert.equal(rendered.dvnVerifier, "0x9999999999999999999999999999999999999999");
   assert.deepEqual(rendered.workerPathwayConfig, {
     enabled: true,
@@ -76,21 +77,20 @@ test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () =
     minLzReceiveGas: "200000",
     maxLzReceiveGas: "1000000",
   });
-  assert.deepEqual(rendered.executorPriceConfig, {
-    baseFee: "1000",
+  assert.deepEqual(rendered.priceSnapshot, {
     dstGasPriceInSrcToken: "2",
-    dstGasOverhead: "50000",
-    marginBps: 1000,
     updatedAt: "1700000000",
     staleAfter: "1800",
   });
-  assert.deepEqual(rendered.dvnPriceConfig, {
+  assert.deepEqual(rendered.executorFeeModel, {
+    baseFee: "1000",
+    dstGasOverhead: "50000",
+    marginBps: 1000,
+  });
+  assert.deepEqual(rendered.dvnFeeModel, {
     baseFee: "2000",
-    dstGasPriceInSrcToken: "3",
     dstGasOverhead: "150000",
     marginBps: 500,
-    updatedAt: "1700000001",
-    staleAfter: "1801",
   });
   assert.equal(rendered.receiveLibraryGracePeriod, 0);
   assert.deepEqual(rendered.enforcedOptions, [
@@ -163,16 +163,16 @@ test("buildTestOFTPathwayConfigParameters validates worker gas bounds", () => {
   );
 });
 
-test("buildTestOFTPathwayConfigParameters validates worker price config", () => {
+test("buildTestOFTPathwayConfigParameters validates worker fee model", () => {
   assert.throws(
     () =>
       buildTestOFTPathwayConfigParameters({
         ...basePathwayInput(),
-        executorPriceConfig: {
-          ...basePathwayInput().executorPriceConfig,
+        executorFeeModel: {
+          ...basePathwayInput().executorFeeModel,
           marginBps: 10_001,
         },
       }),
-    /executorPriceConfig\.marginBps must be between 0 and 10000 bps/,
+    /executorFeeModel\.marginBps must be between 0 and 10000 bps/,
   );
 });

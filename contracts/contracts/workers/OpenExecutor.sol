@@ -7,13 +7,19 @@ import {WorkerErrors} from "../common/WorkerErrors.sol";
 import {WorkerFeeLib} from "../common/WorkerFeeLib.sol";
 import {WorkerOptions} from "../common/WorkerOptions.sol";
 import {WorkerTypes} from "../common/WorkerTypes.sol";
-import {PriceFeedStore} from "../common/PriceFeedStore.sol";
+import {IPriceFeed} from "../common/IPriceFeed.sol";
 
 /// @title OpenExecutor
 /// @notice First-phase LayerZero Executor worker contract with strict option and pathway validation.
-contract OpenExecutor is ILayerZeroExecutor, WorkerAccess, PriceFeedStore {
+contract OpenExecutor is ILayerZeroExecutor, WorkerAccess {
+    /// @notice Shared source-chain price feed used for destination market price snapshots.
+    IPriceFeed public immutable priceFeed;
+
     /// @notice Per-destination and per-OApp pathway configuration.
     mapping(uint32 dstEid => mapping(address sender => WorkerTypes.PathwayConfig config)) public pathwayConfig;
+
+    /// @notice Per-destination executor fee model.
+    mapping(uint32 dstEid => WorkerTypes.FeeModel model) public feeModel;
 
     /// @notice Emitted when a LayerZero send library assigns an executor job.
     /// @param dstEid Destination endpoint ID.
@@ -37,9 +43,18 @@ contract OpenExecutor is ILayerZeroExecutor, WorkerAccess, PriceFeedStore {
     /// @param config New pathway configuration.
     event PathwayConfigSet(uint32 indexed dstEid, address indexed sender, WorkerTypes.PathwayConfig config);
 
+    /// @notice Emitted when an executor fee model changes.
+    /// @param dstEid Destination endpoint ID.
+    /// @param model New executor fee model.
+    event FeeModelSet(uint32 indexed dstEid, WorkerTypes.FeeModel model);
+
     /// @notice Initializes executor ownership.
     /// @param initialOwner Initial owner address.
-    constructor(address initialOwner) WorkerAccess(initialOwner) {}
+    /// @param sharedPriceFeed Shared price feed contract.
+    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner) {
+        require(sharedPriceFeed != address(0), "price feed required");
+        priceFeed = IPriceFeed(sharedPriceFeed);
+    }
 
     /// @notice Sets pathway controls for a destination and source OApp.
     /// @param dstEid Destination endpoint ID.
@@ -53,11 +68,12 @@ contract OpenExecutor is ILayerZeroExecutor, WorkerAccess, PriceFeedStore {
         emit PathwayConfigSet(dstEid, sender, config);
     }
 
-    /// @notice Sets destination fee inputs.
+    /// @notice Sets executor fee model inputs.
     /// @param dstEid Destination endpoint ID.
-    /// @param config Price configuration.
-    function setPriceConfig(uint32 dstEid, WorkerTypes.PriceConfig calldata config) external onlyOwner {
-        _setPriceConfig(dstEid, config);
+    /// @param model Fee model.
+    function setFeeModel(uint32 dstEid, WorkerTypes.FeeModel calldata model) external onlyOwner {
+        feeModel[dstEid] = model;
+        emit FeeModelSet(dstEid, model);
     }
 
     /// @notice Quotes and assigns an executor job for a LayerZero send library.
@@ -117,6 +133,7 @@ contract OpenExecutor is ILayerZeroExecutor, WorkerAccess, PriceFeedStore {
             revert WorkerErrors.InvalidGas(parsed.lzReceiveGas, pathway.minLzReceiveGas, pathway.maxLzReceiveGas);
         }
 
-        return WorkerFeeLib.quoteExecutor(dstEid, priceConfig[dstEid], parsed.lzReceiveGas);
+        return
+            WorkerFeeLib.quoteExecutor(dstEid, priceFeed.priceSnapshot(dstEid), feeModel[dstEid], parsed.lzReceiveGas);
     }
 }

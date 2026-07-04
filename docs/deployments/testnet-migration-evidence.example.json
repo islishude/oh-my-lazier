@@ -45,7 +45,8 @@
       "dstEid": 40449,
       "sourceWorkers": {
         "openExecutor": "0x2222222222222222222222222222222222222222",
-        "openDVN": "0x3333333333333333333333333333333333333333"
+        "openDVN": "0x3333333333333333333333333333333333333333",
+        "priceFeed": "0x4444444444444444444444444444444444444444"
       },
       "destinationWorkers": {
         "openDVN": "0x6666666666666666666666666666666666666666"
@@ -68,19 +69,25 @@
         "checkedAt": "1800000000",
         "maxAgeSeconds": "1800",
         "expectedStaleAfter": "1800",
+        "priceFeed": {
+          "address": "0x4444444444444444444444444444444444444444",
+          "priceSnapshot": {
+            "updatedAt": "1799999940",
+            "staleAfter": "1800",
+            "dstGasPriceInSrcToken": "1"
+          }
+        },
         "executor": {
+          "address": "0x2222222222222222222222222222222222222222",
+          "priceFeed": "0x4444444444444444444444444444444444444444",
           "baseFee": "1000",
-          "updatedAt": "1799999940",
-          "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1",
           "dstGasOverhead": "50000",
           "marginBps": 100
         },
         "dvn": {
+          "address": "0x3333333333333333333333333333333333333333",
+          "priceFeed": "0x4444444444444444444444444444444444444444",
           "baseFee": "2000",
-          "updatedAt": "1799999940",
-          "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1",
           "dstGasOverhead": "150000",
           "marginBps": 200
         }
@@ -133,7 +140,8 @@
       "dstEid": 40161,
       "sourceWorkers": {
         "openExecutor": "0x5555555555555555555555555555555555555555",
-        "openDVN": "0x6666666666666666666666666666666666666666"
+        "openDVN": "0x6666666666666666666666666666666666666666",
+        "priceFeed": "0x7777777777777777777777777777777777777777"
       },
       "destinationWorkers": {
         "openDVN": "0x3333333333333333333333333333333333333333"
@@ -156,19 +164,25 @@
         "checkedAt": "1800000000",
         "maxAgeSeconds": "1800",
         "expectedStaleAfter": "1800",
+        "priceFeed": {
+          "address": "0x7777777777777777777777777777777777777777",
+          "priceSnapshot": {
+            "updatedAt": "1799999940",
+            "staleAfter": "1800",
+            "dstGasPriceInSrcToken": "1"
+          }
+        },
         "executor": {
+          "address": "0x5555555555555555555555555555555555555555",
+          "priceFeed": "0x7777777777777777777777777777777777777777",
           "baseFee": "1000",
-          "updatedAt": "1799999940",
-          "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1",
           "dstGasOverhead": "50000",
           "marginBps": 100
         },
         "dvn": {
+          "address": "0x6666666666666666666666666666666666666666",
+          "priceFeed": "0x7777777777777777777777777777777777777777",
           "baseFee": "2000",
-          "updatedAt": "1799999940",
-          "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1",
           "dstGasOverhead": "150000",
           "marginBps": 200
         }

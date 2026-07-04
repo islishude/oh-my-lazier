@@ -61,46 +61,35 @@ func TestSelectPriceWithSanityRejectsAnyDeviatingSource(t *testing.T) {
 	}
 }
 
-func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) {
-	config, err := BuildPriceConfig(PriceInputs{
+func TestBuildPriceSnapshotConvertsDestinationGasPriceToSourceToken(t *testing.T) {
+	snapshot, err := BuildPriceSnapshot(PriceInputs{
 		SrcNativeUSD:      big.NewRat(2000, 1),
 		DstNativeUSD:      big.NewRat(1000, 1),
 		DstGasPriceWei:    big.NewInt(2_000_000_000),
-		Fee:               FeeModel{FixedFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
 		UpdatedAtUnix:     1_700_000_000,
 		StaleAfterSeconds: 1800,
 	})
 	if err != nil {
-		t.Fatalf("BuildPriceConfig() error = %v", err)
+		t.Fatalf("BuildPriceSnapshot() error = %v", err)
 	}
-	if config.DstGasPriceInSrcToken.Cmp(big.NewInt(1_000_000_000)) != 0 {
-		t.Fatalf("dst gas price = %s, want 1000000000", config.DstGasPriceInSrcToken)
-	}
-	if config.BaseFee.Cmp(big.NewInt(1000)) != 0 {
-		t.Fatalf("base fee = %s, want 1000", config.BaseFee)
-	}
-	if config.DstGasOverhead != 50_000 {
-		t.Fatalf("dst gas overhead = %d, want 50000", config.DstGasOverhead)
-	}
-	if config.MarginBps != 100 {
-		t.Fatalf("margin bps = %d, want 100", config.MarginBps)
+	if snapshot.DstGasPriceInSrcToken.Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("dst gas price = %s, want 1000000000", snapshot.DstGasPriceInSrcToken)
 	}
 }
 
-func TestBuildPriceConfigRoundsUpFractionalWei(t *testing.T) {
-	config, err := BuildPriceConfig(PriceInputs{
+func TestBuildPriceSnapshotRoundsUpFractionalWei(t *testing.T) {
+	snapshot, err := BuildPriceSnapshot(PriceInputs{
 		SrcNativeUSD:      big.NewRat(3, 1),
 		DstNativeUSD:      big.NewRat(2, 1),
 		DstGasPriceWei:    big.NewInt(10),
-		Fee:               FeeModel{FixedFee: big.NewInt(0)},
 		UpdatedAtUnix:     1,
 		StaleAfterSeconds: 2,
 	})
 	if err != nil {
-		t.Fatalf("BuildPriceConfig() error = %v", err)
+		t.Fatalf("BuildPriceSnapshot() error = %v", err)
 	}
-	if config.DstGasPriceInSrcToken.Cmp(big.NewInt(7)) != 0 {
-		t.Fatalf("dst gas price = %s, want rounded-up 7", config.DstGasPriceInSrcToken)
+	if snapshot.DstGasPriceInSrcToken.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("dst gas price = %s, want rounded-up 7", snapshot.DstGasPriceInSrcToken)
 	}
 }
 
@@ -113,37 +102,36 @@ func TestGasIncreaseBpsOnlyCountsUpwardMoves(t *testing.T) {
 	}
 }
 
-func TestBuildSetPriceConfigCalldata(t *testing.T) {
-	config := testPriceConfig()
-	calldata, err := BuildSetPriceConfigCalldata(40449, config)
+func TestBuildSetPriceSnapshotCalldata(t *testing.T) {
+	snapshot := testPriceSnapshot()
+	calldata, err := BuildSetPriceSnapshotCalldata(40449, snapshot)
 	if err != nil {
-		t.Fatalf("BuildSetPriceConfigCalldata() error = %v", err)
+		t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v", err)
 	}
-	if len(calldata) != 4+32*7 {
-		t.Fatalf("calldata len = %d, want %d", len(calldata), 4+32*7)
+	if len(calldata) != 4+32*4 {
+		t.Fatalf("calldata len = %d, want %d", len(calldata), 4+32*4)
 	}
-	method := priceConfigABI.Methods["setPriceConfig"]
+	method := priceSnapshotABI.Methods["setPriceSnapshot"]
 	if string(calldata[:4]) != string(method.ID) {
 		t.Fatalf("method id = 0x%x, want 0x%x", calldata[:4], method.ID)
 	}
 }
 
-func TestBuildSetPriceConfigTx(t *testing.T) {
-	request, err := BuildSetPriceConfigTx(
+func TestBuildSetPriceSnapshotTx(t *testing.T) {
+	request, err := BuildSetPriceSnapshotTx(
 		40161,
 		common.HexToAddress("0x1111111111111111111111111111111111111111"),
 		40449,
-		TxPurposeSetExecutorPriceConfig,
 		"0x9999999999999999999999999999999999999999",
-		testPriceConfig(),
+		testPriceSnapshot(),
 	)
 	if err != nil {
-		t.Fatalf("BuildSetPriceConfigTx() error = %v", err)
+		t.Fatalf("BuildSetPriceSnapshotTx() error = %v", err)
 	}
 	if request.ChainEID != 40161 {
 		t.Fatalf("chain eid = %d, want 40161", request.ChainEID)
 	}
-	if request.Purpose != TxPurposeSetExecutorPriceConfig {
+	if request.Purpose != TxPurposeSetPriceSnapshot {
 		t.Fatalf("purpose = %q", request.Purpose)
 	}
 	if len(request.Calldata) == 0 {
@@ -154,12 +142,9 @@ func TestBuildSetPriceConfigTx(t *testing.T) {
 	}
 }
 
-func testPriceConfig() PriceConfig {
-	return PriceConfig{
-		BaseFee:               big.NewInt(1000),
+func testPriceSnapshot() PriceSnapshot {
+	return PriceSnapshot{
 		DstGasPriceInSrcToken: big.NewInt(2_000_000_000),
-		DstGasOverhead:        50_000,
-		MarginBps:             100,
 		UpdatedAt:             1_700_000_000,
 		StaleAfter:            1800,
 	}

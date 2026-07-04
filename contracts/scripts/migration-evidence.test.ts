@@ -12,6 +12,37 @@ test("validateMigrationEvidenceRecord accepts complete migration evidence", () =
   assert.deepEqual(validateMigrationEvidenceRecord(baseRecord()), []);
 });
 
+test("validateMigrationEvidenceRecord rejects price config evidence not bound to source workers", () => {
+  const record = baseRecord();
+  const evidence = record.directions[0].priceConfigCheck;
+  const wrongPriceFeed = "0x9999999999999999999999999999999999999999";
+  record.directions[0].priceConfigCheck = {
+    ...evidence,
+    priceFeed: {
+      ...evidence.priceFeed,
+      address: wrongPriceFeed,
+    },
+    executor: {
+      ...evidence.executor,
+      address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      priceFeed: wrongPriceFeed,
+    },
+    dvn: {
+      ...evidence.dvn,
+      address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      priceFeed: wrongPriceFeed,
+    },
+  };
+
+  const errors = validateMigrationEvidenceRecord(record);
+
+  assert.deepEqual(errors, [
+    "directions[0].priceConfigCheck.priceFeed.address must equal sourceWorkers.priceFeed 0x4444444444444444444444444444444444444444",
+    "directions[0].priceConfigCheck.executor.address must equal sourceWorkers.openExecutor 0x2222222222222222222222222222222222222222",
+    "directions[0].priceConfigCheck.dvn.address must equal sourceWorkers.openDVN 0x3333333333333333333333333333333333333333",
+  ]);
+});
+
 test("validateMigrationEvidenceRecord rejects missing required artifacts", () => {
   const record = baseRecord();
   record.operatorContacts = [];
@@ -83,6 +114,8 @@ test("validateMigrationEvidenceRecord rejects zero and invalid account addresses
   record.directions[0].sourceWorkers.openExecutor =
     "0x0000000000000000000000000000000000000000";
   record.directions[0].sourceWorkers.openDVN = "not-an-address";
+  record.directions[0].sourceWorkers.priceFeed =
+    "0x0000000000000000000000000000000000000000";
   record.directions[1].destinationWorkers.openDVN = "0xabc";
   record.directions[0].canary.senderAccount =
     "0x0000000000000000000000000000000000000000";
@@ -98,6 +131,7 @@ test("validateMigrationEvidenceRecord rejects zero and invalid account addresses
     "signerAccount must be an EVM address",
     "directions[0].sourceWorkers.openExecutor must not be the zero address",
     "directions[0].sourceWorkers.openDVN must be an EVM address",
+    "directions[0].sourceWorkers.priceFeed must not be the zero address",
     "directions[0].canary.senderAccount must not be the zero address",
     "directions[1].destinationWorkers.openDVN must be an EVM address",
     "directions[1].canary.recipientAccount must be an EVM address",
@@ -171,7 +205,7 @@ test("validateMigrationEvidenceRecord rejects weak DVN verification packet ident
   ]);
 });
 
-test("validateMigrationEvidenceRecord rejects stale or mismatched price config evidence", () => {
+test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot evidence", () => {
   const record = baseRecord();
   record.directions[0].priceConfigCheck = {
     ...record.directions[0].priceConfigCheck,
@@ -179,19 +213,25 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price config e
     checkedAt: "1000",
     maxAgeSeconds: "60",
     expectedStaleAfter: "1800",
+    priceFeed: {
+      address: "0x4444444444444444444444444444444444444444",
+      priceSnapshot: {
+        updatedAt: "900",
+        staleAfter: "120",
+        dstGasPriceInSrcToken: "0",
+      },
+    },
     executor: {
+      address: "0x2222222222222222222222222222222222222222",
+      priceFeed: "0x9999999999999999999999999999999999999999",
       baseFee: "-1",
-      updatedAt: "900",
-      staleAfter: "120",
-      dstGasPriceInSrcToken: "0",
       dstGasOverhead: "-1",
       marginBps: 10001,
     },
     dvn: {
+      address: "0x3333333333333333333333333333333333333333",
+      priceFeed: "0x4444444444444444444444444444444444444444",
       baseFee: "0",
-      updatedAt: "1001",
-      staleAfter: "1800",
-      dstGasPriceInSrcToken: "2",
       dstGasOverhead: "150000",
       marginBps: 100,
     },
@@ -201,13 +241,13 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price config e
 
   assert.deepEqual(errors, [
     "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40449",
+    "directions[0].priceConfigCheck.priceFeed.priceSnapshot.dstGasPriceInSrcToken must be a positive decimal integer string",
+    "directions[0].priceConfigCheck.priceFeed.priceSnapshot.updatedAt age exceeds 60s",
+    "directions[0].priceConfigCheck.priceFeed.priceSnapshot.staleAfter must equal expectedStaleAfter 1800",
+    "directions[0].priceConfigCheck.executor.priceFeed must equal priceFeed.address 0x4444444444444444444444444444444444444444",
     "directions[0].priceConfigCheck.executor.baseFee must be a non-negative decimal integer string",
-    "directions[0].priceConfigCheck.executor.dstGasPriceInSrcToken must be a positive decimal integer string",
     "directions[0].priceConfigCheck.executor.dstGasOverhead must be a non-negative decimal integer string",
     "directions[0].priceConfigCheck.executor.marginBps must be between 0 and 10000 bps",
-    "directions[0].priceConfigCheck.executor.updatedAt age exceeds 60s",
-    "directions[0].priceConfigCheck.executor.staleAfter must equal expectedStaleAfter 1800",
-    "directions[0].priceConfigCheck.dvn.updatedAt must not be in the future",
   ]);
 });
 
@@ -236,6 +276,7 @@ function baseRecord(): MigrationEvidenceRecord {
         sourceWorkers: {
           openExecutor: "0x2222222222222222222222222222222222222222",
           openDVN: "0x3333333333333333333333333333333333333333",
+          priceFeed: "0x4444444444444444444444444444444444444444",
         },
         destinationWorkers: {
           openDVN: "0x6666666666666666666666666666666666666666",
@@ -253,6 +294,9 @@ function baseRecord(): MigrationEvidenceRecord {
         priceConfigCheck: priceConfigEvidence(
           "artifacts/price-config-eth-sepolia-to-hoodi.json",
           40449,
+          "0x4444444444444444444444444444444444444444",
+          "0x2222222222222222222222222222222222222222",
+          "0x3333333333333333333333333333333333333333",
         ),
         drainCheckBeforeSwitch: evidence(
           "artifacts/drain-eth-sepolia-to-hoodi.json",
@@ -289,6 +333,7 @@ function baseRecord(): MigrationEvidenceRecord {
         sourceWorkers: {
           openExecutor: "0x5555555555555555555555555555555555555555",
           openDVN: "0x6666666666666666666666666666666666666666",
+          priceFeed: "0x7777777777777777777777777777777777777777",
         },
         destinationWorkers: {
           openDVN: "0x3333333333333333333333333333333333333333",
@@ -306,6 +351,9 @@ function baseRecord(): MigrationEvidenceRecord {
         priceConfigCheck: priceConfigEvidence(
           "artifacts/price-config-hoodi-to-eth-sepolia.json",
           40161,
+          "0x7777777777777777777777777777777777777777",
+          "0x5555555555555555555555555555555555555555",
+          "0x6666666666666666666666666666666666666666",
         ),
         drainCheckBeforeSwitch: evidence(
           "artifacts/drain-hoodi-to-eth-sepolia.json",
@@ -359,26 +407,38 @@ function evidence(ref: string): EvidenceRef {
   return { ref, capturedAt: "2026-06-27T00:00:00Z", reviewer: "ops" };
 }
 
-function priceConfigEvidence(ref: string, dstEid: number): PriceConfigEvidence {
+function priceConfigEvidence(
+  ref: string,
+  dstEid: number,
+  priceFeed: string,
+  executor: string,
+  dvn: string,
+): PriceConfigEvidence {
   return {
     ...evidence(ref),
     dstEid,
     checkedAt: "1000",
     maxAgeSeconds: "60",
     expectedStaleAfter: "1800",
+    priceFeed: {
+      address: priceFeed,
+      priceSnapshot: {
+        updatedAt: "950",
+        staleAfter: "1800",
+        dstGasPriceInSrcToken: "2",
+      },
+    },
     executor: {
+      address: executor,
+      priceFeed,
       baseFee: "1000",
-      updatedAt: "950",
-      staleAfter: "1800",
-      dstGasPriceInSrcToken: "2",
       dstGasOverhead: "50000",
       marginBps: 100,
     },
     dvn: {
+      address: dvn,
+      priceFeed,
       baseFee: "2000",
-      updatedAt: "950",
-      staleAfter: "1800",
-      dstGasPriceInSrcToken: "2",
       dstGasOverhead: "150000",
       marginBps: 200,
     },

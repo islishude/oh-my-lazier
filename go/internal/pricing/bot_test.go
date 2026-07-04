@@ -16,7 +16,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 )
 
-func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
+func TestBotEnqueueOnceQueuesSharedPriceFeedUpdates(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
 	logger, logs := captureLogger(slog.LevelInfo)
@@ -29,12 +29,11 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	if err := bot.EnqueueOnce(context.Background()); err != nil {
 		t.Fatalf("EnqueueOnce() error = %v", err)
 	}
-	if len(store.requests) != 4 {
-		t.Fatalf("enqueued requests = %d, want 4", len(store.requests))
+	if len(store.requests) != 2 {
+		t.Fatalf("enqueued requests = %d, want 2", len(store.requests))
 	}
 	wantPurposes := map[string]int{
-		TxPurposeSetExecutorPriceConfig: 2,
-		TxPurposeSetDVNPriceConfig:      2,
+		TxPurposeSetPriceSnapshot: 2,
 	}
 	for _, request := range store.requests {
 		wantPurposes[request.Purpose]--
@@ -53,24 +52,13 @@ func TestBotEnqueueOnceQueuesExecutorAndDVNPriceUpdates(t *testing.T) {
 	assertLogContains(t, logs.String(),
 		`msg="price update tx enqueued"`,
 		`tx_outbox_id=1`,
-		`purpose=pricing_set_executor_price_config`,
+		`purpose=pricing_set_price_snapshot`,
 		`src_eid=40161`,
 		`dst_eid=40449`,
-		`worker=0x2222222222222222222222222222222222222222`,
+		`price_feed=0x4444444444444444444444444444444444444444`,
 	)
-	assertRequestMatchesConfig(t, store.requests, common.HexToAddress("0x2222222222222222222222222222222222222222"), TxPurposeSetExecutorPriceConfig, 40449, PriceConfig{
-		BaseFee:               big.NewInt(1000),
+	assertRequestMatchesSnapshot(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), 40449, PriceSnapshot{
 		DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
-		DstGasOverhead:        50_000,
-		MarginBps:             100,
-		UpdatedAt:             1_700_000_000,
-		StaleAfter:            1800,
-	})
-	assertRequestMatchesConfig(t, store.requests, common.HexToAddress("0x3333333333333333333333333333333333333333"), TxPurposeSetDVNPriceConfig, 40449, PriceConfig{
-		BaseFee:               big.NewInt(2000),
-		DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
-		DstGasOverhead:        150_000,
-		MarginBps:             200,
 		UpdatedAt:             1_700_000_000,
 		StaleAfter:            1800,
 	})
@@ -112,24 +100,24 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	if err := bot.EnqueueOnce(context.Background()); err != nil {
 		t.Fatalf("EnqueueOnce() error = %v", err)
 	}
-	if len(store.requests) != 4 {
-		t.Fatalf("initial enqueued requests = %d, want 4", len(store.requests))
+	if len(store.requests) != 2 {
+		t.Fatalf("initial enqueued requests = %d, want 2", len(store.requests))
 	}
 
 	destinationGas.price = big.NewInt(2_100_000_000)
 	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
 		t.Fatalf("EnqueueOnGasSpike() below threshold error = %v", err)
 	}
-	if len(store.requests) != 4 {
-		t.Fatalf("below-threshold enqueued requests = %d, want 4", len(store.requests))
+	if len(store.requests) != 2 {
+		t.Fatalf("below-threshold enqueued requests = %d, want 2", len(store.requests))
 	}
 
 	destinationGas.price = big.NewInt(2_300_000_000)
 	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
 		t.Fatalf("EnqueueOnGasSpike() above threshold error = %v", err)
 	}
-	if len(store.requests) != 6 {
-		t.Fatalf("above-threshold enqueued requests = %d, want 6", len(store.requests))
+	if len(store.requests) != 3 {
+		t.Fatalf("above-threshold enqueued requests = %d, want 3", len(store.requests))
 	}
 	assertLogContains(t, logs.String(),
 		`msg="price bot enqueued gas-spike update"`,
@@ -141,7 +129,7 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	)
 }
 
-func TestBotEnqueueOnceDeduplicatesSharedRoleIndependently(t *testing.T) {
+func TestBotEnqueueOnceDeduplicatesSharedPriceFeed(t *testing.T) {
 	pathways := testPathways()
 	duplicate := pathways[0]
 	duplicate.SrcOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999998")
@@ -159,14 +147,11 @@ func TestBotEnqueueOnceDeduplicatesSharedRoleIndependently(t *testing.T) {
 	if err := bot.EnqueueOnce(context.Background()); err != nil {
 		t.Fatalf("EnqueueOnce() error = %v", err)
 	}
-	if len(store.requests) != 3 {
-		t.Fatalf("enqueued requests = %d, want 3", len(store.requests))
+	if len(store.requests) != 1 {
+		t.Fatalf("enqueued requests = %d, want 1", len(store.requests))
 	}
-	if got := countRequests(store.requests, TxPurposeSetExecutorPriceConfig); got != 1 {
-		t.Fatalf("executor requests = %d, want 1", got)
-	}
-	if got := countRequests(store.requests, TxPurposeSetDVNPriceConfig); got != 2 {
-		t.Fatalf("dvn requests = %d, want 2", got)
+	if got := countRequests(store.requests, TxPurposeSetPriceSnapshot); got != 1 {
+		t.Fatalf("price snapshot requests = %d, want 1", got)
 	}
 }
 
@@ -208,7 +193,7 @@ func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
 			if err == nil {
 				t.Fatal("EnqueueOnce() error = nil, want conflicting fee model error")
 			}
-			if !strings.Contains(err.Error(), "conflicting pricing_set_") {
+			if !strings.Contains(err.Error(), "conflicting "+test.name+" fee model") {
 				t.Fatalf("EnqueueOnce() error = %v, want conflicting fee model", err)
 			}
 			if len(store.requests) != 0 {
@@ -314,6 +299,7 @@ func testPathways() []config.PathwayConfig {
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+				PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			},
 			DestinationWorkers: config.DestinationWorkerContractsConfig{
 				OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
@@ -333,6 +319,7 @@ func testPathways() []config.PathwayConfig {
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 				OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+				PriceFeed:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 			},
 			DestinationWorkers: config.DestinationWorkerContractsConfig{
 				OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
@@ -385,21 +372,21 @@ func assertLogContains(t *testing.T, output string, wants ...string) {
 	}
 }
 
-func assertRequestMatchesConfig(t *testing.T, requests []db.TxRequest, worker common.Address, purpose string, dstEID uint32, config PriceConfig) {
+func assertRequestMatchesSnapshot(t *testing.T, requests []db.TxRequest, priceFeed common.Address, dstEID uint32, snapshot PriceSnapshot) {
 	t.Helper()
-	want, err := BuildSetPriceConfigCalldata(dstEID, config)
+	want, err := BuildSetPriceSnapshotCalldata(dstEID, snapshot)
 	if err != nil {
-		t.Fatalf("BuildSetPriceConfigCalldata() error = %v", err)
+		t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v", err)
 	}
 	for _, request := range requests {
-		if request.To == worker && request.Purpose == purpose {
+		if request.To == priceFeed && request.Purpose == TxPurposeSetPriceSnapshot {
 			if !bytes.Equal(request.Calldata, want) {
-				t.Fatalf("%s calldata for %s does not match expected config", purpose, worker)
+				t.Fatalf("price snapshot calldata for %s does not match expected snapshot", priceFeed)
 			}
 			return
 		}
 	}
-	t.Fatalf("missing %s request for %s", purpose, worker)
+	t.Fatalf("missing price snapshot request for %s", priceFeed)
 }
 
 func countRequests(requests []db.TxRequest, purpose string) int {

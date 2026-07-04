@@ -20,10 +20,12 @@ const TestOFTPathwayConfigModule = buildModule(
     const receiveUln = m.getParameter<string>("receiveUln");
     const openExecutorAddress = m.getParameter<string>("openExecutor");
     const openDVNAddress = m.getParameter<string>("openDVN");
+    const priceFeedAddress = m.getParameter<string>("priceFeed");
     const dvnVerifier = m.getParameter("dvnVerifier", defaultSender);
     const workerPathwayConfig = m.getParameter("workerPathwayConfig");
-    const executorPriceConfig = m.getParameter("executorPriceConfig");
-    const dvnPriceConfig = m.getParameter("dvnPriceConfig");
+    const priceSnapshot = m.getParameter("priceSnapshot");
+    const executorFeeModel = m.getParameter("executorFeeModel");
+    const dvnFeeModel = m.getParameter("dvnFeeModel");
     const receiveLibraryGracePeriod = m.getParameter(
       "receiveLibraryGracePeriod",
       0,
@@ -35,6 +37,7 @@ const TestOFTPathwayConfigModule = buildModule(
     const testOFT = m.contractAt("TestOFT", testOFTAddress);
     const openExecutor = m.contractAt("OpenExecutor", openExecutorAddress);
     const openDVN = m.contractAt("OpenDVN", openDVNAddress);
+    const priceFeed = m.contractAt("OpenPriceFeed", priceFeedAddress);
     const endpoint = m.contractAt(
       "ILayerZeroEndpointV2",
       endpointArtifact,
@@ -96,13 +99,22 @@ const TestOFTPathwayConfigModule = buildModule(
         after: [setOpenExecutorAllowedSendLib],
       },
     );
-    const setOpenExecutorPriceConfig = m.call(
-      openExecutor,
-      "setPriceConfig",
-      [remoteEid, executorPriceConfig],
+    const setPriceSnapshot = m.call(
+      priceFeed,
+      "setPriceSnapshot",
+      [remoteEid, priceSnapshot],
       {
-        id: "SetOpenExecutorPriceConfig",
+        id: "SetPriceFeedSnapshot",
         after: [setOpenExecutorPathwayConfig],
+      },
+    );
+    const setOpenExecutorFeeModel = m.call(
+      openExecutor,
+      "setFeeModel",
+      [remoteEid, executorFeeModel],
+      {
+        id: "SetOpenExecutorFeeModel",
+        after: [setPriceSnapshot],
       },
     );
     const setOpenDVNAllowedSendLib = m.call(
@@ -111,7 +123,7 @@ const TestOFTPathwayConfigModule = buildModule(
       [sendUln, true],
       {
         id: "SetOpenDVNAllowedSendLib",
-        after: [setOpenExecutorPriceConfig],
+        after: [setOpenExecutorFeeModel],
       },
     );
     const setOpenDVNPathwayConfig = m.call(
@@ -120,18 +132,18 @@ const TestOFTPathwayConfigModule = buildModule(
       [remoteEid, testOFT, workerPathwayConfig],
       { id: "SetOpenDVNPathwayConfig", after: [setOpenDVNAllowedSendLib] },
     );
-    const setOpenDVNPriceConfig = m.call(
+    const setOpenDVNFeeModel = m.call(
       openDVN,
-      "setPriceConfig",
-      [remoteEid, dvnPriceConfig],
-      { id: "SetOpenDVNPriceConfig", after: [setOpenDVNPathwayConfig] },
+      "setFeeModel",
+      [remoteEid, dvnFeeModel],
+      { id: "SetOpenDVNFeeModel", after: [setOpenDVNPathwayConfig] },
     );
     m.call(openDVN, "setVerifier", [dvnVerifier, true], {
       id: "SetOpenDVNVerifier",
-      after: [setOpenDVNPriceConfig],
+      after: [setOpenDVNFeeModel],
     });
 
-    return { testOFT, endpoint, openExecutor, openDVN };
+    return { testOFT, endpoint, openExecutor, openDVN, priceFeed };
   },
 );
 

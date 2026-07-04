@@ -138,8 +138,8 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 				cfg.Pricing.Signer = config.MustEVMAddress(account.Address.Hex())
 			},
 			wantPurposes: map[uint32][]string{
-				40161: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
-				40449: {"pricing_set_dvn_price_config", "pricing_set_executor_price_config"},
+				40161: {"pricing_set_price_snapshot"},
+				40449: {"pricing_set_price_snapshot"},
 			},
 		},
 		{
@@ -435,6 +435,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),

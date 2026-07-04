@@ -46,6 +46,7 @@ type DVNTxRole struct {
 type WorkerContracts struct {
 	OpenExecutor common.Address
 	OpenDVN      common.Address
+	PriceFeed    common.Address
 }
 
 // DestinationWorkerContracts identifies target-chain worker contracts selected for one pathway.
@@ -118,6 +119,7 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			SourceWorkers: WorkerContracts{
 				OpenExecutor: cfg.SourceWorkers.OpenExecutor.Common(),
 				OpenDVN:      cfg.SourceWorkers.OpenDVN.Common(),
+				PriceFeed:    cfg.SourceWorkers.PriceFeed.Common(),
 			},
 			DestinationWorkers: DestinationWorkerContracts{
 				OpenDVN: cfg.DestinationWorkers.OpenDVN.Common(),

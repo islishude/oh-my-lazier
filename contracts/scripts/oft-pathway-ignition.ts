@@ -25,13 +25,16 @@ export type WorkerPathwayConfigParam = {
   maxLzReceiveGas: string;
 };
 
-export type WorkerPriceConfigParam = {
-  baseFee: string;
+export type PriceSnapshotParam = {
   dstGasPriceInSrcToken: string;
-  dstGasOverhead: string;
-  marginBps: number;
   updatedAt: string;
   staleAfter: string;
+};
+
+export type WorkerFeeModelParam = {
+  baseFee: string;
+  dstGasOverhead: string;
+  marginBps: number;
 };
 
 export type TestOFTPathwayConfigParameters = {
@@ -44,10 +47,12 @@ export type TestOFTPathwayConfigParameters = {
   receiveUln: Address;
   openExecutor: Address;
   openDVN: Address;
+  priceFeed: Address;
   dvnVerifier?: Address;
   workerPathwayConfig: WorkerPathwayConfigParam;
-  executorPriceConfig: WorkerPriceConfigParam;
-  dvnPriceConfig: WorkerPriceConfigParam;
+  priceSnapshot: PriceSnapshotParam;
+  executorFeeModel: WorkerFeeModelParam;
+  dvnFeeModel: WorkerFeeModelParam;
   receiveLibraryGracePeriod: number;
   sendConfig: SetConfigEntry[];
   receiveConfig: SetConfigEntry[];
@@ -58,13 +63,16 @@ export type TestOFTPathwayConfigParameterFile = {
   TestOFTPathwayConfig: TestOFTPathwayConfigParameters;
 };
 
-export type WorkerPriceConfigInput = {
-  baseFee: bigint;
+export type PriceSnapshotInput = {
   dstGasPriceInSrcToken: bigint;
-  dstGasOverhead: bigint;
-  marginBps: number | bigint;
   updatedAt: bigint;
   staleAfter: bigint;
+};
+
+export type WorkerFeeModelInput = {
+  baseFee: bigint;
+  dstGasOverhead: bigint;
+  marginBps: number | bigint;
 };
 
 export function buildTestOFTPathwayConfigParameters(input: {
@@ -77,13 +85,15 @@ export function buildTestOFTPathwayConfigParameters(input: {
   receiveUln: Address;
   openExecutor: Address;
   openDVN: Address;
+  priceFeed: Address;
   layerZeroLabsDVN: Address;
   confirmations: bigint;
   maxMessageSize: number;
   minLzReceiveGas: bigint;
   maxLzReceiveGas: bigint;
-  executorPriceConfig: WorkerPriceConfigInput;
-  dvnPriceConfig: WorkerPriceConfigInput;
+  priceSnapshot: PriceSnapshotInput;
+  executorFeeModel: WorkerFeeModelInput;
+  dvnFeeModel: WorkerFeeModelInput;
   dvnVerifier?: Address;
   enforcedLzReceiveGas: bigint;
   receiveLibraryGracePeriod?: number;
@@ -122,20 +132,19 @@ export function buildTestOFTPathwayConfigParameters(input: {
     receiveUln: input.receiveUln,
     openExecutor: input.openExecutor,
     openDVN: input.openDVN,
+    priceFeed: input.priceFeed,
     workerPathwayConfig: {
       enabled: true,
       maxMessageSize: maxMessageSize.toString(),
       minLzReceiveGas,
       maxLzReceiveGas,
     },
-    executorPriceConfig: normalizeWorkerPriceConfig(
-      input.executorPriceConfig,
-      "executorPriceConfig",
+    priceSnapshot: normalizePriceSnapshot(input.priceSnapshot, "priceSnapshot"),
+    executorFeeModel: normalizeWorkerFeeModel(
+      input.executorFeeModel,
+      "executorFeeModel",
     ),
-    dvnPriceConfig: normalizeWorkerPriceConfig(
-      input.dvnPriceConfig,
-      "dvnPriceConfig",
-    ),
+    dvnFeeModel: normalizeWorkerFeeModel(input.dvnFeeModel, "dvnFeeModel"),
     receiveLibraryGracePeriod,
     sendConfig: [
       {
@@ -176,23 +185,31 @@ export function buildTestOFTPathwayConfigParameters(input: {
   return { TestOFTPathwayConfig: params };
 }
 
-function normalizeWorkerPriceConfig(
-  config: WorkerPriceConfigInput,
+function normalizePriceSnapshot(
+  config: PriceSnapshotInput,
   label: string,
-): WorkerPriceConfigParam {
+): PriceSnapshotParam {
   return {
-    baseFee: normalizeUint256(config.baseFee, `${label}.baseFee`),
     dstGasPriceInSrcToken: normalizeUint256(
       config.dstGasPriceInSrcToken,
       `${label}.dstGasPriceInSrcToken`,
     ),
-    dstGasOverhead: normalizeUint64(
-      config.dstGasOverhead,
-      `${label}.dstGasOverhead`,
-    ),
-    marginBps: normalizeBps(config.marginBps, `${label}.marginBps`),
     updatedAt: normalizeUint64(config.updatedAt, `${label}.updatedAt`),
     staleAfter: normalizeUint64(config.staleAfter, `${label}.staleAfter`),
+  };
+}
+
+function normalizeWorkerFeeModel(
+  model: WorkerFeeModelInput,
+  label: string,
+): WorkerFeeModelParam {
+  return {
+    baseFee: normalizeUint256(model.baseFee, `${label}.baseFee`),
+    dstGasOverhead: normalizeUint64(
+      model.dstGasOverhead,
+      `${label}.dstGasOverhead`,
+    ),
+    marginBps: normalizeBps(model.marginBps, `${label}.marginBps`),
   };
 }
 

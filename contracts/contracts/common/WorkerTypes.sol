@@ -12,14 +12,18 @@ library WorkerTypes {
         uint128 maxLzReceiveGas;
     }
 
-    /// @notice Native-token fee inputs for one destination endpoint and worker role.
-    struct PriceConfig {
-        uint256 baseFee;
+    /// @notice Shared market price inputs for one destination endpoint.
+    struct PriceSnapshot {
         uint256 dstGasPriceInSrcToken;
-        uint64 dstGasOverhead;
-        uint16 marginBps;
         uint64 updatedAt;
         uint64 staleAfter;
+    }
+
+    /// @notice Native-token fee inputs for one destination endpoint and worker role.
+    struct FeeModel {
+        uint256 baseFee;
+        uint64 dstGasOverhead;
+        uint16 marginBps;
     }
 
     /// @notice Decoded executor lzReceive option accepted in phase 1.

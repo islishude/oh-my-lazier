@@ -37,6 +37,7 @@ export type MigrationDirectionEvidence = {
 export type SourceWorkersEvidence = {
   openExecutor: string;
   openDVN: string;
+  priceFeed: string;
 };
 
 export type DestinationWorkersEvidence = {
@@ -60,13 +61,18 @@ export type DVNJoinEvidence = {
   configCheck: EvidenceRef;
 };
 
-export type WorkerPriceConfigEvidence = {
+export type PriceSnapshotEvidence = {
+  dstGasPriceInSrcToken: string;
+  updatedAt: string;
+  staleAfter: string;
+};
+
+export type WorkerFeeModelEvidence = {
+  address: string;
+  priceFeed: string;
   baseFee: string;
   dstGasOverhead: string;
   marginBps: number;
-  updatedAt: string;
-  staleAfter: string;
-  dstGasPriceInSrcToken: string;
 };
 
 export type PriceConfigEvidence = EvidenceRef & {
@@ -74,8 +80,12 @@ export type PriceConfigEvidence = EvidenceRef & {
   checkedAt: string;
   maxAgeSeconds: string;
   expectedStaleAfter: string;
-  executor: WorkerPriceConfigEvidence;
-  dvn: WorkerPriceConfigEvidence;
+  priceFeed: {
+    address: string;
+    priceSnapshot: PriceSnapshotEvidence;
+  };
+  executor: WorkerFeeModelEvidence;
+  dvn: WorkerFeeModelEvidence;
 };
 
 export type DVNVerificationEvidence = EvidenceRef & {
@@ -199,6 +209,7 @@ function validateDirections(
       direction.priceConfigCheck,
       `${prefix}.priceConfigCheck`,
       direction.dstEid,
+      direction.sourceWorkers,
     );
     requireEvidence(
       errors,
@@ -253,6 +264,7 @@ function validateSourceWorkers(
   }
   requireEVMAddress(errors, workers.openExecutor, `${field}.openExecutor`);
   requireEVMAddress(errors, workers.openDVN, `${field}.openDVN`);
+  requireEVMAddress(errors, workers.priceFeed, `${field}.priceFeed`);
 }
 
 function validateDestinationWorkers(
@@ -272,6 +284,7 @@ function validatePriceConfigEvidence(
   evidence: PriceConfigEvidence,
   field: string,
   dstEid: number,
+  sourceWorkers?: SourceWorkersEvidence,
 ): void {
   if (!isRecord(evidence)) {
     errors.push(`${field} evidence is required`);
@@ -296,27 +309,54 @@ function validatePriceConfigEvidence(
     evidence.expectedStaleAfter,
     `${field}.expectedStaleAfter`,
   );
-  validateWorkerPriceConfigEvidence(
+  let priceFeedAddress: string | undefined;
+  if (!isRecord(evidence.priceFeed)) {
+    errors.push(`${field}.priceFeed is required`);
+  } else {
+    priceFeedAddress = evidence.priceFeed.address;
+    requireEVMAddress(
+      errors,
+      evidence.priceFeed.address,
+      `${field}.priceFeed.address`,
+    );
+    requireMatchingAddress(
+      errors,
+      evidence.priceFeed.address,
+      `${field}.priceFeed.address`,
+      sourceWorkers?.priceFeed,
+      "sourceWorkers.priceFeed",
+    );
+    validatePriceSnapshotEvidence(
+      errors,
+      evidence.priceFeed.priceSnapshot,
+      `${field}.priceFeed.priceSnapshot`,
+      checkedAt,
+      maxAge,
+      expectedStaleAfter,
+    );
+  }
+  validateWorkerFeeModelEvidence(
     errors,
     evidence.executor,
     `${field}.executor`,
-    checkedAt,
-    maxAge,
-    expectedStaleAfter,
+    priceFeedAddress,
+    {
+      address: sourceWorkers?.openExecutor,
+      field: "sourceWorkers.openExecutor",
+    },
   );
-  validateWorkerPriceConfigEvidence(
+  validateWorkerFeeModelEvidence(
     errors,
     evidence.dvn,
     `${field}.dvn`,
-    checkedAt,
-    maxAge,
-    expectedStaleAfter,
+    priceFeedAddress,
+    { address: sourceWorkers?.openDVN, field: "sourceWorkers.openDVN" },
   );
 }
 
-function validateWorkerPriceConfigEvidence(
+function validatePriceSnapshotEvidence(
   errors: string[],
-  evidence: WorkerPriceConfigEvidence,
+  evidence: PriceSnapshotEvidence,
   field: string,
   checkedAt?: bigint,
   maxAge?: bigint,
@@ -336,18 +376,11 @@ function validateWorkerPriceConfigEvidence(
     evidence.staleAfter,
     `${field}.staleAfter`,
   );
-  requireNonNegativeDecimalIntegerValue(errors, evidence.baseFee, `${field}.baseFee`);
   requirePositiveDecimalIntegerValue(
     errors,
     evidence.dstGasPriceInSrcToken,
     `${field}.dstGasPriceInSrcToken`,
   );
-  requireNonNegativeDecimalIntegerValue(
-    errors,
-    evidence.dstGasOverhead,
-    `${field}.dstGasOverhead`,
-  );
-  requireBps(errors, evidence.marginBps, `${field}.marginBps`);
   if (
     checkedAt !== undefined &&
     updatedAt !== undefined &&
@@ -372,6 +405,68 @@ function validateWorkerPriceConfigEvidence(
     errors.push(
       `${field}.staleAfter must equal expectedStaleAfter ${expectedStaleAfter}`,
     );
+  }
+}
+
+function validateWorkerFeeModelEvidence(
+  errors: string[],
+  evidence: WorkerFeeModelEvidence,
+  field: string,
+  expectedPriceFeed?: string,
+  expectedWorker?: { address?: string; field: string },
+): void {
+  if (!isRecord(evidence)) {
+    errors.push(`${field} evidence is required`);
+    return;
+  }
+  requireEVMAddress(errors, evidence.address, `${field}.address`);
+  requireMatchingAddress(
+    errors,
+    evidence.address,
+    `${field}.address`,
+    expectedWorker?.address,
+    expectedWorker?.field,
+  );
+  requireEVMAddress(errors, evidence.priceFeed, `${field}.priceFeed`);
+  if (
+    expectedPriceFeed !== undefined &&
+    isAddressString(evidence.priceFeed) &&
+    evidence.priceFeed.toLowerCase() !== expectedPriceFeed.toLowerCase()
+  ) {
+    errors.push(
+      `${field}.priceFeed must equal priceFeed.address ${expectedPriceFeed}`,
+    );
+  }
+  requireNonNegativeDecimalIntegerValue(
+    errors,
+    evidence.baseFee,
+    `${field}.baseFee`,
+  );
+  requireNonNegativeDecimalIntegerValue(
+    errors,
+    evidence.dstGasOverhead,
+    `${field}.dstGasOverhead`,
+  );
+  requireBps(errors, evidence.marginBps, `${field}.marginBps`);
+}
+
+function requireMatchingAddress(
+  errors: string[],
+  actual: string,
+  actualField: string,
+  expected?: string,
+  expectedField?: string,
+): void {
+  if (
+    expected === undefined ||
+    expectedField === undefined ||
+    !isNonZeroAddressString(actual) ||
+    !isNonZeroAddressString(expected)
+  ) {
+    return;
+  }
+  if (actual.toLowerCase() !== expected.toLowerCase()) {
+    errors.push(`${actualField} must equal ${expectedField} ${expected}`);
   }
 }
 
@@ -625,13 +720,21 @@ function requireEVMAddress(
   value: string,
   field: string,
 ): void {
-  if (typeof value !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(value)) {
+  if (!isAddressString(value)) {
     errors.push(`${field} must be an EVM address`);
     return;
   }
   if (/^0x0{40}$/i.test(value)) {
     errors.push(`${field} must not be the zero address`);
   }
+}
+
+function isNonZeroAddressString(value: unknown): value is string {
+  return isAddressString(value) && !/^0x0{40}$/i.test(value);
+}
+
+function isAddressString(value: unknown): value is string {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

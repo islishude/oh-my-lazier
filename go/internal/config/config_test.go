@@ -17,8 +17,11 @@ func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 
 func TestValidateRejectsMissingWorkerContractAddress(t *testing.T) {
 	for name, mutate := range map[string]func(*Config){
-		"source": func(cfg *Config) {
+		"source_dvn": func(cfg *Config) {
 			cfg.Pathways[0].SourceWorkers.OpenDVN = EVMAddress{}
+		},
+		"source_price_feed": func(cfg *Config) {
+			cfg.Pathways[0].SourceWorkers.PriceFeed = EVMAddress{}
 		},
 		"destination": func(cfg *Config) {
 			cfg.Pathways[0].DestinationWorkers.OpenDVN = EVMAddress{}
@@ -526,6 +529,7 @@ pathways:
     source_workers:
       open_executor: "0x2222222222222222222222222222222222222222"
       open_dvn: "0x3333333333333333333333333333333333333333"
+      price_feed: "0x4444444444444444444444444444444444444444"
     destination_workers:
       open_dvn: "0x6666666666666666666666666666666666666666"
     enabled: true
@@ -620,6 +624,7 @@ func validConfig() Config {
 				SourceWorkers: WorkerContractsConfig{
 					OpenExecutor: MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					PriceFeed:    MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				},
 				DestinationWorkers: DestinationWorkerContractsConfig{
 					OpenDVN: MustEVMAddress("0x6666666666666666666666666666666666666666"),
@@ -641,6 +646,7 @@ func validConfig() Config {
 				SourceWorkers: WorkerContractsConfig{
 					OpenExecutor: MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      MustEVMAddress("0x6666666666666666666666666666666666666666"),
+					PriceFeed:    MustEVMAddress("0x9999999999999999999999999999999999999999"),
 				},
 				DestinationWorkers: DestinationWorkerContractsConfig{
 					OpenDVN: MustEVMAddress("0x3333333333333333333333333333333333333333"),

@@ -54,6 +54,14 @@ func TestCheckWithClientsReportsMismatches(t *testing.T) {
 			cfg.MaxLzReceiveGas = big.NewInt(1)
 			clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40449, addr("0x7777777777777777777777777777777777777777"))] = cfg
 		},
+		"priceFeed": func(clients map[uint32]*fakeChainClient) {
+			clients[40161].priceFeeds[addr("0x2222222222222222222222222222222222222222")] = addr("0x1212121212121212121212121212121212121212")
+		},
+		"feeModel": func(clients map[uint32]*fakeChainClient) {
+			model := clients[40161].workerFeeModels[workerFeeModelKey(addr("0x2222222222222222222222222222222222222222"), 40449)]
+			model.MarginBps = 999
+			clients[40161].workerFeeModels[workerFeeModelKey(addr("0x2222222222222222222222222222222222222222"), 40449)] = model
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			registry, clients := testRegistryAndClients(t)
@@ -168,6 +176,7 @@ func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Re
 		dst.addOApp(pathway.DstOApp, dstChain.EndpointAddress, pathway.SrcEID, pathway.SrcOApp)
 		src.code[pathway.SendLib] = true
 		dst.code[pathway.ReceiveLib] = true
+		src.code[pathway.SourceWorkers.PriceFeed] = true
 		src.sendLibraries[pathKey(pathway.SrcOApp, pathway.DstEID)] = pathway.SendLib
 		dst.receiveLibraries[pathKey(pathway.DstOApp, pathway.SrcEID)] = pathway.ReceiveLib
 		src.executorConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = executorConfig{
@@ -178,6 +187,7 @@ func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Re
 		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain, pathway.DestinationWorkers.OpenDVN)
 		for _, worker := range []common.Address{pathway.SourceWorkers.OpenExecutor, pathway.SourceWorkers.OpenDVN} {
 			src.code[worker] = true
+			src.priceFeeds[worker] = pathway.SourceWorkers.PriceFeed
 			src.allowedSendLibs[workerSendLibKey(worker, pathway.SendLib)] = true
 			src.workerPathways[workerPathwayKey(worker, pathway.DstEID, pathway.SrcOApp)] = pathwayConfig{
 				Enabled:         pathway.Enabled,
@@ -185,6 +195,12 @@ func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Re
 				MinLzReceiveGas: new(big.Int).SetUint64(pathway.MinLzReceiveGas),
 				MaxLzReceiveGas: new(big.Int).SetUint64(pathway.MaxLzReceiveGas),
 			}
+		}
+		if pathway.Pricing.ExecutorFee.FixedFeeWei != "" {
+			src.workerFeeModels[workerFeeModelKey(pathway.SourceWorkers.OpenExecutor, pathway.DstEID)] = testFeeModel(t, pathway.Pricing.ExecutorFee)
+		}
+		if pathway.Pricing.DVNFee.FixedFeeWei != "" {
+			src.workerFeeModels[workerFeeModelKey(pathway.SourceWorkers.OpenDVN, pathway.DstEID)] = testFeeModel(t, pathway.Pricing.DVNFee)
 		}
 		dst.code[pathway.DestinationWorkers.OpenDVN] = true
 		if pathway.DVNMode == config.DVNModeActive {
@@ -223,6 +239,8 @@ type fakeChainClient struct {
 	ulnConfigs       map[string]ulnConfig
 	allowedSendLibs  map[string]bool
 	workerPathways   map[string]pathwayConfig
+	priceFeeds       map[common.Address]common.Address
+	workerFeeModels  map[string]feeModel
 	verifiers        map[string]bool
 }
 
@@ -239,6 +257,8 @@ func newFakeChainClient(chainID int64, eid uint32) *fakeChainClient {
 		ulnConfigs:       make(map[string]ulnConfig),
 		allowedSendLibs:  make(map[string]bool),
 		workerPathways:   make(map[string]pathwayConfig),
+		priceFeeds:       make(map[common.Address]common.Address),
+		workerFeeModels:  make(map[string]feeModel),
 		verifiers:        make(map[string]bool),
 	}
 }
@@ -335,6 +355,11 @@ func (f *fakeChainClient) callWorker(to common.Address, method *abi.Method, args
 	case "pathwayConfig":
 		config := f.workerPathways[workerPathwayKey(to, args[0].(uint32), args[1].(common.Address))]
 		return method.Outputs.Pack(config.Enabled, config.MaxMessageSize, config.MinLzReceiveGas, config.MaxLzReceiveGas)
+	case "priceFeed":
+		return method.Outputs.Pack(f.priceFeeds[to])
+	case "feeModel":
+		model := f.workerFeeModels[workerFeeModelKey(to, args[0].(uint32))]
+		return method.Outputs.Pack(model.BaseFee, model.DstGasOverhead, model.MarginBps)
 	case "verifiers":
 		return method.Outputs.Pack(f.verifiers[verifierKey(to, args[0].(common.Address))])
 	default:
@@ -413,11 +438,13 @@ func testConfig() config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+				Pricing:         testPathwayPricingConfig(),
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
@@ -433,11 +460,13 @@ func testConfig() config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+					PriceFeed:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
 				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
+				Pricing:         testPathwayPricingConfig(),
 				Enabled:         true,
 				MaxMessageSize:  10000,
 				MinLzReceiveGas: 100000,
@@ -463,6 +492,13 @@ func testDVNRole() config.DVNTxRoleConfig {
 	}
 }
 
+func testPathwayPricingConfig() config.PathwayPricingConfig {
+	return config.PathwayPricingConfig{
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50_000, MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150_000, MarginBps: 200},
+	}
+}
+
 func pathKey(oapp common.Address, eid uint32) string {
 	return oapp.Hex() + ":" + big.NewInt(int64(eid)).String()
 }
@@ -479,8 +515,21 @@ func workerPathwayKey(worker common.Address, dstEID uint32, sender common.Addres
 	return worker.Hex() + ":" + big.NewInt(int64(dstEID)).String() + ":" + sender.Hex()
 }
 
+func workerFeeModelKey(worker common.Address, dstEID uint32) string {
+	return worker.Hex() + ":" + big.NewInt(int64(dstEID)).String()
+}
+
 func verifierKey(openDVN, verifier common.Address) string {
 	return openDVN.Hex() + ":" + verifier.Hex()
+}
+
+func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
+	t.Helper()
+	baseFee, ok := new(big.Int).SetString(cfg.FixedFeeWei, 10)
+	if !ok {
+		t.Fatalf("invalid fixed fee %q", cfg.FixedFeeWei)
+	}
+	return feeModel{BaseFee: baseFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}
 }
 
 func addr(raw string) common.Address {

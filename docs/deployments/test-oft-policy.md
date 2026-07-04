@@ -12,9 +12,10 @@ This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia
 
 ## Ownership
 
-`OWNER` must be the testnet operations owner for all three contracts deployed by the `TestOFTWorkers` Hardhat Ignition module:
+`OWNER` must be the testnet operations owner for all worker-side contracts deployed by the `TestOFTWorkers` Hardhat Ignition module:
 
 - `TestOFT`
+- `OpenPriceFeed`
 - `OpenExecutor`
 - `OpenDVN`
 
@@ -23,7 +24,7 @@ The owner must be able to:
 - configure OFT peers
 - pause and unpause TestOFT send/receive pathways
 - configure outbound rate limits
-- configure worker allowlists, pathway limits, and price config
+- configure worker allowlists, pathway limits, shared price snapshots, and fee models
 - withdraw worker balances during rollback or cleanup
 
 Do not use the worker hot signer as `OWNER` unless the migration ticket explicitly approves that temporary testnet shortcut.

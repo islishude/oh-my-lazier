@@ -81,10 +81,10 @@ const requiredDocs: RequiredDoc[] = [
     anchors: [
       "go run ./go/cmd/pricebot-once -config <worker.yaml>",
       "npm run check:price-config",
-      "For each unique source/destination/source-worker role key",
+      "For each unique source/destination/source price-feed key",
       "`updatedAt` is recent",
       "`staleAfter` matches the approved config",
-      "If the newly submitted price config is wrong:",
+      "If the newly submitted price snapshot is wrong:",
     ],
   },
   {

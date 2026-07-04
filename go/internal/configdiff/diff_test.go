@@ -137,6 +137,7 @@ func validConfig() config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
@@ -156,6 +157,7 @@ func validConfig() config.Config {
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+					PriceFeed:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

@@ -54,12 +54,12 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	if pathways != 1 {
 		t.Fatalf("pathways = %d, want 1", pathways)
 	}
-	var openExecutor, openDVN, destinationOpenDVN []byte
+	var openExecutor, openDVN, priceFeed, destinationOpenDVN []byte
 	if err := store.pool.QueryRow(ctx, `
-		SELECT open_executor, open_dvn, destination_open_dvn
-		FROM pathways
-		WHERE src_eid = 40161 AND dst_eid = 40449
-	`).Scan(&openExecutor, &openDVN, &destinationOpenDVN); err != nil {
+			SELECT open_executor, open_dvn, price_feed, destination_open_dvn
+			FROM pathways
+			WHERE src_eid = 40161 AND dst_eid = 40449
+		`).Scan(&openExecutor, &openDVN, &priceFeed, &destinationOpenDVN); err != nil {
 		t.Fatalf("select pathway workers: %v", err)
 	}
 	if got := common.BytesToAddress(openExecutor); got != common.HexToAddress("0x2222222222222222222222222222222222222222") {
@@ -67,6 +67,9 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	}
 	if got := common.BytesToAddress(openDVN); got != common.HexToAddress("0x3333333333333333333333333333333333333333") {
 		t.Fatalf("open_dvn = %s", got)
+	}
+	if got := common.BytesToAddress(priceFeed); got != common.HexToAddress("0x4444444444444444444444444444444444444444") {
+		t.Fatalf("price_feed = %s", got)
 	}
 	if got := common.BytesToAddress(destinationOpenDVN); got != common.HexToAddress("0x6666666666666666666666666666666666666666") {
 		t.Fatalf("destination_open_dvn = %s", got)
@@ -1589,6 +1592,7 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				},
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
@@ -1650,6 +1654,7 @@ func testPathways() []config.PathwayConfig {
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+				PriceFeed:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			},
 			DestinationWorkers: config.DestinationWorkerContractsConfig{
 				OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),

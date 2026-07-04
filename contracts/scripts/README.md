@@ -20,15 +20,16 @@ The local target writes all generated files under `tmp/e2e`, starts disposable
 Postgres, LocalStack KMS, isolated Anvil, and worker services through
 `docker-compose.e2e.yml`, creates a local `ECC_SECG_P256K1` KMS key, runs
 `npm run e2e:deploy-local` to deploy local EndpointV2, SendUln302,
-ReceiveUln302, TestOFT, OpenExecutor, a primary OpenDVN, and a secondary
-OpenDVN on both chains, generates a worker keystore, runs `configcheck`, and
+ReceiveUln302, TestOFT, OpenPriceFeed, OpenExecutor, a primary OpenDVN, and a
+secondary OpenDVN on both chains, generates a worker keystore, runs
+`configcheck`, and
 then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
 executor and active DVN roles; chain B uses the generated keystore signer. The
 local runner sends OFT canaries in both directions. It does not start the price
-bot; deployment writes fresh hard-coded worker price configs, with source
-OpenExecutor pricing non-zero and local OpenDVN pricing zero because pinned
-SendUln302 accounts DVN fees internally without forwarding native value to DVN
-`assignJob`.
+bot; deployment writes a fresh shared OpenPriceFeed snapshot and local worker
+fee models, with source OpenExecutor pricing non-zero and local OpenDVN pricing
+zero because pinned SendUln302 accounts DVN fees internally without forwarding
+native value to DVN `assignJob`.
 
 CI runs the same deployment and canary scripts through `make e2e-ci`, but
 GitHub Actions services own Postgres, LocalStack KMS, and the two Anvil chains. The CI target
@@ -65,7 +66,7 @@ npm run check:migration-evidence -- \
   --migration-evidence docs/deployments/testnet-migration-evidence.example.json
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Hoodi `40449`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, price config evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Hoodi `40449`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, shared price snapshot evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
 Deploy the local pathway contracts with Hardhat Ignition:
 
@@ -142,7 +143,8 @@ Configure the OFT and Endpoint baseline for one local direction after both sides
 - `TestOFT.setEnforcedOptions`
 - `OpenExecutor.setAllowedSendLib` and `OpenDVN.setAllowedSendLib`
 - `OpenExecutor.setPathwayConfig` and `OpenDVN.setPathwayConfig`
-- `OpenExecutor.setPriceConfig` and `OpenDVN.setPriceConfig`
+- `OpenPriceFeed.setPriceSnapshot`
+- `OpenExecutor.setFeeModel` and `OpenDVN.setFeeModel`
 - `OpenDVN.setVerifier` for the local verifier signer
 
 ```bash
@@ -155,24 +157,23 @@ npm run render:oft-pathway-params -- \
   --receive-uln 0xdAf00F5eE2158dD58E0d3857851c432E34A3A851 \
   --open-executor ... \
   --open-dvn ... \
+  --price-feed ... \
   --layerzero-labs-dvn 0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193 \
   --confirmations 12 \
   --executor-max-message-size 10000 \
   --enforced-lz-receive-gas 200000 \
   --max-lz-receive-gas 1000000 \
-  --executor-price-base-fee 0 \
-  --executor-price-dst-gas-price-in-src-token 1 \
-  --executor-price-dst-gas-overhead 50000 \
-  --executor-price-margin-bps 1000 \
-  --executor-price-stale-after 1800 \
-  --dvn-price-base-fee 0 \
-  --dvn-price-dst-gas-price-in-src-token 1 \
-  --dvn-price-dst-gas-overhead 150000 \
-  --dvn-price-margin-bps 1000 \
-  --dvn-price-stale-after 1800 > ignition/parameters/sepolia-to-hoodi.generated.json
+  --price-snapshot-dst-gas-price-in-src-token 1 \
+  --price-snapshot-stale-after 1800 \
+  --executor-fee-base-fee 0 \
+  --executor-fee-dst-gas-overhead 50000 \
+  --executor-fee-margin-bps 1000 \
+  --dvn-fee-base-fee 0 \
+  --dvn-fee-dst-gas-overhead 150000 \
+  --dvn-fee-margin-bps 1000 > ignition/parameters/sepolia-to-hoodi.generated.json
 ```
 
-`--min-lz-receive-gas` defaults to `--enforced-lz-receive-gas`. `--executor-price-updated-at` and `--dvn-price-updated-at` default to the render script's current Unix timestamp; regenerate parameters shortly before signing so the price configs remain fresh for the approved stale window. `--dvn-verifier` defaults to the Ignition sender, and must match the destination-chain `tx_roles.dvn.signer` before switching a pathway to active DVN mode.
+`--min-lz-receive-gas` defaults to `--enforced-lz-receive-gas`. `--price-snapshot-updated-at` defaults to the render script's current Unix timestamp; regenerate parameters shortly before signing so the shared price snapshot remains fresh for the approved stale window. `--dvn-verifier` defaults to the Ignition sender, and must match the destination-chain `tx_roles.dvn.signer` before switching a pathway to active DVN mode.
 
 ```bash
 SEPOLIA_RPC_URL=... \
@@ -195,24 +196,23 @@ npm run configure:workers -- \
   --test-oft ... \
   --open-executor ... \
   --open-dvn ... \
+  --price-feed ... \
   --remote-eid 40449 \
   --send-lib ... \
   --max-message-size 10000 \
   --min-lz-receive-gas 200000 \
   --max-lz-receive-gas 1000000 \
-  --executor-price-base-fee 0 \
-  --executor-price-dst-gas-price-in-src-token 1 \
-  --executor-price-dst-gas-overhead 50000 \
-  --executor-price-margin-bps 1000 \
-  --executor-price-stale-after 3600 \
-  --dvn-price-base-fee 0 \
-  --dvn-price-dst-gas-price-in-src-token 1 \
-  --dvn-price-dst-gas-overhead 150000 \
-  --dvn-price-margin-bps 1000 \
-  --dvn-price-stale-after 3600
+  --price-snapshot-dst-gas-price-in-src-token 1 \
+  --price-snapshot-stale-after 3600 \
+  --executor-fee-base-fee 0 \
+  --executor-fee-dst-gas-overhead 50000 \
+  --executor-fee-margin-bps 1000 \
+  --dvn-fee-base-fee 0 \
+  --dvn-fee-dst-gas-overhead 150000 \
+  --dvn-fee-margin-bps 1000
 ```
 
-For standard pathway setup, `configure:oft-pathway` already writes the worker send-lib allowlist, pathway limits, initial price configs, and verifier authorization. `configure:workers` remains the manual entrypoint for later worker price refreshes and outbound rate limit changes. `--src-oapp` defaults to `--test-oft`. Set `--rate-limit-capacity` and `--rate-limit-refill-per-second` together to configure outbound rate limiting.
+For standard pathway setup, `configure:oft-pathway` already writes the worker send-lib allowlist, pathway limits, initial shared price snapshot, worker fee models, and verifier authorization. `configure:workers` remains the manual entrypoint for later shared snapshot refreshes, fee-model changes, and outbound rate limit changes. `--src-oapp` defaults to `--test-oft`. Set `--rate-limit-capacity` and `--rate-limit-refill-per-second` together to configure outbound rate limiting.
 
 Inspect the current LayerZero libraries and message-lib configs for one local direction:
 
@@ -332,7 +332,7 @@ npm run check:oft-canary -- \
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
 
-The migration evidence record must capture each direction's source OpenExecutor/OpenDVN contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `baseFee`, `dstGasPriceInSrcToken`, `dstGasOverhead`, `marginBps`, `updatedAt`, and `staleAfter` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
+The migration evidence record must capture each direction's source OpenExecutor/OpenDVN/OpenPriceFeed contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, shared price-feed `address`, shared `priceSnapshot`, each worker's bound `priceFeed`, and each worker's `feeModel` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 
