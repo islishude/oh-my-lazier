@@ -30,6 +30,8 @@ bot; deployment writes a fresh shared OpenPriceFeed snapshot and local worker
 fee models, with source OpenExecutor pricing non-zero and local OpenDVN pricing
 zero because pinned SendUln302 accounts DVN fees internally without forwarding
 native value to DVN `assignJob`.
+Set `E2E_KEYSTORE_PASSWORD` to override the generated local keystore password;
+the same value is passed to the worker container.
 
 CI runs the same deployment and canary scripts through `make e2e-ci`, but
 GitHub Actions services own Postgres, LocalStack KMS, and the two Anvil chains. The CI target

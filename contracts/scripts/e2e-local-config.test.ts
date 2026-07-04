@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   localE2EChains,
@@ -83,6 +84,20 @@ test("localE2EKMS keeps Compose-compatible defaults and accepts overrides", () =
       containerEndpoint: "http://127.0.0.1:24566",
       region: "local-test-1",
     },
+  );
+});
+
+test("local E2E worker keeps keystore password overrideable", () => {
+  const compose = readFileSync("docker-compose.e2e.yml", "utf8");
+  assert.match(
+    compose,
+    /E2E_KEYSTORE_PASSWORD:\s*\$\{E2E_KEYSTORE_PASSWORD:-local-e2e-password\}/,
+  );
+
+  const makefile = readFileSync("Makefile", "utf8");
+  assert.match(
+    makefile,
+    /E2E_KEYSTORE_PASSWORD="\$\(E2E_KEYSTORE_PASSWORD\)" \$\(E2E_COMPOSE\) --profile worker up/,
   );
 });
 
