@@ -101,15 +101,14 @@ type PricingConfig struct {
 	Enabled                 bool                 `yaml:"enabled"`
 	Signer                  EVMAddress           `yaml:"signer"`
 	IntervalSeconds         uint64               `yaml:"interval_seconds"`
-	BaseFeeWei              string               `yaml:"base_fee_wei"`
-	BufferBps               uint16               `yaml:"buffer_bps"`
+	ExecutorFee             WorkerFeeModelConfig `yaml:"executor_fee"`
+	DVNFee                  WorkerFeeModelConfig `yaml:"dvn_fee"`
 	StaleAfterSeconds       uint64               `yaml:"stale_after_seconds"`
 	MaxDeviationBps         uint64               `yaml:"max_deviation_bps"`
 	GasSpikeBps             uint64               `yaml:"gas_spike_bps"`
-	AllowUniswapFallback    bool                 `yaml:"allow_uniswap_fallback"`
+	AllowSanityFallback     bool                 `yaml:"allow_sanity_fallback"`
 	MaxFeePerGasWei         string               `yaml:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string               `yaml:"max_priority_fee_per_gas_wei"`
-	PrimarySource           string               `yaml:"primary_source"`
 	BinanceBaseURL          string               `yaml:"binance_base_url"`
 	CoinMarketCapBaseURL    string               `yaml:"coinmarketcap_base_url"`
 	CoinMarketCapAPIKeyEnv  string               `yaml:"coinmarketcap_api_key_env"`
@@ -117,9 +116,18 @@ type PricingConfig struct {
 	Chains                  []PricingChainConfig `yaml:"chains"`
 }
 
+// WorkerFeeModelConfig controls one worker role's source-chain service fee model.
+type WorkerFeeModelConfig struct {
+	BaseFeeWei     string `yaml:"base_fee_wei"`
+	DstGasOverhead uint64 `yaml:"dst_gas_overhead"`
+	MarginBps      uint16 `yaml:"margin_bps"`
+}
+
 // PricingChainConfig configures price sources for one chain's native asset.
 type PricingChainConfig struct {
 	EID                 uint32               `yaml:"eid"`
+	PrimarySource       string               `yaml:"primary_source"`
+	SanitySources       []string             `yaml:"sanity_sources"`
 	BinanceSymbol       string               `yaml:"binance_symbol"`
 	CoinMarketCapSymbol string               `yaml:"coinmarketcap_symbol"`
 	CoinGeckoID         string               `yaml:"coingecko_id"`
@@ -506,30 +514,14 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.GasSpikeBps == 0 {
 		return errors.New("pricing gas_spike_bps is required")
 	}
-	if c.Pricing.BufferBps > 10_000 {
-		return errors.New("pricing buffer_bps exceeds 10000")
+	if err := validateWorkerFeeModel("pricing.executor_fee", c.Pricing.ExecutorFee); err != nil {
+		return err
 	}
-	if c.Pricing.BaseFeeWei == "" {
-		return errors.New("pricing base_fee_wei is required")
-	}
-	baseFee, ok := new(big.Int).SetString(c.Pricing.BaseFeeWei, 10)
-	if !ok || baseFee.Sign() < 0 {
-		return errors.New("pricing base_fee_wei must be a non-negative integer")
+	if err := validateWorkerFeeModel("pricing.dvn_fee", c.Pricing.DVNFee); err != nil {
+		return err
 	}
 	if err := validateTxFeePolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei); err != nil {
 		return err
-	}
-	primarySource := c.Pricing.PrimarySource
-	if primarySource == "" {
-		primarySource = "binance"
-	}
-	switch primarySource {
-	case "binance", "coinmarketcap", "coingecko":
-	default:
-		return fmt.Errorf("unsupported pricing primary_source %q", c.Pricing.PrimarySource)
-	}
-	if primarySource == "coinmarketcap" && c.Pricing.CoinMarketCapAPIKeyEnv == "" {
-		return errors.New("pricing coinmarketcap_api_key_env is required when coinmarketcap is primary")
 	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
 	for _, chain := range c.Pricing.Chains {
@@ -540,48 +532,132 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 			return fmt.Errorf("duplicate pricing chain eid %d", chain.EID)
 		}
 		seen[chain.EID] = struct{}{}
-		if chain.CoinMarketCapSymbol != "" && c.Pricing.CoinMarketCapAPIKeyEnv == "" {
-			return fmt.Errorf("pricing chain %d coinmarketcap_api_key_env is required when coinmarketcap_symbol is configured", chain.EID)
-		}
-		switch primarySource {
-		case "binance":
-			if chain.BinanceSymbol == "" {
-				return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
-			}
-		case "coinmarketcap":
-			if chain.CoinMarketCapSymbol == "" {
-				return fmt.Errorf("pricing chain %d coinmarketcap_symbol is required", chain.EID)
-			}
-		case "coingecko":
-			if chain.CoinGeckoID == "" {
-				return fmt.Errorf("pricing chain %d coingecko_id is required", chain.EID)
-			}
-		}
-		for label, value := range map[string]EVMAddress{
-			"uniswap.quoter_address": chain.Uniswap.QuoterAddress,
-			"uniswap.token_in":       chain.Uniswap.TokenIn,
-			"uniswap.token_out":      chain.Uniswap.TokenOut,
-		} {
-			if value.IsZero() {
-				return fmt.Errorf("pricing chain %d %s is required", chain.EID, label)
-			}
-		}
-		if chain.Uniswap.Fee > (1<<24)-1 {
-			return fmt.Errorf("pricing chain %d uniswap fee exceeds uint24", chain.EID)
-		}
-		if chain.Uniswap.AmountInWei == "" {
-			return fmt.Errorf("pricing chain %d uniswap amount_in_wei is required", chain.EID)
-		}
-		amountIn, ok := new(big.Int).SetString(chain.Uniswap.AmountInWei, 10)
-		if !ok || amountIn.Sign() <= 0 {
-			return fmt.Errorf("pricing chain %d uniswap amount_in_wei must be positive", chain.EID)
-		}
-		if chain.Uniswap.TokenOutDecimals == 0 {
-			return fmt.Errorf("pricing chain %d uniswap token_out_decimals is required", chain.EID)
+		if err := validatePricingChainSources(chain, c.Pricing.CoinMarketCapAPIKeyEnv); err != nil {
+			return err
 		}
 	}
 	if len(seen) != len(chains) {
 		return errors.New("pricing must configure every chain when enabled")
+	}
+	return nil
+}
+
+func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
+	if model.BaseFeeWei == "" {
+		return fmt.Errorf("%s.base_fee_wei is required", prefix)
+	}
+	baseFee, ok := new(big.Int).SetString(model.BaseFeeWei, 10)
+	if !ok || baseFee.Sign() < 0 {
+		return fmt.Errorf("%s.base_fee_wei must be a non-negative integer", prefix)
+	}
+	if model.MarginBps > 10_000 {
+		return fmt.Errorf("%s.margin_bps exceeds 10000", prefix)
+	}
+	return nil
+}
+
+func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEnv string) error {
+	if err := validatePrimaryPricingSourceName(chain.EID, chain.PrimarySource); err != nil {
+		return err
+	}
+	if len(chain.SanitySources) == 0 {
+		return fmt.Errorf("pricing chain %d sanity_sources is required", chain.EID)
+	}
+	seen := make(map[string]struct{}, len(chain.SanitySources)+1)
+	seen[chain.PrimarySource] = struct{}{}
+	hasUniswap := false
+	for idx, source := range chain.SanitySources {
+		if err := validateSanityPricingSourceName(chain.EID, fmt.Sprintf("sanity_sources[%d]", idx), source); err != nil {
+			return err
+		}
+		if _, ok := seen[source]; ok {
+			return fmt.Errorf("pricing chain %d source %q is configured more than once", chain.EID, source)
+		}
+		seen[source] = struct{}{}
+		if source == "uniswap" {
+			hasUniswap = true
+		}
+	}
+	if !hasUniswap {
+		return fmt.Errorf("pricing chain %d sanity_sources must include uniswap", chain.EID)
+	}
+	for source := range seen {
+		if err := validateConfiguredPricingSource(chain, source, coinMarketCapAPIKeyEnv); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePrimaryPricingSourceName(eid uint32, source string) error {
+	switch source {
+	case "binance", "coinmarketcap", "coingecko":
+		return nil
+	case "":
+		return fmt.Errorf("pricing chain %d primary_source is required", eid)
+	default:
+		return fmt.Errorf("pricing chain %d primary_source has unsupported source %q", eid, source)
+	}
+}
+
+func validateSanityPricingSourceName(eid uint32, field, source string) error {
+	switch source {
+	case "binance", "coinmarketcap", "coingecko", "uniswap":
+		return nil
+	case "":
+		return fmt.Errorf("pricing chain %d %s is required", eid, field)
+	default:
+		return fmt.Errorf("pricing chain %d %s has unsupported source %q", eid, field, source)
+	}
+}
+
+func validateConfiguredPricingSource(chain PricingChainConfig, source, coinMarketCapAPIKeyEnv string) error {
+	switch source {
+	case "binance":
+		if chain.BinanceSymbol == "" {
+			return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
+		}
+	case "coinmarketcap":
+		if coinMarketCapAPIKeyEnv == "" {
+			return fmt.Errorf("pricing chain %d coinmarketcap_api_key_env is required when coinmarketcap is used", chain.EID)
+		}
+		if chain.CoinMarketCapSymbol == "" {
+			return fmt.Errorf("pricing chain %d coinmarketcap_symbol is required", chain.EID)
+		}
+	case "coingecko":
+		if chain.CoinGeckoID == "" {
+			return fmt.Errorf("pricing chain %d coingecko_id is required", chain.EID)
+		}
+	case "uniswap":
+		if err := validateUniswapPricingSource(chain); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUniswapPricingSource(chain PricingChainConfig) error {
+	for label, value := range map[string]EVMAddress{
+		"uniswap.quoter_address": chain.Uniswap.QuoterAddress,
+		"uniswap.token_in":       chain.Uniswap.TokenIn,
+		"uniswap.token_out":      chain.Uniswap.TokenOut,
+	} {
+		if value.IsZero() {
+			return fmt.Errorf("pricing chain %d %s is required", chain.EID, label)
+		}
+	}
+	if chain.Uniswap.Fee > (1<<24)-1 {
+		return fmt.Errorf("pricing chain %d uniswap fee exceeds uint24", chain.EID)
+	}
+	if chain.Uniswap.AmountInWei == "" {
+		return fmt.Errorf("pricing chain %d uniswap amount_in_wei is required", chain.EID)
+	}
+	amountIn, ok := new(big.Int).SetString(chain.Uniswap.AmountInWei, 10)
+	if !ok || amountIn.Sign() <= 0 {
+		return fmt.Errorf("pricing chain %d uniswap amount_in_wei must be positive", chain.EID)
+	}
+	if chain.Uniswap.TokenOutDecimals == 0 {
+		return fmt.Errorf("pricing chain %d uniswap token_out_decimals is required", chain.EID)
 	}
 	return nil
 }

@@ -61,6 +61,9 @@ export type DVNJoinEvidence = {
 };
 
 export type WorkerPriceConfigEvidence = {
+  baseFee: string;
+  dstGasOverhead: string;
+  marginBps: number;
   updatedAt: string;
   staleAfter: string;
   dstGasPriceInSrcToken: string;
@@ -333,11 +336,18 @@ function validateWorkerPriceConfigEvidence(
     evidence.staleAfter,
     `${field}.staleAfter`,
   );
+  requireNonNegativeDecimalIntegerValue(errors, evidence.baseFee, `${field}.baseFee`);
   requirePositiveDecimalIntegerValue(
     errors,
     evidence.dstGasPriceInSrcToken,
     `${field}.dstGasPriceInSrcToken`,
   );
+  requireNonNegativeDecimalIntegerValue(
+    errors,
+    evidence.dstGasOverhead,
+    `${field}.dstGasOverhead`,
+  );
+  requireBps(errors, evidence.marginBps, `${field}.marginBps`);
   if (
     checkedAt !== undefined &&
     updatedAt !== undefined &&
@@ -578,6 +588,24 @@ function requirePositiveDecimalIntegerValue(
     return undefined;
   }
   return BigInt(value);
+}
+
+function requireNonNegativeDecimalIntegerValue(
+  errors: string[],
+  value: string,
+  field: string,
+): bigint | undefined {
+  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
+    errors.push(`${field} must be a non-negative decimal integer string`);
+    return undefined;
+  }
+  return BigInt(value);
+}
+
+function requireBps(errors: string[], value: number, field: string): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 10_000) {
+    errors.push(`${field} must be between 0 and 10000 bps`);
+  }
 }
 
 function requireBytes32(errors: string[], value: string, field: string): void {

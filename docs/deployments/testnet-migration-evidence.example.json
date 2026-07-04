@@ -69,14 +69,20 @@
         "maxAgeSeconds": "1800",
         "expectedStaleAfter": "1800",
         "executor": {
+          "baseFee": "1000",
           "updatedAt": "1799999940",
           "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1"
+          "dstGasPriceInSrcToken": "1",
+          "dstGasOverhead": "50000",
+          "marginBps": 100
         },
         "dvn": {
+          "baseFee": "2000",
           "updatedAt": "1799999940",
           "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1"
+          "dstGasPriceInSrcToken": "1",
+          "dstGasOverhead": "150000",
+          "marginBps": 200
         }
       },
       "drainCheckBeforeSwitch": {
@@ -151,14 +157,20 @@
         "maxAgeSeconds": "1800",
         "expectedStaleAfter": "1800",
         "executor": {
+          "baseFee": "1000",
           "updatedAt": "1799999940",
           "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1"
+          "dstGasPriceInSrcToken": "1",
+          "dstGasOverhead": "50000",
+          "marginBps": 100
         },
         "dvn": {
+          "baseFee": "2000",
           "updatedAt": "1799999940",
           "staleAfter": "1800",
-          "dstGasPriceInSrcToken": "1"
+          "dstGasPriceInSrcToken": "1",
+          "dstGasOverhead": "150000",
+          "marginBps": 200
         }
       },
       "drainCheckBeforeSwitch": {

@@ -66,8 +66,7 @@ func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) 
 		SrcNativeUSD:      big.NewRat(2000, 1),
 		DstNativeUSD:      big.NewRat(1000, 1),
 		DstGasPriceWei:    big.NewInt(2_000_000_000),
-		BaseFee:           big.NewInt(1000),
-		BufferBps:         100,
+		Fee:               FeeModel{BaseFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
 		UpdatedAtUnix:     1_700_000_000,
 		StaleAfterSeconds: 1800,
 	})
@@ -80,6 +79,12 @@ func TestBuildPriceConfigConvertsDestinationGasPriceToSourceToken(t *testing.T) 
 	if config.BaseFee.Cmp(big.NewInt(1000)) != 0 {
 		t.Fatalf("base fee = %s, want 1000", config.BaseFee)
 	}
+	if config.DstGasOverhead != 50_000 {
+		t.Fatalf("dst gas overhead = %d, want 50000", config.DstGasOverhead)
+	}
+	if config.MarginBps != 100 {
+		t.Fatalf("margin bps = %d, want 100", config.MarginBps)
+	}
 }
 
 func TestBuildPriceConfigRoundsUpFractionalWei(t *testing.T) {
@@ -87,7 +92,7 @@ func TestBuildPriceConfigRoundsUpFractionalWei(t *testing.T) {
 		SrcNativeUSD:      big.NewRat(3, 1),
 		DstNativeUSD:      big.NewRat(2, 1),
 		DstGasPriceWei:    big.NewInt(10),
-		BaseFee:           big.NewInt(0),
+		Fee:               FeeModel{BaseFee: big.NewInt(0)},
 		UpdatedAtUnix:     1,
 		StaleAfterSeconds: 2,
 	})
@@ -114,8 +119,8 @@ func TestBuildSetPriceConfigCalldata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildSetPriceConfigCalldata() error = %v", err)
 	}
-	if len(calldata) != 4+32*6 {
-		t.Fatalf("calldata len = %d, want %d", len(calldata), 4+32*6)
+	if len(calldata) != 4+32*7 {
+		t.Fatalf("calldata len = %d, want %d", len(calldata), 4+32*7)
 	}
 	method := priceConfigABI.Methods["setPriceConfig"]
 	if string(calldata[:4]) != string(method.ID) {
@@ -153,7 +158,8 @@ func testPriceConfig() PriceConfig {
 	return PriceConfig{
 		BaseFee:               big.NewInt(1000),
 		DstGasPriceInSrcToken: big.NewInt(2_000_000_000),
-		BufferBps:             100,
+		DstGasOverhead:        50_000,
+		MarginBps:             100,
 		UpdatedAt:             1_700_000_000,
 		StaleAfter:            1800,
 	}

@@ -401,14 +401,16 @@ async function configureSourceWorkers(
   const executorPriceConfig = {
     baseFee: 1n,
     dstGasPriceInSrcToken: 1n,
-    bufferBps: 0,
+    dstGasOverhead: 0n,
+    marginBps: 0,
     updatedAt: timestamp,
     staleAfter: 86_400n,
   };
   const dvnPriceConfig = {
     baseFee: 0n,
-    dstGasPriceInSrcToken: 0n,
-    bufferBps: 0,
+    dstGasPriceInSrcToken: 1n,
+    dstGasOverhead: 0n,
+    marginBps: 0,
     updatedAt: timestamp,
     staleAfter: 86_400n,
   };

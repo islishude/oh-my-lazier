@@ -30,14 +30,16 @@ function basePathwayInput() {
     executorPriceConfig: {
       baseFee: 1000n,
       dstGasPriceInSrcToken: 2n,
-      bufferBps: 1000,
+      dstGasOverhead: 50_000n,
+      marginBps: 1000,
       updatedAt: 1_700_000_000n,
       staleAfter: 1800n,
     },
     dvnPriceConfig: {
       baseFee: 2000n,
       dstGasPriceInSrcToken: 3n,
-      bufferBps: 500n,
+      dstGasOverhead: 150_000n,
+      marginBps: 500n,
       updatedAt: 1_700_000_001n,
       staleAfter: 1801n,
     },
@@ -77,14 +79,16 @@ test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () =
   assert.deepEqual(rendered.executorPriceConfig, {
     baseFee: "1000",
     dstGasPriceInSrcToken: "2",
-    bufferBps: 1000,
+    dstGasOverhead: "50000",
+    marginBps: 1000,
     updatedAt: "1700000000",
     staleAfter: "1800",
   });
   assert.deepEqual(rendered.dvnPriceConfig, {
     baseFee: "2000",
     dstGasPriceInSrcToken: "3",
-    bufferBps: 500,
+    dstGasOverhead: "150000",
+    marginBps: 500,
     updatedAt: "1700000001",
     staleAfter: "1801",
   });
@@ -166,9 +170,9 @@ test("buildTestOFTPathwayConfigParameters validates worker price config", () => 
         ...basePathwayInput(),
         executorPriceConfig: {
           ...basePathwayInput().executorPriceConfig,
-          bufferBps: 10_001,
+          marginBps: 10_001,
         },
       }),
-    /executorPriceConfig\.bufferBps must be between 0 and 10000 bps/,
+    /executorPriceConfig\.marginBps must be between 0 and 10000 bps/,
   );
 });

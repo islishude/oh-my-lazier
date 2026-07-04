@@ -115,15 +115,22 @@ type PriceReader interface {
 
 // Settings controls price update generation.
 type Settings struct {
-	Enabled       bool
-	SignerID      string
-	Interval      time.Duration
-	BaseFee       *big.Int
-	BufferBps     uint16
-	StaleAfter    time.Duration
-	MaxDeviation  uint64
-	GasSpikeBps   uint64
-	AllowFallback bool
+	Enabled             bool
+	SignerID            string
+	Interval            time.Duration
+	ExecutorFee         FeeModel
+	DVNFee              FeeModel
+	StaleAfter          time.Duration
+	MaxDeviation        uint64
+	GasSpikeBps         uint64
+	AllowSanityFallback bool
+}
+
+// FeeModel controls one worker role's source-chain quote inputs.
+type FeeModel struct {
+	BaseFee        *big.Int
+	DstGasOverhead uint64
+	MarginBps      uint16
 }
 
 // Validate checks settings required for enabled price updates.
@@ -137,11 +144,11 @@ func (s Settings) Validate() error {
 	if s.Interval <= 0 {
 		return errors.New("pricing interval must be positive")
 	}
-	if s.BaseFee == nil || s.BaseFee.Sign() < 0 {
-		return errors.New("pricing base fee must be non-negative")
+	if err := s.ExecutorFee.Validate("pricing executor fee"); err != nil {
+		return err
 	}
-	if s.BufferBps > 10_000 {
-		return errors.New("pricing buffer bps exceeds 10000")
+	if err := s.DVNFee.Validate("pricing dvn fee"); err != nil {
+		return err
 	}
 	if s.StaleAfter <= 0 {
 		return errors.New("pricing stale_after must be positive")
@@ -151,6 +158,17 @@ func (s Settings) Validate() error {
 	}
 	if s.GasSpikeBps == 0 {
 		return errors.New("pricing gas spike bps is required")
+	}
+	return nil
+}
+
+// Validate checks one worker fee model.
+func (m FeeModel) Validate(prefix string) error {
+	if m.BaseFee == nil || m.BaseFee.Sign() < 0 {
+		return fmt.Errorf("%s base fee must be non-negative", prefix)
+	}
+	if m.MarginBps > 10_000 {
+		return fmt.Errorf("%s margin bps exceeds 10000", prefix)
 	}
 	return nil
 }
@@ -252,8 +270,18 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 		SrcNativeUSD:      srcPrice,
 		DstNativeUSD:      dstPrice,
 		DstGasPriceWei:    dstGasPrice,
-		BaseFee:           b.settings.BaseFee,
-		BufferBps:         b.settings.BufferBps,
+		Fee:               b.settings.ExecutorFee,
+		UpdatedAtUnix:     uint64(b.now().Unix()),
+		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	dvnConfig, err := BuildPriceConfig(PriceInputs{
+		SrcNativeUSD:      srcPrice,
+		DstNativeUSD:      dstPrice,
+		DstGasPriceWei:    dstGasPrice,
+		Fee:               b.settings.DVNFee,
 		UpdatedAtUnix:     uint64(b.now().Unix()),
 		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
 	})
@@ -264,11 +292,12 @@ func (b *Bot) enqueuePathway(ctx context.Context, pathway pricedPathway) (*big.I
 	for _, request := range []struct {
 		worker  common.Address
 		purpose string
+		config  PriceConfig
 	}{
-		{worker: pathway.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig},
-		{worker: pathway.OpenDVN, purpose: TxPurposeSetDVNPriceConfig},
+		{worker: pathway.OpenExecutor, purpose: TxPurposeSetExecutorPriceConfig, config: config},
+		{worker: pathway.OpenDVN, purpose: TxPurposeSetDVNPriceConfig, config: dvnConfig},
 	} {
-		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, config)
+		tx, err := BuildSetPriceConfigTx(srcChain.EID, request.worker, dstChain.EID, request.purpose, b.settings.SignerID, request.config)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -309,7 +338,7 @@ func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
 			sanityPrices = append(sanityPrices, price)
 		}
 	}
-	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowFallback)
+	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowSanityFallback)
 }
 
 func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {
@@ -422,8 +451,7 @@ type PriceInputs struct {
 	SrcNativeUSD      *big.Rat
 	DstNativeUSD      *big.Rat
 	DstGasPriceWei    *big.Int
-	BaseFee           *big.Int
-	BufferBps         uint16
+	Fee               FeeModel
 	UpdatedAtUnix     uint64
 	StaleAfterSeconds uint64
 }
@@ -432,7 +460,8 @@ type PriceInputs struct {
 type PriceConfig struct {
 	BaseFee               *big.Int `abi:"baseFee"`
 	DstGasPriceInSrcToken *big.Int `abi:"dstGasPriceInSrcToken"`
-	BufferBps             uint16   `abi:"bufferBps"`
+	DstGasOverhead        uint64   `abi:"dstGasOverhead"`
+	MarginBps             uint16   `abi:"marginBps"`
 	UpdatedAt             uint64   `abi:"updatedAt"`
 	StaleAfter            uint64   `abi:"staleAfter"`
 }
@@ -448,8 +477,8 @@ func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
 	if inputs.DstGasPriceWei == nil || inputs.DstGasPriceWei.Sign() <= 0 {
 		return PriceConfig{}, errors.New("destination gas price must be positive")
 	}
-	if inputs.BaseFee == nil || inputs.BaseFee.Sign() < 0 {
-		return PriceConfig{}, errors.New("base fee must be non-negative")
+	if err := inputs.Fee.Validate("fee model"); err != nil {
+		return PriceConfig{}, err
 	}
 	if inputs.UpdatedAtUnix == 0 {
 		return PriceConfig{}, errors.New("updated_at is required")
@@ -461,9 +490,10 @@ func BuildPriceConfig(inputs PriceInputs) (PriceConfig, error) {
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
 	return PriceConfig{
-		BaseFee:               new(big.Int).Set(inputs.BaseFee),
+		BaseFee:               new(big.Int).Set(inputs.Fee.BaseFee),
 		DstGasPriceInSrcToken: ceilRat(dstGasPriceInSrcToken),
-		BufferBps:             inputs.BufferBps,
+		DstGasOverhead:        inputs.Fee.DstGasOverhead,
+		MarginBps:             inputs.Fee.MarginBps,
 		UpdatedAt:             inputs.UpdatedAtUnix,
 		StaleAfter:            inputs.StaleAfterSeconds,
 	}, nil
@@ -516,8 +546,8 @@ func (c PriceConfig) Validate() error {
 	if c.DstGasPriceInSrcToken == nil || c.DstGasPriceInSrcToken.Sign() <= 0 {
 		return errors.New("price config destination gas price must be positive")
 	}
-	if c.BufferBps > 10_000 {
-		return errors.New("price config buffer bps exceeds 10000")
+	if c.MarginBps > 10_000 {
+		return errors.New("price config margin bps exceeds 10000")
 	}
 	if c.UpdatedAt == 0 {
 		return errors.New("price config updated_at is required")

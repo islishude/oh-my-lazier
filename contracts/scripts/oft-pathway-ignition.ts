@@ -28,7 +28,8 @@ export type WorkerPathwayConfigParam = {
 export type WorkerPriceConfigParam = {
   baseFee: string;
   dstGasPriceInSrcToken: string;
-  bufferBps: number;
+  dstGasOverhead: string;
+  marginBps: number;
   updatedAt: string;
   staleAfter: string;
 };
@@ -60,7 +61,8 @@ export type TestOFTPathwayConfigParameterFile = {
 export type WorkerPriceConfigInput = {
   baseFee: bigint;
   dstGasPriceInSrcToken: bigint;
-  bufferBps: number | bigint;
+  dstGasOverhead: bigint;
+  marginBps: number | bigint;
   updatedAt: bigint;
   staleAfter: bigint;
 };
@@ -184,7 +186,11 @@ function normalizeWorkerPriceConfig(
       config.dstGasPriceInSrcToken,
       `${label}.dstGasPriceInSrcToken`,
     ),
-    bufferBps: normalizeBps(config.bufferBps, `${label}.bufferBps`),
+    dstGasOverhead: normalizeUint64(
+      config.dstGasOverhead,
+      `${label}.dstGasOverhead`,
+    ),
+    marginBps: normalizeBps(config.marginBps, `${label}.marginBps`),
     updatedAt: normalizeUint64(config.updatedAt, `${label}.updatedAt`),
     staleAfter: normalizeUint64(config.staleAfter, `${label}.staleAfter`),
   };

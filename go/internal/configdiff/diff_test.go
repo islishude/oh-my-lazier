@@ -63,17 +63,19 @@ func validConfig() config.Config {
 			Enabled:                 true,
 			Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 			IntervalSeconds:         300,
-			BaseFeeWei:              "1000",
-			BufferBps:               100,
+			ExecutorFee:             config.WorkerFeeModelConfig{BaseFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
+			DVNFee:                  config.WorkerFeeModelConfig{BaseFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
 			StaleAfterSeconds:       1800,
 			MaxDeviationBps:         500,
 			GasSpikeBps:             1000,
-			AllowUniswapFallback:    true,
+			AllowSanityFallback:     true,
 			MaxFeePerGasWei:         "2000000000",
 			MaxPriorityFeePerGasWei: "1000000000",
 			Chains: []config.PricingChainConfig{
 				{
 					EID:           40161,
+					PrimarySource: "binance",
+					SanitySources: []string{"uniswap"},
 					BinanceSymbol: "ETHUSDT",
 					Uniswap: config.UniswapPricingConfig{
 						QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
@@ -86,6 +88,8 @@ func validConfig() config.Config {
 				},
 				{
 					EID:           40449,
+					PrimarySource: "binance",
+					SanitySources: []string{"uniswap"},
 					BinanceSymbol: "ETHUSDT",
 					Uniswap: config.UniswapPricingConfig{
 						QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),

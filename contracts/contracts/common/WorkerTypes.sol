@@ -12,11 +12,12 @@ library WorkerTypes {
         uint128 maxLzReceiveGas;
     }
 
-    /// @notice Native-token fee inputs for one destination endpoint.
+    /// @notice Native-token fee inputs for one destination endpoint and worker role.
     struct PriceConfig {
         uint256 baseFee;
         uint256 dstGasPriceInSrcToken;
-        uint16 bufferBps;
+        uint64 dstGasOverhead;
+        uint16 marginBps;
         uint64 updatedAt;
         uint64 staleAfter;
     }

@@ -16,18 +16,26 @@ pricing:
   enabled: false
   signer: "0x9999999999999999999999999999999999999999"
   interval_seconds: 300
-  base_fee_wei: "1000"
-  buffer_bps: 100
+  executor_fee:
+    base_fee_wei: "1000"
+    dst_gas_overhead: 50000
+    margin_bps: 100
+  dvn_fee:
+    base_fee_wei: "2000"
+    dst_gas_overhead: 150000
+    margin_bps: 200
   stale_after_seconds: 1800
   max_deviation_bps: 500
   gas_spike_bps: 1000
-  allow_uniswap_fallback: true
+  allow_sanity_fallback: true
   max_fee_per_gas_wei: "2000000000"
   max_priority_fee_per_gas_wei: "1000000000"
-  primary_source: binance
   # coinmarketcap_api_key_env: COINMARKETCAP_API_KEY
   chains:
     - eid: 40161
+      primary_source: binance
+      sanity_sources:
+        - uniswap
       binance_symbol: ETHUSDT
       coinmarketcap_symbol: ETH
       coingecko_id: ethereum
@@ -39,6 +47,9 @@ pricing:
         amount_in_wei: "1000000000000000000"
         token_out_decimals: 6
     - eid: 40449
+      primary_source: binance
+      sanity_sources:
+        - uniswap
       binance_symbol: ETHUSDT
       coinmarketcap_symbol: ETH
       coingecko_id: ethereum

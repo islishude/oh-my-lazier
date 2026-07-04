@@ -38,7 +38,7 @@ Review checklist:
 - Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, source worker contracts, DVN mode, enablement, and max message size changes are intentional.
 - Confirm pathway `min_lz_receive_gas` and `max_lz_receive_gas` changes match the OpenExecutor/OpenDVN on-chain pathway settings.
 - Confirm signer changes are expected and do not point to unapproved keys.
-- Confirm pricing source, stale threshold, gas spike threshold, and fee cap changes are expected. Outer transaction gas is estimated by the tx manager at send time.
+- Confirm pricing feed source, per-worker fee model, stale threshold, gas spike threshold, and fee cap changes are expected. Outer transaction gas is estimated by the tx manager at send time.
 - For DVN migration, confirm each proposed pathway still uses `pathways[].dvn.mode: shadow` until the explicit active-mode change is approved.
 - Keep the text output in the migration ticket and the JSON output as an immutable review artifact.
 

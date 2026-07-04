@@ -16,6 +16,7 @@ test("validatePriceConfigReport rejects stale and mismatched configs", () => {
     priceConfig: {
       ...report.workers[0].priceConfig,
       dstGasPriceInSrcToken: 0n,
+      marginBps: 10_001,
       updatedAt: 900n,
       staleAfter: 120n,
     },
@@ -23,10 +24,11 @@ test("validatePriceConfigReport rejects stale and mismatched configs", () => {
 
   const errors = validatePriceConfigReport(report);
 
-  assert.equal(errors.length, 3);
+  assert.equal(errors.length, 4);
   assert.match(errors[0], /dstGasPriceInSrcToken/);
-  assert.match(errors[1], /exceeds/);
-  assert.match(errors[2], /staleAfter/);
+  assert.match(errors[1], /marginBps/);
+  assert.match(errors[2], /exceeds/);
+  assert.match(errors[3], /staleAfter/);
 });
 
 test("validatePriceConfigReport rejects future updatedAt", () => {
@@ -56,7 +58,8 @@ function baseReport(): PriceConfigReport {
         priceConfig: {
           baseFee: 1n,
           dstGasPriceInSrcToken: 2n,
-          bufferBps: 100,
+          dstGasOverhead: 50_000n,
+          marginBps: 100,
           updatedAt: 950n,
           staleAfter: 1800n,
         },
@@ -67,7 +70,8 @@ function baseReport(): PriceConfigReport {
         priceConfig: {
           baseFee: 1n,
           dstGasPriceInSrcToken: 2n,
-          bufferBps: 100,
+          dstGasOverhead: 150_000n,
+          marginBps: 100,
           updatedAt: 950n,
           staleAfter: 1800n,
         },

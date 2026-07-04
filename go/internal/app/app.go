@@ -290,31 +290,34 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	if !a.cfg.Pricing.Enabled {
 		return pricing.New(a.logger), nil
 	}
-	baseFee, err := parseBigInt(a.cfg.Pricing.BaseFeeWei)
+	executorFee, err := pricingFeeModel(a.cfg.Pricing.ExecutorFee)
+	if err != nil {
+		return nil, err
+	}
+	dvnFee, err := pricingFeeModel(a.cfg.Pricing.DVNFee)
 	if err != nil {
 		return nil, err
 	}
 	settings := pricing.Settings{
-		Enabled:       true,
-		SignerID:      a.cfg.Pricing.Signer.Hex(),
-		Interval:      time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
-		BaseFee:       baseFee,
-		BufferBps:     a.cfg.Pricing.BufferBps,
-		StaleAfter:    time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
-		MaxDeviation:  a.cfg.Pricing.MaxDeviationBps,
-		GasSpikeBps:   a.cfg.Pricing.GasSpikeBps,
-		AllowFallback: a.cfg.Pricing.AllowUniswapFallback,
+		Enabled:             true,
+		SignerID:            a.cfg.Pricing.Signer.Hex(),
+		Interval:            time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
+		ExecutorFee:         executorFee,
+		DVNFee:              dvnFee,
+		StaleAfter:          time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
+		MaxDeviation:        a.cfg.Pricing.MaxDeviationBps,
+		GasSpikeBps:         a.cfg.Pricing.GasSpikeBps,
+		AllowSanityFallback: a.cfg.Pricing.AllowSanityFallback,
 	}
 	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
-	coinMarketCapClient, err := pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
-	if err != nil {
-		return nil, err
+	var coinMarketCapClient *pricing.CoinMarketCapClient
+	if pricingUsesSource(a.cfg.Pricing.Chains, "coinmarketcap") {
+		coinMarketCapClient, err = pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
+		if err != nil {
+			return nil, err
+		}
 	}
 	coinGeckoClient := pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, http.DefaultClient)
-	primarySource := a.cfg.Pricing.PrimarySource
-	if primarySource == "" {
-		primarySource = "binance"
-	}
 	sources := make(map[uint32]pricing.ChainSources, len(a.cfg.Pricing.Chains))
 	for _, cfg := range a.cfg.Pricing.Chains {
 		configuredChain, err := registry.Get(cfg.EID)
@@ -329,7 +332,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			}
 			readers["binance"] = reader
 		}
-		if cfg.CoinMarketCapSymbol != "" {
+		if cfg.CoinMarketCapSymbol != "" && coinMarketCapClient != nil {
 			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCapSymbol)
 			if err != nil {
 				return nil, err
@@ -342,10 +345,6 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 				return nil, err
 			}
 			readers["coingecko"] = reader
-		}
-		primary := readers[primarySource]
-		if primary == nil {
-			return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, primarySource)
 		}
 		amountIn, err := parseBigInt(cfg.Uniswap.AmountInWei)
 		if err != nil {
@@ -362,15 +361,36 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		if err != nil {
 			return nil, err
 		}
-		sanityReaders := []pricing.PriceReader{sanity}
-		for source, reader := range readers {
-			if source != primarySource {
-				sanityReaders = append(sanityReaders, reader)
+		readers["uniswap"] = sanity
+		primary := readers[cfg.PrimarySource]
+		if primary == nil {
+			return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
+		}
+		sanityReaders := make([]pricing.PriceReader, 0, len(cfg.SanitySources))
+		for _, source := range cfg.SanitySources {
+			reader := readers[source]
+			if reader == nil {
+				return nil, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
 			}
+			sanityReaders = append(sanityReaders, reader)
 		}
 		sources[cfg.EID] = pricing.ChainSources{Primary: primary, Sanity: sanityReaders, Gas: configuredChain.RPC}
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
+}
+
+func pricingUsesSource(chains []config.PricingChainConfig, source string) bool {
+	for _, chain := range chains {
+		if chain.PrimarySource == source {
+			return true
+		}
+		for _, sanity := range chain.SanitySources {
+			if sanity == source {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker, error) {
@@ -519,6 +539,18 @@ func parseBigInt(value string) (*big.Int, error) {
 		return nil, errors.New("invalid integer")
 	}
 	return parsed, nil
+}
+
+func pricingFeeModel(cfg config.WorkerFeeModelConfig) (pricing.FeeModel, error) {
+	baseFee, err := parseBigInt(cfg.BaseFeeWei)
+	if err != nil {
+		return pricing.FeeModel{}, err
+	}
+	return pricing.FeeModel{
+		BaseFee:        baseFee,
+		DstGasOverhead: cfg.DstGasOverhead,
+		MarginBps:      cfg.MarginBps,
+	}, nil
 }
 
 func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy, error) {

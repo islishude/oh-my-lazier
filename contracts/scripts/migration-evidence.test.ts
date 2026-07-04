@@ -180,14 +180,20 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price config e
     maxAgeSeconds: "60",
     expectedStaleAfter: "1800",
     executor: {
+      baseFee: "-1",
       updatedAt: "900",
       staleAfter: "120",
       dstGasPriceInSrcToken: "0",
+      dstGasOverhead: "-1",
+      marginBps: 10001,
     },
     dvn: {
+      baseFee: "0",
       updatedAt: "1001",
       staleAfter: "1800",
       dstGasPriceInSrcToken: "2",
+      dstGasOverhead: "150000",
+      marginBps: 100,
     },
   };
 
@@ -195,7 +201,10 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price config e
 
   assert.deepEqual(errors, [
     "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40449",
+    "directions[0].priceConfigCheck.executor.baseFee must be a non-negative decimal integer string",
     "directions[0].priceConfigCheck.executor.dstGasPriceInSrcToken must be a positive decimal integer string",
+    "directions[0].priceConfigCheck.executor.dstGasOverhead must be a non-negative decimal integer string",
+    "directions[0].priceConfigCheck.executor.marginBps must be between 0 and 10000 bps",
     "directions[0].priceConfigCheck.executor.updatedAt age exceeds 60s",
     "directions[0].priceConfigCheck.executor.staleAfter must equal expectedStaleAfter 1800",
     "directions[0].priceConfigCheck.dvn.updatedAt must not be in the future",
@@ -358,14 +367,20 @@ function priceConfigEvidence(ref: string, dstEid: number): PriceConfigEvidence {
     maxAgeSeconds: "60",
     expectedStaleAfter: "1800",
     executor: {
+      baseFee: "1000",
       updatedAt: "950",
       staleAfter: "1800",
       dstGasPriceInSrcToken: "2",
+      dstGasOverhead: "50000",
+      marginBps: 100,
     },
     dvn: {
+      baseFee: "2000",
       updatedAt: "950",
       staleAfter: "1800",
       dstGasPriceInSrcToken: "2",
+      dstGasOverhead: "150000",
+      marginBps: 200,
     },
   };
 }

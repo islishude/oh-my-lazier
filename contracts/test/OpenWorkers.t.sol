@@ -106,7 +106,8 @@ contract OpenWorkersTest {
         WorkerTypes.PriceConfig memory price = WorkerTypes.PriceConfig({
             baseFee: 1 ether,
             dstGasPriceInSrcToken: 10 gwei,
-            bufferBps: 3000,
+            dstGasOverhead: 1000,
+            marginBps: 3000,
             updatedAt: uint64(block.timestamp),
             staleAfter: 30 minutes
         });
@@ -122,12 +123,17 @@ contract OpenWorkersTest {
 
     function test_executorFeeSuccess() public view {
         uint256 fee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
-        require(fee == 1.3013 ether, "executor fee mismatch");
+        require(fee == 1.301313 ether, "executor fee mismatch");
     }
 
     function test_executorRejectsStalePrice() public {
         WorkerTypes.PriceConfig memory stale = WorkerTypes.PriceConfig({
-            baseFee: 1 ether, dstGasPriceInSrcToken: 10 gwei, bufferBps: 3000, updatedAt: 0, staleAfter: 30 minutes
+            baseFee: 1 ether,
+            dstGasPriceInSrcToken: 10 gwei,
+            dstGasOverhead: 1000,
+            marginBps: 3000,
+            updatedAt: 0,
+            staleAfter: 30 minutes
         });
         executor.setPriceConfig(DST_EID, stale);
 
@@ -249,7 +255,7 @@ contract OpenWorkersTest {
 
     function test_dvnFeeSuccess() public view {
         uint256 fee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
-        require(fee == 1.3 ether, "dvn fee mismatch");
+        require(fee == 1.300013 ether, "dvn fee mismatch");
     }
 
     function test_executorWithdraw() public {
@@ -262,7 +268,12 @@ contract OpenWorkersTest {
 
     function test_dvnRejectsStalePrice() public {
         WorkerTypes.PriceConfig memory stale = WorkerTypes.PriceConfig({
-            baseFee: 1 ether, dstGasPriceInSrcToken: 10 gwei, bufferBps: 3000, updatedAt: 0, staleAfter: 30 minutes
+            baseFee: 1 ether,
+            dstGasPriceInSrcToken: 10 gwei,
+            dstGasOverhead: 1000,
+            marginBps: 3000,
+            updatedAt: 0,
+            staleAfter: 30 minutes
         });
         dvn.setPriceConfig(DST_EID, stale);
 
@@ -384,7 +395,7 @@ contract OpenWorkersTest {
 
         uint256 beforeBalance = address(this).balance;
         uint256 fee = sendLib.assignDVN{value: 2 ether}(dvn, param, "");
-        require(fee == 1.3 ether, "unexpected dvn fee");
+        require(fee == 1.300013 ether, "unexpected dvn fee");
         dvn.withdraw(payable(address(this)), 2 ether);
         require(address(this).balance == beforeBalance, "withdraw failed");
     }

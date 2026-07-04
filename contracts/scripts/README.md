@@ -162,11 +162,13 @@ npm run render:oft-pathway-params -- \
   --max-lz-receive-gas 1000000 \
   --executor-price-base-fee 0 \
   --executor-price-dst-gas-price-in-src-token 1 \
-  --executor-price-buffer-bps 1000 \
+  --executor-price-dst-gas-overhead 50000 \
+  --executor-price-margin-bps 1000 \
   --executor-price-stale-after 1800 \
   --dvn-price-base-fee 0 \
   --dvn-price-dst-gas-price-in-src-token 1 \
-  --dvn-price-buffer-bps 1000 \
+  --dvn-price-dst-gas-overhead 150000 \
+  --dvn-price-margin-bps 1000 \
   --dvn-price-stale-after 1800 > ignition/parameters/sepolia-to-hoodi.generated.json
 ```
 
@@ -198,10 +200,16 @@ npm run configure:workers -- \
   --max-message-size 10000 \
   --min-lz-receive-gas 200000 \
   --max-lz-receive-gas 1000000 \
-  --price-base-fee 0 \
-  --price-dst-gas-price-in-src-token 1 \
-  --price-buffer-bps 1000 \
-  --price-stale-after 3600
+  --executor-price-base-fee 0 \
+  --executor-price-dst-gas-price-in-src-token 1 \
+  --executor-price-dst-gas-overhead 50000 \
+  --executor-price-margin-bps 1000 \
+  --executor-price-stale-after 3600 \
+  --dvn-price-base-fee 0 \
+  --dvn-price-dst-gas-price-in-src-token 1 \
+  --dvn-price-dst-gas-overhead 150000 \
+  --dvn-price-margin-bps 1000 \
+  --dvn-price-stale-after 3600
 ```
 
 For standard pathway setup, `configure:oft-pathway` already writes the worker send-lib allowlist, pathway limits, initial price configs, and verifier authorization. `configure:workers` remains the manual entrypoint for later worker price refreshes and outbound rate limit changes. `--src-oapp` defaults to `--test-oft`. Set `--rate-limit-capacity` and `--rate-limit-refill-per-second` together to configure outbound rate limiting.
@@ -324,7 +332,7 @@ npm run check:oft-canary -- \
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
 
-The migration evidence record must capture each direction's source OpenExecutor/OpenDVN contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `updatedAt`, `staleAfter`, and non-zero `dstGasPriceInSrcToken` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
+The migration evidence record must capture each direction's source OpenExecutor/OpenDVN contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, and each worker's `baseFee`, `dstGasPriceInSrcToken`, `dstGasOverhead`, `marginBps`, `updatedAt`, and `staleAfter` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 

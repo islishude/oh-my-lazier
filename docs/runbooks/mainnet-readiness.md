@@ -95,7 +95,7 @@ Required state:
 - Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same independent LayerZero Labs DVN only during the DVN join step.
 - Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
-- OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence.
+- OpenExecutor and OpenDVN `priceConfig(dstEid)` values are fresh and match the approved price bot evidence, including each worker's `baseFee`, `dstGasOverhead`, `marginBps`, `dstGasPriceInSrcToken`, and stale window.
 
 ## Rollback Approval
 

@@ -54,7 +54,8 @@ function workerPriceConfig(
     dstGasPriceInSrcToken: envBigInt(
       `${prefix}_PRICE_DST_GAS_PRICE_IN_SRC_TOKEN`,
     ),
-    bufferBps: envBigInt(`${prefix}_PRICE_BUFFER_BPS`),
+    dstGasOverhead: envBigInt(`${prefix}_PRICE_DST_GAS_OVERHEAD`),
+    marginBps: envBigInt(`${prefix}_PRICE_MARGIN_BPS`),
     updatedAt: optionalUint64(`${prefix}_PRICE_UPDATED_AT`, defaultUpdatedAt),
     staleAfter: envBigInt(`${prefix}_PRICE_STALE_AFTER`),
   };

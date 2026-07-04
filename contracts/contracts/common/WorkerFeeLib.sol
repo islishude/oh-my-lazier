@@ -13,13 +13,13 @@ library WorkerFeeLib {
     /// @param dstEid Destination endpoint ID.
     /// @param config Price configuration to validate.
     function assertFresh(uint32 dstEid, WorkerTypes.PriceConfig memory config) internal view {
-        if (config.bufferBps > BPS_DENOMINATOR) revert WorkerErrors.InvalidBps(config.bufferBps);
+        if (config.marginBps > BPS_DENOMINATOR) revert WorkerErrors.InvalidBps(config.marginBps);
         if (config.updatedAt == 0 || block.timestamp > uint256(config.updatedAt) + config.staleAfter) {
             revert WorkerErrors.PriceConfigStale(dstEid, config.updatedAt, config.staleAfter);
         }
     }
 
-    /// @notice Quotes executor payment from base fee, destination gas price, and buffer.
+    /// @notice Quotes executor payment from base fee, destination gas price, destination gas overhead, and margin.
     /// @param dstEid Destination endpoint ID.
     /// @param config Destination price configuration.
     /// @param lzReceiveGas Gas requested for destination lzReceive.
@@ -29,17 +29,31 @@ library WorkerFeeLib {
         view
         returns (uint256)
     {
-        assertFresh(dstEid, config);
-        uint256 raw = config.baseFee + uint256(lzReceiveGas) * config.dstGasPriceInSrcToken;
-        return raw + (raw * config.bufferBps) / BPS_DENOMINATOR;
+        return quoteWithGas(dstEid, config, uint256(lzReceiveGas));
     }
 
-    /// @notice Quotes DVN payment from base fee and buffer.
+    /// @notice Quotes DVN payment from base fee, destination verification gas overhead, and margin.
     /// @param dstEid Destination endpoint ID.
     /// @param config Destination price configuration.
     /// @return Native-token fee denominated in the source-chain token.
     function quoteDVN(uint32 dstEid, WorkerTypes.PriceConfig memory config) internal view returns (uint256) {
+        return quoteWithGas(dstEid, config, 0);
+    }
+
+    /// @notice Quotes worker payment from fixed fee plus configured and request-specific destination gas units.
+    /// @param dstEid Destination endpoint ID.
+    /// @param config Destination price configuration.
+    /// @param variableDstGas Request-specific destination gas units.
+    /// @return Native-token fee denominated in the source-chain token.
+    function quoteWithGas(uint32 dstEid, WorkerTypes.PriceConfig memory config, uint256 variableDstGas)
+        internal
+        view
+        returns (uint256)
+    {
         assertFresh(dstEid, config);
-        return config.baseFee + (config.baseFee * config.bufferBps) / BPS_DENOMINATOR;
+        uint256 gasUnits = uint256(config.dstGasOverhead) + variableDstGas;
+        if (gasUnits > 0 && config.dstGasPriceInSrcToken == 0) revert WorkerErrors.InvalidDstGasPrice(gasUnits);
+        uint256 raw = config.baseFee + gasUnits * config.dstGasPriceInSrcToken;
+        return raw + (raw * config.marginBps) / BPS_DENOMINATOR;
     }
 }

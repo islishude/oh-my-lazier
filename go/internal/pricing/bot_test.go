@@ -163,15 +163,15 @@ func (g *mutableGas) SuggestGasPrice(context.Context) (*big.Int, error) {
 
 func testSettings() Settings {
 	return Settings{
-		Enabled:       true,
-		SignerID:      "0x9999999999999999999999999999999999999999",
-		Interval:      time.Minute,
-		BaseFee:       big.NewInt(1000),
-		BufferBps:     100,
-		StaleAfter:    30 * time.Minute,
-		MaxDeviation:  500,
-		GasSpikeBps:   1000,
-		AllowFallback: true,
+		Enabled:             true,
+		SignerID:            "0x9999999999999999999999999999999999999999",
+		Interval:            time.Minute,
+		ExecutorFee:         FeeModel{BaseFee: big.NewInt(1000), DstGasOverhead: 50_000, MarginBps: 100},
+		DVNFee:              FeeModel{BaseFee: big.NewInt(2000), DstGasOverhead: 150_000, MarginBps: 200},
+		StaleAfter:          30 * time.Minute,
+		MaxDeviation:        500,
+		GasSpikeBps:         1000,
+		AllowSanityFallback: true,
 	}
 }
 

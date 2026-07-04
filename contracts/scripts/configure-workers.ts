@@ -37,13 +37,8 @@ const pathwayConfig = {
 };
 
 const now = BigInt(Math.floor(Date.now() / 1000));
-const priceConfig = {
-  baseFee: envBigInt("PRICE_BASE_FEE"),
-  dstGasPriceInSrcToken: envBigInt("PRICE_DST_GAS_PRICE_IN_SRC_TOKEN"),
-  bufferBps: envBigInt("PRICE_BUFFER_BPS"),
-  updatedAt: optionalUint64("PRICE_UPDATED_AT", now),
-  staleAfter: envBigInt("PRICE_STALE_AFTER"),
-};
+const executorPriceConfig = workerPriceConfig("EXECUTOR", now);
+const dvnPriceConfig = workerPriceConfig("DVN", now);
 
 const rateLimitCapacity = optionalBigInt("RATE_LIMIT_CAPACITY");
 const rateLimitRefillPerSecond = optionalBigInt("RATE_LIMIT_REFILL_PER_SECOND");
@@ -113,7 +108,10 @@ for (const [label, address, abi] of [
       address,
       abi,
       functionName: "setPriceConfig",
-      args: [remoteEid, priceConfig],
+      args: [
+        remoteEid,
+        label === "OpenExecutor" ? executorPriceConfig : dvnPriceConfig,
+      ],
       account,
       chain: null,
     }),
@@ -136,3 +134,16 @@ console.log(
     2,
   ),
 );
+
+function workerPriceConfig(prefix: "EXECUTOR" | "DVN", defaultUpdatedAt: bigint) {
+  return {
+    baseFee: envBigInt(`${prefix}_PRICE_BASE_FEE`),
+    dstGasPriceInSrcToken: envBigInt(
+      `${prefix}_PRICE_DST_GAS_PRICE_IN_SRC_TOKEN`,
+    ),
+    dstGasOverhead: envBigInt(`${prefix}_PRICE_DST_GAS_OVERHEAD`),
+    marginBps: envBigInt(`${prefix}_PRICE_MARGIN_BPS`),
+    updatedAt: optionalUint64(`${prefix}_PRICE_UPDATED_AT`, defaultUpdatedAt),
+    staleAfter: envBigInt(`${prefix}_PRICE_STALE_AFTER`),
+  };
+}

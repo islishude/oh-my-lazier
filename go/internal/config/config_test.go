@@ -361,9 +361,10 @@ func TestValidateAcceptsPricingWithoutPriorityFeeCap(t *testing.T) {
 func TestValidateAcceptsCoinMarketCapPrimaryPricing(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.PrimarySource = "coinmarketcap"
 	cfg.Pricing.CoinMarketCapAPIKeyEnv = "COINMARKETCAP_API_KEY"
 	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
 		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
 	}
 	if err := cfg.Validate(); err != nil {
@@ -374,8 +375,9 @@ func TestValidateAcceptsCoinMarketCapPrimaryPricing(t *testing.T) {
 func TestValidateRejectsCoinMarketCapPrimaryWithoutAPIKeyEnv(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.PrimarySource = "coinmarketcap"
 	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
 		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
 	}
 	if err := cfg.Validate(); err == nil {
@@ -387,6 +389,7 @@ func TestValidateRejectsCoinMarketCapSanityWithoutAPIKeyEnv(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
 	cfg.Pricing.Chains[0].CoinMarketCapSymbol = "ETH"
+	cfg.Pricing.Chains[0].SanitySources = []string{"uniswap", "coinmarketcap"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing coinmarketcap api key env error")
 	}
@@ -395,12 +398,22 @@ func TestValidateRejectsCoinMarketCapSanityWithoutAPIKeyEnv(t *testing.T) {
 func TestValidateAcceptsCoinGeckoPrimaryPricing(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.PrimarySource = "coingecko"
 	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].PrimarySource = "coingecko"
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
 		cfg.Pricing.Chains[i].CoinGeckoID = "ethereum"
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUniswapPrimaryPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.Chains[0].PrimarySource = "uniswap"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want unsupported uniswap primary error")
 	}
 }
 
@@ -607,17 +620,19 @@ func validPricingConfig() PricingConfig {
 		Enabled:                 true,
 		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		IntervalSeconds:         300,
-		BaseFeeWei:              "1000",
-		BufferBps:               100,
+		ExecutorFee:             WorkerFeeModelConfig{BaseFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
+		DVNFee:                  WorkerFeeModelConfig{BaseFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
 		StaleAfterSeconds:       1800,
 		MaxDeviationBps:         500,
 		GasSpikeBps:             1000,
-		AllowUniswapFallback:    true,
+		AllowSanityFallback:     true,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
 		Chains: []PricingChainConfig{
 			{
 				EID:           40161,
+				PrimarySource: "binance",
+				SanitySources: []string{"uniswap"},
 				BinanceSymbol: "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x1111111111111111111111111111111111111111"),
@@ -630,6 +645,8 @@ func validPricingConfig() PricingConfig {
 			},
 			{
 				EID:           40449,
+				PrimarySource: "binance",
+				SanitySources: []string{"uniswap"},
 				BinanceSymbol: "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),

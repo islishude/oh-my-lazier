@@ -12,7 +12,8 @@ import type { Abi, Address, PublicClient } from "viem";
 export type PriceConfig = {
   baseFee: bigint;
   dstGasPriceInSrcToken: bigint;
-  bufferBps: number;
+  dstGasOverhead: bigint;
+  marginBps: number;
   updatedAt: bigint;
   staleAfter: bigint;
 };
@@ -82,6 +83,9 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
     if (config.dstGasPriceInSrcToken <= 0n) {
       errors.push(`${worker.label} dstGasPriceInSrcToken must be non-zero`);
     }
+    if (config.marginBps > 10_000) {
+      errors.push(`${worker.label} marginBps exceeds 10000`);
+    }
     if (config.updatedAt === 0n) {
       errors.push(`${worker.label} updatedAt is zero`);
     } else if (config.updatedAt > report.checkedAt) {
@@ -129,22 +133,25 @@ function normalizePriceConfig(value: unknown): PriceConfig {
     return {
       baseFee: value[0] as bigint,
       dstGasPriceInSrcToken: value[1] as bigint,
-      bufferBps: Number(value[2]),
-      updatedAt: value[3] as bigint,
-      staleAfter: value[4] as bigint,
+      dstGasOverhead: value[2] as bigint,
+      marginBps: Number(value[3]),
+      updatedAt: value[4] as bigint,
+      staleAfter: value[5] as bigint,
     };
   }
   const config = value as {
     baseFee: bigint;
     dstGasPriceInSrcToken: bigint;
-    bufferBps: number;
+    dstGasOverhead: bigint;
+    marginBps: number;
     updatedAt: bigint;
     staleAfter: bigint;
   };
   return {
     baseFee: config.baseFee,
     dstGasPriceInSrcToken: config.dstGasPriceInSrcToken,
-    bufferBps: Number(config.bufferBps),
+    dstGasOverhead: config.dstGasOverhead,
+    marginBps: Number(config.marginBps),
     updatedAt: config.updatedAt,
     staleAfter: config.staleAfter,
   };
