@@ -25,13 +25,16 @@ const openPriceFeedArtifact = loadArtifact(
 
 const { account, publicClient, walletClient } = createClients();
 
-const testOFT = envAddress("TEST_OFT");
+const testOFT = optionalAddress("TEST_OFT");
 const openExecutor = envAddress("OPEN_EXECUTOR");
 const openDVN = envAddress("OPEN_DVN");
 const priceFeed = envAddress("PRICE_FEED");
 const remoteEid = envUint32("REMOTE_EID");
 const sendLib = envAddress("SEND_LIB");
 const srcOApp = optionalAddress("SRC_OAPP") ?? testOFT;
+if (srcOApp === undefined) {
+  throw new Error("SRC_OAPP or TEST_OFT is required");
+}
 
 const pathwayConfig = {
   enabled: true,
@@ -55,6 +58,9 @@ if (rateLimitCapacity !== undefined || rateLimitRefillPerSecond !== undefined) {
     throw new Error(
       "RATE_LIMIT_CAPACITY and RATE_LIMIT_REFILL_PER_SECOND must be set together",
     );
+  }
+  if (testOFT === undefined) {
+    throw new Error("TEST_OFT is required for TestOFT rate-limit changes");
   }
   await waitForTx(
     publicClient,

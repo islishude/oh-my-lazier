@@ -1,11 +1,11 @@
 import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 
-const TestOFTWorkersModule = buildModule("TestOFTWorkers", (m) => {
+const TestOFTModule = buildModule("TestOFT", (m) => {
   const deployer = m.getAccount(0);
   const tokenName = m.getParameter("tokenName", "Oh My Lazier Test OFT");
   const tokenSymbol = m.getParameter("tokenSymbol", "OMLTOFT");
   const endpoint = m.getParameter("endpoint");
-  const owner = m.getParameter("owner", deployer);
+  const delegate = m.getParameter("delegate", deployer);
   const initialRecipient = m.getParameter("initialRecipient", deployer);
   const initialSupply = m.getParameter("initialSupply", 0n);
 
@@ -13,15 +13,12 @@ const TestOFTWorkersModule = buildModule("TestOFTWorkers", (m) => {
     tokenName,
     tokenSymbol,
     endpoint,
-    owner,
+    delegate,
     initialRecipient,
     initialSupply,
   ]);
-  const priceFeed = m.contract("OpenPriceFeed", [owner]);
-  const openExecutor = m.contract("OpenExecutor", [owner, priceFeed]);
-  const openDVN = m.contract("OpenDVN", [owner, priceFeed]);
 
-  return { testOFT, priceFeed, openExecutor, openDVN };
+  return { testOFT };
 });
 
-export default TestOFTWorkersModule;
+export default TestOFTModule;

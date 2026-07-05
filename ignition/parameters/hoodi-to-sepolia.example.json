@@ -1,35 +1,11 @@
 {
-  "TestOFTPathwayConfig": {
-    "testOFT": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "OAppEndpointConfig": {
+    "oapp": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "endpoint": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "remoteEid": 40161,
     "remotePeer": "0x0000000000000000000000001111111111111111111111111111111111111111",
     "sendUln": "0xcccccccccccccccccccccccccccccccccccccccc",
     "receiveUln": "0xdddddddddddddddddddddddddddddddddddddddd",
-    "openExecutor": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "openDVN": "0xffffffffffffffffffffffffffffffffffffffff",
-    "priceFeed": "0x1234567890123456789012345678901234567890",
-    "workerPathwayConfig": {
-      "enabled": true,
-      "maxMessageSize": "10000",
-      "minLzReceiveGas": "200000",
-      "maxLzReceiveGas": "1000000"
-    },
-    "priceSnapshot": {
-      "dstGasPriceInSrcToken": "1",
-      "updatedAt": "1783082249",
-      "staleAfter": "31536000"
-    },
-    "executorFeeModel": {
-      "baseFee": "0",
-      "dstGasOverhead": "0",
-      "marginBps": 1000
-    },
-    "dvnFeeModel": {
-      "baseFee": "0",
-      "dstGasOverhead": "0",
-      "marginBps": 1000
-    },
     "receiveLibraryGracePeriod": 0,
     "sendConfig": [
       {
@@ -57,7 +33,36 @@
         "options": "0x00030100110100000000000000000000000000030d40"
       }
     ],
-    "delegate": "0x3333333333333333333333333333333333333333",
+    "delegate": "0x3333333333333333333333333333333333333333"
+  },
+  "OpenWorkersPathwayConfig": {
+    "oapp": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remoteEid": 40161,
+    "sendUln": "0xcccccccccccccccccccccccccccccccccccccccc",
+    "openExecutor": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "openDVN": "0xffffffffffffffffffffffffffffffffffffffff",
+    "priceFeed": "0x1234567890123456789012345678901234567890",
+    "workerPathwayConfig": {
+      "enabled": true,
+      "maxMessageSize": "10000",
+      "minLzReceiveGas": "200000",
+      "maxLzReceiveGas": "1000000"
+    },
+    "priceSnapshot": {
+      "dstGasPriceInSrcToken": "1",
+      "updatedAt": "1783082249",
+      "staleAfter": "31536000"
+    },
+    "executorFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "0",
+      "marginBps": 1000
+    },
+    "dvnFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "0",
+      "marginBps": 1000
+    },
     "dvnVerifier": "0x3333333333333333333333333333333333333333"
   }
 }

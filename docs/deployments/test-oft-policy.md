@@ -12,12 +12,11 @@ This policy fixes the phase-1 TestOFT deployment parameters for Ethereum Sepolia
 
 ## Ownership
 
-`OWNER` must be the testnet operations owner for all worker-side contracts deployed by the `TestOFTWorkers` Hardhat Ignition module:
+`OWNER` must be the testnet operations owner for the Sepolia/Hoodi rehearsal
+contracts deployed by the split Hardhat Ignition modules:
 
-- `TestOFT`
-- `OpenPriceFeed`
-- `OpenExecutor`
-- `OpenDVN`
+- `TestOFT` from the `TestOFT` rehearsal module
+- `OpenPriceFeed`, `OpenExecutor`, and `OpenDVN` from the `OpenWorkers` module
 
 The owner must be able to:
 
@@ -30,6 +29,27 @@ The owner must be able to:
 Do not use the worker hot signer as `OWNER` unless the migration ticket explicitly approves that temporary testnet shortcut.
 
 After deployment and before any funded migration step, run `npm run check:deployment-preflight` on each chain with `EXPECTED_OWNER` set to the approved operations owner. Set `CANARY_TREASURY` and the minimum native/TestOFT balances when canary transfers will be sent from a treasury instead of directly from the owner.
+
+For the Sepolia/Hoodi rehearsal, keep these values in the testnet deployment
+profile and generate downstream artifacts from it:
+
+```bash
+SEPOLIA_RPC_URL=... \
+HOODI_RPC_URL=... \
+npm run deploy:profile -- \
+  --profile config/deployments/sepolia-hoodi.example.json \
+  --phase render
+```
+
+The profile is the maintained operator input for owner, initial recipient,
+worker signer addresses, fee caps, worker fee models, and the environment
+variable names that hold RPC URLs and private keys. Do not copy contract
+addresses from terminal output into worker YAML or pathway parameter files by
+hand; regenerate from the Ignition deployment state instead. The normal
+configuration path uses `OAppEndpointConfig` for rehearsal OApp/Endpoint state
+and `OpenWorkersPathwayConfig` for worker-side state, generated from the same
+profile and deployment state. The generated worker YAML is an operational
+artifact under `tmp/`, not a maintained policy document.
 
 ## Initial Supply
 

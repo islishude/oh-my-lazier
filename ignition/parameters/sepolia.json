@@ -1,8 +1,13 @@
 {
-  "TestOFTWorkers": {
+  "OpenWorkers": {
+    "owner": "0x3333333333333333333333333333333333333333"
+  },
+  "TestOFT": {
     "tokenName": "Oh My Lazier Test OFT",
     "tokenSymbol": "OMLTOFT",
     "endpoint": "0x6EDCE65403992e310A62460808c4b910D972f10f",
+    "delegate": "0x3333333333333333333333333333333333333333",
+    "initialRecipient": "0x3333333333333333333333333333333333333333",
     "initialSupply": "1000000000000000000000000n"
   }
 }

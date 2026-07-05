@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   decodeExecutorConfig,
@@ -8,16 +9,17 @@ import {
   NIL_DVN_COUNT,
 } from "./lz-config.js";
 import {
-  buildTestOFTPathwayConfigParameters,
+  buildOAppEndpointConfigParameters,
+  buildOpenWorkersPathwayConfigParameters,
   OFT_MSG_TYPE_SEND,
 } from "./oft-pathway-ignition.js";
 
 function basePathwayInput() {
   return {
-    testOFT: "0x1111111111111111111111111111111111111111",
+    oapp: "0x1111111111111111111111111111111111111111",
     endpoint: "0x2222222222222222222222222222222222222222",
     remoteEid: 40449,
-    remoteOFT: "0x4444444444444444444444444444444444444444",
+    remoteOApp: "0x4444444444444444444444444444444444444444",
     sendUln: "0x5555555555555555555555555555555555555555",
     receiveUln: "0x6666666666666666666666666666666666666666",
     openExecutor: "0x7777777777777777777777777777777777777777",
@@ -47,14 +49,13 @@ function basePathwayInput() {
   } as const;
 }
 
-test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () => {
-  const rendered = buildTestOFTPathwayConfigParameters({
+test("buildOAppEndpointConfigParameters renders generic OApp endpoint config", () => {
+  const rendered = buildOAppEndpointConfigParameters({
     ...basePathwayInput(),
     delegate: "0x3333333333333333333333333333333333333333",
-    dvnVerifier: "0x9999999999999999999999999999999999999999",
-  }).TestOFTPathwayConfig;
+  }).OAppEndpointConfig;
 
-  assert.equal(rendered.testOFT, "0x1111111111111111111111111111111111111111");
+  assert.equal(rendered.oapp, "0x1111111111111111111111111111111111111111");
   assert.equal(rendered.endpoint, "0x2222222222222222222222222222222222222222");
   assert.equal(rendered.delegate, "0x3333333333333333333333333333333333333333");
   assert.equal(rendered.remoteEid, 40449);
@@ -67,31 +68,6 @@ test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () =
     rendered.receiveUln,
     "0x6666666666666666666666666666666666666666",
   );
-  assert.equal(rendered.openExecutor, "0x7777777777777777777777777777777777777777");
-  assert.equal(rendered.openDVN, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
-  assert.equal(rendered.priceFeed, "0xcccccccccccccccccccccccccccccccccccccccc");
-  assert.equal(rendered.dvnVerifier, "0x9999999999999999999999999999999999999999");
-  assert.deepEqual(rendered.workerPathwayConfig, {
-    enabled: true,
-    maxMessageSize: "10000",
-    minLzReceiveGas: "200000",
-    maxLzReceiveGas: "1000000",
-  });
-  assert.deepEqual(rendered.priceSnapshot, {
-    dstGasPriceInSrcToken: "2",
-    updatedAt: "1700000000",
-    staleAfter: "1800",
-  });
-  assert.deepEqual(rendered.executorFeeModel, {
-    baseFee: "1000",
-    dstGasOverhead: "50000",
-    marginBps: 1000,
-  });
-  assert.deepEqual(rendered.dvnFeeModel, {
-    baseFee: "2000",
-    dstGasOverhead: "150000",
-    marginBps: 500,
-  });
   assert.equal(rendered.receiveLibraryGracePeriod, 0);
   assert.deepEqual(rendered.enforcedOptions, [
     {
@@ -140,10 +116,93 @@ test("buildTestOFTPathwayConfigParameters renders endpoint and OFT config", () =
   ]);
 });
 
-test("buildTestOFTPathwayConfigParameters validates uint32 fields", () => {
+test("buildOpenWorkersPathwayConfigParameters renders worker-only config", () => {
+  const rendered = buildOpenWorkersPathwayConfigParameters({
+    ...basePathwayInput(),
+    dvnVerifier: "0x9999999999999999999999999999999999999999",
+  }).OpenWorkersPathwayConfig;
+
+  assert.equal(rendered.oapp, "0x1111111111111111111111111111111111111111");
+  assert.equal(rendered.remoteEid, 40449);
+  assert.equal(rendered.sendUln, "0x5555555555555555555555555555555555555555");
+  assert.equal(rendered.openExecutor, "0x7777777777777777777777777777777777777777");
+  assert.equal(rendered.openDVN, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(rendered.priceFeed, "0xcccccccccccccccccccccccccccccccccccccccc");
+  assert.equal(rendered.dvnVerifier, "0x9999999999999999999999999999999999999999");
+  assert.deepEqual(rendered.workerPathwayConfig, {
+    enabled: true,
+    maxMessageSize: "10000",
+    minLzReceiveGas: "200000",
+    maxLzReceiveGas: "1000000",
+  });
+  assert.deepEqual(rendered.priceSnapshot, {
+    dstGasPriceInSrcToken: "2",
+    updatedAt: "1700000000",
+    staleAfter: "1800",
+  });
+  assert.deepEqual(rendered.executorFeeModel, {
+    baseFee: "1000",
+    dstGasOverhead: "50000",
+    marginBps: 1000,
+  });
+  assert.deepEqual(rendered.dvnFeeModel, {
+    baseFee: "2000",
+    dstGasOverhead: "150000",
+    marginBps: 500,
+  });
+  assert.equal(Object.hasOwn(rendered, "sendConfig"), false);
+  assert.equal(Object.hasOwn(rendered, "enforcedOptions"), false);
+});
+
+test("committed ignition parameter examples use split modules", () => {
+  for (const file of [
+    "ignition/parameters/sepolia.json",
+    "ignition/parameters/hoodi.json",
+  ]) {
+    const parameters = readParameters(file);
+    assert.deepEqual(Object.keys(parameters).sort(), ["OpenWorkers", "TestOFT"]);
+  }
+
+  for (const file of [
+    "ignition/parameters/sepolia-to-hoodi.example.json",
+    "ignition/parameters/hoodi-to-sepolia.example.json",
+  ]) {
+    const parameters = readParameters(file);
+    assert.deepEqual(Object.keys(parameters).sort(), [
+      "OAppEndpointConfig",
+      "OpenWorkersPathwayConfig",
+    ]);
+    const oapp = parameters.OAppEndpointConfig as {
+      sendConfig: { configType: number; config: `0x${string}` }[];
+    };
+    const workers = parameters.OpenWorkersPathwayConfig as {
+      openExecutor: string;
+      openDVN: string;
+    };
+    const executorConfig = oapp.sendConfig.find(
+      (entry) => entry.configType === CONFIG_TYPE_EXECUTOR,
+    );
+    const ulnConfig = oapp.sendConfig.find(
+      (entry) => entry.configType === CONFIG_TYPE_ULN,
+    );
+    assert.ok(executorConfig);
+    assert.ok(ulnConfig);
+    assert.equal(
+      decodeExecutorConfig(executorConfig.config).executor.toLowerCase(),
+      workers.openExecutor.toLowerCase(),
+    );
+    assert.ok(
+      decodeUlnConfig(ulnConfig.config).requiredDVNs.some(
+        (dvn) => dvn.toLowerCase() === workers.openDVN.toLowerCase(),
+      ),
+    );
+  }
+});
+
+test("pathway config builders validate uint32 fields", () => {
   assert.throws(
     () =>
-      buildTestOFTPathwayConfigParameters({
+      buildOAppEndpointConfigParameters({
         ...basePathwayInput(),
         remoteEid: 2 ** 32,
       }),
@@ -151,10 +210,10 @@ test("buildTestOFTPathwayConfigParameters validates uint32 fields", () => {
   );
 });
 
-test("buildTestOFTPathwayConfigParameters validates worker gas bounds", () => {
+test("pathway config builders validate worker gas bounds", () => {
   assert.throws(
     () =>
-      buildTestOFTPathwayConfigParameters({
+      buildOpenWorkersPathwayConfigParameters({
         ...basePathwayInput(),
         minLzReceiveGas: 1_000_001n,
         maxLzReceiveGas: 1_000_000n,
@@ -163,10 +222,10 @@ test("buildTestOFTPathwayConfigParameters validates worker gas bounds", () => {
   );
 });
 
-test("buildTestOFTPathwayConfigParameters validates worker fee model", () => {
+test("pathway config builders validate worker fee model", () => {
   assert.throws(
     () =>
-      buildTestOFTPathwayConfigParameters({
+      buildOpenWorkersPathwayConfigParameters({
         ...basePathwayInput(),
         executorFeeModel: {
           ...basePathwayInput().executorFeeModel,
@@ -176,3 +235,7 @@ test("buildTestOFTPathwayConfigParameters validates worker fee model", () => {
     /executorFeeModel\.marginBps must be between 0 and 10000 bps/,
   );
 });
+
+function readParameters(file: string): Record<string, unknown> {
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+}

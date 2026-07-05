@@ -107,7 +107,7 @@ The rollback section of the migration ticket must include:
 - `npm run configure:lz-rollback -- --dry-run` output showing the exact rollback `setConfig` batches
 - restored Executor/ULN config check after rollback
 - canary transfer evidence after rollback
-- owner account able to pause/unpause TestOFT
+- owner account able to pause/unpause the affected OApp/OFT pathway
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
 - manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using txmgr automatic retry first and `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` only after automatic retry is exhausted or an operator override is approved. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.

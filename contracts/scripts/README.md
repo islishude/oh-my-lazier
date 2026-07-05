@@ -1,6 +1,6 @@
 # Contract Scripts
 
-These scripts use the compiled Hardhat artifacts and `viem`. They require `npm run compile` before execution. TypeScript scripts accept CLI flags using kebab-case names derived from the previous environment variable names, such as `--rpc-url` for `RPC_URL` and `--test-oft` for `TEST_OFT`; environment variables remain a fallback for secrets and automation. Deployment uses the Hardhat Ignition `TestOFTWorkers` module; the scripts in this directory handle post-deploy configuration, inspection, evidence checks, canaries, and rollback.
+These scripts use the compiled Hardhat artifacts and `viem`. They require `npm run compile` before execution. TypeScript scripts accept CLI flags using kebab-case names derived from the previous environment variable names, such as `--rpc-url` for `RPC_URL` and `--test-oft` for TestOFT rehearsal scripts; environment variables remain a fallback for secrets and automation. Deployment uses split Hardhat Ignition modules for rehearsal OApps, worker contracts, OApp/Endpoint config, and worker pathway config; the scripts in this directory handle post-deploy configuration, inspection, evidence checks, canaries, and rollback.
 
 Before any funded testnet migration, confirm the committed LayerZero address list still matches current official metadata:
 
@@ -70,27 +70,80 @@ npm run check:migration-evidence -- \
 
 The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Hoodi `40449`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, shared price snapshot evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
 
-Deploy the local pathway contracts with Hardhat Ignition:
+Use the profile-driven deployment entrypoint for Sepolia/Hoodi rehearsal and
+real external OApp deployments. The profile is the only operator-edited input;
+it stores owner, signer addresses, fee caps, gas limits, fee models, OApp mode,
+and environment variable names for RPC URLs/private keys, but not secret values.
 
 ```bash
 SEPOLIA_RPC_URL=... \
-PRIVATE_KEY=... \
-npm run deploy:workers -- \
-  --network sepolia \
-  --parameters ignition/parameters/sepolia.json \
-  --deployment-id sepolia-test-oft-workers
+HOODI_RPC_URL=... \
+npm run deploy:profile -- \
+  --profile config/deployments/sepolia-hoodi.example.json \
+  --phase render
 ```
+
+`mode: "test-oft-rehearsal"` deploys rehearsal `TestOFT` contracts and worker
+contracts on both chains, then can configure both OApp/Endpoint and worker
+pathways. `mode: "external-oapp"` requires each chain to provide an existing
+`oapp` address and never deploys `TestOFT`.
+
+The `render` phase is local-only. It never executes Hardhat Ignition deployment
+or configuration transactions. Each run first rewrites the bootstrap deployment
+inputs under `tmp/deploy-profile/ignition/parameters` by default:
+
+- `<chain>.open-workers.json` for the `OpenWorkers` module
+- `<chain>.test-oft.json` for the `TestOFT` module in
+  `test-oft-rehearsal` mode
+- `commands.json` and `commands.md` for operator review
+
+After writing those bootstrap files, `render` tries to load existing Ignition
+deployment state from `ignition/deployments/<deployment-id>/deployed_addresses.json`.
+It requires `OpenWorkers#OpenExecutor`, `OpenWorkers#OpenDVN`, and
+`OpenWorkers#OpenPriceFeed`; `test-oft-rehearsal` mode also requires
+`TestOFT#TestOFT`. When an older worker deployment state lacks `OpenPriceFeed`,
+the renderer reads `OpenExecutor.priceFeed()` and `OpenDVN.priceFeed()` from the
+chain and fails unless both match. Set the profile RPC URL environment variables
+before rendering from such state.
+
+If the required deployment state is not available yet, `render` stops in
+bootstrap-only mode after writing `render-status.json`. Run the deploy phases,
+then run `render` again. Once deployment state is present, the second render
+writes the direction-specific `OpenWorkersPathwayConfig` and optional
+`OAppEndpointConfig` parameter files, `deployment-state.json`, `worker.yaml`,
+and verification command inputs. Full render requires the profile RPC URL
+environment variables because the generated worker YAML embeds the resolved RPC
+URLs.
+
+Only `--apply` executes state-changing Hardhat Ignition commands:
 
 ```bash
-HOODI_RPC_URL=... \
-PRIVATE_KEY=... \
-npm run deploy:workers -- \
-  --network hoodi \
-  --parameters ignition/parameters/hoodi.json \
-  --deployment-id hoodi-test-oft-workers
+npm run deploy:profile -- \
+  --profile <profile.json> \
+  --phase all \
+  --apply
 ```
 
-Use `docs/deployments/test-oft-policy.md` for the approved TestOFT name, symbol, owner, constructor mint, and minting policy. The committed parameter files default `OWNER` and `INITIAL_RECIPIENT` to the deploying account; include explicit `owner` and `initialRecipient` module parameters when the approved operations owner or canary treasury differs from the deployer.
+Supported phases are `render`, `deploy-test-oft`, `deploy-workers`,
+`configure-workers`, `configure-oapp`, `verify`, and `all`. In
+`external-oapp` mode, `all --apply` deploys/configures/verifies only the worker
+side; OApp peer and Endpoint message-library changes require
+`--phase configure-oapp --apply` so production OApp ownership changes are
+explicit.
+
+The lower-level Ignition scripts remain available for debugging and staged
+rollouts:
+
+```bash
+npm run deploy:test-oft
+npm run deploy:open-workers
+npm run configure:open-workers-pathway
+npm run configure:oapp-endpoint
+```
+
+Use `docs/deployments/test-oft-policy.md` for the approved rehearsal TestOFT
+name, symbol, owner, constructor mint, and minting policy. Keep generated files
+under `tmp/` out of commits; rendered worker YAML may contain resolved RPC URLs.
 
 After deployment, check that the deployed contracts are still controlled by the expected operations owner and, when used, that the canary treasury has enough native token and TestOFT balance for the planned transfer:
 
@@ -134,27 +187,74 @@ npm run oft:pathway -- \
   --oft-pathway-action drain
 ```
 
-Configure the OFT and Endpoint baseline for one local direction after both sides are deployed. The render step produces the `TestOFTPathwayConfig` Ignition parameters for:
+Configure OApp/Endpoint state and worker pathway state as separate phases. The
+profile flow writes one parameter file for each side of the boundary, so real
+external OApp deployments can deploy/configure workers without implicitly
+changing OApp ownership or Endpoint message libraries.
 
-- `TestOFT.setDelegate`
-- `TestOFT.setPeer`
+`OAppEndpointConfig` attaches to the source OApp and Endpoint and executes:
+
+- `OApp.setDelegate`
+- `OApp.setPeer`
 - `EndpointV2.setSendLibrary`
 - `EndpointV2.setReceiveLibrary`
 - `EndpointV2.setConfig` for SendUln302 `ExecutorConfig` and `UlnConfig`
 - `EndpointV2.setConfig` for ReceiveUln302 `UlnConfig`
-- `TestOFT.setEnforcedOptions`
+- `OApp.setEnforcedOptions`
+
+`OpenWorkersPathwayConfig` attaches to the local worker contracts and executes:
+
 - `OpenExecutor.setAllowedSendLib` and `OpenDVN.setAllowedSendLib`
 - `OpenExecutor.setPathwayConfig` and `OpenDVN.setPathwayConfig`
 - `OpenPriceFeed.setPriceSnapshot`
 - `OpenExecutor.setFeeModel` and `OpenDVN.setFeeModel`
 - `OpenDVN.setVerifier` for the local verifier signer
 
+The profile renderer writes worker pathway parameters at
+`tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`
+and OApp/Endpoint parameters at
+`tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.oapp-endpoint.json`.
+The committed `ignition/parameters/*.json` files are static smoke/debug
+examples for the new module IDs: `sepolia.json` and `hoodi.json` contain
+`OpenWorkers` plus `TestOFT` sections, while the bidirectional
+`*.example.json` files contain `OAppEndpointConfig` plus
+`OpenWorkersPathwayConfig` sections. Regenerate real deployment parameters from
+the profile instead of editing those examples by hand.
+Run worker configuration independently:
+
+```bash
+SEPOLIA_RPC_URL=... \
+SEPOLIA_PRIVATE_KEY=... \
+npm run configure:open-workers-pathway -- \
+  --network sepolia \
+  --parameters tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json \
+  --deployment-id sepolia-open-workers-sepolia-to-hoodi-open-workers-pathway
+```
+
+Run OApp/Endpoint configuration only when the OApp owner/delegate has approved
+that change:
+
+```bash
+SEPOLIA_RPC_URL=... \
+SEPOLIA_PRIVATE_KEY=... \
+npm run configure:oapp-endpoint -- \
+  --network sepolia \
+  --parameters tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.oapp-endpoint.json \
+  --deployment-id sepolia-open-workers-sepolia-to-hoodi-oapp-endpoint
+```
+
+Repeat each command on Hoodi with the corresponding
+`hoodi-to-sepolia.*.json` parameter files, `--network hoodi`, and Hoodi private
+key environment variable.
+
+For attach-only debugging, render split parameters from explicit addresses:
+
 ```bash
 npm run render:oft-pathway-params -- \
-  --test-oft ... \
+  --oapp ... \
   --endpoint 0x6EDCE65403992e310A62460808c4b910D972f10f \
   --remote-eid 40449 \
-  --remote-oft ... \
+  --remote-oapp ... \
   --send-uln 0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE \
   --receive-uln 0xdAf00F5eE2158dD58E0d3857851c432E34A3A851 \
   --open-executor ... \
@@ -172,21 +272,18 @@ npm run render:oft-pathway-params -- \
   --executor-fee-margin-bps 1000 \
   --dvn-fee-base-fee 0 \
   --dvn-fee-dst-gas-overhead 150000 \
-  --dvn-fee-margin-bps 1000 > ignition/parameters/sepolia-to-hoodi.generated.json
+  --dvn-fee-margin-bps 1000 > ignition/parameters/sepolia-to-hoodi.split.json
 ```
 
-`--min-lz-receive-gas` defaults to `--enforced-lz-receive-gas`. `--price-snapshot-updated-at` defaults to the render script's current Unix timestamp; regenerate parameters shortly before signing so the shared price snapshot remains fresh for the approved stale window. `--dvn-verifier` defaults to the Ignition sender, and must match the destination-chain `tx_roles.dvn.signer` before switching a pathway to active DVN mode.
-
-```bash
-SEPOLIA_RPC_URL=... \
-PRIVATE_KEY=... \
-npm run configure:oft-pathway -- \
-  --network sepolia \
-  --parameters ignition/parameters/sepolia-to-hoodi.generated.json \
-  --deployment-id sepolia-to-hoodi-oft-pathway-config
-```
-
-Repeat the same flow on Hoodi with Hoodi's local endpoint/message libraries, `REMOTE_EID=40161`, the Sepolia `REMOTE_OFT`, and `--network hoodi`. `DELEGATE` is optional in the render step; when set, it must match the account that will sign the same configuration run, because the later Endpoint calls require the signer to be the OApp delegate.
+`--min-lz-receive-gas` defaults to `--enforced-lz-receive-gas`.
+`--price-snapshot-updated-at` defaults to the render script's current Unix
+timestamp; regenerate parameters shortly before signing so the shared price
+snapshot remains fresh for the approved stale window. `--dvn-verifier` defaults
+to the Ignition sender, and must match the source-chain `tx_roles.dvn.signer`
+used by that chain's OpenDVN verifier authorization.
+`DELEGATE` is optional in the render step; when set, it must match the account
+that will sign the same configuration run, because the later Endpoint calls
+require the signer to be the OApp delegate.
 
 Refresh local OpenExecutor/OpenDVN price inputs or rate limits separately when needed:
 
@@ -214,7 +311,14 @@ npm run configure:workers -- \
   --dvn-fee-margin-bps 1000
 ```
 
-For standard pathway setup, `configure:oft-pathway` already writes the worker send-lib allowlist, pathway limits, initial shared price snapshot, worker fee models, and verifier authorization. `configure:workers` remains the manual entrypoint for later shared snapshot refreshes, fee-model changes, and outbound rate limit changes. `--src-oapp` defaults to `--test-oft`. Set `--rate-limit-capacity` and `--rate-limit-refill-per-second` together to configure outbound rate limiting.
+For standard pathway setup, `configure:open-workers-pathway` writes the worker
+send-lib allowlist, pathway limits, initial shared price snapshot, worker fee
+models, and verifier authorization. `configure:workers` remains the manual
+entrypoint for later shared snapshot refreshes, fee-model changes, and outbound
+rate-limit changes. Set `--src-oapp` for external OApp deployments; rehearsal
+flows may omit it when `--test-oft` is set. Set `--rate-limit-capacity` and
+`--rate-limit-refill-per-second` together to configure TestOFT outbound rate
+limiting, which requires `--test-oft`.
 
 Inspect the current LayerZero libraries and message-lib configs for one local direction:
 
@@ -286,7 +390,10 @@ npm run configure:lz-rollback -- \
 
 Use `--dry-run` with the same `--lz-config-snapshot` before signing. The dry run validates the snapshot and prints the exact `Endpoint.setConfig` batches and encoded config bytes without requiring RPC or `--private-key`.
 
-`TestOFT` has no post-deploy owner mint function, so there is no `mint:oft` script. Sepolia's test supply is minted only by the `TestOFTWorkers` constructor parameters, and Hoodi supply is created by successful inbound OFT receive-side minting.
+`TestOFT` has no post-deploy owner mint function, so there is no `mint:oft`
+script. Sepolia's rehearsal supply is minted only by the `TestOFT` Ignition
+constructor parameters, and Hoodi supply is created by successful inbound OFT
+receive-side minting.
 
 Send a basic OFT transfer after the local and remote OFTs are peered and the pathway is configured:
 
@@ -302,7 +409,7 @@ npm run send:oft -- \
   --min-amount-ld 1000000000000000
 ```
 
-`send:oft` calls `quoteSend` first and pays the quoted native fee. By default it sends empty caller `extraOptions` and relies on the pathway's enforced `lzReceiveOption`; this avoids duplicate executor options after `configure:oft-pathway` has set enforced options. Pass `--extra-options 0x...` only for an explicitly approved custom options payload, or `--lz-receive-gas <gas>` only on pathways without enforced lzReceive options. `composeMsg` and `oftCmd` are always empty for the first phase. `send:oft-canary` remains as an alias with canary-specific logging for migration evidence flows.
+`send:oft` calls `quoteSend` first and pays the quoted native fee. By default it sends empty caller `extraOptions` and relies on the pathway's enforced `lzReceiveOption`; this avoids duplicate executor options after the configured-pathway module has set enforced options. Pass `--extra-options 0x...` only for an explicitly approved custom options payload, or `--lz-receive-gas <gas>` only on pathways without enforced lzReceive options. `composeMsg` and `oftCmd` are always empty for the first phase. `send:oft-canary` remains as an alias with canary-specific logging for migration evidence flows.
 
 Check the source-chain canary receipt after the send transaction is mined:
 
@@ -353,4 +460,8 @@ npm run check:dvn-verification -- \
 `check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. For the active OpenDVN path, the worker transaction calls `OpenDVN.submitVerification`, and OpenDVN calls `ReceiveUln302.verify` so the `PayloadVerified.dvn` field is the OpenDVN address. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
 Set `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` to also require the `PayloadVerified` PacketV1 header to match the exact migration direction and packet identity.
 
-Run the LayerZero config module or lower-level scripts on both chains with the local endpoint, local OApp, local message libraries, and local DVN addresses for each direction. `configure:oft-pathway` and `configure:lz-dvn` explicitly set `optionalDVNCount` to LayerZero's NIL value so default optional DVNs are not inherited during the first-phase required-DVN migration.
+Run the LayerZero config module or lower-level scripts on both chains with the
+local endpoint, local OApp, local message libraries, and local DVN addresses for
+each direction. `configure:oapp-endpoint` and `configure:lz-dvn` explicitly set
+`optionalDVNCount` to LayerZero's NIL value so default optional DVNs are not
+inherited during the first-phase required-DVN migration.

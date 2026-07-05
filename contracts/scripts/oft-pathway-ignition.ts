@@ -37,14 +37,49 @@ export type WorkerFeeModelParam = {
   marginBps: number;
 };
 
-export type TestOFTPathwayConfigParameters = {
-  testOFT: Address;
+export type OpenWorkersParameters = {
+  owner: Address;
+};
+
+export type OpenWorkersParameterFile = {
+  OpenWorkers: OpenWorkersParameters;
+};
+
+export type TestOFTParameters = {
+  tokenName: string;
+  tokenSymbol: string;
+  endpoint: Address;
+  delegate: Address;
+  initialRecipient: Address;
+  initialSupply: string;
+};
+
+export type TestOFTParameterFile = {
+  TestOFT: TestOFTParameters;
+};
+
+export type OAppEndpointConfigParameters = {
+  oapp: Address;
   endpoint: Address;
   delegate?: Address;
   remoteEid: number;
   remotePeer: Hex;
   sendUln: Address;
   receiveUln: Address;
+  receiveLibraryGracePeriod: number;
+  sendConfig: SetConfigEntry[];
+  receiveConfig: SetConfigEntry[];
+  enforcedOptions: EnforcedOptionParam[];
+};
+
+export type OAppEndpointConfigParameterFile = {
+  OAppEndpointConfig: OAppEndpointConfigParameters;
+};
+
+export type OpenWorkersPathwayConfigParameters = {
+  oapp: Address;
+  remoteEid: number;
+  sendUln: Address;
   openExecutor: Address;
   openDVN: Address;
   priceFeed: Address;
@@ -53,14 +88,10 @@ export type TestOFTPathwayConfigParameters = {
   priceSnapshot: PriceSnapshotParam;
   executorFeeModel: WorkerFeeModelParam;
   dvnFeeModel: WorkerFeeModelParam;
-  receiveLibraryGracePeriod: number;
-  sendConfig: SetConfigEntry[];
-  receiveConfig: SetConfigEntry[];
-  enforcedOptions: EnforcedOptionParam[];
 };
 
-export type TestOFTPathwayConfigParameterFile = {
-  TestOFTPathwayConfig: TestOFTPathwayConfigParameters;
+export type OpenWorkersPathwayConfigParameterFile = {
+  OpenWorkersPathwayConfig: OpenWorkersPathwayConfigParameters;
 };
 
 export type PriceSnapshotInput = {
@@ -75,12 +106,12 @@ export type WorkerFeeModelInput = {
   marginBps: number | bigint;
 };
 
-export function buildTestOFTPathwayConfigParameters(input: {
-  testOFT: Address;
+export type PathwayConfigInput = {
+  oapp: Address;
   endpoint: Address;
   delegate?: Address;
   remoteEid: number;
-  remoteOFT: Address;
+  remoteOApp: Address;
   sendUln: Address;
   receiveUln: Address;
   openExecutor: Address;
@@ -97,7 +128,79 @@ export function buildTestOFTPathwayConfigParameters(input: {
   dvnVerifier?: Address;
   enforcedLzReceiveGas: bigint;
   receiveLibraryGracePeriod?: number;
-}): TestOFTPathwayConfigParameterFile {
+};
+
+export function buildOpenWorkersParameters(input: {
+  owner: Address;
+}): OpenWorkersParameterFile {
+  return { OpenWorkers: { owner: input.owner } };
+}
+
+export function buildTestOFTParameters(input: {
+  tokenName: string;
+  tokenSymbol: string;
+  endpoint: Address;
+  delegate: Address;
+  initialRecipient: Address;
+  initialSupply: string;
+}): TestOFTParameterFile {
+  return {
+    TestOFT: {
+      tokenName: input.tokenName,
+      tokenSymbol: input.tokenSymbol,
+      endpoint: input.endpoint,
+      delegate: input.delegate,
+      initialRecipient: input.initialRecipient,
+      initialSupply: `${input.initialSupply}n`,
+    },
+  };
+}
+
+export function buildOAppEndpointConfigParameters(
+  input: PathwayConfigInput,
+): OAppEndpointConfigParameterFile {
+  const common = buildCommonPathwayParameters(input);
+  const params: OAppEndpointConfigParameters = {
+    oapp: input.oapp,
+    endpoint: input.endpoint,
+    remoteEid: common.remoteEid,
+    remotePeer: addressToBytes32(input.remoteOApp),
+    sendUln: input.sendUln,
+    receiveUln: input.receiveUln,
+    receiveLibraryGracePeriod: common.receiveLibraryGracePeriod,
+    sendConfig: common.sendConfig,
+    receiveConfig: common.receiveConfig,
+    enforcedOptions: common.enforcedOptions,
+  };
+  if (input.delegate !== undefined) {
+    params.delegate = input.delegate;
+  }
+  return { OAppEndpointConfig: params };
+}
+
+export function buildOpenWorkersPathwayConfigParameters(
+  input: PathwayConfigInput,
+): OpenWorkersPathwayConfigParameterFile {
+  const common = buildCommonPathwayParameters(input);
+  const params: OpenWorkersPathwayConfigParameters = {
+    oapp: input.oapp,
+    remoteEid: common.remoteEid,
+    sendUln: input.sendUln,
+    openExecutor: input.openExecutor,
+    openDVN: input.openDVN,
+    priceFeed: input.priceFeed,
+    workerPathwayConfig: common.workerPathwayConfig,
+    priceSnapshot: common.priceSnapshot,
+    executorFeeModel: common.executorFeeModel,
+    dvnFeeModel: common.dvnFeeModel,
+  };
+  if (input.dvnVerifier !== undefined) {
+    params.dvnVerifier = input.dvnVerifier;
+  }
+  return { OpenWorkersPathwayConfig: params };
+}
+
+function buildCommonPathwayParameters(input: PathwayConfigInput) {
   const remoteEid = normalizeUint32(input.remoteEid, "remoteEid");
   const maxMessageSize = normalizeUint32(
     input.maxMessageSize,
@@ -123,16 +226,9 @@ export function buildTestOFTPathwayConfigParameters(input: {
     input.layerZeroLabsDVN,
   ]);
   const encodedUlnConfig = encodeUlnConfig(ulnConfig);
-  const params: TestOFTPathwayConfigParameters = {
-    testOFT: input.testOFT,
-    endpoint: input.endpoint,
+  return {
     remoteEid,
-    remotePeer: addressToBytes32(input.remoteOFT),
-    sendUln: input.sendUln,
-    receiveUln: input.receiveUln,
-    openExecutor: input.openExecutor,
-    openDVN: input.openDVN,
-    priceFeed: input.priceFeed,
+    receiveLibraryGracePeriod,
     workerPathwayConfig: {
       enabled: true,
       maxMessageSize: maxMessageSize.toString(),
@@ -145,7 +241,6 @@ export function buildTestOFTPathwayConfigParameters(input: {
       "executorFeeModel",
     ),
     dvnFeeModel: normalizeWorkerFeeModel(input.dvnFeeModel, "dvnFeeModel"),
-    receiveLibraryGracePeriod,
     sendConfig: [
       {
         eid: remoteEid,
@@ -176,13 +271,6 @@ export function buildTestOFTPathwayConfigParameters(input: {
       },
     ],
   };
-  if (input.delegate !== undefined) {
-    params.delegate = input.delegate;
-  }
-  if (input.dvnVerifier !== undefined) {
-    params.dvnVerifier = input.dvnVerifier;
-  }
-  return { TestOFTPathwayConfig: params };
 }
 
 function normalizePriceSnapshot(

@@ -11,7 +11,10 @@ import type {
   PriceSnapshotInput,
   WorkerFeeModelInput,
 } from "./oft-pathway-ignition.js";
-import { buildTestOFTPathwayConfigParameters } from "./oft-pathway-ignition.js";
+import {
+  buildOAppEndpointConfigParameters,
+  buildOpenWorkersPathwayConfigParameters,
+} from "./oft-pathway-ignition.js";
 
 const maxMessageSizeValue = envBigInt("EXECUTOR_MAX_MESSAGE_SIZE");
 if (maxMessageSizeValue > 0xffffffffn) {
@@ -25,12 +28,12 @@ const minLzReceiveGas =
   optionalBigInt("MIN_LZ_RECEIVE_GAS") ?? enforcedLzReceiveGas;
 const priceUpdatedAt = BigInt(Math.floor(Date.now() / 1000));
 
-const parameters = buildTestOFTPathwayConfigParameters({
-  testOFT: envAddress("TEST_OFT"),
+const input = {
+  oapp: envAddress("OAPP"),
   endpoint: envAddress("ENDPOINT"),
   delegate,
   remoteEid: envUint32("REMOTE_EID"),
-  remoteOFT: envAddress("REMOTE_OFT"),
+  remoteOApp: envAddress("REMOTE_OAPP"),
   sendUln: envAddress("SEND_ULN"),
   receiveUln: envAddress("RECEIVE_ULN"),
   openExecutor: envAddress("OPEN_EXECUTOR"),
@@ -46,7 +49,12 @@ const parameters = buildTestOFTPathwayConfigParameters({
   dvnFeeModel: workerFeeModel("DVN"),
   dvnVerifier,
   enforcedLzReceiveGas,
-});
+};
+
+const parameters = {
+  ...buildOAppEndpointConfigParameters(input),
+  ...buildOpenWorkersPathwayConfigParameters(input),
+};
 
 console.log(jsonStringify(parameters));
 
