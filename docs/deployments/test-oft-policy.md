@@ -21,6 +21,7 @@ contracts deployed by the split Hardhat Ignition modules:
 The owner must be able to:
 
 - configure OFT peers
+- mint TestOFT supply with the owner-only `mint(address,uint256)` function
 - pause and unpause TestOFT send/receive pathways
 - configure outbound rate limits
 - configure worker allowlists, pathway limits, shared price snapshots, and fee models
@@ -66,9 +67,14 @@ The value above is `1,000,000 OMLTOFT` with 18 decimals. Hoodi starts with zero 
 
 ## Minting Policy
 
-`TestOFT` has no post-deploy owner mint function. The only direct mint is the optional constructor mint controlled by `INITIAL_SUPPLY`.
+`TestOFT` includes an owner-only post-deploy `mint(address,uint256)` function.
+The approved default direct mint is still the optional constructor mint
+controlled by `INITIAL_SUPPLY`; any post-deploy owner mint requires an explicit
+migration ticket approval that records the chain, recipient, amount, rationale,
+and supply-risk acceptance before signing.
 
-After deployment, supply movement is limited to the OFT burn/mint flow:
+Without an approved post-deploy owner mint, post-deploy supply movement is
+limited to the OFT burn/mint flow:
 
 - source-chain send burns local tokens
 - destination-chain receive mints local tokens

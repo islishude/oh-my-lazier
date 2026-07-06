@@ -400,10 +400,12 @@ npm run configure:lz-rollback -- \
 
 Use `--dry-run` with the same `--lz-config-snapshot` before signing. The dry run validates the snapshot and prints the exact `Endpoint.setConfig` batches and encoded config bytes without requiring RPC or `--private-key`.
 
-`TestOFT` has no post-deploy owner mint function, so there is no `mint:oft`
-script. Sepolia's rehearsal supply is minted only by the `TestOFT` Ignition
+`TestOFT` exposes an owner-only post-deploy `mint(address,uint256)` function,
+but this repository intentionally does not provide a `mint:oft` script.
+Sepolia's approved rehearsal supply is minted by the `TestOFT` Ignition
 constructor parameters, and Hoodi supply is created by successful inbound OFT
-receive-side minting.
+receive-side minting unless the deployment policy explicitly approves an owner
+mint.
 
 Send a basic OFT transfer after the local and remote OFTs are peered and the pathway is configured:
 
