@@ -418,7 +418,7 @@ async function configureSourceWorkers(
     marginBps: 0,
   };
   const dvnFeeModel = {
-    baseFee: 0n,
+    baseFee: 1n,
     dstGasOverhead: 0n,
     marginBps: 0,
   };

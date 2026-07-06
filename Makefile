@@ -66,8 +66,7 @@ test-integration:
 	}; \
 	trap cleanup EXIT INT TERM; \
 	$(INTEGRATION_COMPOSE) up -d --wait; \
-	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" go test ./go/internal/db ./go/internal/txmgr -count=1; \
-	RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test ./go/internal/signer/kms -run TestRustackKMSIntegrationSignsEthereumTransaction -count=1
+	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test -count=1 ./...; \
 
 test-kms-rustack:
 	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \

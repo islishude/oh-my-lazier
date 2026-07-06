@@ -21,6 +21,10 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { buildCanarySendParam } from "./oft-canary.js";
 import {
+  sourceWorkerFeeClaims,
+  type SourceWorkerFeeClaim,
+} from "./e2e-fee-withdrawal.js";
+import {
   assertCanaryDestinationReceipt,
   assertCanaryRecipientBalance,
   assertCanarySourceReceipt,
@@ -46,6 +50,9 @@ const deployerPrivateKey = normalizePrivateKey(
   ),
 );
 const deployer = privateKeyToAccount(deployerPrivateKey);
+const withdrawalRecipient = getAddress(
+  "0x000000000000000000000000000000000000fee1",
+);
 
 const endpointArtifact = loadArtifact(
   "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json",
@@ -58,6 +65,9 @@ const receiveUlnArtifact = loadArtifact(
 );
 const oftArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
+);
+const openExecutorArtifact = loadArtifact(
+  "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
 );
 const openDVNArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
@@ -138,7 +148,7 @@ async function runDirection(
     throw new Error(`${source.name} OFT send ${hash} failed`);
   }
 
-  assertCanarySourceReceipt({
+  const sourceStatus = assertCanarySourceReceipt({
     logs: sourceReceipt.logs,
     endpoint: source.endpoint,
     sendLib: source.sendUln,
@@ -146,7 +156,20 @@ async function runDirection(
     endpointAbi: endpointArtifact.abi,
     sendLibAbi: sendUlnArtifact.abi,
   });
-  assertSourceDVNFees(sourceReceipt.logs, source);
+  await withdrawSourceWorkerFees(
+    sourceClients,
+    source,
+    sourceWorkerFeeClaims({
+      sourceName: source.name,
+      logs: sourceReceipt.logs,
+      sendLib: source.sendUln,
+      sendLibAbi: sendUlnArtifact.abi,
+      openExecutor: source.openExecutor,
+      primaryOpenDVN: source.primaryOpenDVN,
+      secondaryOpenDVN: source.secondaryOpenDVN,
+      executorFee: sourceStatus.executorFee,
+    }),
+  );
   const packet = packetFromSourceReceipt(sourceReceipt, source);
 
   await submitSecondaryVerification(destinationClients, destination, packet);
@@ -290,40 +313,159 @@ function packetFromSourceReceipt(
   throw new Error("source receipt is missing PacketSent");
 }
 
-function assertSourceDVNFees(logs: readonly Log[], source: ChainDeployment) {
-  for (const log of logs) {
-    if (!isAddressEqual(log.address, source.sendUln)) {
-      continue;
-    }
-    if (log.topics[0] !== eventTopic(sendUlnArtifact, "DVNFeePaid")) {
-      continue;
-    }
-    const decoded = decodeEventLog({
-      abi: sendUlnArtifact.abi,
-      eventName: "DVNFeePaid",
-      data: log.data,
-      topics: mutableTopics(log.topics),
-    });
-    const args = decoded.args as unknown as {
-      requiredDVNs: Address[];
-      fees: bigint[];
-    };
-    const requiredDVNs = args.requiredDVNs.map((address) =>
-      getAddress(address).toLowerCase(),
-    );
-    for (const required of [source.primaryOpenDVN, source.secondaryOpenDVN]) {
-      if (!requiredDVNs.includes(required.toLowerCase())) {
-        throw new Error(
-          `DVNFeePaid missing source DVN ${required} on ${source.name}`,
-        );
-      }
-    }
-    if (args.fees.length < 2) {
-      throw new Error("DVNFeePaid has fewer than two fees");
-    }
-    return;
+async function withdrawSourceWorkerFees(
+  clients: Clients,
+  source: ChainDeployment,
+  claims: readonly SourceWorkerFeeClaim[],
+) {
+  for (const claim of claims) {
+    await withdrawSourceWorkerFee(clients, source, claim);
   }
-  throw new Error("source receipt is missing SendUln302 DVNFeePaid");
+}
+
+async function withdrawSourceWorkerFee(
+  clients: Clients,
+  source: ChainDeployment,
+  claim: SourceWorkerFeeClaim,
+) {
+  const ledgerBefore = await sendLibFeeBalance(
+    clients.publicClient,
+    source.sendUln,
+    claim.worker,
+  );
+  if (ledgerBefore !== claim.amount) {
+    throw new Error(
+      `${source.name} ${claim.role} fee ledger ${ledgerBefore} does not match expected ${claim.amount}`,
+    );
+  }
+  const recipientBefore = await clients.publicClient.getBalance({
+    address: withdrawalRecipient,
+  });
+  const sendLibBefore = await clients.publicClient.getBalance({
+    address: source.sendUln,
+  });
+
+  const hash = await clients.walletClient.writeContract({
+    address: claim.worker,
+    abi: workerArtifactForClaim(claim).abi,
+    functionName: "withdrawFee",
+    args: [source.sendUln, withdrawalRecipient, claim.amount],
+    account: deployer,
+    chain: null,
+  });
+  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`${source.name} ${claim.role} fee withdrawal ${hash} failed`);
+  }
+  assertFeeWithdrawalReceipt(source, claim, receipt.logs);
+
+  const ledgerAfter = await sendLibFeeBalance(
+    clients.publicClient,
+    source.sendUln,
+    claim.worker,
+  );
+  if (ledgerAfter !== 0n) {
+    throw new Error(
+      `${source.name} ${claim.role} fee ledger ${ledgerAfter} after withdrawal, want 0`,
+    );
+  }
+  const recipientAfter = await clients.publicClient.getBalance({
+    address: withdrawalRecipient,
+  });
+  if (recipientAfter - recipientBefore !== claim.amount) {
+    throw new Error(
+      `${source.name} withdrawal recipient balance delta ${
+        recipientAfter - recipientBefore
+      } does not match ${claim.amount}`,
+    );
+  }
+  const sendLibAfter = await clients.publicClient.getBalance({
+    address: source.sendUln,
+  });
+  if (sendLibBefore - sendLibAfter !== claim.amount) {
+    throw new Error(
+      `${source.name} SendUln302 balance delta ${
+        sendLibBefore - sendLibAfter
+      } does not match ${claim.amount}`,
+    );
+  }
+}
+
+async function sendLibFeeBalance(
+  publicClient: PublicClient,
+  sendLib: Address,
+  worker: Address,
+): Promise<bigint> {
+  return (await publicClient.readContract({
+    address: sendLib,
+    abi: sendUlnArtifact.abi,
+    functionName: "fees",
+    args: [worker],
+  })) as bigint;
+}
+
+function assertFeeWithdrawalReceipt(
+  source: ChainDeployment,
+  claim: SourceWorkerFeeClaim,
+  logs: readonly Log[],
+) {
+  let sawWorkerEvent = false;
+  let sawSendLibEvent = false;
+  for (const log of logs) {
+    if (
+      isAddressEqual(log.address, claim.worker) &&
+      log.topics[0] ===
+        eventTopic(workerArtifactForClaim(claim), "SendLibFeeWithdrawn")
+    ) {
+      const decoded = decodeEventLog({
+        abi: workerArtifactForClaim(claim).abi,
+        eventName: "SendLibFeeWithdrawn",
+        data: log.data,
+        topics: mutableTopics(log.topics),
+      });
+      const args = decoded.args as unknown as {
+        sendLib: Address;
+        recipient: Address;
+        amount: bigint;
+      };
+      sawWorkerEvent =
+        isAddressEqual(args.sendLib, source.sendUln) &&
+        isAddressEqual(args.recipient, withdrawalRecipient) &&
+        args.amount === claim.amount;
+    }
+    if (
+      isAddressEqual(log.address, source.sendUln) &&
+      log.topics[0] === eventTopic(sendUlnArtifact, "NativeFeeWithdrawn")
+    ) {
+      const decoded = decodeEventLog({
+        abi: sendUlnArtifact.abi,
+        eventName: "NativeFeeWithdrawn",
+        data: log.data,
+        topics: mutableTopics(log.topics),
+      });
+      const args = decoded.args as unknown as {
+        worker: Address;
+        receiver: Address;
+        amount: bigint;
+      };
+      sawSendLibEvent =
+        isAddressEqual(args.worker, claim.worker) &&
+        isAddressEqual(args.receiver, withdrawalRecipient) &&
+        args.amount === claim.amount;
+    }
+  }
+  if (!sawWorkerEvent) {
+    throw new Error(`${source.name} ${claim.role} withdrawal missing worker event`);
+  }
+  if (!sawSendLibEvent) {
+    throw new Error(
+      `${source.name} ${claim.role} withdrawal missing SendUln302 event`,
+    );
+  }
+}
+
+function workerArtifactForClaim(claim: SourceWorkerFeeClaim): Artifact {
+  return claim.role === "open_executor" ? openExecutorArtifact : openDVNArtifact;
 }
 
 async function verifiedDVNs(

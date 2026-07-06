@@ -25,11 +25,13 @@ secondary OpenDVN on both chains, generates a worker keystore, runs
 `configcheck`, and
 then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
 executor and active DVN roles; chain B uses the generated keystore signer. The
-local runner sends OFT canaries in both directions. It does not start the price
-bot; deployment writes a fresh shared OpenPriceFeed snapshot and local worker
-fee models. Pinned SendUln302 accounts returned worker fees internally without
-forwarding native value to worker `assignJob`; operators withdraw those recorded
-fees through the worker `withdrawFee(sendLib, recipient, amount)` passthrough.
+local runner sends OFT canaries in both directions and then withdraws each
+source worker's recorded SendUln302 fee through the worker
+`withdrawFee(sendLib, recipient, amount)` passthrough. It does not start the
+price bot; deployment writes a fresh shared OpenPriceFeed snapshot and local
+worker fee models. Pinned SendUln302 accounts returned worker fees internally
+without forwarding native value to worker `assignJob`; operators withdraw those
+recorded fees through the same worker passthrough.
 Set `E2E_KEYSTORE_PASSWORD` to override the generated local keystore password;
 the same value is passed to the worker container.
 
@@ -54,7 +56,9 @@ then checks that ReceiveUln302 emitted `PayloadVerified` for both OpenDVNs,
 EndpointV2 emitted `PacketDelivered`, the delivery transaction sender matches
 the destination chain's configured executor signer, the primary OpenDVN verifier
 matches the destination chain's configured DVN signer, and the recipient TestOFT
-balance increased.
+balance increased. The same run also checks each source chain's executor,
+primary OpenDVN, and secondary OpenDVN fee ledger, withdrawal events, recipient
+balance increase, SendUln302 balance decrease, and zeroed fee ledger.
 
 When registry access is unavailable, set `ANVIL_IMAGE` to a compatible local
 Foundry image. If `oh-my-lazier-worker:e2e` already exists, set

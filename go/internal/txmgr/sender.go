@@ -244,7 +244,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 		}
 		return 0, err
 	}
-	signed, err := signOutboxTx(ctx, outboxTx, target.ChainID, gasLimit, quote, target.Signer)
+	signed, err := signReplacementOutboxTx(ctx, outboxTx, target.ChainID, gasLimit, quote, target.Signer)
 	if err != nil {
 		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
 			return 0, markErr
@@ -467,7 +467,15 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 }
 
 func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer) (*types.Transaction, error) {
-	if outboxTx.Status != db.TxStatusNonceAssigned {
+	return signOutboxTxWithStatus(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusNonceAssigned)
+}
+
+func signReplacementOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer) (*types.Transaction, error) {
+	return signOutboxTxWithStatus(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusBroadcast)
+}
+
+func signOutboxTxWithStatus(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer, signableStatus string) (*types.Transaction, error) {
+	if outboxTx.Status != signableStatus {
 		return nil, fmt.Errorf("outbox tx %d status %q is not signable", outboxTx.ID, outboxTx.Status)
 	}
 	if gasLimit == 0 {
