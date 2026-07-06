@@ -26,13 +26,28 @@ func TestDecodeExecutorOptionsAcceptsSingleLzReceiveOption(t *testing.T) {
 	}
 }
 
-func TestDecodeExecutorOptionsRejectsUnsupportedOption(t *testing.T) {
-	options := testLzReceiveOptions(t, 0)
-	options[5] = 2
+func TestDecodeExecutorOptionsRejectsUnsupportedOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		optionType byte
+		want       string
+	}{
+		{name: "native drop", optionType: optionTypeNativeDrop, want: "unsupported native drop executor option"},
+		{name: "lz compose", optionType: optionTypeLzCompose, want: "unsupported lzCompose executor option"},
+		{name: "ordered execution", optionType: optionTypeOrdered, want: "unsupported ordered execution executor option"},
+		{name: "lz read", optionType: optionTypeLzRead, want: "unsupported lzRead executor option"},
+		{name: "unknown", optionType: 99, want: "unsupported executor option type 99"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options := testLzReceiveOptions(t, 0)
+			options[5] = tt.optionType
 
-	_, err := DecodeExecutorOptions(options)
-	if err == nil || !strings.Contains(err.Error(), "unsupported executor option type") {
-		t.Fatalf("DecodeExecutorOptions() error = %v, want unsupported option type", err)
+			_, err := DecodeExecutorOptions(options)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("DecodeExecutorOptions() error = %v, want %q", err, tt.want)
+			}
+		})
 	}
 }
 

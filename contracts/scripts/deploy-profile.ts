@@ -93,6 +93,7 @@ export type TxRoleProfile = {
   signer: Address;
   maxFeePerGasWei: string;
   maxPriorityFeePerGasWei: string;
+  minNativeBalanceWei: string;
 };
 
 export type PathwayProfile = {
@@ -1239,6 +1240,14 @@ function normalizeTxRole(
   if (!signerIDs.has(signer.toLowerCase())) {
     throw new Error(`${pathLabel}.signer must reference a configured signer`);
   }
+  const minNativeBalanceWei = decimalField(
+    role,
+    "minNativeBalanceWei",
+    `${pathLabel}.minNativeBalanceWei`,
+  );
+  if (minNativeBalanceWei === "0") {
+    throw new Error(`${pathLabel}.minNativeBalanceWei must be positive`);
+  }
   return {
     signer,
     maxFeePerGasWei: decimalField(
@@ -1251,6 +1260,7 @@ function normalizeTxRole(
       "maxPriorityFeePerGasWei",
       `${pathLabel}.maxPriorityFeePerGasWei`,
     ),
+    minNativeBalanceWei,
   };
 }
 
@@ -1412,10 +1422,12 @@ function renderWorkerChain(chain: ChainProfile, rpcURL: string): string {
         signer: "${chain.txRoles.executor.signer}"
         max_fee_per_gas_wei: "${chain.txRoles.executor.maxFeePerGasWei}"
         max_priority_fee_per_gas_wei: "${chain.txRoles.executor.maxPriorityFeePerGasWei}"
+        min_native_balance_wei: "${chain.txRoles.executor.minNativeBalanceWei}"
       dvn:
         signer: "${chain.txRoles.dvn.signer}"
         max_fee_per_gas_wei: "${chain.txRoles.dvn.maxFeePerGasWei}"
-        max_priority_fee_per_gas_wei: "${chain.txRoles.dvn.maxPriorityFeePerGasWei}"`;
+        max_priority_fee_per_gas_wei: "${chain.txRoles.dvn.maxPriorityFeePerGasWei}"
+        min_native_balance_wei: "${chain.txRoles.dvn.minNativeBalanceWei}"`;
 }
 
 function renderWorkerPathway(

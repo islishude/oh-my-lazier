@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"sort"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/readiness"
 	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
@@ -29,8 +31,9 @@ type RuntimeProvider interface {
 
 // RuntimeSnapshot is a process-local worker metrics snapshot.
 type RuntimeSnapshot struct {
-	Indexers    []IndexerRuntimeStat
-	LoopRetries []LoopRetryRuntimeStat
+	Indexers       []IndexerRuntimeStat
+	LoopRetries    []LoopRetryRuntimeStat
+	SignerBalances []SignerBalanceRuntimeStat
 }
 
 // IndexerRuntimeStat summarizes one in-process indexer loop.
@@ -57,12 +60,25 @@ type LoopRetryRuntimeStat struct {
 	LastRetryUnix int64
 }
 
+// SignerBalanceRuntimeStat summarizes one signer's native gas balance on one chain.
+type SignerBalanceRuntimeStat struct {
+	ChainEID                uint32
+	SignerID                string
+	PollSuccess             bool
+	BalanceWei              *big.Int
+	MinNativeBalanceWei     *big.Int
+	LastSuccessUnix         int64
+	LastErrorUnix           int64
+	LastPollDurationSeconds float64
+}
+
 // Registry records process-local worker metrics.
 type Registry struct {
-	mu          sync.Mutex
-	indexers    map[indexerKey]*IndexerRuntimeStat
-	loopRetries map[string]*LoopRetryRuntimeStat
-	now         func() time.Time
+	mu             sync.Mutex
+	indexers       map[indexerKey]*IndexerRuntimeStat
+	loopRetries    map[string]*LoopRetryRuntimeStat
+	signerBalances map[signerBalanceKey]*SignerBalanceRuntimeStat
+	now            func() time.Time
 }
 
 type indexerKey struct {
@@ -70,12 +86,18 @@ type indexerKey struct {
 	chainName string
 }
 
+type signerBalanceKey struct {
+	chainEID uint32
+	signerID string
+}
+
 // NewRegistry creates an empty process-local metrics registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		indexers:    make(map[indexerKey]*IndexerRuntimeStat),
-		loopRetries: make(map[string]*LoopRetryRuntimeStat),
-		now:         time.Now,
+		indexers:       make(map[indexerKey]*IndexerRuntimeStat),
+		loopRetries:    make(map[string]*LoopRetryRuntimeStat),
+		signerBalances: make(map[signerBalanceKey]*SignerBalanceRuntimeStat),
+		now:            time.Now,
 	}
 }
 
@@ -128,6 +150,33 @@ func (r *Registry) RecordLoopRetry(name string) {
 	stat.LastRetryUnix = r.now().Unix()
 }
 
+// RecordSignerBalance records one signer native-balance polling attempt.
+func (r *Registry) RecordSignerBalance(chainEID uint32, signerID string, balance, minNativeBalanceWei *big.Int, duration time.Duration, err error) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	key := signerBalanceKey{chainEID: chainEID, signerID: signerID}
+	stat := r.signerBalances[key]
+	if stat == nil {
+		stat = &SignerBalanceRuntimeStat{ChainEID: chainEID, SignerID: signerID}
+		r.signerBalances[key] = stat
+	}
+	stat.MinNativeBalanceWei = bigutil.Clone(minNativeBalanceWei)
+	stat.LastPollDurationSeconds = duration.Seconds()
+	now := r.now().Unix()
+	if err != nil {
+		stat.PollSuccess = false
+		stat.LastErrorUnix = now
+		return
+	}
+	stat.PollSuccess = true
+	stat.BalanceWei = bigutil.Clone(balance)
+	stat.LastSuccessUnix = now
+}
+
 // RuntimeSnapshot returns a stable copy of process-local metrics.
 func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	if r == nil {
@@ -137,14 +186,21 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	defer r.mu.Unlock()
 
 	snapshot := RuntimeSnapshot{
-		Indexers:    make([]IndexerRuntimeStat, 0, len(r.indexers)),
-		LoopRetries: make([]LoopRetryRuntimeStat, 0, len(r.loopRetries)),
+		Indexers:       make([]IndexerRuntimeStat, 0, len(r.indexers)),
+		LoopRetries:    make([]LoopRetryRuntimeStat, 0, len(r.loopRetries)),
+		SignerBalances: make([]SignerBalanceRuntimeStat, 0, len(r.signerBalances)),
 	}
 	for _, stat := range r.indexers {
 		snapshot.Indexers = append(snapshot.Indexers, *stat)
 	}
 	for _, stat := range r.loopRetries {
 		snapshot.LoopRetries = append(snapshot.LoopRetries, *stat)
+	}
+	for _, stat := range r.signerBalances {
+		copied := *stat
+		copied.BalanceWei = bigutil.Clone(stat.BalanceWei)
+		copied.MinNativeBalanceWei = bigutil.Clone(stat.MinNativeBalanceWei)
+		snapshot.SignerBalances = append(snapshot.SignerBalances, copied)
 	}
 	sort.Slice(snapshot.Indexers, func(a, b int) bool {
 		if snapshot.Indexers[a].ChainEID != snapshot.Indexers[b].ChainEID {
@@ -154,6 +210,12 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	})
 	sort.Slice(snapshot.LoopRetries, func(a, b int) bool {
 		return snapshot.LoopRetries[a].Name < snapshot.LoopRetries[b].Name
+	})
+	sort.Slice(snapshot.SignerBalances, func(a, b int) bool {
+		if snapshot.SignerBalances[a].ChainEID != snapshot.SignerBalances[b].ChainEID {
+			return snapshot.SignerBalances[a].ChainEID < snapshot.SignerBalances[b].ChainEID
+		}
+		return snapshot.SignerBalances[a].SignerID < snapshot.SignerBalances[b].SignerID
 	})
 	return snapshot
 }
@@ -331,6 +393,40 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"source_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SourceTransactions)
 		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"dvn_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.DVNTransactions)
 		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"destination_logs\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.DestinationLogs)
+	}
+	output.WriteString("# HELP laz_signer_native_balance_wei Last observed signer native-token balance in wei.\n")
+	output.WriteString("# TYPE laz_signer_native_balance_wei gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		if stat.BalanceWei != nil {
+			fmt.Fprintf(output, "laz_signer_native_balance_wei{chain_eid=%q,signer=%s} %s\n", uint32Label(stat.ChainEID), label(stat.SignerID), stat.BalanceWei.String())
+		}
+	}
+	output.WriteString("# HELP laz_signer_min_native_balance_wei Configured minimum signer native-token balance in wei.\n")
+	output.WriteString("# TYPE laz_signer_min_native_balance_wei gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		if stat.MinNativeBalanceWei != nil {
+			fmt.Fprintf(output, "laz_signer_min_native_balance_wei{chain_eid=%q,signer=%s} %s\n", uint32Label(stat.ChainEID), label(stat.SignerID), stat.MinNativeBalanceWei.String())
+		}
+	}
+	output.WriteString("# HELP laz_signer_balance_poll_success Whether the most recent signer native-balance poll succeeded.\n")
+	output.WriteString("# TYPE laz_signer_balance_poll_success gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		fmt.Fprintf(output, "laz_signer_balance_poll_success{chain_eid=%q,signer=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), boolGauge(stat.PollSuccess))
+	}
+	output.WriteString("# HELP laz_signer_balance_last_success_timestamp_seconds Unix timestamp for the most recent successful signer balance poll.\n")
+	output.WriteString("# TYPE laz_signer_balance_last_success_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		fmt.Fprintf(output, "laz_signer_balance_last_success_timestamp_seconds{chain_eid=%q,signer=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), stat.LastSuccessUnix)
+	}
+	output.WriteString("# HELP laz_signer_balance_last_error_timestamp_seconds Unix timestamp for the most recent failed signer balance poll.\n")
+	output.WriteString("# TYPE laz_signer_balance_last_error_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		fmt.Fprintf(output, "laz_signer_balance_last_error_timestamp_seconds{chain_eid=%q,signer=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), stat.LastErrorUnix)
+	}
+	output.WriteString("# HELP laz_signer_balance_last_poll_duration_seconds Duration of the most recent signer balance poll.\n")
+	output.WriteString("# TYPE laz_signer_balance_last_poll_duration_seconds gauge\n")
+	for _, stat := range snapshot.SignerBalances {
+		fmt.Fprintf(output, "laz_signer_balance_last_poll_duration_seconds{chain_eid=%q,signer=%s} %s\n", uint32Label(stat.ChainEID), label(stat.SignerID), floatGauge(stat.LastPollDurationSeconds))
 	}
 }
 

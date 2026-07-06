@@ -47,12 +47,14 @@ const requiredDocs: RequiredDoc[] = [
       "LazExecutorReceiveFailed",
       "LazWorkerManualReview",
       "LazTxOutboxFailed",
+      "LazSignerLowNativeBalance",
       "LazIndexerPollFailing",
       "LazIndexerCursorStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
       "laz_indexer_poll_success",
       "laz_indexer_cursor_last_block",
+      "laz_signer_native_balance_wei",
       "go run ./go/cmd/readinesscheck -config <worker.yaml> -format json",
     ],
   },
@@ -169,6 +171,13 @@ const requiredAlertRules: RequiredAlertRule[] = [
     anchors: [
       'laz_tx_outbox_total{status="failed",retry_state="exhausted"} > 0',
       "severity: ticket",
+    ],
+  },
+  {
+    alert: "LazSignerLowNativeBalance",
+    anchors: [
+      "laz_signer_native_balance_wei < laz_signer_min_native_balance_wei",
+      "severity: page",
     ],
   },
   {

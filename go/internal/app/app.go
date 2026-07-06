@@ -178,6 +178,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 	if len(txTargets) > 0 {
+		start("signer_balance", txmgr.NewBalanceMonitor(txTargets, runtimeMetrics, a.logger).Run)
 		start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
 	}
 	if a.cfg.ExecutorEnabled() {
@@ -337,7 +338,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			}
 			readers["coingecko"] = reader
 		}
-		amountIn, err := parseBigInt(cfg.Uniswap.AmountInWei)
+		amountIn, err := bigutil.ParsePositiveDecimal("uniswap amount_in_wei", cfg.Uniswap.AmountInWei)
 		if err != nil {
 			return nil, err
 		}
@@ -409,13 +410,20 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		chainEID uint32
 		signerID string
 	}
-	required := make(map[targetKey]map[string]txmgr.FeePolicy)
-	addPolicy := func(chainEID uint32, signerID, purpose string, policy txmgr.FeePolicy) {
+	type targetRequirement struct {
+		policies            map[string]txmgr.FeePolicy
+		minNativeBalanceWei *big.Int
+	}
+	required := make(map[targetKey]targetRequirement)
+	addPolicy := func(chainEID uint32, signerID, purpose string, policy txmgr.FeePolicy, minNativeBalanceWei *big.Int) {
 		key := targetKey{chainEID: chainEID, signerID: signerID}
-		if required[key] == nil {
-			required[key] = make(map[string]txmgr.FeePolicy)
+		requirement := required[key]
+		if requirement.policies == nil {
+			requirement.policies = make(map[string]txmgr.FeePolicy)
 		}
-		required[key][purpose] = policy
+		requirement.policies[purpose] = policy
+		requirement.minNativeBalanceWei = bigutil.Max(requirement.minNativeBalanceWei, minNativeBalanceWei)
+		required[key] = requirement
 	}
 	for _, configuredChain := range registry.All() {
 		if a.cfg.ExecutorEnabled() {
@@ -423,15 +431,23 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			if err != nil {
 				return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
 			}
-			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy)
-			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy)
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", configuredChain.TxRoles.Executor.MinNativeBalanceWei)
+			if err != nil {
+				return nil, fmt.Errorf("chain %s executor min native balance: %w", configuredChain.Name, err)
+			}
+			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy, minBalance)
+			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy, minBalance)
 		}
 		if a.cfg.Pricing.Enabled {
 			pricingPolicy, err := feePolicy(a.cfg.Pricing.MaxFeePerGasWei, a.cfg.Pricing.MaxPriorityFeePerGasWei)
 			if err != nil {
 				return nil, fmt.Errorf("pricing fee policy: %w", err)
 			}
-			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy)
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", a.cfg.Pricing.MinNativeBalanceWei)
+			if err != nil {
+				return nil, fmt.Errorf("pricing min native balance: %w", err)
+			}
+			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
 		}
 	}
 	if a.cfg.DVNEnabled() {
@@ -447,7 +463,11 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			if err != nil {
 				return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
 			}
-			addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy)
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", dstChain.TxRoles.DVN.MinNativeBalanceWei)
+			if err != nil {
+				return nil, fmt.Errorf("chain %s dvn min native balance: %w", dstChain.Name, err)
+			}
+			addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy, minBalance)
 		}
 	}
 	if len(required) == 0 {
@@ -458,12 +478,12 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		return nil, err
 	}
 	targets := make([]txmgr.Target, 0, len(required))
-	for key, policies := range required {
+	for key, requirement := range required {
 		configuredChain, err := registry.Get(key.chainEID)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateRuntimeFeePolicies(ctx, configuredChain, policies); err != nil {
+		if err := validateRuntimeFeePolicies(ctx, configuredChain, requirement.policies); err != nil {
 			return nil, err
 		}
 		configuredSigner, ok := signers[key.signerID]
@@ -471,11 +491,12 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			return nil, errors.New("configured signer was not loaded")
 		}
 		targets = append(targets, txmgr.Target{
-			ChainEID:    configuredChain.EID,
-			ChainID:     new(big.Int).Set(configuredChain.ChainID),
-			Signer:      configuredSigner,
-			Client:      configuredChain.RPC,
-			FeePolicies: cloneFeePolicies(policies),
+			ChainEID:            configuredChain.EID,
+			ChainID:             new(big.Int).Set(configuredChain.ChainID),
+			Signer:              configuredSigner,
+			Client:              configuredChain.RPC,
+			FeePolicies:         cloneFeePolicies(requirement.policies),
+			MinNativeBalanceWei: bigutil.Clone(requirement.minNativeBalanceWei),
 		})
 	}
 	return targets, nil
@@ -523,22 +544,14 @@ func loadKMSAWSConfig(ctx context.Context, cfg config.KMSSignerConfig) (aws.Conf
 	return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 }
 
-func parseBigInt(value string) (*big.Int, error) {
-	parsed, ok := new(big.Int).SetString(value, 10)
-	if !ok {
-		return nil, errors.New("invalid integer")
-	}
-	return parsed, nil
-}
-
 func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy, error) {
-	maxFeePerGas, err := parseBigInt(maxFeePerGasWei)
+	maxFeePerGas, err := bigutil.ParseDecimal("max_fee_per_gas_wei", maxFeePerGasWei)
 	if err != nil {
 		return txmgr.FeePolicy{}, err
 	}
 	var maxPriorityFeePerGas *big.Int
 	if maxPriorityFeePerGasWei != "" {
-		maxPriorityFeePerGas, err = parseBigInt(maxPriorityFeePerGasWei)
+		maxPriorityFeePerGas, err = bigutil.ParseDecimal("max_priority_fee_per_gas_wei", maxPriorityFeePerGasWei)
 		if err != nil {
 			return txmgr.FeePolicy{}, err
 		}

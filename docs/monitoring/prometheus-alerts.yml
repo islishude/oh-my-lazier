@@ -82,6 +82,15 @@ groups:
           summary: Transaction outbox has exhausted failed rows
           runbook: docs/runbooks/monitoring.md
 
+      - alert: LazSignerLowNativeBalance
+        expr: laz_signer_native_balance_wei < laz_signer_min_native_balance_wei
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Worker signer native gas balance is below configured minimum
+          runbook: docs/runbooks/monitoring.md
+
       - alert: LazIndexerPollFailing
         expr: laz_indexer_poll_success == 0
         for: 5m

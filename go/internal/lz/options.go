@@ -11,6 +11,10 @@ const (
 	optionType3          = 3
 	executorWorkerID     = 1
 	optionTypeLzReceive  = 1
+	optionTypeNativeDrop = 2
+	optionTypeLzCompose  = 3
+	optionTypeOrdered    = 4
+	optionTypeLzRead     = 5
 	lzReceiveGasBytes    = 16
 	lzReceiveValueBytes  = 16
 	lzReceiveOptionBytes = lzReceiveGasBytes + lzReceiveValueBytes
@@ -49,7 +53,7 @@ func DecodeExecutorOptions(options []byte) (ExecutorOptions, error) {
 			return ExecutorOptions{}, fmt.Errorf("unsupported worker option id %d", workerID)
 		}
 		if optionType != optionTypeLzReceive {
-			return ExecutorOptions{}, fmt.Errorf("unsupported executor option type %d", optionType)
+			return ExecutorOptions{}, unsupportedExecutorOptionError(optionType)
 		}
 		if hasLzReceive {
 			return ExecutorOptions{}, errors.New("duplicate lzReceive option")
@@ -72,4 +76,19 @@ func DecodeExecutorOptions(options []byte) (ExecutorOptions, error) {
 		return ExecutorOptions{}, errors.New("missing lzReceive option")
 	}
 	return decoded, nil
+}
+
+func unsupportedExecutorOptionError(optionType byte) error {
+	switch optionType {
+	case optionTypeNativeDrop:
+		return errors.New("unsupported native drop executor option")
+	case optionTypeLzCompose:
+		return errors.New("unsupported lzCompose executor option")
+	case optionTypeOrdered:
+		return errors.New("unsupported ordered execution executor option")
+	case optionTypeLzRead:
+		return errors.New("unsupported lzRead executor option")
+	default:
+		return fmt.Errorf("unsupported executor option type %d", optionType)
+	}
 }

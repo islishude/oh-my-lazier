@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
@@ -64,6 +65,9 @@ var ErrNonceCursorMissing = errors.New("tx nonce cursor missing")
 
 // ErrNoFailedTxRetry indicates no failed outbox row is due for automatic retry.
 var ErrNoFailedTxRetry = errors.New("no failed tx retry")
+
+// ErrNoStaleBroadcastReplacement indicates no pending broadcast row is due for automatic replacement.
+var ErrNoStaleBroadcastReplacement = errors.New("no stale broadcast replacement")
 
 // TxRequest describes a durable transaction request before nonce assignment.
 type TxRequest struct {
@@ -569,6 +573,173 @@ func (s *Store) PrepareReplacementTx(ctx context.Context, id int64) error {
 	return nil
 }
 
+// PrepareNextStaleBroadcastReplacement reserves one stale broadcast row for same-nonce replacement.
+//
+// The row remains in broadcast status with its current tx_hash so receipt
+// polling can still observe the original transaction while replacement signing
+// is attempted.
+func (s *Store) PrepareNextStaleBroadcastReplacement(ctx context.Context, chainEID uint32, signerID string, staleAfter time.Duration) (OutboxTx, error) {
+	if chainEID == 0 {
+		return OutboxTx{}, errors.New("chain eid is required")
+	}
+	if signerID == "" {
+		return OutboxTx{}, errors.New("signer id is required")
+	}
+	if staleAfter <= 0 {
+		return OutboxTx{}, errors.New("stale broadcast duration must be positive")
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var row outboxTxRow
+	err = tx.QueryRow(ctx, `
+		SELECT
+			id, chain_eid, purpose, guid, to_address, calldata, value::text,
+			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
+			nonce, tx_hash, signer_id, status, attempts,
+			failure_kind, next_retry_at, retry_of_id
+		FROM tx_outbox
+		WHERE chain_eid = $1
+			AND signer_id = $2
+			AND status = $3
+			AND tx_hash IS NOT NULL
+			AND nonce IS NOT NULL
+			AND max_fee_per_gas IS NOT NULL
+			AND attempts < $4
+			AND updated_at <= now() - $5::interval
+		ORDER BY updated_at, id
+		FOR UPDATE SKIP LOCKED
+		LIMIT 1
+	`, chainEID, signerID, TxStatusBroadcast, TxAutoRetryMaxAttempts, pgInterval(staleAfter)).Scan(
+		&row.ID,
+		&row.ChainEID,
+		&row.Purpose,
+		&row.GUID,
+		&row.ToAddress,
+		&row.Calldata,
+		&row.Value,
+		&row.GasLimit,
+		&row.MaxFeePerGas,
+		&row.MaxPriorityFeePerGas,
+		&row.Nonce,
+		&row.TxHash,
+		&row.SignerID,
+		&row.Status,
+		&row.Attempts,
+		&row.FailureKind,
+		&row.NextRetryAt,
+		&row.RetryOfID,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OutboxTx{}, ErrNoStaleBroadcastReplacement
+	}
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	outboxTx, err := row.toOutboxTx()
+	if err != nil {
+		return OutboxTx{}, err
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			attempts = attempts + 1,
+			failure_kind = NULL,
+			next_retry_at = NULL,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $1
+			AND status = $2
+			AND tx_hash = $3
+	`, outboxTx.ID, TxStatusBroadcast, outboxTx.TxHash.Bytes())
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	if tag.RowsAffected() != 1 {
+		return OutboxTx{}, fmt.Errorf("outbox tx %d is not a stale broadcast replacement candidate", outboxTx.ID)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return OutboxTx{}, err
+	}
+	outboxTx.Attempts++
+	return outboxTx, nil
+}
+
+// MarkTxReplacementBroadcast records a successfully broadcast replacement transaction.
+func (s *Store) MarkTxReplacementBroadcast(ctx context.Context, id int64, previousTxHash, replacementTxHash common.Hash, gasLimit uint64, maxFeePerGas, maxPriorityFeePerGas *big.Int) error {
+	if id <= 0 {
+		return errors.New("outbox tx id is required")
+	}
+	if previousTxHash == (common.Hash{}) {
+		return errors.New("previous tx hash is required")
+	}
+	if replacementTxHash == (common.Hash{}) {
+		return errors.New("replacement tx hash is required")
+	}
+	if gasLimit == 0 {
+		return errors.New("gas limit is required")
+	}
+	if maxFeePerGas == nil || maxFeePerGas.Sign() <= 0 {
+		return errors.New("max fee per gas is required")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET
+			status = $1,
+			tx_hash = $2,
+			gas_limit = $3,
+			max_fee_per_gas = $4,
+			max_priority_fee_per_gas = $5,
+			failure_kind = NULL,
+			next_retry_at = NULL,
+			last_error = NULL,
+			updated_at = now()
+		WHERE id = $6
+			AND status = $1
+			AND tx_hash = $7
+	`, TxStatusBroadcast, replacementTxHash.Bytes(), gasLimit, maxFeePerGas.String(), numericString(maxPriorityFeePerGas), id, previousTxHash.Bytes())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d no longer has replaceable tx hash %s", id, previousTxHash)
+	}
+	return nil
+}
+
+// MarkTxReplacementAttemptFailed records a non-terminal failed replacement attempt.
+func (s *Store) MarkTxReplacementAttemptFailed(ctx context.Context, id int64, previousTxHash common.Hash, failure error) error {
+	if id <= 0 {
+		return errors.New("outbox tx id is required")
+	}
+	if previousTxHash == (common.Hash{}) {
+		return errors.New("previous tx hash is required")
+	}
+	message := ""
+	if failure != nil {
+		message = failure.Error()
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE tx_outbox
+		SET last_error = $1, updated_at = now()
+		WHERE id = $2
+			AND status = $3
+			AND tx_hash = $4
+	`, optionalString(message), id, TxStatusBroadcast, previousTxHash.Bytes())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("outbox tx %d no longer has replaceable tx hash %s", id, previousTxHash)
+	}
+	return nil
+}
+
 // RetryFailedTx returns a failed transaction request to the queue.
 //
 // Rows that already consumed a nonce are cloned to preserve the original nonce
@@ -961,15 +1132,15 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 }
 
 func (r outboxTxRow) toQueuedOutboxTx() (QueuedOutboxTx, error) {
-	value, err := parseBigInt("value", &r.Value, true)
+	value, err := bigutil.ParseRequiredDecimal("value", &r.Value)
 	if err != nil {
 		return QueuedOutboxTx{}, err
 	}
-	maxFeePerGas, err := parseBigInt("max_fee_per_gas", r.MaxFeePerGas, false)
+	maxFeePerGas, err := bigutil.ParseOptionalDecimal("max_fee_per_gas", r.MaxFeePerGas)
 	if err != nil {
 		return QueuedOutboxTx{}, err
 	}
-	maxPriorityFeePerGas, err := parseBigInt("max_priority_fee_per_gas", r.MaxPriorityFeePerGas, false)
+	maxPriorityFeePerGas, err := bigutil.ParseOptionalDecimal("max_priority_fee_per_gas", r.MaxPriorityFeePerGas)
 	if err != nil {
 		return QueuedOutboxTx{}, err
 	}
@@ -1015,20 +1186,6 @@ func (r outboxTxRow) toQueuedOutboxTx() (QueuedOutboxTx, error) {
 		NextRetryAt:          cloneOptionalTime(r.NextRetryAt),
 		RetryOfID:            cloneOptionalInt64(r.RetryOfID),
 	}, nil
-}
-
-func parseBigInt(field string, value *string, required bool) (*big.Int, error) {
-	if value == nil {
-		if required {
-			return nil, fmt.Errorf("%s is required", field)
-		}
-		return nil, nil
-	}
-	parsed, ok := new(big.Int).SetString(*value, 10)
-	if !ok {
-		return nil, fmt.Errorf("%s is not a valid integer", field)
-	}
-	return parsed, nil
 }
 
 func parseUint64(field string, value *string) (uint64, error) {
@@ -1084,4 +1241,8 @@ func autoRetryDelay(attempts uint32) time.Duration {
 		return txAutoRetryMaxDelay
 	}
 	return delay
+}
+
+func pgInterval(duration time.Duration) string {
+	return strconv.FormatInt(int64(duration/time.Microsecond), 10) + " microseconds"
 }

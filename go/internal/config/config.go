@@ -4,12 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -95,6 +95,8 @@ type ExecutorTxRoleConfig struct {
 	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
 	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips; legacy transactions may leave it empty.
 	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	// MinNativeBalanceWei is the advisory minimum signer gas balance for monitoring.
+	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
 }
 
 // DVNTxRoleConfig controls active DVN verification transaction submission on one chain.
@@ -105,6 +107,8 @@ type DVNTxRoleConfig struct {
 	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
 	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips; shadow-only DVN configs may omit all role fields.
 	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	// MinNativeBalanceWei is the advisory minimum signer gas balance for active DVN monitoring.
+	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
 }
 
 // ChainTxRolesConfig configures local transaction roles for one chain.
@@ -135,6 +139,8 @@ type PricingConfig struct {
 	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
 	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price snapshot update transactions.
 	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	// MinNativeBalanceWei is the advisory minimum pricing signer gas balance for monitoring.
+	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
 	// BinanceBaseURL optionally overrides the Binance HTTP API endpoint.
 	BinanceBaseURL string `yaml:"binance_base_url"`
 	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTP API endpoint.
@@ -506,11 +512,11 @@ func validateExecutorTxRole(chainName string, role ExecutorTxRoleConfig, signers
 	if _, ok := signers[role.Signer.Hex()]; !ok {
 		return fmt.Errorf("chain %s tx_roles.executor.signer must reference a configured signer", chainName)
 	}
-	return validateTxFeePolicy(fmt.Sprintf("chain %s tx_roles.executor", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
+	return validateTxSubmissionPolicy(fmt.Sprintf("chain %s tx_roles.executor", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei, role.MinNativeBalanceWei)
 }
 
 func validateOptionalDVNTxRole(chainName string, role DVNTxRoleConfig) error {
-	return validateOptionalTxFeePolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
+	return validateOptionalTxSubmissionPolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei, role.MinNativeBalanceWei)
 }
 
 func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers map[string]struct{}) error {
@@ -520,7 +526,7 @@ func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers m
 	if _, ok := signers[role.Signer.Hex()]; !ok {
 		return fmt.Errorf("chain %s tx_roles.dvn.signer must reference a configured signer", chainName)
 	}
-	return validateTxFeePolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei)
+	return validateTxSubmissionPolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei, role.MinNativeBalanceWei)
 }
 
 func validateRPCURL(raw string) error {
@@ -617,7 +623,7 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.GasSpikeBps == 0 {
 		return errors.New("pricing gas_spike_bps is required")
 	}
-	if err := validateTxFeePolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei); err != nil {
+	if err := validateTxSubmissionPolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei, c.Pricing.MinNativeBalanceWei); err != nil {
 		return err
 	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
@@ -654,9 +660,8 @@ func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
 	if model.FixedFeeWei == "" {
 		return fmt.Errorf("%s.fixed_fee_wei is required", prefix)
 	}
-	fixedFee, ok := new(big.Int).SetString(model.FixedFeeWei, 10)
-	if !ok || fixedFee.Sign() < 0 {
-		return fmt.Errorf("%s.fixed_fee_wei must be a non-negative integer", prefix)
+	if _, err := bigutil.ParseNonNegativeDecimal(fmt.Sprintf("%s.fixed_fee_wei", prefix), model.FixedFeeWei); err != nil {
+		return err
 	}
 	if model.MarginBps > 10_000 {
 		return fmt.Errorf("%s.margin_bps exceeds 10000", prefix)
@@ -760,9 +765,8 @@ func validateUniswapPricingSource(chain PricingChainConfig) error {
 	if chain.Uniswap.AmountInWei == "" {
 		return fmt.Errorf("pricing chain %d uniswap amount_in_wei is required", chain.EID)
 	}
-	amountIn, ok := new(big.Int).SetString(chain.Uniswap.AmountInWei, 10)
-	if !ok || amountIn.Sign() <= 0 {
-		return fmt.Errorf("pricing chain %d uniswap amount_in_wei must be positive", chain.EID)
+	if _, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("pricing chain %d uniswap amount_in_wei", chain.EID), chain.Uniswap.AmountInWei); err != nil {
+		return err
 	}
 	if chain.Uniswap.TokenOutDecimals == 0 {
 		return fmt.Errorf("pricing chain %d uniswap token_out_decimals is required", chain.EID)
@@ -774,14 +778,14 @@ func validateTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei string
 	if maxFeePerGasWei == "" {
 		return fmt.Errorf("%s.max_fee_per_gas_wei is required", prefix)
 	}
-	maxFee, err := parsePositiveInteger(fmt.Sprintf("%s.max_fee_per_gas_wei", prefix), maxFeePerGasWei)
+	maxFee, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("%s.max_fee_per_gas_wei", prefix), maxFeePerGasWei)
 	if err != nil {
 		return err
 	}
 	if maxPriorityFeePerGasWei == "" {
 		return nil
 	}
-	priorityFee, err := parsePositiveInteger(fmt.Sprintf("%s.max_priority_fee_per_gas_wei", prefix), maxPriorityFeePerGasWei)
+	priorityFee, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("%s.max_priority_fee_per_gas_wei", prefix), maxPriorityFeePerGasWei)
 	if err != nil {
 		return err
 	}
@@ -798,10 +802,29 @@ func validateOptionalTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWe
 	return validateTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei)
 }
 
-func parsePositiveInteger(field, value string) (*big.Int, error) {
-	parsed, ok := new(big.Int).SetString(value, 10)
-	if !ok || parsed.Sign() <= 0 {
-		return nil, fmt.Errorf("%s must be a positive integer", field)
+func validateTxSubmissionPolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei, minNativeBalanceWei string) error {
+	if err := validateTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei); err != nil {
+		return err
 	}
-	return parsed, nil
+	if minNativeBalanceWei == "" {
+		return fmt.Errorf("%s.min_native_balance_wei is required", prefix)
+	}
+	if _, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("%s.min_native_balance_wei", prefix), minNativeBalanceWei); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOptionalTxSubmissionPolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei, minNativeBalanceWei string) error {
+	if maxFeePerGasWei == "" && maxPriorityFeePerGasWei == "" && minNativeBalanceWei == "" {
+		return nil
+	}
+	if err := validateOptionalTxFeePolicy(prefix, maxFeePerGasWei, maxPriorityFeePerGasWei); err != nil {
+		return err
+	}
+	if minNativeBalanceWei != "" {
+		_, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("%s.min_native_balance_wei", prefix), minNativeBalanceWei)
+		return err
+	}
+	return nil
 }

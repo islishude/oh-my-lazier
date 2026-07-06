@@ -69,6 +69,7 @@ func validConfig() config.Config {
 			AllowSanityFallback:     true,
 			MaxFeePerGasWei:         "2000000000",
 			MaxPriorityFeePerGasWei: "1000000000",
+			MinNativeBalanceWei:     "100000000000000000",
 			Chains: []config.PricingChainConfig{
 				{
 					EID:           40161,
@@ -176,6 +177,7 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 

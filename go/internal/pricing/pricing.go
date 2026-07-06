@@ -390,8 +390,8 @@ func feeModelFromConfig(cfg config.WorkerFeeModelConfig) (FeeModel, error) {
 	if cfg.FixedFeeWei == "" {
 		return FeeModel{}, errors.New("fixed_fee_wei is required")
 	}
-	fixedFee, ok := new(big.Int).SetString(cfg.FixedFeeWei, 10)
-	if !ok || fixedFee.Sign() < 0 {
+	fixedFee, err := bigutil.ParseNonNegativeDecimal("fixed_fee_wei", cfg.FixedFeeWei)
+	if err != nil {
 		return FeeModel{}, errors.New("fixed_fee_wei must be a non-negative integer")
 	}
 	model := FeeModel{FixedFee: fixedFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}

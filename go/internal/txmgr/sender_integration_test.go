@@ -660,6 +660,274 @@ func TestProcessOnceRetriesDueBroadcastFailureBeforeQueuedTx(t *testing.T) {
 	}
 }
 
+func TestProcessOnceReplacesStaleBroadcastBeforeQueuedTx(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       31,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	manager := NewWithTargets(store, []Target{target}, discardLogger())
+
+	staleID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(stale) error = %v", err)
+	}
+	if _, err := manager.ProcessNext(t.Context(), target); err != nil {
+		t.Fatalf("ProcessNext(stale) error = %v", err)
+	}
+	original, err := store.GetOutboxTx(t.Context(), staleID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(original) error = %v", err)
+	}
+	forceBroadcastStale(t, staleID)
+	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		Calldata: []byte{0x04, 0x05, 0x06},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(queued) error = %v", err)
+	}
+
+	processed, err := manager.processOnce(t.Context())
+	if err != nil {
+		t.Fatalf("processOnce(stale replacement) error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processOnce(stale replacement) processed = false, want true")
+	}
+	replacement, err := store.GetOutboxTx(t.Context(), staleID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(stale) error = %v", err)
+	}
+	if replacement.Status != db.TxStatusBroadcast {
+		t.Fatalf("replacement status = %q, want broadcast", replacement.Status)
+	}
+	if replacement.Nonce != 31 {
+		t.Fatalf("replacement nonce = %d, want 31", replacement.Nonce)
+	}
+	if replacement.Attempts != 1 {
+		t.Fatalf("replacement attempts = %d, want 1", replacement.Attempts)
+	}
+	if replacement.TxHash == original.TxHash || replacement.TxHash == (common.Hash{}) {
+		t.Fatalf("replacement tx hash = %s, want non-zero hash distinct from original %s", replacement.TxHash, original.TxHash)
+	}
+	if replacement.GasLimit != 123_456 {
+		t.Fatalf("replacement gas limit = %d, want 123456", replacement.GasLimit)
+	}
+	if replacement.MaxFeePerGas.Cmp(big.NewInt(2_200_000_000)) != 0 {
+		t.Fatalf("replacement max fee = %s, want 2200000000", replacement.MaxFeePerGas)
+	}
+	if replacement.MaxPriorityFeePerGas.Cmp(big.NewInt(1_100_000_000)) != 0 {
+		t.Fatalf("replacement priority fee = %s, want 1100000000", replacement.MaxPriorityFeePerGas)
+	}
+	stillQueued, err := store.GetOutboxTx(t.Context(), queuedID)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(queued) error = %v", err)
+	}
+	if stillQueued.Status != db.TxStatusQueued {
+		t.Fatalf("later queued status = %q, want queued", stillQueued.Status)
+	}
+	if len(client.sent) != 2 {
+		t.Fatalf("sent tx count = %d, want 2", len(client.sent))
+	}
+	sentReplacement := client.sent[1]
+	if sentReplacement.Nonce() != 31 {
+		t.Fatalf("replacement nonce = %d, want 31", sentReplacement.Nonce())
+	}
+	if sentReplacement.Gas() != 123_456 {
+		t.Fatalf("replacement gas = %d, want re-estimated gas", sentReplacement.Gas())
+	}
+	if sentReplacement.GasFeeCap().Cmp(big.NewInt(2_200_000_000)) != 0 {
+		t.Fatalf("replacement max fee = %s, want 2200000000", sentReplacement.GasFeeCap())
+	}
+	if sentReplacement.GasTipCap().Cmp(big.NewInt(1_100_000_000)) != 0 {
+		t.Fatalf("replacement priority fee = %s, want 1100000000", sentReplacement.GasTipCap())
+	}
+}
+
+func TestProcessOnceReceiptWinsOverStaleBroadcastReplacement(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       32,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+		receipts:           make(map[common.Hash]*types.Receipt),
+	}
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	manager := NewWithTargets(store, []Target{target}, discardLogger())
+
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	if _, err := manager.ProcessNext(t.Context(), target); err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	forceBroadcastStale(t, id)
+	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+
+	processed, err := manager.processOnce(t.Context())
+	if err != nil {
+		t.Fatalf("processOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processOnce() processed = false, want true")
+	}
+	confirmed, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(confirmed) error = %v", err)
+	}
+	if confirmed.Status != db.TxStatusConfirmed {
+		t.Fatalf("status = %q, want confirmed", confirmed.Status)
+	}
+	if confirmed.Attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", confirmed.Attempts)
+	}
+}
+
+func TestStaleBroadcastReplacementDefersWhenBumpExceedsCap(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       33,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	original, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(original) error = %v", err)
+	}
+	forceBroadcastStale(t, id)
+
+	lowCapPolicy := FeePolicy{
+		ConfiguredMaxFeePerGas:         big.NewInt(2_100_000_000),
+		ConfiguredMaxPriorityFeePerGas: big.NewInt(2_000_000_000),
+	}
+	_, err = manager.ProcessStaleBroadcastReplacement(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, lowCapPolicy))
+	if !errors.Is(err, ErrTxDeferred) {
+		t.Fatalf("ProcessStaleBroadcastReplacement() error = %v, want ErrTxDeferred", err)
+	}
+	deferred, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if deferred.Status != db.TxStatusBroadcast {
+		t.Fatalf("status = %q, want broadcast", deferred.Status)
+	}
+	if deferred.TxHash != original.TxHash {
+		t.Fatalf("tx hash = %s, want original %s", deferred.TxHash, original.TxHash)
+	}
+	if deferred.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", deferred.Attempts)
+	}
+	if len(client.sent) != 1 {
+		t.Fatalf("sent tx count = %d, want original only", len(client.sent))
+	}
+
+	client.receipts = map[common.Hash]*types.Receipt{
+		original.TxHash: {TxHash: original.TxHash, Status: types.ReceiptStatusSuccessful},
+	}
+	if _, err := manager.ProcessReceipts(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, lowCapPolicy), 1); err != nil {
+		t.Fatalf("ProcessReceipts(original) error = %v", err)
+	}
+	confirmed, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(confirmed) error = %v", err)
+	}
+	if confirmed.Status != db.TxStatusConfirmed {
+		t.Fatalf("status after original receipt = %q, want confirmed", confirmed.Status)
+	}
+}
+
+func TestStaleBroadcastReplacementStopsAtAttemptCap(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       34,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := New(store, discardLogger())
+
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	if _, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())); err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	forceBroadcastStale(t, id)
+	forceOutboxAttempts(t, id, db.TxAutoRetryMaxAttempts)
+
+	_, err = manager.ProcessStaleBroadcastReplacement(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if !errors.Is(err, db.ErrNoStaleBroadcastReplacement) {
+		t.Fatalf("ProcessStaleBroadcastReplacement() error = %v, want ErrNoStaleBroadcastReplacement", err)
+	}
+	capped, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if capped.Status != db.TxStatusBroadcast {
+		t.Fatalf("status = %q, want broadcast", capped.Status)
+	}
+	if capped.Attempts != db.TxAutoRetryMaxAttempts {
+		t.Fatalf("attempts = %d, want %d", capped.Attempts, db.TxAutoRetryMaxAttempts)
+	}
+}
+
 func TestProcessNextSignFailureRetainsAssignedNonce(t *testing.T) {
 	store := openTestStore(t)
 	key, err := crypto.GenerateKey()
@@ -1526,6 +1794,54 @@ func forceRetryDue(t *testing.T, id int64) {
 	}
 }
 
+func forceBroadcastStale(t *testing.T, id int64) {
+	t.Helper()
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	tag, err := pool.Exec(t.Context(), `
+		UPDATE tx_outbox
+		SET updated_at = now() - interval '16 minutes'
+		WHERE id = $1
+	`, id)
+	if err != nil {
+		t.Fatalf("force broadcast stale: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("force broadcast stale rows = %d, want 1", tag.RowsAffected())
+	}
+}
+
+func forceOutboxAttempts(t *testing.T, id int64, attempts uint32) {
+	t.Helper()
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+	pool, err := pgxpool.New(t.Context(), databaseURL)
+	if err != nil {
+		t.Fatalf("pgxpool.New() error = %v", err)
+	}
+	t.Cleanup(pool.Close)
+	tag, err := pool.Exec(t.Context(), `
+		UPDATE tx_outbox
+		SET attempts = $1
+		WHERE id = $2
+	`, attempts, id)
+	if err != nil {
+		t.Fatalf("force outbox attempts: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("force outbox attempts rows = %d, want 1", tag.RowsAffected())
+	}
+}
+
 func newTestKeystoreSigner(t *testing.T) *keystore.Signer {
 	t.Helper()
 	dir := t.TempDir()
@@ -1583,6 +1899,18 @@ type fakeChainClient struct {
 	sendErr               error
 	sent                  []*types.Transaction
 	receipts              map[common.Hash]*types.Receipt
+	balance               *big.Int
+	balanceErr            error
+}
+
+func (f *fakeChainClient) BalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error) {
+	if f.balanceErr != nil {
+		return nil, f.balanceErr
+	}
+	if f.balance == nil {
+		return big.NewInt(0), nil
+	}
+	return new(big.Int).Set(f.balance), nil
 }
 
 func (f *fakeChainClient) EstimateGas(_ context.Context, call ethereum.CallMsg) (uint64, error) {
@@ -1749,6 +2077,7 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 

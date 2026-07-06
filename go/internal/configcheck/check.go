@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
@@ -515,8 +516,8 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 }
 
 func (c *checker) compareFeeModel(path string, actual feeModel, expected config.WorkerFeeModelConfig) {
-	expectedBaseFee, ok := new(big.Int).SetString(expected.FixedFeeWei, 10)
-	if !ok {
+	expectedBaseFee, err := bigutil.ParseDecimal("configured fixed_fee_wei", expected.FixedFeeWei)
+	if err != nil {
 		c.add(path+".base_fee", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
 		return
 	}

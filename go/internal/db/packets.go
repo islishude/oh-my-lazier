@@ -8,6 +8,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -229,8 +230,8 @@ func (r packetRow) toPacketRecord() (PacketRecord, error) {
 	if len(r.PayloadHash) != common.HashLength {
 		return PacketRecord{}, fmt.Errorf("packet payload_hash has length %d", len(r.PayloadHash))
 	}
-	nonce, ok := new(big.Int).SetString(r.Nonce, 10)
-	if !ok {
+	nonce, err := bigutil.ParseDecimal("packet nonce", r.Nonce)
+	if err != nil {
 		return PacketRecord{}, fmt.Errorf("packet nonce %q is not a valid integer", r.Nonce)
 	}
 	return PacketRecord{

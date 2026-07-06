@@ -178,6 +178,47 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 	}
 }
 
+func TestTxTargetsUsesMaxSignerBalanceThresholdAcrossRoles(t *testing.T) {
+	stubReadTxHeader(t, &gethtypes.Header{})
+
+	dir := t.TempDir()
+	const password = "test-password"
+	account, err := gethkeystore.StoreKey(dir, password, gethkeystore.StandardScryptN, gethkeystore.StandardScryptP)
+	if err != nil {
+		t.Fatalf("StoreKey() error = %v", err)
+	}
+	t.Setenv("KEYSTORE_PASSWORD", password)
+
+	cfg := testConfig(account.Address.Hex(), filepath.Clean(account.URL.Path))
+	cfg.Pricing = testPricingConfig()
+	cfg.Pricing.Signer = config.MustEVMAddress(account.Address.Hex())
+	cfg.Pricing.MinNativeBalanceWei = "200000000000000000"
+	for i := range cfg.Chains {
+		cfg.Chains[i].TxRoles.Executor.MinNativeBalanceWei = "100000000000000000"
+	}
+	registry, err := chain.NewRegistry(cfg.Chains, cfg.Pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	worker, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	targets, err := worker.txTargets(t.Context(), registry)
+	if err != nil {
+		t.Fatalf("txTargets() error = %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets = %d, want 2", len(targets))
+	}
+	for _, target := range targets {
+		if target.MinNativeBalanceWei == nil || target.MinNativeBalanceWei.Cmp(big.NewInt(200_000_000_000_000_000)) != 0 {
+			t.Fatalf("target %d min native balance = %v, want pricing max threshold", target.ChainEID, target.MinNativeBalanceWei)
+		}
+	}
+}
+
 func TestNewRejectsNilLogger(t *testing.T) {
 	_, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), nil)
 	if err == nil {
@@ -469,6 +510,7 @@ func testExecutorRole(signer config.EVMAddress) config.ExecutorTxRoleConfig {
 		Signer:                  signer,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -477,6 +519,7 @@ func testDVNRole(signer config.EVMAddress) config.DVNTxRoleConfig {
 		Signer:                  signer,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -491,6 +534,7 @@ func testPricingConfig() config.PricingConfig {
 		AllowSanityFallback:     true,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 		Chains: []config.PricingChainConfig{
 			{
 				EID:           40161,

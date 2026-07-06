@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,6 +147,10 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	registry.RecordLoopRetry("txmgr")
 	registry.now = func() time.Time { return time.Unix(1_700_000_060, 0) }
 	registry.RecordLoopRetry("pricing")
+	registry.now = func() time.Time { return time.Unix(1_700_000_070, 0) }
+	registry.RecordSignerBalance(40161, "0x9999999999999999999999999999999999999999", big.NewInt(900_000_000_000_000_000), big.NewInt(1_000_000_000_000_000_000), 75*time.Millisecond, nil)
+	registry.now = func() time.Time { return time.Unix(1_700_000_080, 0) }
+	registry.RecordSignerBalance(40449, "0x8888888888888888888888888888888888888888", nil, big.NewInt(1_000_000_000_000_000_000), 125*time.Millisecond, errors.New("balance rpc unavailable"))
 	handler := Handler(fakeProvider{err: errors.New("database down")}, registry)
 	recorder := httptest.NewRecorder()
 
@@ -171,12 +176,20 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="source_transactions"} 2`,
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="dvn_transactions"} 1`,
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="destination_logs"} 3`,
+		`laz_signer_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 900000000000000000`,
+		`laz_signer_min_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1000000000000000000`,
+		`laz_signer_min_native_balance_wei{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 1000000000000000000`,
+		`laz_signer_balance_poll_success{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1`,
+		`laz_signer_balance_poll_success{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 0`,
+		`laz_signer_balance_last_success_timestamp_seconds{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1700000070`,
+		`laz_signer_balance_last_error_timestamp_seconds{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 1700000080`,
+		`laz_signer_balance_last_poll_duration_seconds{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 0.125000`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "database down") || strings.Contains(body, "rpc unavailable") {
+	if strings.Contains(body, "database down") || strings.Contains(body, "rpc unavailable") || strings.Contains(body, "balance rpc unavailable") {
 		t.Fatalf("metrics body exposes raw error text:\n%s", body)
 	}
 }

@@ -114,6 +114,7 @@ type pricingConfigGlobal struct {
 	AllowSanityFallback     bool   `json:"allow_sanity_fallback"`
 	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string `json:"max_priority_fee_per_gas_wei"`
+	MinNativeBalanceWei     string `json:"min_native_balance_wei"`
 	BinanceBaseURL          string `json:"binance_base_url"`
 	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
 	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
@@ -143,6 +144,7 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		AllowSanityFallback:     pricing.AllowSanityFallback,
 		MaxFeePerGasWei:         pricing.MaxFeePerGasWei,
 		MaxPriorityFeePerGasWei: pricing.MaxPriorityFeePerGasWei,
+		MinNativeBalanceWei:     pricing.MinNativeBalanceWei,
 		BinanceBaseURL:          pricing.BinanceBaseURL,
 		CoinMarketCapBaseURL:    pricing.CoinMarketCapBaseURL,
 		CoinMarketCapAPIKeyEnv:  pricing.CoinMarketCapAPIKeyEnv,

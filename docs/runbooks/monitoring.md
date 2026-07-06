@@ -29,6 +29,7 @@ Required alerts:
 - `LazExecutorReceiveFailed`: `laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} > 0`; ticket and inspect destination `LzReceiveAlert` logs. A failed outbox receipt may be automatically cloned for retry and restore the job to `LZ_RECEIVE_TX_ENQUEUED`; persistent `LZ_RECEIVE_FAILED` means the retry path has not yet cleared the workflow state.
 - `LazWorkerManualReview`: `laz_executor_jobs_total{status="MANUAL_REVIEW"} > 0` or `laz_dvn_jobs_total{status="MANUAL_REVIEW"} > 0`; ticket and block migration approval until reviewed.
 - `LazTxOutboxFailed`: `laz_tx_outbox_total{status="failed",retry_state="exhausted"} > 0`; ticket; page if exhausted failure count increases for active migration chains. Rows with `retry_state="retrying"` are still under txmgr automatic retry, and rows with `retry_state="superseded"` already have a retry child.
+- `LazSignerLowNativeBalance`: `laz_signer_native_balance_wei < laz_signer_min_native_balance_wei`; page after five minutes. Fund the affected worker signer before queued or replacement transactions exhaust their configured fee caps.
 - `LazIndexerPollFailing`: `laz_indexer_poll_success == 0` for a configured indexer; page after the failure persists across polling intervals.
 - `LazIndexerCursorStalled`: missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window; page if the chain is actively used.
 
@@ -56,20 +57,21 @@ Migration dashboard panels:
 - Executor job count by status.
 - DVN job count by status.
 - Tx outbox count by chain, status, and retry state.
+- Signer native balance, configured minimum native balance, balance poll success, last success timestamp, and last error timestamp by chain and signer.
 - Indexer cursor last block by chain and stream: `executor_source`, `executor_destination`, `dvn_source`, and `dvn_destination`.
 - Indexer poll success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain.
 - Worker loop retry count and last retry timestamp by loop name.
 
 Operational assumptions:
 
-- Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status and worker loop retry metrics are process-local and reset on restart.
+- Packet, job, outbox, pause, and cursor metrics are derived from committed DB state, so a worker restart should not reset that visibility. Indexer poll status, signer balance status, and worker loop retry metrics are process-local and reset on restart.
 - Worker binaries default to `-log-level info`. Run with `-log-level debug` during investigations to include normal skip/defer reasons without changing durable state.
 - The worker defaults to `-indexer-progress-log-interval 1m`. Set it to `0` to disable periodic indexer progress `Info` logs; per-poll details remain available with `-log-level debug`, and continuous progress should be monitored through `/metrics`.
 - Worker logs emit `Info` entries for durable state changes and transaction enqueue/broadcast/receipt milestones, `Warn` entries for conflict, reorg, receipt failure, signing failure, and broadcast failure paths, and `Debug` entries for normal skip/defer reasons that do not change state.
 - Indexer logs emit at most one throttled `Info` `indexer progress` entry per chain per interval, aggregating advanced streams, block range, lag, processed item counts, and duration. Per-stream `indexer stream advanced` entries and per-poll `indexer poll completed` summaries are `Debug`. Per-event entries identify source assignments and destination reconciliation events by `guid`, `src_eid`, `dst_eid`, and `tx_hash`.
 - Tx manager logs identify nonce bootstrap/claim, signing, broadcast, receipt confirmation/failure, and retry enqueue by `tx_outbox_id` or `id`, `chain_eid`, `signer`, and `purpose`; they must not include calldata, signatures, keystore contents, or raw secret-bearing config.
 - `services.executor.enabled` and `services.dvn.enabled` are process-level switches. A deployment that runs only one role should page on that role's streams and job states, while the other role's durable cursors may be absent in that process.
-- Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. `txretry` remains the manual override for exhausted rows or operator-reviewed replacement, but it is no longer the default path for ordinary failed rows.
+- Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. It also automatically replaces broadcast rows that have no receipt after 15 minutes, keeping the nonce and using the existing replacement fee bump while still respecting configured fee caps. `txretry` remains the manual override for exhausted rows or operator-reviewed replacement, but it is no longer the default path for ordinary failed rows or ordinary pending replacements.
 - If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.

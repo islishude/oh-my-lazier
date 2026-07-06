@@ -166,6 +166,29 @@ func TestValidateRejectsIncompleteExecutorFeePolicy(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMissingExecutorMinNativeBalance(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].TxRoles.Executor.MinNativeBalanceWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing executor min native balance error")
+	}
+}
+
+func TestValidateRejectsInvalidExecutorMinNativeBalance(t *testing.T) {
+	for name, value := range map[string]string{
+		"zero":    "0",
+		"invalid": "abc",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].TxRoles.Executor.MinNativeBalanceWei = value
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want invalid executor min native balance error")
+			}
+		})
+	}
+}
+
 func TestValidateRoleAwareSignerRequirements(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -294,6 +317,15 @@ func TestValidateRejectsActiveDVNWithoutFees(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsActiveDVNWithoutMinNativeBalance(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pathways[0].DVN.Mode = DVNModeActive
+	cfg.Chains[1].TxRoles.DVN.MinNativeBalanceWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing active dvn min native balance error")
+	}
+}
+
 func TestValidateAcceptsActiveDVNWithoutPriorityFeeCap(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pathways[0].DVN.Mode = DVNModeActive
@@ -340,6 +372,15 @@ func TestValidateAcceptsEnabledPricing(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsEnabledPricingWithoutMinNativeBalance(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.MinNativeBalanceWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing pricing min native balance error")
 	}
 }
 
@@ -498,10 +539,12 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
   - eid: 40449
     name: hoodi
     family: evm
@@ -515,10 +558,12 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
 pathways:
   - src_eid: 40161
     dst_eid: 40449
@@ -667,6 +712,7 @@ func validExecutorTxRoleConfig() ExecutorTxRoleConfig {
 		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -675,6 +721,7 @@ func validDVNTxRoleConfig() DVNTxRoleConfig {
 		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -689,6 +736,7 @@ func validPricingConfig() PricingConfig {
 		AllowSanityFallback:     true,
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 		Chains: []PricingChainConfig{
 			{
 				EID:           40161,

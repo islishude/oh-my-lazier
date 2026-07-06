@@ -632,10 +632,12 @@ ${chainList
         signer: "${chain.executorSigner}"
         max_fee_per_gas_wei: "100000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "1000000000000000000"
       dvn:
         signer: "${chain.dvnSigner}"
         max_fee_per_gas_wei: "100000000000"
-        max_priority_fee_per_gas_wei: "1000000000"`,
+        max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "1000000000000000000"`,
   )
   .join("\n")}
 pathways:

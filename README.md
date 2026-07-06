@@ -109,7 +109,8 @@ Phase 1 is EVM-only.
 - Address fields are parsed as EVM 20-byte hex addresses during config load.
 - Worker contract addresses remain required in every pathway config, even when this process runs only one role.
 - `services.executor.enabled` and `services.dvn.enabled` default to true when omitted; pricing remains independently controlled.
-- Tx fees are selected at send time by `txmgr`, which estimates gas, reads current RPC fee suggestions, applies configured caps, signs, broadcasts, and persists the signed fee state.
+- Tx fees are selected at send time by `txmgr`, which estimates gas, reads current RPC fee suggestions, applies configured caps, signs, broadcasts, replaces pending transactions after a 15-minute receipt timeout, and persists the signed fee state.
+- Worker metrics expose each active transaction signer's native balance against its configured `min_native_balance_wei` threshold.
 - Indexers poll confirmed block windows and persist role-specific cursors in Postgres.
 - Retryable loop errors are logged and supervised with backoff; non-retryable loop errors stop `App.Run`.
 

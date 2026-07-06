@@ -22,6 +22,7 @@ pricing:
   allow_sanity_fallback: true
   max_fee_per_gas_wei: "2000000000"
   max_priority_fee_per_gas_wei: "1000000000"
+  min_native_balance_wei: "100000000000000000"
   # coinmarketcap_api_key_env: COINMARKETCAP_API_KEY
   chains:
     - eid: 40161
@@ -69,10 +70,12 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
   - eid: 40449
     name: hoodi
     family: evm
@@ -88,10 +91,12 @@ chains:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       dvn:
         signer: "0x9999999999999999999999999999999999999999"
         max_fee_per_gas_wei: "2000000000"
         max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
 pathways:
   - src_eid: 40161
     dst_eid: 40449

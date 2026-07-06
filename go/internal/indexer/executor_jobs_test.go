@@ -57,6 +57,9 @@ func TestExecutorJobFromAssignmentMarksUnsupportedOptionsManualReview(t *testing
 	if !strings.Contains(job.LastError, "unsupported executor options") {
 		t.Fatalf("LastError = %q, want unsupported options detail", job.LastError)
 	}
+	if !strings.Contains(job.LastError, "unsupported native drop executor option") {
+		t.Fatalf("LastError = %q, want native drop detail", job.LastError)
+	}
 }
 
 func TestExecutorJobFromAssignmentRejectsMismatchedSender(t *testing.T) {

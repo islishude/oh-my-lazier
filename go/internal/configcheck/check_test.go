@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
@@ -481,6 +482,7 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -489,6 +491,7 @@ func testDVNRole() config.DVNTxRoleConfig {
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
@@ -525,8 +528,8 @@ func verifierKey(openDVN, verifier common.Address) string {
 
 func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
 	t.Helper()
-	baseFee, ok := new(big.Int).SetString(cfg.FixedFeeWei, 10)
-	if !ok {
+	baseFee, err := bigutil.ParseDecimal("fixed_fee_wei", cfg.FixedFeeWei)
+	if err != nil {
 		t.Fatalf("invalid fixed fee %q", cfg.FixedFeeWei)
 	}
 	return feeModel{BaseFee: baseFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}

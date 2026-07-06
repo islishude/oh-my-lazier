@@ -15,11 +15,12 @@ const defaultPollInterval = 5 * time.Second
 
 // Target binds one configured chain RPC client to the signer that should consume its tx_outbox rows.
 type Target struct {
-	ChainEID    uint32
-	ChainID     *big.Int
-	Signer      signer.Signer
-	Client      ChainClient
-	FeePolicies map[string]FeePolicy
+	ChainEID            uint32
+	ChainID             *big.Int
+	Signer              signer.Signer
+	Client              ChainClient
+	FeePolicies         map[string]FeePolicy
+	MinNativeBalanceWei *big.Int
 }
 
 // Manager owns transaction outbox processing and nonce assignment.
@@ -84,6 +85,19 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 		} else {
 			processed = true
 			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			continue
+		}
+		id, err = m.ProcessStaleBroadcastReplacement(ctx, target)
+		if errors.Is(err, db.ErrNoStaleBroadcastReplacement) {
+			// No stale pending broadcast; failed retries may still be due.
+		} else if errors.Is(err, ErrTxDeferred) {
+			// Replacement fee would exceed configured caps; keep polling the original tx hash.
+			continue
+		} else if err != nil {
+			return processed, err
+		} else {
+			processed = true
+			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
 			continue
 		}
 		id, err = m.ProcessFailedRetry(ctx, target)

@@ -14,7 +14,7 @@ For each deployment environment, record:
 - allowed chains and purposes: Executor, DVN, price bot
 - key owner and emergency contact
 - rotation procedure and rollback signer
-- funding policy for native gas
+- funding policy for native gas and configured `min_native_balance_wei`
 
 The configured signer address must match the expected address in worker config and migration tickets. Never infer approval from a successful transaction alone.
 
@@ -36,7 +36,8 @@ Implementation evidence:
 
 - `go/internal/config.Config.Validate` rejects unknown signer references only for roles enabled in this process: executor, active DVN, and pricing.
 - `go/internal/app.App.txTargets` loads configured signers only when at least one enabled role can submit transactions, and creates one tx manager target per required signer per chain with per-purpose fee policy so executor, DVN, and pricing caps do not overwrite each other when they share a signer.
-- `go/internal/db` stores per-chain signer nonce cursors in Postgres. The tx manager initializes a missing cursor from RPC pending nonce on first use, then increments only the local cursor. Automatic failed-transaction retry follows the same cursor: replacement keeps the assigned nonce, while fresh receipt retry consumes the next local nonce. After bootstrap, do not use the same signer account from another broadcaster.
+- `go/internal/db` stores per-chain signer nonce cursors in Postgres. The tx manager initializes a missing cursor from RPC pending nonce on first use, then increments only the local cursor. Automatic failed-transaction retry follows the same cursor: replacement keeps the assigned nonce, while fresh receipt retry consumes the next local nonce. Broadcast rows without a receipt for 15 minutes are automatically re-signed with the same nonce and replacement fee bump until the attempt cap is reached. After bootstrap, do not use the same signer account from another broadcaster.
+- `go/internal/txmgr.BalanceMonitor` polls every active transaction target signer and exposes `laz_signer_native_balance_wei`, `laz_signer_min_native_balance_wei`, and balance poll status from `/metrics`.
 - `go/internal/app.loadKMSAWSConfig` uses the AWS SDK `config.LoadDefaultConfig` path with the configured region.
 - `go/internal/signer/kms.Signer.ValidateKey` rejects non-`ECC_SECG_P256K1` keys.
 - `go/internal/signer/kms.Signer.SignHash` parses DER signatures, normalizes low-S, and recovers the configured Ethereum address.
@@ -70,7 +71,7 @@ Implementation evidence:
 - When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.
-- Confirm each configured signer has native gas on the chains assigned to enabled executor, active DVN, or pricing purposes.
+- Confirm each configured signer has native gas above the role's `min_native_balance_wei` threshold on the chains assigned to enabled executor, active DVN, or pricing purposes.
 - Confirm break-glass operators can pause OFT sends and worker assignments without needing private key material from the worker host.
 
 ## Rotation Procedure

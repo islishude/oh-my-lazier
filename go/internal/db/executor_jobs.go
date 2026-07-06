@@ -8,6 +8,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
@@ -73,8 +74,8 @@ func (s *Store) GetExecutorJob(ctx context.Context, guid common.Hash) (ExecutorJ
 		return ExecutorJobRecord{}, err
 	}
 	if feeText != nil {
-		fee, ok := new(big.Int).SetString(*feeText, 10)
-		if !ok {
+		fee, err := bigutil.ParseDecimal("executor assigned fee", *feeText)
+		if err != nil {
 			return ExecutorJobRecord{}, fmt.Errorf("executor assigned fee %q is invalid", *feeText)
 		}
 		job.AssignedFee = fee
@@ -412,11 +413,11 @@ func (r executorWorkRow) toExecutorWorkItem() (ExecutorWorkItem, error) {
 	if len(r.PayloadHash) != common.HashLength {
 		return ExecutorWorkItem{}, fmt.Errorf("executor work payload_hash has length %d", len(r.PayloadHash))
 	}
-	nonce, err := parseBigInt("packet nonce", &r.Nonce, true)
+	nonce, err := bigutil.ParseRequiredDecimal("packet nonce", &r.Nonce)
 	if err != nil {
 		return ExecutorWorkItem{}, err
 	}
-	assignedFee, err := parseBigInt("assigned_fee", r.AssignedFee, false)
+	assignedFee, err := bigutil.ParseOptionalDecimal("assigned_fee", r.AssignedFee)
 	if err != nil {
 		return ExecutorWorkItem{}, err
 	}

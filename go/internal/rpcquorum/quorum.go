@@ -16,6 +16,7 @@ import (
 
 var _ interface {
 	BlockNumber(context.Context) (uint64, error)
+	BalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error)
 	CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
 	ChainID(context.Context) (*big.Int, error)
 	CheckHead(context.Context) (HeadResult, error)
@@ -245,6 +246,19 @@ func (c *Client) ChainID(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	return client.ChainID(ctx)
+}
+
+// BalanceAt returns the first healthy provider's native token balance for an account.
+func (c *Client) BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error) {
+	index, err := c.firstHealthyProvider()
+	if err != nil {
+		return nil, err
+	}
+	client, err := c.providerClient(ctx, index)
+	if err != nil {
+		return nil, err
+	}
+	return client.BalanceAt(ctx, account, blockNumber)
 }
 
 // ValidateChainID verifies every configured provider reports the expected EVM chain ID.

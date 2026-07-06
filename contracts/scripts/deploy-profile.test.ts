@@ -58,6 +58,16 @@ test("normalizeProfile rejects tx roles that do not reference a configured signe
   );
 });
 
+test("normalizeProfile rejects zero tx role minimum native balance", () => {
+  const input = baseProfile();
+  input.chains[0].txRoles.executor.minNativeBalanceWei = "0";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /txRoles\.executor\.minNativeBalanceWei must be positive/,
+  );
+});
+
 test("normalizeProfile rejects Hardhat private key env injection", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).privateKeyEnv = "SEPOLIA_PRIVATE_KEY";
@@ -248,6 +258,7 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(yaml, /source_workers:\n      open_executor: "0x1111111111111111111111111111111111111112"/);
   assert.match(yaml, /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/);
   assert.match(yaml, /signer: "0x2222222222222222222222222222222222222222"/);
+  assert.match(yaml, /min_native_balance_wei: "100000000000000000"/);
 });
 
 test("parameter files split TestOFT rehearsal from OpenWorkers deployment", () => {
@@ -432,11 +443,13 @@ function baseProfile() {
             signer: "0x2222222222222222222222222222222222222222",
             maxFeePerGasWei: "100000000000",
             maxPriorityFeePerGasWei: "1000000000",
+            minNativeBalanceWei: "100000000000000000",
           },
           dvn: {
             signer: "0x2222222222222222222222222222222222222222",
             maxFeePerGasWei: "100000000000",
             maxPriorityFeePerGasWei: "1000000000",
+            minNativeBalanceWei: "100000000000000000",
           },
         },
       },
@@ -458,11 +471,13 @@ function baseProfile() {
             signer: "0x2222222222222222222222222222222222222222",
             maxFeePerGasWei: "100000000000",
             maxPriorityFeePerGasWei: "1000000000",
+            minNativeBalanceWei: "100000000000000000",
           },
           dvn: {
             signer: "0x2222222222222222222222222222222222222222",
             maxFeePerGasWei: "100000000000",
             maxPriorityFeePerGasWei: "1000000000",
+            minNativeBalanceWei: "100000000000000000",
           },
         },
       },

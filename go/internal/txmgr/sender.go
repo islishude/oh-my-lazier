@@ -1,11 +1,13 @@
 package txmgr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -25,10 +27,13 @@ const (
 
 	replacementBumpNumerator   = int64(110)
 	replacementBumpDenominator = int64(100)
+
+	staleBroadcastReplacementAfter = 15 * time.Minute
 )
 
 // ChainClient is the tx manager's RPC boundary for first-use nonce bootstrap, fee reads, and broadcasts.
 type ChainClient interface {
+	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
@@ -200,6 +205,67 @@ func (m *Manager) ProcessFailedRetry(ctx context.Context, target Target) (int64,
 	return m.store.PrepareNextFailedTxRetry(ctx, target.ChainEID, target.Signer.Address().Hex())
 }
 
+// ProcessStaleBroadcastReplacement signs and broadcasts one long-pending same-nonce replacement.
+func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target Target) (int64, error) {
+	if target.ChainID == nil || target.ChainID.Sign() <= 0 {
+		return 0, errors.New("chain id is required")
+	}
+	if target.Signer == nil {
+		return 0, errors.New("target signer is required")
+	}
+	if target.Client == nil {
+		return 0, errors.New("target client is required")
+	}
+	signerID := target.Signer.Address().Hex()
+	outboxTx, err := m.store.PrepareNextStaleBroadcastReplacement(ctx, target.ChainEID, signerID, staleBroadcastReplacementAfter)
+	if err != nil {
+		return 0, err
+	}
+	queued := queuedFromOutbox(outboxTx)
+	policy, ok := target.FeePolicies[outboxTx.Purpose]
+	if !ok {
+		return 0, fmt.Errorf("missing fee policy for purpose %q", outboxTx.Purpose)
+	}
+	gasLimit, err := estimateGas(ctx, queued, target.Signer.Address(), target.Client)
+	if err != nil {
+		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+			return 0, markErr
+		}
+		m.logger.Warn("failed stale broadcast replacement gas estimate", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", outboxTx.TxHash, "error", err.Error())
+		return outboxTx.ID, nil
+	}
+	quote, err := quoteFee(ctx, queued, policy, target.Client)
+	if err != nil {
+		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+			return 0, markErr
+		}
+		if errors.Is(err, ErrTxDeferred) {
+			return 0, ErrTxDeferred
+		}
+		return 0, err
+	}
+	signed, err := signOutboxTx(ctx, outboxTx, target.ChainID, gasLimit, quote, target.Signer)
+	if err != nil {
+		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+			return 0, markErr
+		}
+		m.logger.Warn("failed stale broadcast replacement signing", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", outboxTx.TxHash, "error", err.Error())
+		return outboxTx.ID, nil
+	}
+	if err := target.Client.SendTransaction(ctx, signed); err != nil {
+		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+			return 0, markErr
+		}
+		m.logger.Warn("failed stale broadcast replacement broadcast", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", signed.Hash(), "previous_tx_hash", outboxTx.TxHash, "error", err.Error())
+		return outboxTx.ID, nil
+	}
+	if err := m.store.MarkTxReplacementBroadcast(ctx, outboxTx.ID, outboxTx.TxHash, signed.Hash(), gasLimit, quote.MaxFeePerGas, quote.MaxPriorityFeePerGas); err != nil {
+		return 0, err
+	}
+	m.logger.Info("broadcast stale tx replacement", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", signed.Hash(), "previous_tx_hash", outboxTx.TxHash)
+	return outboxTx.ID, nil
+}
+
 func (m *Manager) applyWorkflowReceipt(ctx context.Context, outboxTx db.OutboxTx, success bool) error {
 	if len(outboxTx.GUID) != common.HashLength {
 		return nil
@@ -299,6 +365,30 @@ func estimateGas(ctx context.Context, queued db.QueuedOutboxTx, from common.Addr
 	return gasLimit, nil
 }
 
+func queuedFromOutbox(outboxTx db.OutboxTx) db.QueuedOutboxTx {
+	nonce := outboxTx.Nonce
+	return db.QueuedOutboxTx{
+		ID:                   outboxTx.ID,
+		ChainEID:             outboxTx.ChainEID,
+		Purpose:              outboxTx.Purpose,
+		GUID:                 bytes.Clone(outboxTx.GUID),
+		To:                   outboxTx.To,
+		Calldata:             bytes.Clone(outboxTx.Calldata),
+		Value:                bigutil.Clone(outboxTx.Value),
+		GasLimit:             outboxTx.GasLimit,
+		MaxFeePerGas:         bigutil.Clone(outboxTx.MaxFeePerGas),
+		MaxPriorityFeePerGas: bigutil.Clone(outboxTx.MaxPriorityFeePerGas),
+		Nonce:                &nonce,
+		TxHash:               outboxTx.TxHash,
+		SignerID:             outboxTx.SignerID,
+		Status:               db.TxStatusQueued,
+		Attempts:             outboxTx.Attempts,
+		FailureKind:          outboxTx.FailureKind,
+		NextRetryAt:          outboxTx.NextRetryAt,
+		RetryOfID:            outboxTx.RetryOfID,
+	}
+}
+
 func quoteFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, client ChainClient) (feeQuote, error) {
 	if policy.ConfiguredMaxFeePerGas == nil || policy.ConfiguredMaxFeePerGas.Sign() <= 0 {
 		return feeQuote{}, errors.New("max fee per gas cap is required")
@@ -329,7 +419,7 @@ func quoteLegacyFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePol
 		if queued.MaxFeePerGas.Sign() <= 0 {
 			return feeQuote{}, fmt.Errorf("outbox tx %d previous max fee per gas must be positive for replacement", queued.ID)
 		}
-		price = maxBigInt(price, bumpFee(queued.MaxFeePerGas))
+		price = bigutil.Max(price, bumpFee(queued.MaxFeePerGas))
 	}
 	if price.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
 		return feeQuote{}, ErrTxDeferred
@@ -351,7 +441,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	if suggestedTip == nil || suggestedTip.Sign() <= 0 {
 		return feeQuote{}, fmt.Errorf("outbox tx %d priority fee per gas is required", queued.ID)
 	}
-	tip := minBigInt(suggestedTip, policy.ConfiguredMaxPriorityFeePerGas)
+	tip := bigutil.Min(suggestedTip, policy.ConfiguredMaxPriorityFeePerGas)
 	hasPreviousFee := queued.Nonce != nil && (queued.MaxFeePerGas != nil || queued.MaxPriorityFeePerGas != nil)
 	if hasPreviousFee {
 		if queued.MaxFeePerGas == nil || queued.MaxFeePerGas.Sign() <= 0 {
@@ -360,7 +450,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 		if queued.MaxPriorityFeePerGas == nil || queued.MaxPriorityFeePerGas.Sign() <= 0 {
 			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas must be positive for replacement", queued.ID)
 		}
-		tip = maxBigInt(tip, bumpFee(queued.MaxPriorityFeePerGas))
+		tip = bigutil.Max(tip, bumpFee(queued.MaxPriorityFeePerGas))
 		if tip.Cmp(policy.ConfiguredMaxPriorityFeePerGas) > 0 {
 			return feeQuote{}, ErrTxDeferred
 		}
@@ -368,7 +458,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 	feeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	feeCap.Add(feeCap, tip)
 	if hasPreviousFee {
-		feeCap = maxBigInt(feeCap, bumpFee(queued.MaxFeePerGas))
+		feeCap = bigutil.Max(feeCap, bumpFee(queued.MaxFeePerGas))
 	}
 	if feeCap.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
 		return feeQuote{}, ErrTxDeferred
@@ -455,18 +545,4 @@ func bumpFee(value *big.Int) *big.Int {
 	bumped.Add(bumped, big.NewInt(replacementBumpDenominator-1))
 	bumped.Div(bumped, big.NewInt(replacementBumpDenominator))
 	return bumped
-}
-
-func minBigInt(left, right *big.Int) *big.Int {
-	if left.Cmp(right) <= 0 {
-		return bigutil.Clone(left)
-	}
-	return bigutil.Clone(right)
-}
-
-func maxBigInt(left, right *big.Int) *big.Int {
-	if left.Cmp(right) >= 0 {
-		return bigutil.Clone(left)
-	}
-	return bigutil.Clone(right)
 }

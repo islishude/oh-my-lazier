@@ -46,12 +46,14 @@
         "executor": {
           "signer": "0x2222222222222222222222222222222222222222",
           "maxFeePerGasWei": "100000000000",
-          "maxPriorityFeePerGasWei": "1000000000"
+          "maxPriorityFeePerGasWei": "1000000000",
+          "minNativeBalanceWei": "100000000000000000"
         },
         "dvn": {
           "signer": "0x2222222222222222222222222222222222222222",
           "maxFeePerGasWei": "100000000000",
-          "maxPriorityFeePerGasWei": "1000000000"
+          "maxPriorityFeePerGasWei": "1000000000",
+          "minNativeBalanceWei": "100000000000000000"
         }
       }
     },
@@ -72,12 +74,14 @@
         "executor": {
           "signer": "0x2222222222222222222222222222222222222222",
           "maxFeePerGasWei": "100000000000",
-          "maxPriorityFeePerGasWei": "1000000000"
+          "maxPriorityFeePerGasWei": "1000000000",
+          "minNativeBalanceWei": "100000000000000000"
         },
         "dvn": {
           "signer": "0x2222222222222222222222222222222222222222",
           "maxFeePerGasWei": "100000000000",
-          "maxPriorityFeePerGasWei": "1000000000"
+          "maxPriorityFeePerGasWei": "1000000000",
+          "minNativeBalanceWei": "100000000000000000"
         }
       }
     }

@@ -67,9 +67,10 @@ Required runtime checks:
 
 - `/healthz` returns `200`.
 - `/readyz` returns `200`.
-- `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, indexer cursor, and indexer polling metrics.
+- `/metrics` exposes chain pause, pathway pause, packet, executor, DVN, tx outbox, signer native balance, indexer cursor, and indexer polling metrics.
 - No chain or pathway is paused before the migration begins.
 - No active-chain tx outbox row is stuck in `failed` with `retry_state="exhausted"`.
+- Every active transaction signer reports `laz_signer_native_balance_wei >= laz_signer_min_native_balance_wei`.
 - For deployments with `services.dvn.enabled: true`, no DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
 - For deployments with `services.executor.enabled: true`, no executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
 - Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`.
@@ -110,7 +111,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause the affected OApp/OFT pathway
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
-- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using txmgr automatic retry first and `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` only after automatic retry is exhausted or an operator override is approved. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.
+- manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using txmgr automatic retry and 15-minute pending replacement first. Run `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` only after automatic retry is exhausted or an operator override is approved. `replace` keeps the nonce, re-reads the latest RPC header/gas suggestions, and signs only when the current fee is at least 10% above the previous signed fee without exceeding the configured cap. `retry-failed` preserves any failed row that already consumed a nonce and returns a cloned queued outbox row in the command JSON; use the returned `after.id` for tracking the fresh retry.
 
 ## Rejection Criteria
 

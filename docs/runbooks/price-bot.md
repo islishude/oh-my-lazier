@@ -5,7 +5,7 @@ This runbook covers the phase-1 shared price snapshot update path for source-cha
 ## Preconditions
 
 - `pricing.enabled: true` in the validated worker config.
-- The pricing signer is present in `signers` and has funds on every configured source chain.
+- The pricing signer is present in `signers`, has `pricing.min_native_balance_wei` configured, and `laz_signer_native_balance_wei` is above `laz_signer_min_native_balance_wei` on every configured source chain.
 - Every configured pricing chain declares `primary_source`, `sanity_sources`, a Uniswap V3 sanity route, and at least one healthy RPC URL.
 - Supported primary sources are `binance`, `coinmarketcap`, and `coingecko`. `sanity_sources` may use those sources plus `uniswap`, must include `uniswap`, and must not duplicate the primary source.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap` is used as a primary or sanity source; do not put API keys in worker YAML.
@@ -67,4 +67,4 @@ If the newly submitted price snapshot is wrong:
 1. Pause sends for affected pathways when pricing could undercharge execution.
 2. Restore the previous approved snapshot with `contracts/scripts/configure-workers.ts` or a manually reviewed owner transaction; only use worker fee-model updates when the low-frequency model itself was wrong.
 3. Restart the worker after updating config files; phase 1 does not support hot reload.
-4. Let txmgr automatic retry handle classified pricing outbox failures. Use `txretry` only after automatic retry is exhausted or after the signer, fee caps, and calldata have been reviewed for an operator override.
+4. Let txmgr automatic retry and pending replacement handle classified pricing outbox failures or stale broadcasts. Use `txretry` only after automatic retry is exhausted or after the signer balance, fee caps, and calldata have been reviewed for an operator override.

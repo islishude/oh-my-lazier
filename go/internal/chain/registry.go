@@ -33,6 +33,7 @@ type ExecutorTxRole struct {
 	SignerID                string
 	MaxFeePerGasWei         string
 	MaxPriorityFeePerGasWei string
+	MinNativeBalanceWei     string
 }
 
 // DVNTxRole identifies active DVN transaction settings for one chain.
@@ -40,6 +41,7 @@ type DVNTxRole struct {
 	SignerID                string
 	MaxFeePerGasWei         string
 	MaxPriorityFeePerGasWei string
+	MinNativeBalanceWei     string
 }
 
 // WorkerContracts identifies the self-hosted worker contracts selected for one source pathway.
@@ -98,11 +100,13 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 					SignerID:                cfg.TxRoles.Executor.Signer.Hex(),
 					MaxFeePerGasWei:         cfg.TxRoles.Executor.MaxFeePerGasWei,
 					MaxPriorityFeePerGasWei: cfg.TxRoles.Executor.MaxPriorityFeePerGasWei,
+					MinNativeBalanceWei:     cfg.TxRoles.Executor.MinNativeBalanceWei,
 				},
 				DVN: DVNTxRole{
 					SignerID:                optionalSignerID(cfg.TxRoles.DVN.Signer),
 					MaxFeePerGasWei:         cfg.TxRoles.DVN.MaxFeePerGasWei,
 					MaxPriorityFeePerGasWei: cfg.TxRoles.DVN.MaxPriorityFeePerGasWei,
+					MinNativeBalanceWei:     cfg.TxRoles.DVN.MinNativeBalanceWei,
 				},
 			},
 			RPC: rpcquorum.New(cfg.Name, cfg.RPCURLs),

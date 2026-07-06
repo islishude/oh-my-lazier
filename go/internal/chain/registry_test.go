@@ -92,6 +92,7 @@ func testChains() []config.ChainConfig {
 					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
+					MinNativeBalanceWei:     "100000000000000000",
 				},
 			},
 		},
@@ -109,6 +110,7 @@ func testChains() []config.ChainConfig {
 					Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 					MaxFeePerGasWei:         "2000000000",
 					MaxPriorityFeePerGasWei: "1000000000",
+					MinNativeBalanceWei:     "100000000000000000",
 				},
 			},
 		},
@@ -120,6 +122,7 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 
