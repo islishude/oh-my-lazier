@@ -37,13 +37,15 @@ profile and generate downstream artifacts from it:
 SEPOLIA_RPC_URL=... \
 HOODI_RPC_URL=... \
 npm run deploy:profile -- \
-  --profile config/deployments/sepolia-hoodi.example.json \
+  --profile config/deployments/template.json \
   --phase render
 ```
 
 The profile is the maintained operator input for owner, initial recipient,
 worker signer addresses, fee caps, worker fee models, and the environment
-variable names that hold RPC URLs and private keys. Do not copy contract
+variable names that hold RPC URLs. Hardhat private key configuration variables
+are defined in `hardhat.config.ts` and must be stored with `hardhat-keystore`
+before state-changing Ignition commands. Do not copy contract
 addresses from terminal output into worker YAML or pathway parameter files by
 hand; regenerate from the Ignition deployment state instead. The normal
 configuration path uses `OAppEndpointConfig` for rehearsal OApp/Endpoint state
@@ -58,7 +60,7 @@ Use a single constructor mint on Ethereum Sepolia:
 | Chain            | `INITIAL_SUPPLY`            | `INITIAL_RECIPIENT`                         |
 | ---------------- | --------------------------- | ------------------------------------------- |
 | Ethereum Sepolia | `1000000000000000000000000` | testnet operations owner or canary treasury |
-| Hoodi             | `0`                         | testnet operations owner or canary treasury |
+| Hoodi            | `0`                         | testnet operations owner or canary treasury |
 
 The value above is `1,000,000 OMLTOFT` with 18 decimals. Hoodi starts with zero supply so destination balances are created only by LayerZero receive-side minting during canary transfers. Reverse-direction canaries must first use tokens minted on Hoodi by a successful Ethereum Sepolia -> Hoodi transfer.
 

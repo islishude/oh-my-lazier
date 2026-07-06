@@ -73,13 +73,20 @@ The migration evidence checker verifies that the ticket includes `make check`, L
 Use the profile-driven deployment entrypoint for Sepolia/Hoodi rehearsal and
 real external OApp deployments. The profile is the only operator-edited input;
 it stores owner, signer addresses, fee caps, gas limits, fee models, OApp mode,
-and environment variable names for RPC URLs/private keys, but not secret values.
+and environment variable names for RPC URLs, but not secret values. Hardhat
+private key configuration variables are defined in `hardhat.config.ts`; store
+them with `hardhat-keystore` before running state-changing Ignition commands:
+
+```bash
+npx hardhat keystore set SEPOLIA_PRIVATE_KEY
+npx hardhat keystore set HOODI_PRIVATE_KEY
+```
 
 ```bash
 SEPOLIA_RPC_URL=... \
 HOODI_RPC_URL=... \
 npm run deploy:profile -- \
-  --profile config/deployments/sepolia-hoodi.example.json \
+  --profile config/deployments/template.json \
   --phase render
 ```
 
@@ -123,6 +130,10 @@ npm run deploy:profile -- \
   --phase all \
   --apply
 ```
+
+`--apply` runs Hardhat Ignition with inherited terminal stdio so
+`hardhat-keystore` can prompt for the keystore password interactively. Render
+and verification commands that write artifacts still capture output to files.
 
 Supported phases are `render`, `deploy-test-oft`, `deploy-workers`,
 `configure-workers`, `configure-oapp`, `verify`, and `all`. In
@@ -224,7 +235,6 @@ Run worker configuration independently:
 
 ```bash
 SEPOLIA_RPC_URL=... \
-SEPOLIA_PRIVATE_KEY=... \
 npm run configure:open-workers-pathway -- \
   --network sepolia \
   --parameters tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json \
@@ -236,7 +246,6 @@ that change:
 
 ```bash
 SEPOLIA_RPC_URL=... \
-SEPOLIA_PRIVATE_KEY=... \
 npm run configure:oapp-endpoint -- \
   --network sepolia \
   --parameters tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.oapp-endpoint.json \
@@ -244,8 +253,8 @@ npm run configure:oapp-endpoint -- \
 ```
 
 Repeat each command on Hoodi with the corresponding
-`hoodi-to-sepolia.*.json` parameter files, `--network hoodi`, and Hoodi private
-key environment variable.
+`hoodi-to-sepolia.*.json` parameter files and `--network hoodi`; Hardhat reads
+the Hoodi private key from its keystore-backed configuration variable.
 
 For attach-only debugging, render split parameters from explicit addresses:
 

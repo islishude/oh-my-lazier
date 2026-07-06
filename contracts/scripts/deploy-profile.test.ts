@@ -58,6 +58,16 @@ test("normalizeProfile rejects tx roles that do not reference a configured signe
   );
 });
 
+test("normalizeProfile rejects Hardhat private key env injection", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).privateKeyEnv = "SEPOLIA_PRIVATE_KEY";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.privateKeyEnv is not supported/,
+  );
+});
+
 test("extractOpenWorkerContracts and buildDeploymentState require OpenWorkers price feed", () => {
   const profile = normalizeProfile(baseProfile());
   const workerDeployedAddresses = {
@@ -279,6 +289,7 @@ test("command plan and phase gates keep external OApp config explicit", () => {
   const commandText = plan.commands.map((command) => command.command).join("\n");
 
   assert.doesNotMatch(commandText, /deploy:test-oft/);
+  assert.doesNotMatch(commandText, /PRIVATE_KEY/);
   assert.match(commandText, /npm run deploy:open-workers/);
   assert.match(commandText, /npm run configure:open-workers-pathway/);
   assert.match(commandText, /npm run configure:oapp-endpoint/);
@@ -410,7 +421,6 @@ function baseProfile() {
         eid: 40161,
         chainId: 11155111,
         rpcUrlEnv: "SEPOLIA_RPC_URL",
-        privateKeyEnv: "SEPOLIA_PRIVATE_KEY",
         deploymentId: "sepolia-open-workers",
         testOFTDeploymentId: "sepolia-test-oft",
         initialSupply: "1000000000000000000000000",
@@ -437,7 +447,6 @@ function baseProfile() {
         eid: 40449,
         chainId: 560048,
         rpcUrlEnv: "HOODI_RPC_URL",
-        privateKeyEnv: "HOODI_PRIVATE_KEY",
         deploymentId: "hoodi-open-workers",
         testOFTDeploymentId: "hoodi-test-oft",
         initialSupply: "0",

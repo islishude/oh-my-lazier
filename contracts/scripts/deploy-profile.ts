@@ -1,6 +1,6 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -14,11 +14,11 @@ import {
   type Address,
   type PublicClient,
 } from "viem";
+import { jsonStringify, loadArtifact, parseCLIParams } from "./lib.js";
 import {
   expectedLayerZeroChains,
   type ExpectedLayerZeroChain,
 } from "./lz-addresses.js";
-import { jsonStringify, loadArtifact, parseCLIParams } from "./lib.js";
 import {
   buildOAppEndpointConfigParameters,
   buildOpenWorkersParameters,
@@ -40,24 +40,24 @@ export type DeploymentPhase =
 
 export type SignerProfile =
   | {
-      id: Address;
-      type: "keystore";
-      keystore: {
-        path: string;
-        passwordEnv?: string;
-        passwordFile?: string;
-      };
-    }
-  | {
-      id: Address;
-      type: "kms";
-      kms: {
-        keyId: string;
-        region: string;
-        address: Address;
-        endpoint?: string;
-      };
+    id: Address;
+    type: "keystore";
+    keystore: {
+      path: string;
+      passwordEnv?: string;
+      passwordFile?: string;
     };
+  }
+  | {
+    id: Address;
+    type: "kms";
+    kms: {
+      keyId: string;
+      region: string;
+      address: Address;
+      endpoint?: string;
+    };
+  };
 
 export type LayerZeroAddresses = Pick<
   ExpectedLayerZeroChain,
@@ -75,7 +75,6 @@ export type ChainProfile = {
   eid: number;
   chainId: number;
   rpcUrlEnv: string;
-  privateKeyEnv: string;
   deploymentId: string;
   testOFTDeploymentId?: string;
   oapp?: Address;
@@ -323,10 +322,10 @@ export function buildDeploymentState(input: {
       input.profile.mode === "external-oapp"
         ? requiredOApp(chain)
         : extractTestOFTAddress(
-            input.testOFTDeployedAddresses?.[chain.key] ??
-              input.workerDeployedAddresses[chain.key],
-            chain.key,
-          );
+          input.testOFTDeployedAddresses?.[chain.key] ??
+          input.workerDeployedAddresses[chain.key],
+          chain.key,
+        );
     return {
       key: chain.key,
       network: chain.network,
@@ -641,7 +640,7 @@ export async function writeInitialParameterFiles(
 async function main() {
   const flags = parseCLIParams(process.argv.slice(2));
   const profilePath =
-    flags.get("profile") ?? "config/deployments/sepolia-hoodi.example.json";
+    flags.get("profile") ?? "config/deployments/template.json";
   const outDir = flags.get("out") ?? "tmp/deploy-profile";
   const phase = normalizePhase(flags.get("phase") ?? "render");
   const apply = flagEnabled(flags.get("apply"));
@@ -745,9 +744,9 @@ async function loadDeploymentState(
   const overrides: PriceFeedOverrides = {};
   let workerArtifacts:
     | {
-        openExecutorAbi: Abi;
-        openDVNAbi: Abi;
-      }
+      openExecutorAbi: Abi;
+      openDVNAbi: Abi;
+    }
     | undefined;
   for (const chain of profile.chains) {
     const workerRaw = JSON.parse(
@@ -873,13 +872,13 @@ function runVerify(
           ...(profile.canaryTreasury === undefined
             ? []
             : [
-                "--canary-treasury",
-                profile.canaryTreasury,
-                "--min-canary-native-balance",
-                profile.minCanaryNativeBalanceWei,
-                "--min-canary-token-balance",
-                profile.minCanaryTokenBalance,
-              ]),
+              "--canary-treasury",
+              profile.canaryTreasury,
+              "--min-canary-native-balance",
+              profile.minCanaryNativeBalanceWei,
+              "--min-canary-token-balance",
+              profile.minCanaryTokenBalance,
+            ]),
           "--expected-total-supply",
           chain.initialSupply,
         ],
@@ -985,8 +984,11 @@ function runHardhatIgnition(input: {
       input.deploymentId,
     ],
     env: hardhatEnv(input.chain),
+    stdio: "inherit",
   });
 }
+
+type RunCommandStdio = "pipe" | "inherit";
 
 function runCommand(input: {
   label: string;
@@ -994,21 +996,35 @@ function runCommand(input: {
   args: string[];
   env?: NodeJS.ProcessEnv;
   outputPath?: string;
+  stdio?: RunCommandStdio;
 }) {
+  const stdio = input.stdio ?? "pipe";
+  if (input.outputPath !== undefined && stdio !== "pipe") {
+    throw new Error(`${input.label} cannot capture output with inherited stdio`);
+  }
   const result = spawnSync(input.command, input.args, {
     env: input.env ?? process.env,
     encoding: "utf8",
+    stdio,
   });
+  if (stdio === "inherit") {
+    if (result.status !== 0) {
+      throw new Error(`${input.label} failed with exit ${result.status}`);
+    }
+    return;
+  }
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
   if (input.outputPath !== undefined) {
     const dir = path.dirname(input.outputPath);
-    const output = result.stdout === "" ? result.stderr : result.stdout;
+    const output = stdout === "" ? stderr : stdout;
     mkdirSync(dir, { recursive: true });
     writeFileSync(input.outputPath, output);
-  } else if (result.stdout !== "") {
-    process.stdout.write(result.stdout);
+  } else if (stdout !== "") {
+    process.stdout.write(stdout);
   }
-  if (result.stderr !== "" && input.outputPath === undefined) {
-    process.stderr.write(result.stderr);
+  if (stderr !== "" && input.outputPath === undefined) {
+    process.stderr.write(stderr);
   }
   if (result.status !== 0) {
     throw new Error(`${input.label} failed with exit ${result.status}`);
@@ -1018,12 +1034,9 @@ function runCommand(input: {
 function hardhatEnv(chain: ChainProfile): NodeJS.ProcessEnv {
   const env = { ...process.env };
   const rpcURL = requiredProcessEnv(chain.rpcUrlEnv);
-  const privateKey = requiredProcessEnv(chain.privateKeyEnv);
   env[chain.rpcUrlEnv] = rpcURL;
-  env[chain.privateKeyEnv] = privateKey;
   const prefix = chain.network.toUpperCase().replace(/[^A-Z0-9]/g, "_");
   env[`${prefix}_RPC_URL`] = rpcURL;
-  env[`${prefix}_PRIVATE_KEY`] = privateKey;
   return env;
 }
 
@@ -1107,6 +1120,11 @@ function normalizeChain(
   if (mode === "external-oapp" && oapp === undefined) {
     throw new Error(`${pathLabel}.oapp is required for external-oapp mode`);
   }
+  if (Object.hasOwn(input, "privateKeyEnv")) {
+    throw new Error(
+      `${pathLabel}.privateKeyEnv is not supported; store Hardhat private key config variables with hardhat keystore`,
+    );
+  }
   return {
     key,
     network,
@@ -1114,11 +1132,6 @@ function normalizeChain(
     eid,
     chainId: chainID,
     rpcUrlEnv: envVarNameField(input, "rpcUrlEnv", `${pathLabel}.rpcUrlEnv`),
-    privateKeyEnv: envVarNameField(
-      input,
-      "privateKeyEnv",
-      `${pathLabel}.privateKeyEnv`,
-    ),
     deploymentId: stringField(input, "deploymentId", `${pathLabel}.deploymentId`),
     testOFTDeploymentId: optionalStringValue(
       input.testOFTDeploymentId,
@@ -1577,8 +1590,8 @@ function printSummary(
     outDir,
     parameters: path.join(outDir, "ignition", "parameters"),
     ...(phase === "deploy-test-oft" ||
-    phase === "deploy-workers" ||
-    options?.deploymentState === false
+      phase === "deploy-workers" ||
+      options?.deploymentState === false
       ? {}
       : { workerConfig: path.join(outDir, "worker.yaml") }),
     commands: path.join(outDir, "commands.md"),
@@ -1698,7 +1711,7 @@ function hardhatCommand(
   parametersPath: string,
   deploymentId: string,
 ): string {
-  return `${chain.rpcUrlEnv}=... ${chain.privateKeyEnv}=... ${script} -- --network ${chain.network} --parameters ${parametersPath} --deployment-id ${deploymentId}`;
+  return `${chain.rpcUrlEnv}=... ${script} -- --network ${chain.network} --parameters ${parametersPath} --deployment-id ${deploymentId}`;
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
