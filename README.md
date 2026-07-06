@@ -100,7 +100,7 @@ Phase 1 is EVM-only.
 - `OpenDVN` rejects non-empty DVN options.
 - Shared price snapshots must be fresh.
 
-`OpenExecutor` remains compatible with the pinned nonpayable `ILayerZeroExecutor.assignJob` interface. It quotes and emits assignment price information without collecting native fee there. `OpenDVN` is payable and requires `msg.value >= fee`.
+`OpenExecutor` remains compatible with the pinned nonpayable `ILayerZeroExecutor.assignJob` interface. `OpenExecutor` and `OpenDVN` quote and emit assignment price information while pinned `SendUln302` records returned worker fees in its own ledger. Worker owners withdraw those recorded fees through the worker `withdrawFee(sendLib, recipient, amount)` passthrough for allowed send libraries.
 
 ## Runtime Notes
 

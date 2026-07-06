@@ -27,9 +27,9 @@ then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
 executor and active DVN roles; chain B uses the generated keystore signer. The
 local runner sends OFT canaries in both directions. It does not start the price
 bot; deployment writes a fresh shared OpenPriceFeed snapshot and local worker
-fee models, with source OpenExecutor pricing non-zero and local OpenDVN pricing
-zero because pinned SendUln302 accounts DVN fees internally without forwarding
-native value to DVN `assignJob`.
+fee models. Pinned SendUln302 accounts returned worker fees internally without
+forwarding native value to worker `assignJob`; operators withdraw those recorded
+fees through the worker `withdrawFee(sendLib, recipient, amount)` passthrough.
 Set `E2E_KEYSTORE_PASSWORD` to override the generated local keystore password;
 the same value is passed to the worker container.
 
@@ -219,6 +219,7 @@ changing OApp ownership or Endpoint message libraries.
 - `OpenExecutor.setPathwayConfig` and `OpenDVN.setPathwayConfig`
 - `OpenPriceFeed.setPriceSnapshot`
 - `OpenExecutor.setFeeModel` and `OpenDVN.setFeeModel`
+- `OpenExecutor.withdrawFee` and `OpenDVN.withdrawFee` for allowed send-lib worker fees
 - `OpenDVN.setVerifier` for the local verifier signer
 
 The profile renderer writes worker pathway parameters at

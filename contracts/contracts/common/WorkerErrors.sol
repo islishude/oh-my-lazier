@@ -10,7 +10,6 @@ library WorkerErrors {
     error MessageTooLarge(uint256 size, uint256 maxSize);
     error InvalidPriceSnapshot(uint32 dstEid);
     error PriceSnapshotStale(uint32 dstEid, uint256 updatedAt, uint256 staleAfter);
-    error InsufficientFee(uint256 required, uint256 supplied);
     error InvalidBps(uint16 bps);
     error InvalidDstGasPrice(uint256 gasUnits);
     error InvalidGas(uint256 gasLimit, uint256 minGas, uint256 maxGas);

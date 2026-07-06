@@ -40,6 +40,8 @@ contract TestOFTHarness is TestOFT {
 }
 
 contract SendLibCaller {
+    mapping(address worker => uint256 fee) public fees;
+
     function executorFee(OpenExecutor executor, uint32 dstEid, address oapp, uint256 size, bytes calldata options)
         external
         view
@@ -52,7 +54,9 @@ contract SendLibCaller {
         external
         returns (uint256)
     {
-        return executor.assignJob(dstEid, oapp, size, options);
+        uint256 fee = executor.assignJob(dstEid, oapp, size, options);
+        fees[address(executor)] += fee;
+        return fee;
     }
 
     function dvnFee(OpenDVN dvn, uint32 dstEid, uint64 confirmations, address oapp, bytes calldata options)
@@ -68,12 +72,23 @@ contract SendLibCaller {
         payable
         returns (uint256)
     {
-        return dvn.assignJob{value: msg.value}(param, options);
+        uint256 fee = dvn.assignJob(param, options);
+        fees[address(dvn)] += fee;
+        return fee;
     }
 
     function setPriceSnapshot(OpenPriceFeed feed, uint32 dstEid, WorkerTypes.PriceSnapshot calldata snapshot) external {
         feed.setPriceSnapshot(dstEid, snapshot);
     }
+
+    function withdrawFee(address to, uint256 amount) external {
+        require(fees[msg.sender] >= amount, "insufficient worker fee");
+        fees[msg.sender] -= amount;
+        (bool ok,) = to.call{value: amount}("");
+        require(ok, "send lib withdraw failed");
+    }
+
+    receive() external payable {}
 }
 
 contract PriceFeedMock {
@@ -351,6 +366,20 @@ contract OpenWorkersTest {
         require(address(this).balance == beforeBalance, "executor withdraw failed");
     }
 
+    function test_executorWithdrawFeeFromAllowedSendLib() public {
+        uint256 fee = sendLib.assignExecutor(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
+        require(fee == 1.301313 ether, "unexpected executor fee");
+        require(sendLib.fees(address(executor)) == fee, "executor fee accounting missing");
+
+        uint256 beforeBalance = address(this).balance;
+        (bool funded,) = payable(address(sendLib)).call{value: fee}("");
+        require(funded, "fund send lib failed");
+        executor.withdrawFee(address(sendLib), address(this), fee);
+
+        require(address(this).balance == beforeBalance, "executor send lib fee withdraw failed");
+        require(sendLib.fees(address(executor)) == 0, "executor fee accounting not debited");
+    }
+
     function test_dvnRejectsStalePrice() public {
         WorkerTypes.PriceSnapshot memory stale =
             WorkerTypes.PriceSnapshot({dstGasPriceInSrcToken: 10 gwei, updatedAt: 0, staleAfter: 30 minutes});
@@ -405,7 +434,7 @@ contract OpenWorkersTest {
         );
     }
 
-    function test_dvnAssignRejectsInsufficientFee() public {
+    function test_dvnAssignUsesSendLibInternalAccountingWithoutNativeValue() public {
         ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
             dstEid: DST_EID,
             packetHeader: hex"01020304",
@@ -414,10 +443,11 @@ contract OpenWorkersTest {
             sender: OAPP
         });
 
-        (bool ok, bytes memory data) =
-            address(sendLib).call{value: 1 ether}(abi.encodeCall(sendLib.assignDVN, (dvn, param, "")));
-        require(!ok, "expected revert");
-        require(bytes4(data) == WorkerErrors.InsufficientFee.selector, "unexpected revert");
+        uint256 fee = sendLib.assignDVN(dvn, param, "");
+
+        require(fee == 1.300013 ether, "unexpected dvn fee");
+        require(address(dvn).balance == 0, "dvn should not receive assignment value");
+        require(sendLib.fees(address(dvn)) == fee, "send lib fee accounting missing");
     }
 
     function test_dvnRejectsWhenPaused() public {
@@ -469,6 +499,14 @@ contract OpenWorkersTest {
     }
 
     function test_dvnWithdraw() public {
+        uint256 beforeBalance = address(this).balance;
+        (bool funded,) = payable(address(dvn)).call{value: 1 ether}("");
+        require(funded, "fund dvn failed");
+        dvn.withdraw(payable(address(this)), 1 ether);
+        require(address(this).balance == beforeBalance, "withdraw failed");
+    }
+
+    function test_dvnWithdrawFeeFromAllowedSendLib() public {
         ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
             dstEid: DST_EID,
             packetHeader: hex"01020304",
@@ -478,10 +516,24 @@ contract OpenWorkersTest {
         });
 
         uint256 beforeBalance = address(this).balance;
-        uint256 fee = sendLib.assignDVN{value: 2 ether}(dvn, param, "");
+        uint256 fee = sendLib.assignDVN(dvn, param, "");
         require(fee == 1.300013 ether, "unexpected dvn fee");
-        dvn.withdraw(payable(address(this)), 2 ether);
-        require(address(this).balance == beforeBalance, "withdraw failed");
+        require(sendLib.fees(address(dvn)) == fee, "dvn fee accounting missing");
+
+        (bool funded,) = payable(address(sendLib)).call{value: fee}("");
+        require(funded, "fund send lib failed");
+        dvn.withdrawFee(address(sendLib), address(this), fee);
+
+        require(address(this).balance == beforeBalance, "dvn send lib fee withdraw failed");
+        require(sendLib.fees(address(dvn)) == 0, "dvn fee accounting not debited");
+    }
+
+    function test_workerWithdrawFeeRejectsUnauthorizedSendLib() public {
+        expectRevert(
+            address(executor),
+            abi.encodeCall(executor.withdrawFee, (address(0xDEAD), address(this), uint256(1))),
+            WorkerErrors.UnauthorizedSendLib.selector
+        );
     }
 
     function test_oftSendPauseRejectsDebit() public {

@@ -122,7 +122,8 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
         emit DVNVerificationSubmitted(msg.sender, receiveLib, payloadHash, keccak256(packetHeader), confirmations);
     }
 
-    /// @notice Quotes, charges, and assigns a DVN verification job.
+    /// @notice Quotes and assigns a DVN verification job.
+    /// @dev Pinned SendUln302 records the returned fee in its own worker-fee ledger without forwarding native value.
     /// @param param LayerZero DVN assignment parameters.
     /// @param options DVN options, which must be empty in phase 1.
     /// @return fee Quoted DVN fee.
@@ -133,9 +134,7 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
         whenNotPaused
         returns (uint256 fee)
     {
-        // DVN assignment remains payable in the pinned interface, so underpayment is rejected on-chain.
         fee = _quote(param.dstEid, param.confirmations, param.sender, param.packetHeader.length, options);
-        if (msg.value < fee) revert WorkerErrors.InsufficientFee(fee, msg.value);
         bytes32 jobId = keccak256(abi.encode(param.dstEid, param.packetHeader, param.payloadHash, param.sender));
         emit DVNJobAssigned(jobId, param.dstEid, param.sender, msg.sender, param.confirmations, fee);
     }

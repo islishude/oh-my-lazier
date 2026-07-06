@@ -2,6 +2,7 @@
 pragma solidity ^0.8.35;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ISendLib} from "@layerzerolabs/lz-evm-protocol-v2/contracts/interfaces/ISendLib.sol";
 import {WorkerErrors} from "./WorkerErrors.sol";
 
 /// @title WorkerAccess
@@ -26,6 +27,12 @@ abstract contract WorkerAccess is Ownable {
     /// @param recipient Withdrawal recipient.
     /// @param amount Amount withdrawn.
     event Withdrawn(address indexed recipient, uint256 amount);
+
+    /// @notice Emitted when worker fees are withdrawn from a LayerZero send library.
+    /// @param sendLib LayerZero send library that held the worker fee balance.
+    /// @param recipient Withdrawal recipient.
+    /// @param amount Amount withdrawn.
+    event SendLibFeeWithdrawn(address indexed sendLib, address indexed recipient, uint256 amount);
 
     /// @notice Initializes worker ownership.
     /// @param initialOwner Initial owner address.
@@ -61,5 +68,15 @@ abstract contract WorkerAccess is Ownable {
         (bool ok,) = recipient.call{value: amount}("");
         require(ok, "withdraw failed");
         emit Withdrawn(recipient, amount);
+    }
+
+    /// @notice Withdraws this worker's accumulated native fees from an allowed LayerZero send library.
+    /// @param sendLib LayerZero send library holding the worker fee balance.
+    /// @param recipient Recipient of withdrawn fees.
+    /// @param amount Amount to withdraw.
+    function withdrawFee(address sendLib, address recipient, uint256 amount) external onlyOwner {
+        if (!allowedSendLib[sendLib]) revert WorkerErrors.UnauthorizedSendLib(sendLib);
+        ISendLib(sendLib).withdrawFee(recipient, amount);
+        emit SendLibFeeWithdrawn(sendLib, recipient, amount);
     }
 }
