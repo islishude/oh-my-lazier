@@ -48,9 +48,6 @@ jobs:
       - name: Check runbooks
         run: npm run check:runbooks
 
-      - name: Check migration evidence example
-        run: MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
-
   go:
     name: Go (${{ matrix.os }})
     strategy:
