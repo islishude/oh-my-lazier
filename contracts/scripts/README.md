@@ -300,7 +300,11 @@ testnet profile writes same-native pricing chains that use destination RPC gas
 prices directly without requiring a Uniswap route on Hoodi. Set a different
 lowercase `nativeAssetId` on any chain whose native gas asset differs; those
 cross-asset pathways must provide market price sources and the required Uniswap
-sanity route in the worker config before starting the price bot.
+sanity route in the worker config before starting the price bot. When Uniswap is
+used, `uniswap.quoter_address` must point at QuoterV2 on that chain, with an
+existing V3 pool route for the configured token pair and fee tier. Hoodi has no
+assumed public Uniswap deployment, so cross-asset Hoodi pricing requires an
+operator-managed Uniswap V3 and QuoterV2 deployment first.
 
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`

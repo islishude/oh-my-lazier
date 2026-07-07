@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -103,8 +102,14 @@ func TestCoinGeckoClientPriceUSD(t *testing.T) {
 
 func TestUniswapV3ClientPriceUSD(t *testing.T) {
 	amountOut := new(big.Int).Mul(big.NewInt(2000), big.NewInt(1_000_000))
-	outputs := abi.Arguments{{Type: mustABIType(t, "uint256")}}
-	encoded, err := outputs.Pack(amountOut)
+	method := uniswapV3QuoterABI.Methods["quoteExactInputSingle"]
+	if len(method.Inputs) != 1 || method.Inputs[0].Type.TupleElems == nil {
+		t.Fatalf("quoteExactInputSingle input is not the QuoterV2 tuple shape")
+	}
+	if len(method.Outputs) != 4 {
+		t.Fatalf("quoteExactInputSingle outputs = %d, want 4", len(method.Outputs))
+	}
+	encoded, err := method.Outputs.Pack(amountOut, new(big.Int), uint32(0), new(big.Int))
 	if err != nil {
 		t.Fatalf("Pack() error = %v", err)
 	}
@@ -137,6 +142,19 @@ func TestUniswapV3ClientPriceUSD(t *testing.T) {
 	if len(caller.data) == 0 {
 		t.Fatal("call data is empty")
 	}
+	expectedCalldata, err := uniswapV3QuoterABI.Pack("quoteExactInputSingle", quoteExactInputSingleParams{
+		TokenIn:           common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		TokenOut:          common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		AmountIn:          new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil),
+		Fee:               big.NewInt(500),
+		SqrtPriceLimitX96: new(big.Int),
+	})
+	if err != nil {
+		t.Fatalf("Pack(expected calldata) error = %v", err)
+	}
+	if !bytes.Equal(caller.data, expectedCalldata) {
+		t.Fatalf("calldata = %x, want %x", caller.data, expectedCalldata)
+	}
 }
 
 type fakeCaller struct {
@@ -149,13 +167,4 @@ func (c *fakeCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *b
 	c.to = call.To
 	c.data = bytes.Clone(call.Data)
 	return c.response, nil
-}
-
-func mustABIType(t *testing.T, typ string) abi.Type {
-	t.Helper()
-	parsed, err := abi.NewType(typ, "", nil)
-	if err != nil {
-		t.Fatalf("NewType(%q) error = %v", typ, err)
-	}
-	return parsed
 }

@@ -75,8 +75,8 @@ generation:
 
 These are not accepted for mainnet by this document. They require either a
 compatible upstream fix or explicit approval before mainnet readiness.
-`@uniswap/v3-periphery` is used as a pinned source for `IQuoter` ABI generation;
-the project does not deploy its bundled contracts.
+`@uniswap/v3-periphery` is used as a pinned source for `IQuoterV2` ABI
+generation; the project does not deploy its bundled contracts.
 
 ## Release Decision
 

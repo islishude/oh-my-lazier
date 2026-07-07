@@ -48,7 +48,7 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "node_modules/@uniswap/v3-periphery/artifacts/contracts/interfaces/IQuoter.sol/IQuoter.json",
+          "node_modules/@uniswap/v3-periphery/artifacts/contracts/interfaces/IQuoterV2.sol/IQuoterV2.json",
         type: "function",
         name: "quoteExactInputSingle",
       },

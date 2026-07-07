@@ -24,7 +24,7 @@ type CallContractReader interface {
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
 
-// UniswapV3Client reads native/USD sanity prices from a configured V3 quoter.
+// UniswapV3Client reads native/USD sanity prices from a configured V3 QuoterV2.
 type UniswapV3Client struct {
 	caller      CallContractReader
 	quoter      common.Address
@@ -45,7 +45,15 @@ type UniswapV3Config struct {
 	TokenOutDecimals uint8
 }
 
-// NewUniswapV3Client creates a Uniswap V3 quoter-backed price client.
+type quoteExactInputSingleParams struct {
+	TokenIn           common.Address
+	TokenOut          common.Address
+	AmountIn          *big.Int
+	Fee               *big.Int
+	SqrtPriceLimitX96 *big.Int
+}
+
+// NewUniswapV3Client creates a Uniswap V3 QuoterV2-backed price client.
 func NewUniswapV3Client(caller CallContractReader, cfg UniswapV3Config) (*UniswapV3Client, error) {
 	if caller == nil {
 		return nil, errors.New("uniswap caller is required")
@@ -76,7 +84,7 @@ func NewUniswapV3Client(caller CallContractReader, cfg UniswapV3Config) (*Uniswa
 	}, nil
 }
 
-// PriceUSD fetches a native-token USD sanity price through quoteExactInputSingle.
+// PriceUSD fetches a native-token USD sanity price through QuoterV2 quoteExactInputSingle.
 func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	calldata, err := c.quoteCalldata()
 	if err != nil {
@@ -90,7 +98,7 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	if err != nil {
 		return SourcePrice{}, err
 	}
-	if len(decoded) != 1 {
+	if len(decoded) != 4 {
 		return SourcePrice{}, fmt.Errorf("uniswap quote returned %d values", len(decoded))
 	}
 	amountOut, ok := decoded[0].(*big.Int)
@@ -105,5 +113,11 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 }
 
 func (c *UniswapV3Client) quoteCalldata() ([]byte, error) {
-	return uniswapV3QuoterABI.Pack("quoteExactInputSingle", c.tokenIn, c.tokenOut, new(big.Int).SetUint64(uint64(c.fee)), c.amountIn, new(big.Int))
+	return uniswapV3QuoterABI.Pack("quoteExactInputSingle", quoteExactInputSingleParams{
+		TokenIn:           c.tokenIn,
+		TokenOut:          c.tokenOut,
+		AmountIn:          c.amountIn,
+		Fee:               new(big.Int).SetUint64(uint64(c.fee)),
+		SqrtPriceLimitX96: new(big.Int),
+	})
 }

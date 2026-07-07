@@ -197,9 +197,9 @@ type PricingChainConfig struct {
 	Uniswap UniswapPricingConfig `yaml:"uniswap"`
 }
 
-// UniswapPricingConfig configures one V3 quoter sanity route.
+// UniswapPricingConfig configures one V3 QuoterV2 sanity route.
 type UniswapPricingConfig struct {
-	// QuoterAddress is the Uniswap V3 quoter contract used for sanity pricing.
+	// QuoterAddress is the Uniswap V3 QuoterV2 contract used for sanity pricing.
 	QuoterAddress EVMAddress `yaml:"quoter_address"`
 	// TokenIn is the chain-native or wrapped-native token being priced.
 	TokenIn EVMAddress `yaml:"token_in"`
