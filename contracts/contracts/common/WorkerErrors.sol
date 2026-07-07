@@ -9,6 +9,9 @@ library WorkerErrors {
     error PathwayDisabled(uint32 dstEid, address sender);
     error MessageTooLarge(uint256 size, uint256 maxSize);
     error InvalidPriceSnapshot(uint32 dstEid);
+    error InvalidPriceSnapshotBatch();
+    error InvalidPriceSubmitter(address submitter);
+    error UnauthorizedPriceSubmitter(address submitter);
     error PriceSnapshotStale(uint32 dstEid, uint256 updatedAt, uint256 staleAfter);
     error InvalidBps(uint16 bps);
     error InvalidDstGasPrice(uint256 gasUnits);

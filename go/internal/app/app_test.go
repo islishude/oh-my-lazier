@@ -297,7 +297,7 @@ func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
 func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	originalCheck := checkOnChainConfig
 	defer func() { checkOnChainConfig = originalCheck }()
-	checkOnChainConfig = func(_ context.Context, _ *chain.Registry) (configcheck.Report, error) {
+	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
 		return configcheck.Report{
 			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
 		}, nil

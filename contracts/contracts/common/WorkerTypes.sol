@@ -19,6 +19,12 @@ library WorkerTypes {
         uint64 staleAfter;
     }
 
+    /// @notice Price snapshot update for one destination endpoint.
+    struct PriceSnapshotUpdate {
+        uint32 dstEid;
+        PriceSnapshot snapshot;
+    }
+
     /// @notice Native-token fee inputs for one destination endpoint and worker role.
     struct FeeModel {
         uint256 baseFee;

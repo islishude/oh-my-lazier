@@ -31,12 +31,19 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
-var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry) (configcheck.Report, error) {
-	return configcheck.Check(ctx, registry)
+var checkOnChainConfig = func(ctx context.Context, registry *chain.Registry, opts ...configcheck.Option) (configcheck.Report, error) {
+	return configcheck.Check(ctx, registry, opts...)
 }
 
 var readTxHeader = func(ctx context.Context, client txmgr.ChainClient) (*gethtypes.Header, error) {
 	return client.HeaderByNumber(ctx, nil)
+}
+
+func configCheckOptions(cfg config.Config) []configcheck.Option {
+	if !cfg.Pricing.Enabled {
+		return nil
+	}
+	return []configcheck.Option{configcheck.WithPricingSigner(cfg.Pricing.Signer.Common())}
 }
 
 const loopRestartDelay = 5 * time.Second
@@ -98,7 +105,7 @@ func (a *App) Run(ctx context.Context) error {
 	defer registry.Close()
 
 	a.logger.Info("worker starting and checking on-chain config...")
-	if report, err := checkOnChainConfig(ctx, registry); err != nil {
+	if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
 		return err
 	} else if !report.OK {
 		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
@@ -258,7 +265,7 @@ func (a *App) RunPriceOnce(ctx context.Context) error {
 		return err
 	}
 	defer registry.Close()
-	if report, err := checkOnChainConfig(ctx, registry); err != nil {
+	if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
 		return err
 	} else if !report.OK {
 		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))

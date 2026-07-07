@@ -24,7 +24,7 @@ The owner must be able to:
 - mint TestOFT supply with the owner-only `mint(address,uint256)` function
 - pause and unpause TestOFT send/receive pathways
 - configure outbound rate limits
-- configure worker allowlists, pathway limits, shared price snapshots, and fee models
+- configure worker allowlists, pathway limits, PriceFeed submitters, and fee models
 - withdraw worker balances during rollback or cleanup
 
 Do not use the worker hot signer as `OWNER` unless the migration ticket explicitly approves that temporary testnet shortcut.
@@ -42,9 +42,9 @@ npm run deploy:profile -- \
   --phase render
 ```
 
-The profile is the maintained operator input for owner, initial recipient,
-worker signer addresses, fee caps, worker fee models, and the environment
-variable names that hold RPC URLs. Hardhat private key configuration variables
+The profile is the maintained operator input for owner, PriceFeed submitters,
+initial recipient, worker signer addresses, fee caps, worker fee models, and
+the environment variable names that hold RPC URLs. Hardhat private key configuration variables
 are defined in `hardhat.config.ts` and must be stored with `hardhat-keystore`
 before state-changing Ignition commands. Do not copy contract
 addresses from terminal output into worker YAML or pathway parameter files by

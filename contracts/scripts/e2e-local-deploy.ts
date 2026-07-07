@@ -68,7 +68,7 @@ const oftArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
 );
 const openPriceFeedArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+  "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
 );
 const openExecutorArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
@@ -220,7 +220,7 @@ async function deployChain(
   const priceFeed = await deployContract(clients, `${spec.name} OpenPriceFeed`, {
     abi: openPriceFeedArtifact.abi,
     bytecode: openPriceFeedArtifact.bytecode,
-    args: [deployer.address],
+    args: [deployer.address, [deployer.address, worker.address]],
   });
   const openExecutor = await deployContract(
     clients,
@@ -428,7 +428,7 @@ async function configureSourceWorkers(
     source.priceFeed,
     openPriceFeedArtifact.abi,
     "setPriceSnapshot",
-    [destination.eid, priceSnapshot],
+    [[{ dstEid: destination.eid, snapshot: priceSnapshot }]],
   );
   for (const workerAddress of [
     source.openExecutor,

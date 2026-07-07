@@ -38,7 +38,7 @@ const OpenWorkersPathwayConfigModule = buildModule(
     const setPriceSnapshot = m.call(
       priceFeed,
       "setPriceSnapshot",
-      [remoteEid, priceSnapshot],
+      [[{ dstEid: remoteEid, snapshot: priceSnapshot }]],
       {
         id: "SetPriceFeedSnapshot",
         after: [setOpenExecutorPathwayConfig],

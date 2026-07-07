@@ -4,6 +4,10 @@
   "databaseUrl": "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable",
   "metricsListenAddress": ":9090",
   "owner": "0x1111111111111111111111111111111111111111",
+  "priceFeedSubmitters": [
+    "0x1111111111111111111111111111111111111111",
+    "0x2222222222222222222222222222222222222222"
+  ],
   "initialRecipient": "0x1111111111111111111111111111111111111111",
   "canaryTreasury": "0x1111111111111111111111111111111111111111",
   "minOwnerNativeBalanceWei": "10000000000000000",

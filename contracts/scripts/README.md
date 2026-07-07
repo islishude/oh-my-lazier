@@ -28,8 +28,8 @@ executor and active DVN roles; chain B uses the generated keystore signer. The
 local runner sends OFT canaries in both directions and then withdraws each
 source worker's recorded SendUln302 fee through the worker
 `withdrawFee(sendLib, recipient, amount)` passthrough. It does not start the
-price bot; deployment writes a fresh shared OpenPriceFeed snapshot and local
-worker fee models. Pinned SendUln302 accounts returned worker fees internally
+price bot; deployment writes a fresh shared OpenPriceFeed snapshot batch and
+local worker fee models. Pinned SendUln302 accounts returned worker fees internally
 without forwarding native value to worker `assignJob`; operators withdraw those
 recorded fees through the same worker passthrough.
 Set `E2E_KEYSTORE_PASSWORD` to override the generated local keystore password;
@@ -221,10 +221,15 @@ changing OApp ownership or Endpoint message libraries.
 
 - `OpenExecutor.setAllowedSendLib` and `OpenDVN.setAllowedSendLib`
 - `OpenExecutor.setPathwayConfig` and `OpenDVN.setPathwayConfig`
-- `OpenPriceFeed.setPriceSnapshot`
+- `OpenPriceFeed.setPriceSnapshot` with a `PriceSnapshotUpdate[]` batch
 - `OpenExecutor.setFeeModel` and `OpenDVN.setFeeModel`
 - `OpenExecutor.withdrawFee` and `OpenDVN.withdrawFee` for allowed send-lib worker fees
 - `OpenDVN.setVerifier` for the local verifier signer
+
+`OpenWorkers` deploys `OpenPriceFeed` with explicit `priceFeedSubmitters`.
+The owner manages that allowlist, but owner status alone does not submit price
+snapshots; include the pricing signer in `priceFeedSubmitters` or authorize it
+with `OpenPriceFeed.setSubmitter` before enabling the price bot.
 
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`

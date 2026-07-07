@@ -86,12 +86,20 @@ type PacketDetails = {
   sourceReceipt: TransactionReceipt;
 };
 
+const deploymentPath = path.join(tmpDir, "deployments.json");
 const deployment: LocalE2EDeployment = validateLocalE2EDeployment(
-  JSON.parse(await readFile(path.join(tmpDir, "deployments.json"), "utf8")),
+  JSON.parse(await readFile(deploymentPath, "utf8")),
 );
 
 const amountAB = 1n * 10n ** 18n;
 const amountBA = amountAB / 2n;
+
+logStep("loaded deployment", {
+  path: deploymentPath,
+  chain_a: `${deployment.chains.a.name}:${deployment.chains.a.eid}`,
+  chain_b: `${deployment.chains.b.name}:${deployment.chains.b.eid}`,
+  deployer: deployer.address,
+});
 
 await waitForWorkerReady();
 await runDirection(deployment.chains.a, deployment.chains.b, amountAB);
@@ -112,6 +120,13 @@ async function runDirection(
   destination: ChainDeployment,
   amountLD: bigint,
 ) {
+  const direction = directionLabel(source, destination);
+  logStep("direction started", {
+    direction,
+    src_eid: source.eid,
+    dst_eid: destination.eid,
+    amount_ld: amountLD,
+  });
   const sourceClients = clientsFor(source);
   const destinationClients = clientsFor(destination);
   const balanceBefore = await balanceOf(
@@ -119,6 +134,11 @@ async function runDirection(
     destination.oft,
     deployer.address,
   );
+  logStep("destination balance before send", {
+    direction,
+    recipient: deployer.address,
+    balance: balanceBefore,
+  });
   const sendParam = buildCanarySendParam({
     dstEid: destination.eid,
     recipient: deployer.address,
@@ -133,6 +153,11 @@ async function runDirection(
     args: [sendParam, false],
   });
   const nativeFee = nativeFeeFromQuote(fee);
+  logStep("quoted OFT send", {
+    direction,
+    native_fee: nativeFee,
+    lz_receive_gas: deployment.parameters.lzReceiveGas,
+  });
   const hash = await sourceClients.walletClient.writeContract({
     address: source.oft,
     abi: oftArtifact.abi,
@@ -142,11 +167,19 @@ async function runDirection(
     chain: null,
     value: nativeFee,
   });
+  logStep("OFT send submitted", { direction, tx: hash });
   const sourceReceipt =
     await sourceClients.publicClient.waitForTransactionReceipt({ hash });
   if (sourceReceipt.status !== "success") {
     throw new Error(`${source.name} OFT send ${hash} failed`);
   }
+  logStep("OFT send confirmed", {
+    direction,
+    tx: hash,
+    block: sourceReceipt.blockNumber,
+    gas_used: sourceReceipt.gasUsed,
+    logs: sourceReceipt.logs.length,
+  });
 
   const sourceStatus = assertCanarySourceReceipt({
     logs: sourceReceipt.logs,
@@ -156,21 +189,42 @@ async function runDirection(
     endpointAbi: endpointArtifact.abi,
     sendLibAbi: sendUlnArtifact.abi,
   });
+  logStep("source receipt assertions passed", {
+    direction,
+    send_library: sourceStatus.sendLibrary,
+    executor: sourceStatus.executor,
+    executor_fee: sourceStatus.executorFee,
+  });
+  const feeClaims = sourceWorkerFeeClaims({
+    sourceName: source.name,
+    logs: sourceReceipt.logs,
+    sendLib: source.sendUln,
+    sendLibAbi: sendUlnArtifact.abi,
+    openExecutor: source.openExecutor,
+    primaryOpenDVN: source.primaryOpenDVN,
+    secondaryOpenDVN: source.secondaryOpenDVN,
+    executorFee: sourceStatus.executorFee,
+  });
+  logStep("source worker fee claims decoded", {
+    direction,
+    claims: feeClaims.map((claim) => ({
+      role: claim.role,
+      worker: claim.worker,
+      amount: claim.amount.toString(),
+    })),
+  });
   await withdrawSourceWorkerFees(
     sourceClients,
     source,
-    sourceWorkerFeeClaims({
-      sourceName: source.name,
-      logs: sourceReceipt.logs,
-      sendLib: source.sendUln,
-      sendLibAbi: sendUlnArtifact.abi,
-      openExecutor: source.openExecutor,
-      primaryOpenDVN: source.primaryOpenDVN,
-      secondaryOpenDVN: source.secondaryOpenDVN,
-      executorFee: sourceStatus.executorFee,
-    }),
+    feeClaims,
   );
   const packet = packetFromSourceReceipt(sourceReceipt, source);
+  logStep("packet extracted", {
+    direction,
+    guid: packet.guid,
+    nonce: packet.nonce,
+    payload_hash: packet.payloadHash,
+  });
 
   await submitSecondaryVerification(destinationClients, destination, packet);
 
@@ -182,6 +236,10 @@ async function runDirection(
     packet,
     balanceBefore + amountLD,
   );
+  logStep("direction completed", {
+    direction,
+    min_balance: balanceBefore + amountLD,
+  });
 }
 
 async function submitSecondaryVerification(
@@ -189,6 +247,12 @@ async function submitSecondaryVerification(
   destination: ChainDeployment,
   packet: PacketDetails,
 ) {
+  logStep("secondary OpenDVN verification submitting", {
+    chain: destination.name,
+    dvn: destination.secondaryOpenDVN,
+    receive_uln: destination.receiveUln,
+    payload_hash: packet.payloadHash,
+  });
   const hash = await clients.walletClient.writeContract({
     address: destination.secondaryOpenDVN,
     abi: openDVNArtifact.abi,
@@ -202,10 +266,20 @@ async function submitSecondaryVerification(
     account: deployer,
     chain: null,
   });
+  logStep("secondary OpenDVN verification submitted", {
+    chain: destination.name,
+    tx: hash,
+  });
   const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") {
     throw new Error(`secondary OpenDVN verification ${hash} failed`);
   }
+  logStep("secondary OpenDVN verification confirmed", {
+    chain: destination.name,
+    tx: hash,
+    block: receipt.blockNumber,
+    gas_used: receipt.gasUsed,
+  });
 }
 
 async function waitForDelivery(
@@ -216,9 +290,22 @@ async function waitForDelivery(
   packet: PacketDetails,
   minBalance: bigint,
 ) {
+  const direction = directionLabel(source, destination);
   const started = Date.now();
+  let attempts = 0;
+  let lastProgressAt = 0;
+  let loggedPayloadVerified = false;
+  let loggedPrimaryVerifier = false;
+  let loggedDeliveryReceipt = false;
   let lastError: unknown;
+  logStep("waiting for delivery", {
+    direction,
+    nonce: packet.nonce,
+    payload_hash: packet.payloadHash,
+    min_balance: minBalance,
+  });
   while (Date.now() - started < 180_000) {
+    attempts++;
     await mine(sourceClients.publicClient);
     await mine(destinationClients.publicClient);
     try {
@@ -237,28 +324,56 @@ async function waitForDelivery(
           ].join(",")}`,
         );
       }
-      await assertPrimaryDVNVerifier(
+      if (!loggedPayloadVerified) {
+        logStep("payload verified by required DVNs", {
+          direction,
+          dvns: [...verified].sort(),
+        });
+        loggedPayloadVerified = true;
+      }
+      const primaryVerifier = await assertPrimaryDVNVerifier(
         destinationClients.publicClient,
         destination,
         packet,
       );
+      if (!loggedPrimaryVerifier) {
+        logStep("primary OpenDVN verifier assertion passed", {
+          direction,
+          verifier: primaryVerifier,
+        });
+        loggedPrimaryVerifier = true;
+      }
       const deliveryReceipt = await matchingPacketDeliveredReceipt(
         destinationClients.publicClient,
         source,
         destination,
         packet,
       );
+      if (!loggedDeliveryReceipt) {
+        logStep("PacketDelivered receipt found", {
+          direction,
+          tx: deliveryReceipt.transactionHash,
+          block: deliveryReceipt.blockNumber,
+          logs: deliveryReceipt.logs.length,
+        });
+        loggedDeliveryReceipt = true;
+      }
       await assertTransactionFrom(
         destinationClients.publicClient,
         deliveryReceipt.transactionHash,
         destination.executorSigner,
         `${destination.name} PacketDelivered`,
       );
+      logStep("delivery transaction signer assertion passed", {
+        direction,
+        signer: destination.executorSigner,
+      });
       assertCanaryDestinationReceipt({
         logs: deliveryReceipt.logs,
         endpoint: destination.endpoint,
         endpointAbi: endpointArtifact.abi,
       });
+      logStep("destination receipt assertions passed", { direction });
       const balance = await balanceOf(
         destinationClients.publicClient,
         destination.oft,
@@ -269,9 +384,25 @@ async function waitForDelivery(
         balance,
         minBalance,
       });
+      logStep("recipient balance assertion passed", {
+        direction,
+        recipient: deployer.address,
+        balance,
+        min_balance: minBalance,
+      });
       return;
     } catch (err) {
       lastError = err;
+      const now = Date.now();
+      if (now - lastProgressAt >= 10_000) {
+        logStep("delivery pending", {
+          direction,
+          attempts,
+          elapsed_ms: now - started,
+          last_error: err instanceof Error ? err.message : String(err),
+        });
+        lastProgressAt = now;
+      }
       await sleep(1_000);
     }
   }
@@ -333,6 +464,13 @@ async function withdrawSourceWorkerFee(
     source.sendUln,
     claim.worker,
   );
+  logStep("source worker fee ledger checked", {
+    chain: source.name,
+    role: claim.role,
+    worker: claim.worker,
+    amount: claim.amount,
+    ledger: ledgerBefore,
+  });
   if (ledgerBefore !== claim.amount) {
     throw new Error(
       `${source.name} ${claim.role} fee ledger ${ledgerBefore} does not match expected ${claim.amount}`,
@@ -353,11 +491,23 @@ async function withdrawSourceWorkerFee(
     account: deployer,
     chain: null,
   });
+  logStep("source worker fee withdrawal submitted", {
+    chain: source.name,
+    role: claim.role,
+    tx: hash,
+  });
   const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") {
     throw new Error(`${source.name} ${claim.role} fee withdrawal ${hash} failed`);
   }
   assertFeeWithdrawalReceipt(source, claim, receipt.logs);
+  logStep("source worker fee withdrawal confirmed", {
+    chain: source.name,
+    role: claim.role,
+    tx: hash,
+    block: receipt.blockNumber,
+    gas_used: receipt.gasUsed,
+  });
 
   const ledgerAfter = await sendLibFeeBalance(
     clients.publicClient,
@@ -389,6 +539,13 @@ async function withdrawSourceWorkerFee(
       } does not match ${claim.amount}`,
     );
   }
+  logStep("source worker fee withdrawal assertions passed", {
+    chain: source.name,
+    role: claim.role,
+    ledger_after: ledgerAfter,
+    recipient_delta: recipientAfter - recipientBefore,
+    send_lib_delta: sendLibBefore - sendLibAfter,
+  });
 }
 
 async function sendLibFeeBalance(
@@ -508,7 +665,7 @@ async function assertPrimaryDVNVerifier(
   publicClient: PublicClient,
   destination: ChainDeployment,
   packet: PacketDetails,
-): Promise<void> {
+): Promise<Address> {
   const logs = await publicClient.getLogs({
     address: destination.primaryOpenDVN,
     fromBlock: 0n,
@@ -544,7 +701,7 @@ async function assertPrimaryDVNVerifier(
           `${destination.name} primary OpenDVN verifier ${args.verifier} does not match configured DVN signer ${destination.dvnSigner}`,
         );
       }
-      return;
+      return getAddress(args.verifier);
     }
   }
   throw new Error(
@@ -659,10 +816,15 @@ async function waitForWorkerReady() {
     "http://127.0.0.1:19090/readyz",
   );
   const started = Date.now();
+  logStep("waiting for worker readiness", { url });
   while (Date.now() - started < 60_000) {
     try {
       const response = await fetch(url);
       if (response.ok) {
+        logStep("worker readiness healthy", {
+          url,
+          elapsed_ms: Date.now() - started,
+        });
         return;
       }
     } catch {
@@ -723,6 +885,37 @@ function normalizePrivateKey(value: string): Hex {
     throw new Error("private key must be a 32-byte hex value");
   }
   return normalized as Hex;
+}
+
+function directionLabel(source: ChainDeployment, destination: ChainDeployment): string {
+  return `${source.name}->${destination.name}`;
+}
+
+function logStep(message: string, fields: Record<string, unknown> = {}) {
+  const suffix = Object.entries(fields)
+    .map(([key, value]) => `${key}=${formatLogValue(value)}`)
+    .join(" ");
+  console.error(`[e2e-local-run] ${message}${suffix === "" ? "" : ` ${suffix}`}`);
+}
+
+function formatLogValue(value: unknown): string {
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return String(value);
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+  return jsonStringify(value);
 }
 
 function sleep(ms: number): Promise<void> {

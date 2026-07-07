@@ -225,7 +225,7 @@ function normalizeFeeModel(value: unknown): FeeModel {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const priceFeedArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
   );
   const openExecutorArtifact = loadArtifact(
     "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",

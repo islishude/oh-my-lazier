@@ -1,16 +1,23 @@
 [
   {
     "inputs": [
-      { "internalType": "uint32", "name": "dstEid", "type": "uint32" },
       {
         "components": [
-          { "internalType": "uint256", "name": "dstGasPriceInSrcToken", "type": "uint256" },
-          { "internalType": "uint64", "name": "updatedAt", "type": "uint64" },
-          { "internalType": "uint64", "name": "staleAfter", "type": "uint64" }
+          { "internalType": "uint32", "name": "dstEid", "type": "uint32" },
+          {
+            "components": [
+              { "internalType": "uint256", "name": "dstGasPriceInSrcToken", "type": "uint256" },
+              { "internalType": "uint64", "name": "updatedAt", "type": "uint64" },
+              { "internalType": "uint64", "name": "staleAfter", "type": "uint64" }
+            ],
+            "internalType": "struct WorkerTypes.PriceSnapshot",
+            "name": "snapshot",
+            "type": "tuple"
+          }
         ],
-        "internalType": "struct WorkerTypes.PriceSnapshot",
-        "name": "snapshot",
-        "type": "tuple"
+        "internalType": "struct WorkerTypes.PriceSnapshotUpdate[]",
+        "name": "updates",
+        "type": "tuple[]"
       }
     ],
     "name": "setPriceSnapshot",

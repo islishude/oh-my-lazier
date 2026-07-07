@@ -34,7 +34,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	report, err := configcheck.Check(ctx, registry)
+	var opts []configcheck.Option
+	if cfg.Pricing.Enabled {
+		opts = append(opts, configcheck.WithPricingSigner(cfg.Pricing.Signer.Common()))
+	}
+	report, err := configcheck.Check(ctx, registry, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "check on-chain config: %v\n", err)
 		os.Exit(1)

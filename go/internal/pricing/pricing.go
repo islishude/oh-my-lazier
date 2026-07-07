@@ -79,7 +79,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	}
 	interval := time.NewTicker(b.settings.Interval)
 	defer interval.Stop()
-	gasCheckInterval := minDuration(b.settings.Interval, 15*time.Second)
+	gasCheckInterval := min(b.settings.Interval, 15*time.Second)
 	gasCheck := time.NewTicker(gasCheckInterval)
 	defer gasCheck.Stop()
 	for {
@@ -172,7 +172,7 @@ type ChainSources struct {
 	Gas     GasPriceReader
 }
 
-// EnqueueOnce computes current price snapshots and enqueues shared price-feed updates for each pathway.
+// EnqueueOnce computes current price snapshots and enqueues shared price-feed update batches.
 func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b == nil || !b.settings.Enabled {
 		return nil
@@ -188,8 +188,8 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 		b.logger.Debug("skipped price update batch", "reason", "no_pathways")
 		return nil
 	}
-	for _, update := range updates {
-		if _, _, err := b.enqueuePriceUpdate(ctx, update); err != nil {
+	for _, batch := range priceUpdateBatches(updates) {
+		if _, err := b.enqueuePriceUpdateBatch(ctx, batch); err != nil {
 			return err
 		}
 	}
@@ -212,6 +212,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		b.logger.Debug("skipped price gas-spike check", "reason", "no_pathways")
 		return nil
 	}
+	spikes := make([]pricedGasSpike, 0, len(updates))
 	for _, update := range updates {
 		key := priceUpdateKey(update)
 		current, err := b.currentDstGasPrice(ctx, update.DstEID)
@@ -226,12 +227,23 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		if GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
 			continue
 		}
-		enqueuedGas, txOutboxID, err := b.enqueuePriceUpdate(ctx, update)
+		spikes = append(spikes, pricedGasSpike{
+			update:   update,
+			previous: bigutil.Clone(previous),
+			current:  bigutil.Clone(current),
+		})
+	}
+	for _, batch := range priceUpdateBatches(spikeUpdates(spikes)) {
+		txOutboxID, err := b.enqueuePriceUpdateBatch(ctx, batch)
 		if err != nil {
 			return err
 		}
-		b.logger.Warn("price bot enqueued gas-spike update", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "price_feed", update.PriceFeed, "previous_gas_wei", previous, "current_gas_wei", current, "tx_outbox_id", txOutboxID)
-		b.lastGasPrices[key] = bigutil.Clone(enqueuedGas)
+		for _, selected := range spikes {
+			if selected.update.SrcEID != batch.SrcEID || selected.update.PriceFeed != batch.PriceFeed {
+				continue
+			}
+			b.logger.Warn("price bot enqueued gas-spike update", "src_eid", selected.update.SrcEID, "dst_eid", selected.update.DstEID, "price_feed", selected.update.PriceFeed, "previous_gas_wei", selected.previous, "current_gas_wei", selected.current, "tx_outbox_id", txOutboxID)
+		}
 	}
 	return nil
 }
@@ -242,52 +254,73 @@ type pricedUpdate struct {
 	PriceFeed common.Address
 }
 
-func (b *Bot) enqueuePriceUpdate(ctx context.Context, update pricedUpdate) (*big.Int, int64, error) {
-	srcChain, err := b.registry.Get(update.SrcEID)
+type pricedGasSpike struct {
+	update   pricedUpdate
+	previous *big.Int
+	current  *big.Int
+}
+
+type pricedUpdateBatch struct {
+	SrcEID    uint32
+	PriceFeed common.Address
+	Targets   []pricedUpdate
+}
+
+func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBatch) (int64, error) {
+	srcChain, err := b.registry.Get(batch.SrcEID)
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
-	dstChain, err := b.registry.Get(update.DstEID)
+	srcPrice, err := b.chainPrice(ctx, batch.SrcEID)
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
-	srcPrice, err := b.chainPrice(ctx, update.SrcEID)
-	if err != nil {
-		return nil, 0, err
+	updates := make([]PriceSnapshotUpdate, 0, len(batch.Targets))
+	gasByKey := make(map[string]*big.Int, len(batch.Targets))
+	dstEIDs := make([]uint32, 0, len(batch.Targets))
+	for _, target := range batch.Targets {
+		dstChain, err := b.registry.Get(target.DstEID)
+		if err != nil {
+			return 0, err
+		}
+		dstPrice, err := b.chainPrice(ctx, target.DstEID)
+		if err != nil {
+			return 0, err
+		}
+		dstGasPrice, err := b.currentDstGasPrice(ctx, target.DstEID)
+		if err != nil {
+			return 0, err
+		}
+		snapshot, err := BuildPriceSnapshot(PriceInputs{
+			SrcNativeUSD:      srcPrice,
+			DstNativeUSD:      dstPrice,
+			DstGasPriceWei:    dstGasPrice,
+			UpdatedAtUnix:     uint64(b.now().Unix()),
+			StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
+		})
+		if err != nil {
+			return 0, err
+		}
+		updates = append(updates, PriceSnapshotUpdate{DstEid: dstChain.EID, Snapshot: snapshot})
+		gasByKey[priceUpdateKey(target)] = bigutil.Clone(dstGasPrice)
+		dstEIDs = append(dstEIDs, dstChain.EID)
 	}
-	dstPrice, err := b.chainPrice(ctx, update.DstEID)
+	tx, err := BuildSetPriceSnapshotTx(srcChain.EID, batch.PriceFeed, b.settings.SignerID, updates)
 	if err != nil {
-		return nil, 0, err
-	}
-	dstGasPrice, err := b.currentDstGasPrice(ctx, update.DstEID)
-	if err != nil {
-		return nil, 0, err
-	}
-	snapshot, err := BuildPriceSnapshot(PriceInputs{
-		SrcNativeUSD:      srcPrice,
-		DstNativeUSD:      dstPrice,
-		DstGasPriceWei:    dstGasPrice,
-		UpdatedAtUnix:     uint64(b.now().Unix()),
-		StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
-	})
-	if err != nil {
-		return nil, 0, err
-	}
-	tx, err := BuildSetPriceSnapshotTx(srcChain.EID, update.PriceFeed, dstChain.EID, b.settings.SignerID, snapshot)
-	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	id, err := b.store.EnqueueTx(ctx, tx)
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
-	b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", TxPurposeSetPriceSnapshot, "src_eid", srcChain.EID, "dst_eid", dstChain.EID, "price_feed", update.PriceFeed)
-	key := priceUpdateKey(update)
 	if b.lastGasPrices == nil {
 		b.lastGasPrices = make(map[string]*big.Int)
 	}
-	b.lastGasPrices[key] = bigutil.Clone(dstGasPrice)
-	return dstGasPrice, id, nil
+	for key, gas := range gasByKey {
+		b.lastGasPrices[key] = bigutil.Clone(gas)
+	}
+	b.logger.Info("price update tx enqueued", "tx_outbox_id", id, "purpose", TxPurposeSetPriceSnapshot, "src_eid", srcChain.EID, "dst_count", len(dstEIDs), "dst_eids", dstEIDs, "price_feed", batch.PriceFeed)
+	return id, nil
 }
 
 func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
@@ -374,6 +407,49 @@ func priceUpdateKey(update pricedUpdate) string {
 	return fmt.Sprintf("%d:%d:%s", update.SrcEID, update.DstEID, update.PriceFeed)
 }
 
+func priceUpdateBatchKey(update pricedUpdate) string {
+	return fmt.Sprintf("%d:%s", update.SrcEID, update.PriceFeed)
+}
+
+func priceUpdateBatches(updates []pricedUpdate) []pricedUpdateBatch {
+	seen := make(map[string]pricedUpdateBatch)
+	for _, update := range updates {
+		key := priceUpdateBatchKey(update)
+		batch := seen[key]
+		if batch.Targets == nil {
+			batch.SrcEID = update.SrcEID
+			batch.PriceFeed = update.PriceFeed
+		}
+		batch.Targets = append(batch.Targets, update)
+		seen[key] = batch
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	batches := make([]pricedUpdateBatch, 0, len(keys))
+	for _, key := range keys {
+		batch := seen[key]
+		sort.Slice(batch.Targets, func(i, j int) bool {
+			if batch.Targets[i].DstEID != batch.Targets[j].DstEID {
+				return batch.Targets[i].DstEID < batch.Targets[j].DstEID
+			}
+			return priceUpdateKey(batch.Targets[i]) < priceUpdateKey(batch.Targets[j])
+		})
+		batches = append(batches, batch)
+	}
+	return batches
+}
+
+func spikeUpdates(spikes []pricedGasSpike) []pricedUpdate {
+	updates := make([]pricedUpdate, 0, len(spikes))
+	for _, spike := range spikes {
+		updates = append(updates, spike.update)
+	}
+	return updates
+}
+
 func rememberFeeModel(seen map[string]FeeModel, srcEID, dstEID uint32, role string, worker common.Address, fee FeeModel) error {
 	key := fmt.Sprintf("%d:%d:%s:%s", srcEID, dstEID, role, worker)
 	if existing, ok := seen[key]; ok {
@@ -431,12 +507,12 @@ func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxD
 				return nil, fmt.Errorf("price deviation between %s and %s is %d bps, exceeds limit %d bps", primary.Source, sanity.Source, deviation, maxDeviationBps)
 			}
 		}
-		return cloneRat(primary.USD), nil
+		return bigutil.CloneRat(primary.USD), nil
 	}
 	if allowFallback {
 		for _, sanity := range sanityPrices {
 			if sanity.USD != nil && sanity.USD.Sign() > 0 {
-				return cloneRat(sanity.USD), nil
+				return bigutil.CloneRat(sanity.USD), nil
 			}
 		}
 	}
@@ -454,7 +530,7 @@ func GasIncreaseBps(previous, current *big.Int) uint64 {
 	diff := new(big.Int).Sub(current, previous)
 	ratio := new(big.Rat).SetFrac(diff, previous)
 	ratio.Mul(ratio, big.NewRat(10_000, 1))
-	return ceilRat(ratio).Uint64()
+	return bigutil.CeilRat(ratio).Uint64()
 }
 
 // DeviationBps returns abs(left-right)/left in basis points.
@@ -468,7 +544,7 @@ func DeviationBps(left, right *big.Rat) uint64 {
 	}
 	diff.Mul(diff, big.NewRat(10_000, 1))
 	diff.Quo(diff, left)
-	return ceilRat(diff).Uint64()
+	return bigutil.CeilRat(diff).Uint64()
 }
 
 // PriceInputs are the source data used to construct WorkerTypes.PriceSnapshot.
@@ -485,6 +561,12 @@ type PriceSnapshot struct {
 	DstGasPriceInSrcToken *big.Int `abi:"dstGasPriceInSrcToken"`
 	UpdatedAt             uint64   `abi:"updatedAt"`
 	StaleAfter            uint64   `abi:"staleAfter"`
+}
+
+// PriceSnapshotUpdate mirrors WorkerTypes.PriceSnapshotUpdate for ABI encoding.
+type PriceSnapshotUpdate struct {
+	DstEid   uint32        `abi:"dstEid"`
+	Snapshot PriceSnapshot `abi:"snapshot"`
 }
 
 // BuildPriceSnapshot converts destination gas cost into source native-token units.
@@ -508,25 +590,30 @@ func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
 	return PriceSnapshot{
-		DstGasPriceInSrcToken: ceilRat(dstGasPriceInSrcToken),
+		DstGasPriceInSrcToken: bigutil.CeilRat(dstGasPriceInSrcToken),
 		UpdatedAt:             inputs.UpdatedAtUnix,
 		StaleAfter:            inputs.StaleAfterSeconds,
 	}, nil
 }
 
 // BuildSetPriceSnapshotCalldata ABI-encodes OpenPriceFeed setPriceSnapshot.
-func BuildSetPriceSnapshotCalldata(dstEID uint32, snapshot PriceSnapshot) ([]byte, error) {
-	if dstEID == 0 {
-		return nil, errors.New("destination eid is required")
+func BuildSetPriceSnapshotCalldata(updates []PriceSnapshotUpdate) ([]byte, error) {
+	if len(updates) == 0 {
+		return nil, errors.New("price snapshot updates are required")
 	}
-	if err := snapshot.Validate(); err != nil {
-		return nil, err
+	for _, update := range updates {
+		if update.DstEid == 0 {
+			return nil, errors.New("destination eid is required")
+		}
+		if err := update.Snapshot.Validate(); err != nil {
+			return nil, err
+		}
 	}
-	return priceSnapshotABI.Pack("setPriceSnapshot", dstEID, snapshot)
+	return priceSnapshotABI.Pack("setPriceSnapshot", updates)
 }
 
 // BuildSetPriceSnapshotTx creates an outbox transaction for a shared price feed update.
-func BuildSetPriceSnapshotTx(chainEID uint32, priceFeed common.Address, dstEID uint32, signerID string, snapshot PriceSnapshot) (db.TxRequest, error) {
+func BuildSetPriceSnapshotTx(chainEID uint32, priceFeed common.Address, signerID string, updates []PriceSnapshotUpdate) (db.TxRequest, error) {
 	if chainEID == 0 {
 		return db.TxRequest{}, errors.New("chain eid is required")
 	}
@@ -536,7 +623,7 @@ func BuildSetPriceSnapshotTx(chainEID uint32, priceFeed common.Address, dstEID u
 	if signerID == "" {
 		return db.TxRequest{}, errors.New("signer id is required")
 	}
-	calldata, err := BuildSetPriceSnapshotCalldata(dstEID, snapshot)
+	calldata, err := BuildSetPriceSnapshotCalldata(updates)
 	if err != nil {
 		return db.TxRequest{}, err
 	}
@@ -562,31 +649,4 @@ func (s PriceSnapshot) Validate() error {
 		return errors.New("price snapshot stale_after is required")
 	}
 	return nil
-}
-
-func ceilRat(value *big.Rat) *big.Int {
-	if value == nil {
-		return nil
-	}
-	num := value.Num()
-	den := value.Denom()
-	quotient, remainder := new(big.Int).QuoRem(num, den, new(big.Int))
-	if remainder.Sign() != 0 && value.Sign() > 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	return quotient
-}
-
-func minDuration(left, right time.Duration) time.Duration {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func cloneRat(value *big.Rat) *big.Rat {
-	if value == nil {
-		return nil
-	}
-	return new(big.Rat).Set(value)
 }

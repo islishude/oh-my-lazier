@@ -10,6 +10,7 @@ import {
 } from "./lz-config.js";
 import {
   buildOAppEndpointConfigParameters,
+  buildOpenWorkersParameters,
   buildOpenWorkersPathwayConfigParameters,
   OFT_MSG_TYPE_SEND,
 } from "./oft-pathway-ignition.js";
@@ -48,6 +49,27 @@ function basePathwayInput() {
     enforcedLzReceiveGas: 200_000n,
   } as const;
 }
+
+test("buildOpenWorkersParameters renders explicit price feed submitters", () => {
+  assert.deepEqual(
+    buildOpenWorkersParameters({
+      owner: "0x1111111111111111111111111111111111111111",
+      priceFeedSubmitters: [
+        "0x1111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222",
+      ],
+    }),
+    {
+      OpenWorkers: {
+        owner: "0x1111111111111111111111111111111111111111",
+        priceFeedSubmitters: [
+          "0x1111111111111111111111111111111111111111",
+          "0x2222222222222222222222222222222222222222",
+        ],
+      },
+    },
+  );
+});
 
 test("buildOAppEndpointConfigParameters renders generic OApp endpoint config", () => {
   const rendered = buildOAppEndpointConfigParameters({

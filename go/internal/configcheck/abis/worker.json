@@ -40,6 +40,13 @@
     ]
   },
   {
+    "name": "submitters",
+    "type": "function",
+    "stateMutability": "view",
+    "inputs": [{ "name": "submitter", "type": "address" }],
+    "outputs": [{ "name": "allowed", "type": "bool" }]
+  },
+  {
     "name": "verifiers",
     "type": "function",
     "stateMutability": "view",

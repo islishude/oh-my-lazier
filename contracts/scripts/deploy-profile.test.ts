@@ -267,6 +267,7 @@ test("parameter files split TestOFT rehearsal from OpenWorkers deployment", () =
   assert.deepEqual(openWorkersParameterFile(profile, profile.chains[0]), {
     OpenWorkers: {
       owner: "0x1111111111111111111111111111111111111111",
+      priceFeedSubmitters: ["0x1111111111111111111111111111111111111111"],
     },
   });
   assert.deepEqual(testOFTParameterFile(profile, profile.chains[0]), {

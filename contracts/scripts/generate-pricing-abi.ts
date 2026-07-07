@@ -37,7 +37,7 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+          "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
         type: "function",
         name: "setPriceSnapshot",
       },
@@ -178,12 +178,10 @@ function formatParameter(input: AbiInput, indent: number): string {
     return `${spaces}${formatCompactParameter(input)}`;
   }
 
-  const componentLines = input.components.map(
-    (component, index) =>
-      `${" ".repeat(indent + 4)}${formatCompactParameter(component)}${
-        index === input.components!.length - 1 ? "" : ","
-      }`,
-  );
+  const componentLines = input.components.map((component, index) => {
+    const suffix = index === input.components!.length - 1 ? "" : ",";
+    return `${formatParameter(component, indent + 4)}${suffix}`;
+  });
   return [
     `${spaces}{`,
     `${spaces}  "components": [`,

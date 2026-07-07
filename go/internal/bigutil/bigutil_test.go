@@ -105,3 +105,42 @@ func TestCloneMinMaxReturnCopies(t *testing.T) {
 		t.Fatalf("Min(nil, nil) = %v, want nil", got)
 	}
 }
+
+func TestCloneRatReturnsCopy(t *testing.T) {
+	value := big.NewRat(2, 3)
+	got := CloneRat(value)
+	if got == value || got.Cmp(value) != 0 {
+		t.Fatalf("CloneRat() = %v, want equal copy", got)
+	}
+	value.SetInt64(1)
+	if got.Cmp(big.NewRat(2, 3)) != 0 {
+		t.Fatalf("CloneRat() result changed after source mutation: %v", got)
+	}
+	if got := CloneRat(nil); got != nil {
+		t.Fatalf("CloneRat(nil) = %v, want nil", got)
+	}
+}
+
+func TestCeilRat(t *testing.T) {
+	tests := []struct {
+		name  string
+		value *big.Rat
+		want  string
+	}{
+		{name: "integer", value: big.NewRat(6, 3), want: "2"},
+		{name: "positive fraction", value: big.NewRat(7, 3), want: "3"},
+		{name: "negative fraction", value: big.NewRat(-7, 3), want: "-2"},
+		{name: "zero", value: big.NewRat(0, 3), want: "0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := CeilRat(test.value)
+			if got.String() != test.want {
+				t.Fatalf("CeilRat(%s) = %s, want %s", test.value, got, test.want)
+			}
+		})
+	}
+	if got := CeilRat(nil); got != nil {
+		t.Fatalf("CeilRat(nil) = %v, want nil", got)
+	}
+}

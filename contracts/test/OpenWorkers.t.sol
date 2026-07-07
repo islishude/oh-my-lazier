@@ -3,7 +3,7 @@ pragma solidity ^0.8.35;
 
 import {OpenDVN} from "../contracts/workers/OpenDVN.sol";
 import {OpenExecutor} from "../contracts/workers/OpenExecutor.sol";
-import {OpenPriceFeed} from "../contracts/common/OpenPriceFeed.sol";
+import {OpenPriceFeed} from "../contracts/workers/OpenPriceFeed.sol";
 import {TestOFT} from "../contracts/oft/TestOFT.sol";
 import {WorkerErrors} from "../contracts/common/WorkerErrors.sol";
 import {WorkerTypes} from "../contracts/common/WorkerTypes.sol";
@@ -77,8 +77,8 @@ contract SendLibCaller {
         return fee;
     }
 
-    function setPriceSnapshot(OpenPriceFeed feed, uint32 dstEid, WorkerTypes.PriceSnapshot calldata snapshot) external {
-        feed.setPriceSnapshot(dstEid, snapshot);
+    function setPriceSnapshot(OpenPriceFeed feed, WorkerTypes.PriceSnapshotUpdate[] calldata updates) external {
+        feed.setPriceSnapshot(updates);
     }
 
     function withdrawFee(address to, uint256 amount) external {
@@ -115,6 +115,7 @@ contract ReceiveUlnMock {
 
 contract OpenWorkersTest {
     uint32 internal constant DST_EID = 40449;
+    uint32 internal constant ALT_DST_EID = 40161;
     address internal constant OAPP = address(0x2002);
 
     OpenExecutor internal executor;
@@ -124,7 +125,7 @@ contract OpenWorkersTest {
     TestOFTHarness internal oft;
 
     function setUp() public {
-        priceFeed = new OpenPriceFeed(address(this));
+        priceFeed = new OpenPriceFeed(address(this), singleAddress(address(this)));
         executor = new OpenExecutor(address(this), address(priceFeed));
         dvn = new OpenDVN(address(this), address(priceFeed));
         sendLib = new SendLibCaller();
@@ -138,7 +139,7 @@ contract OpenWorkersTest {
         });
         WorkerTypes.FeeModel memory fee =
             WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000});
-        priceFeed.setPriceSnapshot(DST_EID, snapshot);
+        setPriceSnapshot(priceFeed, DST_EID, snapshot);
 
         executor.setAllowedSendLib(address(sendLib), true);
         executor.setPathwayConfig(DST_EID, OAPP, pathway);
@@ -158,7 +159,80 @@ contract OpenWorkersTest {
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
             dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
         });
-        expectAnyRevert(address(sendLib), abi.encodeCall(sendLib.setPriceSnapshot, (priceFeed, DST_EID, snapshot)));
+        WorkerTypes.PriceSnapshotUpdate[] memory updates = singleUpdate(DST_EID, snapshot);
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.setPriceSnapshot, (priceFeed, updates)),
+            WorkerErrors.UnauthorizedPriceSubmitter.selector
+        );
+    }
+
+    function test_priceFeedOwnerCanManageSubmitterWithoutImplicitSubmitAccess() public {
+        OpenPriceFeed managedFeed = new OpenPriceFeed(address(this), singleAddress(address(0xBEEF)));
+        WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+        });
+        WorkerTypes.PriceSnapshotUpdate[] memory updates = singleUpdate(DST_EID, snapshot);
+
+        expectRevert(
+            address(managedFeed),
+            abi.encodeCall(managedFeed.setPriceSnapshot, (updates)),
+            WorkerErrors.UnauthorizedPriceSubmitter.selector
+        );
+
+        managedFeed.setSubmitter(address(this), true);
+        managedFeed.setPriceSnapshot(updates);
+        require(managedFeed.submitters(address(this)), "owner was not added as submitter");
+
+        managedFeed.setSubmitter(address(this), false);
+        require(!managedFeed.submitters(address(this)), "owner submitter was not removed");
+        expectRevert(
+            address(managedFeed),
+            abi.encodeCall(managedFeed.setPriceSnapshot, (updates)),
+            WorkerErrors.UnauthorizedPriceSubmitter.selector
+        );
+    }
+
+    function test_priceFeedRejectsZeroSubmitter() public {
+        expectRevert(
+            address(priceFeed),
+            abi.encodeCall(priceFeed.setSubmitter, (address(0), true)),
+            WorkerErrors.InvalidPriceSubmitter.selector
+        );
+    }
+
+    function test_priceFeedSubmitterCanBatchUpdateMultipleEIDs() public {
+        WorkerTypes.PriceSnapshotUpdate[] memory updates = new WorkerTypes.PriceSnapshotUpdate[](2);
+        updates[0] = WorkerTypes.PriceSnapshotUpdate({
+            dstEid: DST_EID,
+            snapshot: WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 20 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            })
+        });
+        updates[1] = WorkerTypes.PriceSnapshotUpdate({
+            dstEid: ALT_DST_EID,
+            snapshot: WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 30 gwei, updatedAt: uint64(block.timestamp), staleAfter: 1 hours
+            })
+        });
+
+        priceFeed.setPriceSnapshot(updates);
+
+        (uint256 dstGasPriceInSrcToken,, uint64 staleAfter) = priceFeed.priceSnapshot(DST_EID);
+        require(dstGasPriceInSrcToken == 20 gwei, "primary batch snapshot not stored");
+        require(staleAfter == 30 minutes, "primary batch staleAfter not stored");
+        (dstGasPriceInSrcToken,, staleAfter) = priceFeed.priceSnapshot(ALT_DST_EID);
+        require(dstGasPriceInSrcToken == 30 gwei, "alternate batch snapshot not stored");
+        require(staleAfter == 1 hours, "alternate batch staleAfter not stored");
+    }
+
+    function test_priceFeedRejectsEmptyBatch() public {
+        WorkerTypes.PriceSnapshotUpdate[] memory updates = new WorkerTypes.PriceSnapshotUpdate[](0);
+        expectRevert(
+            address(priceFeed),
+            abi.encodeCall(priceFeed.setPriceSnapshot, (updates)),
+            WorkerErrors.InvalidPriceSnapshotBatch.selector
+        );
     }
 
     function test_priceFeedRejectsInvalidSnapshot() public {
@@ -167,7 +241,7 @@ contract OpenWorkersTest {
         });
         expectRevert(
             address(priceFeed),
-            abi.encodeCall(priceFeed.setPriceSnapshot, (DST_EID, invalid)),
+            abi.encodeCall(priceFeed.setPriceSnapshot, (singleUpdate(DST_EID, invalid))),
             WorkerErrors.InvalidPriceSnapshot.selector
         );
     }
@@ -176,7 +250,7 @@ contract OpenWorkersTest {
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
             dstGasPriceInSrcToken: 20 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
         });
-        priceFeed.setPriceSnapshot(DST_EID, snapshot);
+        setPriceSnapshot(priceFeed, DST_EID, snapshot);
 
         uint256 executorFee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
         uint256 dvnFee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
@@ -609,15 +683,28 @@ contract OpenWorkersTest {
 
     receive() external payable {}
 
+    function singleAddress(address value) internal pure returns (address[] memory values) {
+        values = new address[](1);
+        values[0] = value;
+    }
+
+    function setPriceSnapshot(OpenPriceFeed feed, uint32 dstEid, WorkerTypes.PriceSnapshot memory snapshot) internal {
+        feed.setPriceSnapshot(singleUpdate(dstEid, snapshot));
+    }
+
+    function singleUpdate(uint32 dstEid, WorkerTypes.PriceSnapshot memory snapshot)
+        internal
+        pure
+        returns (WorkerTypes.PriceSnapshotUpdate[] memory updates)
+    {
+        updates = new WorkerTypes.PriceSnapshotUpdate[](1);
+        updates[0] = WorkerTypes.PriceSnapshotUpdate({dstEid: dstEid, snapshot: snapshot});
+    }
+
     function expectRevert(address target, bytes memory callData, bytes4 selector) internal {
         (bool ok, bytes memory data) = target.call(callData);
         require(!ok, "expected revert");
         require(bytes4(data) == selector, "unexpected revert");
-    }
-
-    function expectAnyRevert(address target, bytes memory callData) internal {
-        (bool ok,) = target.call(callData);
-        require(!ok, "expected revert");
     }
 
     function defaultPathwayConfig() internal pure returns (WorkerTypes.PathwayConfig memory) {

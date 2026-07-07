@@ -140,6 +140,30 @@ func TestCheckWithClientsReportsMissingDestinationVerifierAuthorization(t *testi
 	}
 }
 
+func TestCheckWithClientsReportsMissingPricingSubmitterAuthorization(t *testing.T) {
+	registry, clients := testRegistryAndClients(t)
+	signer := addr("0x9999999999999999999999999999999999999999")
+	for _, pathway := range registry.Pathways() {
+		clients[pathway.SrcEID].priceSubmitters[priceSubmitterKey(pathway.SourceWorkers.PriceFeed, signer)] = true
+	}
+	pathways := registry.Pathways()
+	delete(clients[pathways[0].SrcEID].priceSubmitters, priceSubmitterKey(pathways[0].SourceWorkers.PriceFeed, signer))
+
+	report, err := CheckWithClients(t.Context(), registry, chainClients(clients), WithPricingSigner(signer))
+	if err != nil {
+		t.Fatalf("CheckWithClients() error = %v", err)
+	}
+	if report.OK {
+		t.Fatal("CheckWithClients() ok = true, want submitter mismatch")
+	}
+	if len(report.Issues) != 1 {
+		t.Fatalf("issues = %+v, want one submitter issue", report.Issues)
+	}
+	if !strings.Contains(report.Issues[0].Path, "source_workers.price_feed.submitter") {
+		t.Fatalf("issue path = %q", report.Issues[0].Path)
+	}
+}
+
 func TestRenderTextIncludesIssuePaths(t *testing.T) {
 	output := RenderText(Report{
 		Issues: []Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
@@ -241,6 +265,7 @@ type fakeChainClient struct {
 	allowedSendLibs  map[string]bool
 	workerPathways   map[string]pathwayConfig
 	priceFeeds       map[common.Address]common.Address
+	priceSubmitters  map[string]bool
 	workerFeeModels  map[string]feeModel
 	verifiers        map[string]bool
 }
@@ -259,6 +284,7 @@ func newFakeChainClient(chainID int64, eid uint32) *fakeChainClient {
 		allowedSendLibs:  make(map[string]bool),
 		workerPathways:   make(map[string]pathwayConfig),
 		priceFeeds:       make(map[common.Address]common.Address),
+		priceSubmitters:  make(map[string]bool),
 		workerFeeModels:  make(map[string]feeModel),
 		verifiers:        make(map[string]bool),
 	}
@@ -358,6 +384,8 @@ func (f *fakeChainClient) callWorker(to common.Address, method *abi.Method, args
 		return method.Outputs.Pack(config.Enabled, config.MaxMessageSize, config.MinLzReceiveGas, config.MaxLzReceiveGas)
 	case "priceFeed":
 		return method.Outputs.Pack(f.priceFeeds[to])
+	case "submitters":
+		return method.Outputs.Pack(f.priceSubmitters[priceSubmitterKey(to, args[0].(common.Address))])
 	case "feeModel":
 		model := f.workerFeeModels[workerFeeModelKey(to, args[0].(uint32))]
 		return method.Outputs.Pack(model.BaseFee, model.DstGasOverhead, model.MarginBps)
@@ -520,6 +548,10 @@ func workerPathwayKey(worker common.Address, dstEID uint32, sender common.Addres
 
 func workerFeeModelKey(worker common.Address, dstEID uint32) string {
 	return worker.Hex() + ":" + big.NewInt(int64(dstEID)).String()
+}
+
+func priceSubmitterKey(priceFeed, submitter common.Address) string {
+	return priceFeed.Hex() + ":" + submitter.Hex()
 }
 
 func verifierKey(openDVN, verifier common.Address) string {

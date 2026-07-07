@@ -84,29 +84,55 @@ func RenderText(report Report) string {
 }
 
 // Check validates a registry against the registry's configured RPC clients.
-func Check(ctx context.Context, registry *chain.Registry) (Report, error) {
+func Check(ctx context.Context, registry *chain.Registry, opts ...Option) (Report, error) {
 	clients := make(map[uint32]ChainClient)
 	for _, configured := range registry.All() {
 		clients[configured.EID] = configured.RPC
 	}
-	return CheckWithClients(ctx, registry, clients)
+	return CheckWithClients(ctx, registry, clients, opts...)
 }
 
 // CheckWithClients validates a registry against supplied chain clients.
-func CheckWithClients(ctx context.Context, registry *chain.Registry, clients map[uint32]ChainClient) (Report, error) {
+func CheckWithClients(ctx context.Context, registry *chain.Registry, clients map[uint32]ChainClient, opts ...Option) (Report, error) {
 	if registry == nil {
 		return Report{}, errors.New("registry is required")
 	}
-	checker := checker{registry: registry, clients: clients}
+	checkOptions := applyOptions(opts)
+	checker := checker{registry: registry, clients: clients, pricingSigner: checkOptions.pricingSigner}
 	if err := checker.run(ctx); err != nil {
 		return Report{}, err
 	}
 	return Report{OK: len(checker.issues) == 0, Issues: checker.issues}, nil
 }
 
+// Option configures optional config checks that are not encoded in the registry.
+type Option func(*options)
+
+type options struct {
+	pricingSigner common.Address
+}
+
+// WithPricingSigner requires each configured source OpenPriceFeed to authorize the pricing signer.
+func WithPricingSigner(signer common.Address) Option {
+	return func(options *options) {
+		options.pricingSigner = signer
+	}
+}
+
+func applyOptions(opts []Option) options {
+	var result options
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&result)
+		}
+	}
+	return result
+}
+
 type checker struct {
 	registry      *chain.Registry
 	clients       map[uint32]ChainClient
+	pricingSigner common.Address
 	invalidChains map[uint32]struct{}
 	issues        []Issue
 }
@@ -289,6 +315,15 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
 	if err := c.requireCode(ctx, srcClient, base+".source_workers.price_feed", srcChain.EID, pathway.SourceWorkers.PriceFeed); err != nil {
 		return err
+	}
+	if c.pricingSigner != (common.Address{}) {
+		allowed, err := callBool(ctx, srcClient, workerABI, pathway.SourceWorkers.PriceFeed, "submitters", c.pricingSigner)
+		if err != nil {
+			return fmt.Errorf("read price feed submitter for %s: %w", base, err)
+		}
+		if !allowed {
+			c.add(base+".source_workers.price_feed.submitter", "price feed does not authorize pricing signer %s", c.pricingSigner)
+		}
 	}
 	workers := []struct {
 		label string

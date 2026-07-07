@@ -39,6 +39,7 @@ export type WorkerFeeModelParam = {
 
 export type OpenWorkersParameters = {
   owner: Address;
+  priceFeedSubmitters: Address[];
 };
 
 export type OpenWorkersParameterFile = {
@@ -132,8 +133,14 @@ export type PathwayConfigInput = {
 
 export function buildOpenWorkersParameters(input: {
   owner: Address;
+  priceFeedSubmitters: Address[];
 }): OpenWorkersParameterFile {
-  return { OpenWorkers: { owner: input.owner } };
+  return {
+    OpenWorkers: {
+      owner: input.owner,
+      priceFeedSubmitters: input.priceFeedSubmitters,
+    },
+  };
 }
 
 export function buildTestOFTParameters(input: {

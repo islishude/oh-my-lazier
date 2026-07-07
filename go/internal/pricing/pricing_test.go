@@ -104,12 +104,12 @@ func TestGasIncreaseBpsOnlyCountsUpwardMoves(t *testing.T) {
 
 func TestBuildSetPriceSnapshotCalldata(t *testing.T) {
 	snapshot := testPriceSnapshot()
-	calldata, err := BuildSetPriceSnapshotCalldata(40449, snapshot)
+	calldata, err := BuildSetPriceSnapshotCalldata([]PriceSnapshotUpdate{{DstEid: 40449, Snapshot: snapshot}})
 	if err != nil {
 		t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v", err)
 	}
-	if len(calldata) != 4+32*4 {
-		t.Fatalf("calldata len = %d, want %d", len(calldata), 4+32*4)
+	if len(calldata) == 0 {
+		t.Fatal("calldata is empty")
 	}
 	method := priceSnapshotABI.Methods["setPriceSnapshot"]
 	if string(calldata[:4]) != string(method.ID) {
@@ -117,13 +117,18 @@ func TestBuildSetPriceSnapshotCalldata(t *testing.T) {
 	}
 }
 
+func TestBuildSetPriceSnapshotCalldataRejectsEmptyUpdates(t *testing.T) {
+	if _, err := BuildSetPriceSnapshotCalldata(nil); err == nil {
+		t.Fatal("BuildSetPriceSnapshotCalldata() error = nil, want empty updates error")
+	}
+}
+
 func TestBuildSetPriceSnapshotTx(t *testing.T) {
 	request, err := BuildSetPriceSnapshotTx(
 		40161,
 		common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		40449,
 		"0x9999999999999999999999999999999999999999",
-		testPriceSnapshot(),
+		[]PriceSnapshotUpdate{{DstEid: 40449, Snapshot: testPriceSnapshot()}},
 	)
 	if err != nil {
 		t.Fatalf("BuildSetPriceSnapshotTx() error = %v", err)

@@ -20,7 +20,7 @@ const openDVNArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
 );
 const openPriceFeedArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/common/OpenPriceFeed.sol/OpenPriceFeed.json",
+  "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
 );
 
 const { account, publicClient, walletClient } = createClients();
@@ -89,7 +89,7 @@ await waitForTx(
     address: priceFeed,
     abi: openPriceFeedArtifact.abi,
     functionName: "setPriceSnapshot",
-    args: [remoteEid, sharedPriceSnapshot],
+    args: [[{ dstEid: remoteEid, snapshot: sharedPriceSnapshot }]],
     account,
     chain: null,
   }),

@@ -122,6 +122,7 @@ export type DeploymentProfile = {
   databaseUrl: string;
   metricsListenAddress: string;
   owner: Address;
+  priceFeedSubmitters: Address[];
   initialRecipient: Address;
   canaryTreasury?: Address;
   minOwnerNativeBalanceWei: string;
@@ -213,6 +214,12 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
   const input = object(value, "profile");
   const mode = normalizeMode(input.mode);
   const owner = addressField(input, "owner", "profile.owner");
+  const priceFeedSubmitters = normalizeAddressArrayField(
+    input,
+    "priceFeedSubmitters",
+    "profile.priceFeedSubmitters",
+    [owner],
+  );
   const initialRecipient =
     optionalAddressField(input, "initialRecipient", "profile.initialRecipient") ??
     owner;
@@ -242,6 +249,7 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
       "profile.metricsListenAddress",
     ),
     owner,
+    priceFeedSubmitters,
     initialRecipient,
     canaryTreasury,
     minOwnerNativeBalanceWei: optionalDecimalField(
@@ -387,7 +395,10 @@ export function openWorkersParameterFile(
   profile: DeploymentProfile,
   _chain: ChainProfile,
 ) {
-  return buildOpenWorkersParameters({ owner: profile.owner });
+  return buildOpenWorkersParameters({
+    owner: profile.owner,
+    priceFeedSubmitters: profile.priceFeedSubmitters,
+  });
 }
 
 export function testOFTParameterFile(
@@ -1743,6 +1754,30 @@ function arrayField(
     throw new Error(`${label} must be an array`);
   }
   return value;
+}
+
+function normalizeAddressArrayField(
+  input: Record<string, unknown>,
+  field: string,
+  label: string,
+  fallback: Address[],
+): Address[] {
+  const value = input[field];
+  if (value === undefined) {
+    return [...fallback];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  if (value.length === 0) {
+    throw new Error(`${label} must not be empty`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "string") {
+      throw new Error(`${label}[${index}] must be an address`);
+    }
+    return normalizeAddress(entry, `${label}[${index}]`);
+  });
 }
 
 function stringField(

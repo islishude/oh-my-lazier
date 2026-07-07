@@ -54,7 +54,7 @@ func TestBotEnqueueOnceQueuesSharedPriceFeedUpdates(t *testing.T) {
 		`tx_outbox_id=1`,
 		`purpose=pricing_set_price_snapshot`,
 		`src_eid=40161`,
-		`dst_eid=40449`,
+		`dst_count=1`,
 		`price_feed=0x4444444444444444444444444444444444444444`,
 	)
 	assertRequestMatchesSnapshot(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), 40449, PriceSnapshot{
@@ -153,6 +153,108 @@ func TestBotEnqueueOnceDeduplicatesSharedPriceFeed(t *testing.T) {
 	if got := countRequests(store.requests, TxPurposeSetPriceSnapshot); got != 1 {
 		t.Fatalf("price snapshot requests = %d, want 1", got)
 	}
+}
+
+func TestBotEnqueueOnceBatchesSameSourcePriceFeedTargets(t *testing.T) {
+	pathways := testPathways()
+	secondTarget := pathways[0]
+	secondTarget.DstEID = 40500
+	secondTarget.DstOApp = config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	secondTarget.ReceiveLib = config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	secondTarget.DestinationWorkers.OpenDVN = config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc")
+	registry := testRegistryWithPathways(t, []config.PathwayConfig{pathways[0], secondTarget})
+	store := &fakeStore{}
+	sources := testSources()
+	sources[40500] = ChainSources{
+		Primary: fixedPrice{price: big.NewRat(500, 1)},
+		Sanity:  []PriceReader{fixedPrice{price: big.NewRat(500, 1)}},
+		Gas:     fixedGas{price: big.NewInt(3_000_000_000)},
+	}
+	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("enqueued requests = %d, want 1 batch", len(store.requests))
+	}
+	assertRequestMatchesUpdates(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), []PriceSnapshotUpdate{
+		{
+			DstEid: 40449,
+			Snapshot: PriceSnapshot{
+				DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
+				UpdatedAt:             1_700_000_000,
+				StaleAfter:            1800,
+			},
+		},
+		{
+			DstEid: 40500,
+			Snapshot: PriceSnapshot{
+				DstGasPriceInSrcToken: big.NewInt(750_000_000),
+				UpdatedAt:             1_700_000_000,
+				StaleAfter:            1800,
+			},
+		},
+	})
+}
+
+func TestBotEnqueueOnGasSpikeBatchesSameSourcePriceFeedTargets(t *testing.T) {
+	pathways := testPathways()
+	secondTarget := pathways[0]
+	secondTarget.DstEID = 40500
+	secondTarget.DstOApp = config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	secondTarget.ReceiveLib = config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	secondTarget.DestinationWorkers.OpenDVN = config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc")
+	registry := testRegistryWithPathways(t, []config.PathwayConfig{pathways[0], secondTarget})
+	store := &fakeStore{}
+	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
+	alternateGas := &mutableGas{price: big.NewInt(3_000_000_000)}
+	sources := testSources()
+	sources[40449] = ChainSources{Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas}
+	sources[40500] = ChainSources{Primary: fixedPrice{price: big.NewRat(500, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(500, 1)}}, Gas: alternateGas}
+	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("initial enqueued requests = %d, want 1 batch", len(store.requests))
+	}
+
+	destinationGas.price = big.NewInt(2_300_000_000)
+	alternateGas.price = big.NewInt(3_600_000_000)
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() error = %v", err)
+	}
+	if len(store.requests) != 2 {
+		t.Fatalf("gas-spike enqueued requests = %d, want 2 total batches", len(store.requests))
+	}
+	assertRequestMatchesUpdates(t, store.requests[1:], common.HexToAddress("0x4444444444444444444444444444444444444444"), []PriceSnapshotUpdate{
+		{
+			DstEid: 40449,
+			Snapshot: PriceSnapshot{
+				DstGasPriceInSrcToken: big.NewInt(1_150_000_000),
+				UpdatedAt:             1_700_000_000,
+				StaleAfter:            1800,
+			},
+		},
+		{
+			DstEid: 40500,
+			Snapshot: PriceSnapshot{
+				DstGasPriceInSrcToken: big.NewInt(900_000_000),
+				UpdatedAt:             1_700_000_000,
+				StaleAfter:            1800,
+			},
+		},
+	})
 }
 
 func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
@@ -280,6 +382,18 @@ func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *ch
 				Executor: testExecutorRole(),
 			},
 		},
+		{
+			EID:             40500,
+			Name:            "alt-destination",
+			Family:          config.ChainFamilyEVM,
+			ChainID:         40500,
+			EndpointAddress: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			Confirmations:   12,
+			RPCURLs:         []string{"http://localhost:8547"},
+			TxRoles: config.ChainTxRolesConfig{
+				Executor: testExecutorRole(),
+			},
+		},
 	}, pathways)
 	if err != nil {
 		t.Fatalf("NewRegistry() error = %v", err)
@@ -375,7 +489,12 @@ func assertLogContains(t *testing.T, output string, wants ...string) {
 
 func assertRequestMatchesSnapshot(t *testing.T, requests []db.TxRequest, priceFeed common.Address, dstEID uint32, snapshot PriceSnapshot) {
 	t.Helper()
-	want, err := BuildSetPriceSnapshotCalldata(dstEID, snapshot)
+	assertRequestMatchesUpdates(t, requests, priceFeed, []PriceSnapshotUpdate{{DstEid: dstEID, Snapshot: snapshot}})
+}
+
+func assertRequestMatchesUpdates(t *testing.T, requests []db.TxRequest, priceFeed common.Address, updates []PriceSnapshotUpdate) {
+	t.Helper()
+	want, err := BuildSetPriceSnapshotCalldata(updates)
 	if err != nil {
 		t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v", err)
 	}

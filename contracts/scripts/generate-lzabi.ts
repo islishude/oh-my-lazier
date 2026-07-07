@@ -267,6 +267,12 @@ const outputs: AbiOutput[] = [
       },
       {
         artifact:
+          "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
+        type: "function",
+        name: "submitters",
+      },
+      {
+        artifact:
           "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
         type: "function",
         name: "verifiers",

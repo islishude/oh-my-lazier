@@ -13,6 +13,28 @@ func Clone(value *big.Int) *big.Int {
 	return new(big.Int).Set(value)
 }
 
+// CloneRat returns a copy of value, preserving nil.
+func CloneRat(value *big.Rat) *big.Rat {
+	if value == nil {
+		return nil
+	}
+	return new(big.Rat).Set(value)
+}
+
+// CeilRat returns the least integer greater than or equal to value, preserving nil.
+func CeilRat(value *big.Rat) *big.Int {
+	if value == nil {
+		return nil
+	}
+	num := value.Num()
+	den := value.Denom()
+	quotient, remainder := new(big.Int).QuoRem(num, den, new(big.Int))
+	if remainder.Sign() != 0 && value.Sign() > 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient
+}
+
 // ParseDecimal parses a base-10 integer field.
 func ParseDecimal(field, value string) (*big.Int, error) {
 	parsed, ok := parseDecimal(value)

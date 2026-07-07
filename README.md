@@ -4,7 +4,7 @@ Self-hosted LayerZero V2 Executor and DVN worker stack.
 
 The repo contains:
 
-- Solidity contracts for `TestOFT`, `OpenPriceFeed`, `OpenExecutor`, `OpenDVN`, worker options, access control, shared price snapshots, and worker fee models.
+- Solidity contracts for `TestOFT`, worker-scoped `OpenPriceFeed`, `OpenExecutor`, `OpenDVN`, worker options, access control, submitter-managed shared price snapshots, and worker fee models.
 - TypeScript scripts for deployment, LayerZero config, canaries, local E2E, ABI generation, runbook checks, and migration evidence checks.
 - Go worker services for config validation, indexing, executor delivery, DVN verification, pricing, tx management, readiness, and metrics.
 - Docker Compose setups for local Postgres, integration dependencies, and the dual-Anvil E2E.
