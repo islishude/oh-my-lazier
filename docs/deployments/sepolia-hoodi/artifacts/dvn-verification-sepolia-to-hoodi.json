@@ -1,0 +1,49 @@
+{
+  "chainId": 560048,
+  "receiveUln": "0xd682ECF100f6F4284138AA925348633B0611Ae21",
+  "endpoint": "0x3aCAAf60502791D199a5a5F0B173D78229eBFe32",
+  "expectedPayloadHash": "0xf4fae3af9f465547bcd591f526a9a9e16eff3b31f47983e1b040949d9b40f405",
+  "expectedPacket": {
+    "srcEid": 40161,
+    "dstEid": 40449,
+    "nonce": "1",
+    "sender": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+    "receiver": "0x94060b9d97386993014225465A97eb864BBe1ef5"
+  },
+  "packetHeader": "0x01000000000000000100009ce100000000000000000000000052c764a3cd1bc44a94c95ec54b8b2cf1b6298ac300009e0100000000000000000000000094060b9d97386993014225465a97eb864bbe1ef5",
+  "payloadVerified": [
+    {
+      "label": "LayerZero Labs DVN",
+      "dvn": "0xa78A78a13074eD93aD447a26Ec57121f29E8feC2",
+      "txHash": "0x583cd4088cc4cafde9b4e7cbdf5aa3a6021550e8a85b5e2e1056b647e3ec503c",
+      "blockNumber": "3168692",
+      "logIndex": 2,
+      "confirmations": "12",
+      "proofHash": "0xf4fae3af9f465547bcd591f526a9a9e16eff3b31f47983e1b040949d9b40f405"
+    },
+    {
+      "label": "OpenDVN",
+      "dvn": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+      "txHash": "0xf841466896e317d43bad827bb7d3fa970260fedeeb2510e484ef4ee5573d282d",
+      "blockNumber": "3168693",
+      "logIndex": 7,
+      "confirmations": "12",
+      "proofHash": "0xf4fae3af9f465547bcd591f526a9a9e16eff3b31f47983e1b040949d9b40f405"
+    }
+  ],
+  "packetVerified": {
+    "txHash": "0x76a9d252783562779575ad292aa5e9dbb214750c5ffc0879d9f171a9687a9d86",
+    "blockNumber": "3168694",
+    "origin": {
+      "srcEid": 40161,
+      "sender": "0x00000000000000000000000052c764a3cd1bc44a94c95ec54b8b2cf1b6298ac3",
+      "nonce": "1"
+    },
+    "receiver": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+    "payloadHash": "0xf4fae3af9f465547bcd591f526a9a9e16eff3b31f47983e1b040949d9b40f405"
+  },
+  "status": {
+    "payloadVerified": true,
+    "packetVerified": true
+  }
+}

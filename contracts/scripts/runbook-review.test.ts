@@ -79,9 +79,9 @@ function currentDocuments(): Map<string, string> {
       readFileSync("docs/runbooks/rate-limit.md", "utf8"),
     ],
     [
-      "docs/deployments/testnet-migration-evidence.example.json",
+      "docs/deployments/sepolia-hoodi/migration-evidence.json",
       readFileSync(
-        "docs/deployments/testnet-migration-evidence.example.json",
+        "docs/deployments/sepolia-hoodi/migration-evidence.json",
         "utf8",
       ),
     ],

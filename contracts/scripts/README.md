@@ -72,14 +72,30 @@ Foundry image. If `oh-my-lazier-worker:e2e` already exists, set
 `E2E_WORKER_UP_FLAGS=--no-build` to reuse it instead of rebuilding the worker
 image.
 
-Before approving a migration ticket, validate that the ticket has attached the required local evidence references:
+Before approving a deployment or migration evidence record, validate that the
+record has attached the required local evidence references:
 
 ```bash
 npm run check:migration-evidence -- \
-  --migration-evidence docs/deployments/testnet-migration-evidence.example.json
+  --migration-evidence docs/deployments/sepolia-hoodi/migration-evidence.json
 ```
 
-The migration evidence checker verifies that the ticket includes `make check`, LayerZero address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/runbook/security review evidence, that the only phase-1 directions are Ethereum Sepolia `40161` <-> Hoodi `40449`, that each direction records source and destination worker contracts plus config diff, deployment preflight, LayerZero config before/after, shared price snapshot evidence tied to the destination EID and freshness window, drain, canary amount/sender/recipient/minimum balance/receipt/balance-check evidence, DVN join config with positive `confirmations` and `requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence tied to the exact payload hash and PacketV1 identity, and that rollback evidence includes previous Executor/ULN configs, rollback dry-run output, restored config check, post-rollback canary, owner pause account, signer account, drain status, and manual retry plan.
+The evidence checker verifies that the record includes `make check`, LayerZero
+address refresh, DB-backed readiness check, key/price/rate-limit/monitoring/
+runbook/security review evidence, that the only phase-1 directions are Ethereum
+Sepolia `40161` <-> Hoodi `40449`, that each direction records source and
+destination worker contracts, deployment preflight, LayerZero config after,
+shared price snapshot evidence tied to the destination EID and freshness window,
+drain, canary amount/sender/recipient/minimum balance/receipt/balance-check
+evidence, DVN join config with positive `confirmations` and
+`requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence
+tied to the exact payload hash and PacketV1 identity. Records with
+`"evidenceType": "migration"` additionally require migration ticket contacts,
+config diff artifacts, LayerZero config before snapshots, and rollback evidence
+for previous Executor/ULN configs, rollback dry-run output, restored config
+check, post-rollback canary, owner pause account, signer account, drain status,
+and manual retry plan. Records with `"evidenceType": "deployment"` omit those
+migration-only artifacts.
 
 Use the profile-driven deployment entrypoint for Sepolia/Hoodi rehearsal and
 real external OApp deployments. The profile is the only operator-edited input;
@@ -552,7 +568,7 @@ npm run check:oft-canary -- \
 
 The destination check requires EndpointV2 `PacketDelivered`, rejects receipts containing `LzReceiveAlert`, and can optionally require the recipient's TestOFT balance to be at least `MIN_RECIPIENT_BALANCE`. `SOURCE_TX_HASH` checks are intended for the source-chain RPC; `DESTINATION_TX_HASH` checks are intended for the destination-chain RPC.
 
-The migration evidence record must capture each direction's source OpenExecutor/OpenDVN/OpenPriceFeed contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, shared price-feed `address`, shared `priceSnapshot`, each worker's bound `priceFeed`, and each worker's `feeModel` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
+The deployment or migration evidence record must capture each direction's source OpenExecutor/OpenDVN/OpenPriceFeed contracts, destination OpenDVN contract, canary `AMOUNT_LD`, sender account, recipient account, `MIN_RECIPIENT_BALANCE`, source receipt, destination receipt, and recipient balance check. The `priceConfigCheck` object must capture the `DST_EID`, `MAX_PRICE_AGE_SECONDS`, `EXPECTED_STALE_AFTER`, `checkedAt`, shared price-feed `address`, shared `priceSnapshot`, each worker's bound `priceFeed`, and each worker's `feeModel` values from `check:price-config`. The `dvnVerificationReceipt` object must also capture the `EXPECTED_PAYLOAD_HASH`, `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` values used by `check:dvn-verification`. This keeps the approval artifact tied to the exact transfer size, accounts, worker contracts, price freshness, packet, and direction used in the rehearsal.
 
 After DVN join, check a destination-chain verification receipt for both required DVNs:
 

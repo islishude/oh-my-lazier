@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "chainId": 11155111,
+  "dstEid": 40449,
+  "checkedAt": "1783408692",
+  "maxAgeSeconds": "1800",
+  "expectedStaleAfter": "1800",
+  "priceFeed": {
+    "address": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+    "priceSnapshot": {
+      "dstGasPriceInSrcToken": "1",
+      "dstDataFeePerByteInSrcToken": "0",
+      "updatedAt": "1783408185",
+      "staleAfter": "1800"
+    }
+  },
+  "workers": [
+    {
+      "label": "OpenExecutor",
+      "address": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C",
+      "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+      "feeModel": {
+        "baseFee": "0",
+        "dstGasOverhead": "50000",
+        "dataSizeOverheadBytes": "0",
+        "marginBps": 1000
+      }
+    },
+    {
+      "label": "OpenDVN",
+      "address": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+      "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+      "feeModel": {
+        "baseFee": "0",
+        "dstGasOverhead": "150000",
+        "dataSizeOverheadBytes": "0",
+        "marginBps": 1000
+      }
+    }
+  ],
+  "errors": []
+}

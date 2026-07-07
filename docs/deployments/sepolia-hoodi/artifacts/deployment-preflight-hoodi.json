@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "chainId": 560048,
+  "expectedOwner": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+  "contracts": [
+    {
+      "label": "TestOFT",
+      "address": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+      "owner": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6"
+    },
+    {
+      "label": "OpenExecutor",
+      "address": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+      "owner": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6"
+    },
+    {
+      "label": "OpenDVN",
+      "address": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+      "owner": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6"
+    }
+  ],
+  "ownerNativeBalance": {
+    "address": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+    "balance": "9940701605147622178",
+    "minBalance": "10000000000000000"
+  },
+  "canaryTreasury": {
+    "nativeBalance": {
+      "address": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+      "balance": "9940701605147622178",
+      "minBalance": "10000000000000000"
+    },
+    "tokenBalance": {
+      "address": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+      "balance": "0",
+      "minBalance": "0"
+    }
+  },
+  "testOFTTotalSupply": {
+    "actual": "0",
+    "expected": "0"
+  },
+  "errors": []
+}

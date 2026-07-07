@@ -1,0 +1,220 @@
+{
+  "evidenceType": "deployment",
+  "environment": "testnet",
+  "scope": "Ethereum Sepolia <-> Hoodi TestOFT rehearsal deployment evidence",
+  "ownerAccount": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+  "signerAccount": "0x00011fad1656b9dfd1ac2d1cadc6d40a35efa42d",
+  "makeCheck": {
+    "ref": "docs/deployments/sepolia-hoodi/artifacts/make-check.txt"
+  },
+  "layerZeroAddressCheck": {
+    "ref": "docs/deployments/layerzero-testnet-addresses.md"
+  },
+  "readinessCheck": {
+    "ref": "docs/deployments/sepolia-hoodi/artifacts/readinesscheck.json"
+  },
+  "keyManagementReview": {
+    "ref": "docs/runbooks/key-management.md"
+  },
+  "priceBotReview": {
+    "ref": "docs/runbooks/price-bot.md"
+  },
+  "rateLimitReview": {
+    "ref": "docs/runbooks/rate-limit.md"
+  },
+  "monitoringReview": {
+    "ref": "docs/runbooks/monitoring.md"
+  },
+  "runbookReview": {
+    "ref": "docs/deployments/sepolia-hoodi/artifacts/runbook-review.txt"
+  },
+  "securityReview": {
+    "ref": "docs/security/security-review.md"
+  },
+  "directions": [
+    {
+      "label": "Ethereum Sepolia to Hoodi",
+      "srcEid": 40161,
+      "dstEid": 40449,
+      "sourceWorkers": {
+        "openExecutor": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C",
+        "openDVN": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+        "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10"
+      },
+      "destinationWorkers": {
+        "openDVN": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A"
+      },
+      "deploymentPreflight": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/deployment-preflight-sepolia.json"
+      },
+      "lzConfigAfter": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/lz-config-sepolia-to-hoodi.json"
+      },
+      "priceConfigCheck": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/price-config-sepolia-to-hoodi.json",
+        "dstEid": 40449,
+        "checkedAt": "1783408692",
+        "maxAgeSeconds": "1800",
+        "expectedStaleAfter": "1800",
+        "priceFeed": {
+          "address": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+          "priceSnapshot": {
+            "dstGasPriceInSrcToken": "1",
+            "dstDataFeePerByteInSrcToken": "0",
+            "updatedAt": "1783408185",
+            "staleAfter": "1800"
+          }
+        },
+        "executor": {
+          "address": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C",
+          "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+          "baseFee": "0",
+          "dstGasOverhead": "50000",
+          "dataSizeOverheadBytes": "0",
+          "marginBps": 1000
+        },
+        "dvn": {
+          "address": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+          "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10",
+          "baseFee": "0",
+          "dstGasOverhead": "150000",
+          "dataSizeOverheadBytes": "0",
+          "marginBps": 1000
+        }
+      },
+      "drainCheckBeforeSwitch": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/drain-sepolia-to-hoodi.json"
+      },
+      "canarySourceReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-source-sepolia-to-hoodi.json"
+      },
+      "canaryDestinationReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-destination-sepolia-to-hoodi.json"
+      },
+      "canary": {
+        "amountLD": "1000000000000000000",
+        "senderAccount": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+        "recipientAccount": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+        "minRecipientBalanceLD": "1000000000000000000",
+        "sourceReceipt": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-source-sepolia-to-hoodi.json"
+        },
+        "destinationReceipt": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-destination-sepolia-to-hoodi.json"
+        },
+        "recipientBalanceCheck": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-recipient-balance-sepolia-to-hoodi.json"
+        }
+      },
+      "dvnJoin": {
+        "confirmations": 12,
+        "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
+        "optionalDVNsDisabled": true,
+        "configCheck": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/lz-config-sepolia-to-hoodi.json"
+        }
+      },
+      "dvnVerificationReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/dvn-verification-sepolia-to-hoodi.json",
+        "expectedPayloadHash": "0xf4fae3af9f465547bcd591f526a9a9e16eff3b31f47983e1b040949d9b40f405",
+        "expectedSrcEid": 40161,
+        "expectedDstEid": 40449,
+        "expectedNonce": "1",
+        "expectedSender": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+        "expectedReceiver": "0x94060b9d97386993014225465A97eb864BBe1ef5"
+      }
+    },
+    {
+      "label": "Hoodi to Ethereum Sepolia",
+      "srcEid": 40449,
+      "dstEid": 40161,
+      "sourceWorkers": {
+        "openExecutor": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+        "openDVN": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+        "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D"
+      },
+      "destinationWorkers": {
+        "openDVN": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21"
+      },
+      "deploymentPreflight": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/deployment-preflight-hoodi.json"
+      },
+      "lzConfigAfter": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/lz-config-hoodi-to-sepolia.json"
+      },
+      "priceConfigCheck": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/price-config-hoodi-to-sepolia.json",
+        "dstEid": 40161,
+        "checkedAt": "1783408703",
+        "maxAgeSeconds": "1800",
+        "expectedStaleAfter": "1800",
+        "priceFeed": {
+          "address": "0x930cb1dd458a32611091b4565E6E36004186092D",
+          "priceSnapshot": {
+            "dstGasPriceInSrcToken": "1",
+            "dstDataFeePerByteInSrcToken": "0",
+            "updatedAt": "1783408185",
+            "staleAfter": "1800"
+          }
+        },
+        "executor": {
+          "address": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+          "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D",
+          "baseFee": "0",
+          "dstGasOverhead": "50000",
+          "dataSizeOverheadBytes": "0",
+          "marginBps": 1000
+        },
+        "dvn": {
+          "address": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+          "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D",
+          "baseFee": "0",
+          "dstGasOverhead": "150000",
+          "dataSizeOverheadBytes": "0",
+          "marginBps": 1000
+        }
+      },
+      "drainCheckBeforeSwitch": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/drain-hoodi-to-sepolia.json"
+      },
+      "canarySourceReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-source-hoodi-to-sepolia.json"
+      },
+      "canaryDestinationReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-destination-hoodi-to-sepolia.json"
+      },
+      "canary": {
+        "amountLD": "1000000000000000000",
+        "senderAccount": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+        "recipientAccount": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+        "minRecipientBalanceLD": "1000000000000000",
+        "sourceReceipt": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-source-hoodi-to-sepolia.json"
+        },
+        "destinationReceipt": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-destination-hoodi-to-sepolia.json"
+        },
+        "recipientBalanceCheck": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/canary-recipient-balance-hoodi-to-sepolia.json"
+        }
+      },
+      "dvnJoin": {
+        "confirmations": 12,
+        "requiredDVNs": ["OpenDVN", "LayerZero Labs DVN"],
+        "optionalDVNsDisabled": true,
+        "configCheck": {
+          "ref": "docs/deployments/sepolia-hoodi/artifacts/lz-config-hoodi-to-sepolia.json"
+        }
+      },
+      "dvnVerificationReceipt": {
+        "ref": "docs/deployments/sepolia-hoodi/artifacts/dvn-verification-hoodi-to-sepolia.json",
+        "expectedPayloadHash": "0x21c1466ef51e5a027489d42dbc056693de6e113f019c42d16bd3a93f3cf561a7",
+        "expectedSrcEid": 40449,
+        "expectedDstEid": 40161,
+        "expectedNonce": "1",
+        "expectedSender": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+        "expectedReceiver": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3"
+      }
+    }
+  ]
+}

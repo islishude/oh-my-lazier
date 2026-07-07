@@ -15,15 +15,17 @@ export type EvidenceRef = {
   reviewer?: string;
 };
 
+export type EvidenceType = "deployment" | "migration";
+
 export type MigrationDirectionEvidence = {
   label: string;
   srcEid: number;
   dstEid: number;
   sourceWorkers: SourceWorkersEvidence;
   destinationWorkers: DestinationWorkersEvidence;
-  configDiff: EvidenceRef;
+  configDiff?: EvidenceRef;
   deploymentPreflight: EvidenceRef;
-  lzConfigBefore: EvidenceRef;
+  lzConfigBefore?: EvidenceRef;
   lzConfigAfter: EvidenceRef;
   priceConfigCheck: PriceConfigEvidence;
   drainCheckBeforeSwitch: EvidenceRef;
@@ -113,10 +115,11 @@ export type RollbackEvidence = {
 };
 
 export type MigrationEvidenceRecord = {
-  ticket: string;
+  evidenceType: EvidenceType;
+  ticket?: string;
   environment: string;
   scope: string;
-  operatorContacts: string[];
+  operatorContacts?: string[];
   ownerAccount: string;
   signerAccount: string;
   makeCheck: EvidenceRef;
@@ -129,19 +132,29 @@ export type MigrationEvidenceRecord = {
   runbookReview: EvidenceRef;
   securityReview: EvidenceRef;
   directions: MigrationDirectionEvidence[];
-  rollback: RollbackEvidence;
+  rollback?: RollbackEvidence;
 };
 
 export function validateMigrationEvidenceRecord(
   record: MigrationEvidenceRecord,
 ): string[] {
   const errors: string[] = [];
-  requireNonEmpty(errors, record.ticket, "ticket");
+  const evidenceType = validateEvidenceType(errors, record.evidenceType);
+  if (evidenceType === "migration") {
+    requireNonEmpty(errors, record.ticket, "ticket");
+    requireStringArray(errors, record.operatorContacts, "operatorContacts");
+  } else {
+    requireOptionalNonEmpty(errors, record.ticket, "ticket");
+    requireOptionalStringArray(
+      errors,
+      record.operatorContacts,
+      "operatorContacts",
+    );
+  }
   requireNonEmpty(errors, record.environment, "environment");
   requireNonEmpty(errors, record.scope, "scope");
   requireEVMAddress(errors, record.ownerAccount, "ownerAccount");
   requireEVMAddress(errors, record.signerAccount, "signerAccount");
-  requireStringArray(errors, record.operatorContacts, "operatorContacts");
   requireEvidence(errors, record.makeCheck, "makeCheck");
   requireEvidence(
     errors,
@@ -155,14 +168,17 @@ export function validateMigrationEvidenceRecord(
   requireEvidence(errors, record.monitoringReview, "monitoringReview");
   requireEvidence(errors, record.runbookReview, "runbookReview");
   requireEvidence(errors, record.securityReview, "securityReview");
-  validateDirections(errors, record.directions);
-  validateRollback(errors, record.rollback);
+  validateDirections(errors, record.directions, evidenceType);
+  if (evidenceType === "migration" || record.rollback !== undefined) {
+    validateRollback(errors, record.rollback);
+  }
   return errors;
 }
 
 function validateDirections(
   errors: string[],
   directions: MigrationDirectionEvidence[],
+  evidenceType: EvidenceType,
 ): void {
   if (!Array.isArray(directions) || directions.length === 0) {
     errors.push("directions must contain at least one direction");
@@ -194,17 +210,33 @@ function validateDirections(
     }
     seen.add(key);
     directionKeys.push(key);
-    requireEvidence(errors, direction.configDiff, `${prefix}.configDiff`);
+    if (evidenceType === "migration") {
+      requireEvidence(errors, direction.configDiff, `${prefix}.configDiff`);
+    } else {
+      requireOptionalEvidence(
+        errors,
+        direction.configDiff,
+        `${prefix}.configDiff`,
+      );
+    }
     requireEvidence(
       errors,
       direction.deploymentPreflight,
       `${prefix}.deploymentPreflight`,
     );
-    requireEvidence(
-      errors,
-      direction.lzConfigBefore,
-      `${prefix}.lzConfigBefore`,
-    );
+    if (evidenceType === "migration") {
+      requireEvidence(
+        errors,
+        direction.lzConfigBefore,
+        `${prefix}.lzConfigBefore`,
+      );
+    } else {
+      requireOptionalEvidence(
+        errors,
+        direction.lzConfigBefore,
+        `${prefix}.lzConfigBefore`,
+      );
+    }
     requireEvidence(errors, direction.lzConfigAfter, `${prefix}.lzConfigAfter`);
     validatePriceConfigEvidence(
       errors,
@@ -594,7 +626,10 @@ function validateDVNVerification(
   );
 }
 
-function validateRollback(errors: string[], rollback: RollbackEvidence): void {
+function validateRollback(
+  errors: string[],
+  rollback: RollbackEvidence | undefined,
+): void {
   if (!isRecord(rollback)) {
     errors.push("rollback is required");
     return;
@@ -637,7 +672,7 @@ function validateRollback(errors: string[], rollback: RollbackEvidence): void {
 
 function requireEvidence(
   errors: string[],
-  value: EvidenceRef,
+  value: EvidenceRef | undefined,
   field: string,
 ): void {
   if (!isRecord(value)) {
@@ -653,9 +688,30 @@ function requireEvidence(
   }
 }
 
+function requireOptionalEvidence(
+  errors: string[],
+  value: EvidenceRef | undefined,
+  field: string,
+): void {
+  if (value !== undefined) {
+    requireEvidence(errors, value, field);
+  }
+}
+
+function validateEvidenceType(
+  errors: string[],
+  value: EvidenceType,
+): EvidenceType {
+  if (value !== "deployment" && value !== "migration") {
+    errors.push("evidenceType must be deployment or migration");
+    return "migration";
+  }
+  return value;
+}
+
 function requireStringArray(
   errors: string[],
-  value: string[],
+  value: string[] | undefined,
   field: string,
 ): void {
   if (!Array.isArray(value) || value.length === 0) {
@@ -665,6 +721,16 @@ function requireStringArray(
   value.forEach((item, index) => {
     requireNonEmpty(errors, item, `${field}[${index}]`);
   });
+}
+
+function requireOptionalStringArray(
+  errors: string[],
+  value: string[] | undefined,
+  field: string,
+): void {
+  if (value !== undefined) {
+    requireStringArray(errors, value, field);
+  }
 }
 
 function requirePositiveInteger(
@@ -721,9 +787,19 @@ function requireBytes32(errors: string[], value: string, field: string): void {
   }
 }
 
-function requireNonEmpty(errors: string[], value: string, field: string): void {
+function requireNonEmpty(errors: string[], value: unknown, field: string): void {
   if (typeof value !== "string" || value.trim() === "") {
     errors.push(`${field} must be a non-empty string`);
+  }
+}
+
+function requireOptionalNonEmpty(
+  errors: string[],
+  value: string | undefined,
+  field: string,
+): void {
+  if (value !== undefined) {
+    requireNonEmpty(errors, value, field);
   }
 }
 
@@ -766,7 +842,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(
     jsonStringify({
       ok: true,
-      ticket: record.ticket,
+      evidenceType: record.evidenceType,
+      ...(record.ticket === undefined ? {} : { ticket: record.ticket }),
       environment: record.environment,
       directions: record.directions.length,
     }),

@@ -1,0 +1,263 @@
+npm run compile
+
+> oh-my-lazier@1.0.0 compile
+> hardhat compile
+
+No contracts to compile
+npm run typecheck
+
+> oh-my-lazier@1.0.0 typecheck
+> tsc --noEmit
+
+npm run check:lzabi
+
+> oh-my-lazier@1.0.0 check:lzabi
+> npm run compile && tsx contracts/scripts/generate-lzabi.ts --check
+
+
+> oh-my-lazier@1.0.0 compile
+> hardhat compile
+
+No contracts to compile
+npm run check:pricing-abi
+
+> oh-my-lazier@1.0.0 check:pricing-abi
+> npm run compile && tsx contracts/scripts/generate-pricing-abi.ts --check
+
+
+> oh-my-lazier@1.0.0 compile
+> hardhat compile
+
+No contracts to compile
+npx hardhat test solidity
+No contracts to compile
+
+Running Solidity tests
+
+  contracts/test/OpenWorkers.t.sol:OpenWorkersTest
+    ✔ test_workerWithdrawFeeRejectsUnauthorizedSendLib()
+    ✔ test_workerRejectsUnauthorizedPriceFeedRotation()
+    ✔ test_workerRejectsInvalidPriceFeed()
+    ✔ test_workerFeeModelsStayIndependent()
+    ✔ test_sharedPriceFeedUpdateChangesExecutorAndDVNQuotes()
+    ✔ test_priceFeedSubmitterCanBatchUpdateMultipleEIDs()
+    ✔ test_priceFeedRejectsZeroSubmitter()
+    ✔ test_priceFeedRejectsUnauthorizedUpdate()
+    ✔ test_priceFeedRejectsInvalidSnapshot()
+    ✔ test_priceFeedRejectsEmptyBatch()
+    ✔ test_priceFeedOwnerCanManageSubmitterWithoutImplicitSubmitAccess()
+    ✔ test_ownerCanRotateExecutorPriceFeed()
+    ✔ test_ownerCanRotateDVNPriceFeed()
+    ✔ test_oftZeroRateLimitDrainsPathway()
+    ✔ test_oftSendPauseRejectsDebit()
+    ✔ test_oftReceivePauseRejectsReceive()
+    ✔ test_oftRateLimitRejectsDebitAboveCapacity()
+    ✔ test_oftRateLimitRefillsFromElapsedTime()
+    ✔ test_oftRateLimitAllowsDebitWithinCapacity()
+    ✔ test_executorWithdrawFeeFromAllowedSendLib()
+    ✔ test_executorWithdraw()
+    ✔ test_executorRejectsZeroGasPriceWithNonZeroGasUnits()
+    ✔ test_executorRejectsWhenPaused()
+    ✔ test_executorRejectsUnsupportedOptions()
+    ✔ test_executorRejectsUnauthorizedSendLib()
+    ✔ test_executorRejectsUnauthorizedOAppSender()
+    ✔ test_executorRejectsStalePrice()
+    ✔ test_executorRejectsOrderedExecutionOption()
+    ✔ test_executorRejectsNonZeroLzReceiveValue()
+    ✔ test_executorRejectsNativeDropOption()
+    ✔ test_executorRejectsMessageSize()
+    ✔ test_executorRejectsInvalidBps()
+    ✔ test_executorRejectsGasBelowMinimum()
+    ✔ test_executorRejectsGasAboveMaximum()
+    ✔ test_executorRejectsDuplicateLzReceiveOption()
+    ✔ test_executorFeeSuccess()
+    ✔ test_executorFeeIncludesCalldataDataFee()
+    ✔ test_dvnWithdrawFeeFromAllowedSendLib()
+    ✔ test_dvnWithdraw()
+    ✔ test_dvnSubmitVerificationRejectsUnauthorizedVerifier()
+    ✔ test_dvnSubmitVerificationRecordsOpenDVNAsSender()
+    ✔ test_dvnRejectsWhenPaused()
+    ✔ test_dvnRejectsUnauthorizedSendLib()
+    ✔ test_dvnRejectsUnauthorizedOAppSender()
+    ✔ test_dvnRejectsStalePrice()
+    ✔ test_dvnRejectsNonEmptyOptions()
+    ✔ test_dvnRejectsMessageSize()
+    ✔ test_dvnOwnerSetsVerifierAuthorization()
+    ✔ test_dvnFeeSuccess()
+    ✔ test_dvnDataFeeUsesConfiguredOverheadOnly()
+    ✔ test_dvnAssignUsesSendLibInternalAccountingWithoutNativeValue()
+
+
+  51 passing
+
+npm run test:scripts
+
+> oh-my-lazier@1.0.0 test:scripts
+> tsx --test contracts/scripts/*.test.ts
+
+✔ decodeKnownContractError decodes nested revert data (2.72975ms)
+✔ decodeKnownContractError maps selector-only viem messages (0.397875ms)
+✔ enrichKnownContractError adds operator hint for stale prices (0.355042ms)
+✔ normalizeProfile validates rehearsal mode and LayerZero metadata (1.109667ms)
+✔ normalizeProfile requires external OApp addresses in external mode (0.214541ms)
+✔ normalizeProfile requires long-term price feed submitters (0.06975ms)
+✔ normalizeProfile rejects owner as a long-term price feed submitter (0.076542ms)
+✔ normalizeProfile rejects uppercase native asset ids (0.083041ms)
+✔ normalizeProfile rejects legacy top-level canary token balance (0.066292ms)
+✔ normalizeProfile requires chain canary token balance in rehearsal mode (0.089208ms)
+✔ normalizeProfile rejects tx roles that do not reference a configured signer (0.117583ms)
+✔ normalizeProfile rejects zero tx role minimum native balance (0.091708ms)
+✔ normalizeProfile rejects Hardhat private key env injection (0.147708ms)
+✔ extractOpenWorkerContracts and buildDeploymentState require OpenWorkers price feed (0.374917ms)
+✔ buildDeploymentState uses profile OApps in external mode without TestOFT state (0.332792ms)
+✔ readPriceFeedFromWorkers hydrates only matching worker price feeds (0.2575ms)
+✔ oappEndpointParameterFile and openWorkersPathwayParameterFile split config surfaces (8.914375ms)
+✔ renderWorkerConfig emits external OApps, active DVN signer, and worker contracts (0.422333ms)
+✔ resolveWorkerStartBlocks queries latest height only for missing profile overrides (0.164958ms)
+✔ resolveWorkerStartBlocks preserves explicit non-zero profile override (0.080833ms)
+✔ parameter files split TestOFT rehearsal from OpenWorkers deployment (0.145167ms)
+✔ deployment state paths use profile deployment ids (0.088458ms)
+✔ deployment preflight args use chain canary token balances (0.143875ms)
+✔ command plan and phase gates keep external OApp config explicit (0.280458ms)
+✔ command plan forwards Ignition verify, build profile, and auto-confirm flags (0.221792ms)
+✔ command plan rejects invalid Ignition build profile values (0.102833ms)
+✔ isBootstrapStateUnavailable only allows missing new deployment state (0.122292ms)
+✔ validateDeploymentPreflight accepts matching owners and balances (0.804833ms)
+✔ validateDeploymentPreflight reports owner mismatches (0.479ms)
+✔ validateDeploymentPreflight reports insufficient canary balances (0.086875ms)
+✔ validateDeploymentPreflight reports total supply mismatch (0.058ms)
+✔ assertDVNVerificationReceipt verifies both required DVNs and Endpoint PacketVerified (2.71875ms)
+✔ assertDVNVerificationReceipt rejects missing required DVN (0.37725ms)
+✔ assertDVNVerificationReceipt rejects insufficient confirmations (0.435333ms)
+✔ assertDVNVerificationReceipt rejects missing PacketVerified when endpoint is required (0.469834ms)
+✔ assertDVNVerificationReceipt rejects mismatched expected packet header (0.46025ms)
+✔ sourceWorkerFeeClaims maps executor and DVN fees by worker address (2.05425ms)
+✔ sourceWorkerFeeClaims rejects missing source DVN fee entries (0.415667ms)
+✔ sourceWorkerFeeClaims rejects zero fee claims (0.274708ms)
+✔ validateLocalE2EDeployment accepts generated deployment shape (0.719667ms)
+✔ validateLocalE2EDeployment rejects invalid addresses (0.214625ms)
+✔ validateLocalE2EGeneratedKMSKey accepts helper output (0.059334ms)
+✔ validateLocalE2EGeneratedKMSKey rejects invalid address (0.057709ms)
+✔ localE2EChains keeps Compose-compatible defaults (0.738166ms)
+✔ localE2EChains accepts CI host and container RPC overrides (0.09275ms)
+✔ localE2EDatabaseURL keeps defaults and accepts overrides (0.07375ms)
+✔ localE2EKMS keeps Compose-compatible defaults and accepts overrides (0.076333ms)
+✔ local E2E worker keeps keystore password overrideable (0.2445ms)
+✔ local E2E worker config enables fast RBF replacement (0.09725ms)
+✔ parseCLIParams accepts kebab-case flags with separate values (0.921292ms)
+✔ parseCLIParams accepts equals syntax and normalizes underscores (0.154917ms)
+✔ verifyLayerZeroAddresses accepts matching metadata (0.858459ms)
+✔ verifyLayerZeroAddresses reports mismatched protocol and DVN addresses (0.211792ms)
+✔ executor config ABI round trips (1.905792ms)
+✔ required DVN config sorts addresses and disables optional DVNs (6.436292ms)
+✔ ULN config ABI round trips required DVNs (0.89575ms)
+✔ required DVN config rejects duplicate addresses case-insensitively (0.189417ms)
+✔ rollback config batches restore executor and both ULN configs (0.363875ms)
+✔ rollback config plan exposes dry-run review payload (0.205125ms)
+✔ rollback config batches reject mismatched DVN counts (0.075ms)
+✔ validateMigrationEvidenceRecord accepts complete migration evidence (1.353125ms)
+✔ validateMigrationEvidenceRecord accepts deployment evidence without migration-only artifacts (0.145167ms)
+✔ validateMigrationEvidenceRecord rejects invalid evidence type (0.147375ms)
+✔ validateMigrationEvidenceRecord rejects price config evidence not bound to source workers (0.139209ms)
+✔ validateMigrationEvidenceRecord rejects missing required artifacts (0.176167ms)
+✔ validateMigrationEvidenceRecord rejects zero and invalid account addresses (0.115083ms)
+✔ validateMigrationEvidenceRecord rejects duplicate directions (0.092334ms)
+✔ validateMigrationEvidenceRecord rejects missing reciprocal direction (0.069625ms)
+✔ validateMigrationEvidenceRecord rejects unsupported phase-1 directions (0.108708ms)
+✔ validateMigrationEvidenceRecord rejects weak DVN verification packet identity (0.136334ms)
+✔ validateMigrationEvidenceRecord rejects stale or mismatched price snapshot evidence (0.102875ms)
+✔ assertCanarySourceReceipt verifies PacketSent and ExecutorFeePaid executor (2.435375ms)
+✔ assertCanarySourceReceipt rejects unexpected executor (1.143ms)
+✔ assertCanaryDestinationReceipt verifies delivery and rejects alerts (1.55375ms)
+✔ assertCanaryRecipientBalance verifies minimum destination balance (0.118542ms)
+✔ buildLzReceiveOption encodes one zero-value executor lzReceive option (0.379125ms)
+✔ buildLzReceiveOption rejects zero gas (0.182875ms)
+✔ buildCanarySendParam defaults to empty extra options (0.342375ms)
+✔ buildCanarySendParam builds explicit lzReceive extra option (0.055208ms)
+✔ buildCanarySendParam rejects slippage above amount (0.071083ms)
+✔ expectedStateForAction maps drain to zero-capacity rate limit (0.661916ms)
+✔ validateOFTPathwayState accepts matching pause and rate-limit state (0.102ms)
+✔ validateOFTPathwayState reports pause and rate-limit mismatches (0.107917ms)
+✔ expectedStateForAction requires rate-limit values for set-rate-limit (0.162167ms)
+✔ buildOpenWorkersParameters renders explicit price feed submitters (0.698292ms)
+✔ buildOAppEndpointConfigParameters renders generic OApp endpoint config (8.738541ms)
+✔ buildOpenWorkersPathwayConfigParameters renders worker-only config (0.227875ms)
+✔ committed ignition parameter examples use split modules (0.722334ms)
+✔ pathway config builders validate uint32 fields (0.192833ms)
+✔ pathway config builders validate worker gas bounds (0.063792ms)
+✔ pathway config builders validate worker fee model (0.109ms)
+✔ validatePriceConfigReport accepts fresh executor and DVN configs (0.641333ms)
+✔ validatePriceConfigReport rejects stale and mismatched configs (0.120125ms)
+✔ validatePriceConfigReport rejects future updatedAt (0.067875ms)
+✔ runbook review accepts current repository documents and alert rules (1.314458ms)
+✔ runbook review rejects missing required alert rules (0.397125ms)
+✔ runbook review rejects missing indexer poll alert (0.298667ms)
+✔ runbook review rejects missing runbook anchors (0.250041ms)
+✔ security review check accepts current repository documents and logs (7.525042ms)
+✔ secret logging guard rejects secret-bearing log calls (0.145625ms)
+✔ secret logging guard allows non-log security validation text (0.057792ms)
+✔ shouldSetPriceFeed skips matching configured feed (0.29925ms)
+✔ shouldSetPriceFeed rotates on mismatch (0.053666ms)
+ℹ tests 103
+ℹ suites 0
+ℹ pass 103
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 631.606209
+go test ./...
+?   	github.com/islishude/oh-my-lazier/go/cmd/configcheck	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/configdiff	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/draincheck	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/e2ekeystore	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/e2ekmskey	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/pricebot-once	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/readinesscheck	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/txretry	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/cmd/worker	[no test files]
+?   	github.com/islishude/oh-my-lazier/go/internal/abiutil	[no test files]
+ok  	github.com/islishude/oh-my-lazier/go/internal/app	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/bigutil	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/chain	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/config	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/configcheck	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/configdiff	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/db	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/dvn	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/executor	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/indexer	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/logging	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/lz	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/lzabi	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/metrics	(cached)
+?   	github.com/islishude/oh-my-lazier/go/internal/packets	[no test files]
+ok  	github.com/islishude/oh-my-lazier/go/internal/pricing	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/readiness	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/rpcquorum	(cached)
+?   	github.com/islishude/oh-my-lazier/go/internal/signer	[no test files]
+ok  	github.com/islishude/oh-my-lazier/go/internal/signer/keystore	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/signer/kms	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/txmgr	(cached)
+ok  	github.com/islishude/oh-my-lazier/go/internal/workerloop	(cached)
+?   	github.com/islishude/oh-my-lazier/go/migrations	[no test files]
+npm run check:runbooks
+
+> oh-my-lazier@1.0.0 check:runbooks
+> tsx contracts/scripts/runbook-review.ts
+
+runbook review ok: 7 documents and 12 alert rules checked
+MIGRATION_EVIDENCE=docs/deployments/sepolia-hoodi/migration-evidence.json npm run check:migration-evidence
+
+> oh-my-lazier@1.0.0 check:migration-evidence
+> tsx contracts/scripts/migration-evidence.ts
+
+{
+  "ok": true,
+  "evidenceType": "deployment",
+  "environment": "testnet",
+  "directions": 2
+}
+golangci-lint run ./...
+0 issues.
+forge fmt --check contracts

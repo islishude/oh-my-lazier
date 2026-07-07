@@ -1,0 +1,81 @@
+{
+  "environment": "testnet",
+  "mode": "test-oft-rehearsal",
+  "generatedAt": "2026-07-07T07:09:45.197Z",
+  "chains": [
+    {
+      "key": "sepolia",
+      "network": "sepolia",
+      "name": "ethereum-sepolia",
+      "eid": 40161,
+      "chainId": 11155111,
+      "endpoint": "0x6EDCE65403992e310A62460808c4b910D972f10f",
+      "sendUln": "0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE",
+      "receiveUln": "0xdAf00F5eE2158dD58E0d3857851c432E34A3A851",
+      "layerZeroLabsDVN": "0x8eebf8b423B73bFCa51a1Db4B7354AA0bFCA9193",
+      "oapp": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+      "workers": {
+        "openExecutor": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C",
+        "openDVN": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+        "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10"
+      }
+    },
+    {
+      "key": "hoodi",
+      "network": "hoodi",
+      "name": "ethereum-hoodi",
+      "eid": 40449,
+      "chainId": 560048,
+      "endpoint": "0x3aCAAf60502791D199a5a5F0B173D78229eBFe32",
+      "sendUln": "0x45841dd1ca50265Da7614fC43A361e526c0e6160",
+      "receiveUln": "0xd682ECF100f6F4284138AA925348633B0611Ae21",
+      "layerZeroLabsDVN": "0xa78A78a13074eD93aD447a26Ec57121f29E8feC2",
+      "oapp": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+      "workers": {
+        "openExecutor": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+        "openDVN": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+        "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D"
+      }
+    }
+  ],
+  "directions": [
+    {
+      "key": "sepolia-to-hoodi",
+      "source": "sepolia",
+      "destination": "hoodi",
+      "srcEid": 40161,
+      "dstEid": 40449,
+      "srcOApp": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+      "dstOApp": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+      "sendLib": "0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE",
+      "receiveLib": "0xd682ECF100f6F4284138AA925348633B0611Ae21",
+      "sourceWorkers": {
+        "openExecutor": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C",
+        "openDVN": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+        "priceFeed": "0x03b443BC151422294e4bcB3173C24b532758Ab10"
+      },
+      "destinationWorkers": {
+        "openDVN": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A"
+      }
+    },
+    {
+      "key": "hoodi-to-sepolia",
+      "source": "hoodi",
+      "destination": "sepolia",
+      "srcEid": 40449,
+      "dstEid": 40161,
+      "srcOApp": "0x94060b9d97386993014225465A97eb864BBe1ef5",
+      "dstOApp": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+      "sendLib": "0x45841dd1ca50265Da7614fC43A361e526c0e6160",
+      "receiveLib": "0xdAf00F5eE2158dD58E0d3857851c432E34A3A851",
+      "sourceWorkers": {
+        "openExecutor": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+        "openDVN": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+        "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D"
+      },
+      "destinationWorkers": {
+        "openDVN": "0x70c8f9E1a93769E5ce507097c2bED350D9991F21"
+      }
+    }
+  ]
+}

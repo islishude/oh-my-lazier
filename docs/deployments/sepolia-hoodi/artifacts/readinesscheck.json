@@ -1,0 +1,93 @@
+{
+  "ready": true,
+  "issues": null,
+  "stats": {
+    "Chains": [
+      {
+        "EID": 40161,
+        "Name": "ethereum-sepolia",
+        "Enabled": true,
+        "Paused": false
+      },
+      {
+        "EID": 40449,
+        "Name": "ethereum-hoodi",
+        "Enabled": true,
+        "Paused": false
+      }
+    ],
+    "Pathways": [
+      {
+        "SrcEID": 40161,
+        "DstEID": 40449,
+        "Enabled": true,
+        "Paused": false
+      },
+      {
+        "SrcEID": 40449,
+        "DstEID": 40161,
+        "Enabled": true,
+        "Paused": false
+      }
+    ],
+    "Packets": null,
+    "ExecutorJobs": null,
+    "DVNJobs": null,
+    "TxOutbox": [
+      {
+        "ChainEID": 40161,
+        "Status": "confirmed",
+        "RetryState": "",
+        "Count": 8
+      },
+      {
+        "ChainEID": 40449,
+        "Status": "confirmed",
+        "RetryState": "",
+        "Count": 8
+      }
+    ],
+    "IndexerCursors": [
+      {
+        "ChainEID": 40161,
+        "Stream": "dvn_destination",
+        "LastBlock": 11225231
+      },
+      {
+        "ChainEID": 40161,
+        "Stream": "dvn_source",
+        "LastBlock": 11225231
+      },
+      {
+        "ChainEID": 40161,
+        "Stream": "executor_destination",
+        "LastBlock": 11225231
+      },
+      {
+        "ChainEID": 40161,
+        "Stream": "executor_source",
+        "LastBlock": 11225231
+      },
+      {
+        "ChainEID": 40449,
+        "Stream": "dvn_destination",
+        "LastBlock": 3168482
+      },
+      {
+        "ChainEID": 40449,
+        "Stream": "dvn_source",
+        "LastBlock": 3168482
+      },
+      {
+        "ChainEID": 40449,
+        "Stream": "executor_destination",
+        "LastBlock": 3168482
+      },
+      {
+        "ChainEID": 40449,
+        "Stream": "executor_source",
+        "LastBlock": 3168482
+      }
+    ]
+  }
+}

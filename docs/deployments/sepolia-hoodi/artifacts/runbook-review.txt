@@ -1,0 +1,5 @@
+
+> oh-my-lazier@1.0.0 check:runbooks
+> tsx contracts/scripts/runbook-review.ts
+
+runbook review ok: 7 documents and 12 alert rules checked

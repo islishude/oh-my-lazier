@@ -42,7 +42,6 @@ check:
 	npm run test:scripts
 	go test ./...
 	npm run check:runbooks
-	MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
 	golangci-lint run ./...
 	@$(MAKE) --no-print-directory fmt-go-check
 	@$(MAKE) --no-print-directory fmt-sol-check

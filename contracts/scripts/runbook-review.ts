@@ -101,8 +101,9 @@ const requiredDocs: RequiredDoc[] = [
     ],
   },
   {
-    path: "docs/deployments/testnet-migration-evidence.example.json",
+    path: "docs/deployments/sepolia-hoodi/migration-evidence.json",
     anchors: [
+      '"evidenceType": "deployment"',
       '"layerZeroAddressCheck"',
       '"readinessCheck"',
       '"runbookReview"',
@@ -110,10 +111,10 @@ const requiredDocs: RequiredDoc[] = [
       '"signerAccount"',
       '"sourceWorkers"',
       '"destinationWorkers"',
+      '"lzConfigAfter"',
       '"canary"',
       '"dvnJoin"',
-      '"rollback"',
-      '"manualRetryPlan"',
+      '"dvnVerificationReceipt"',
     ],
   },
 ];

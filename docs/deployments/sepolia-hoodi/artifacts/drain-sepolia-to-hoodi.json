@@ -1,0 +1,10 @@
+{
+  "src_eid": 40161,
+  "dst_eid": 40449,
+  "ready": true,
+  "packets_total": 0,
+  "executor_pending": [],
+  "dvn_pending": [],
+  "outbox_pending": [],
+  "verified_but_undelivered_count": 0
+}

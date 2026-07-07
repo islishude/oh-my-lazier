@@ -12,6 +12,29 @@ test("validateMigrationEvidenceRecord accepts complete migration evidence", () =
   assert.deepEqual(validateMigrationEvidenceRecord(baseRecord()), []);
 });
 
+test("validateMigrationEvidenceRecord accepts deployment evidence without migration-only artifacts", () => {
+  const record = baseRecord();
+  record.evidenceType = "deployment";
+  delete record.ticket;
+  delete record.operatorContacts;
+  delete record.rollback;
+  for (const direction of record.directions) {
+    delete direction.configDiff;
+    delete direction.lzConfigBefore;
+  }
+
+  assert.deepEqual(validateMigrationEvidenceRecord(record), []);
+});
+
+test("validateMigrationEvidenceRecord rejects invalid evidence type", () => {
+  const record = baseRecord();
+  (record as unknown as { evidenceType: string }).evidenceType = "audit";
+
+  const errors = validateMigrationEvidenceRecord(record);
+
+  assert.deepEqual(errors, ["evidenceType must be deployment or migration"]);
+});
+
 test("validateMigrationEvidenceRecord rejects price config evidence not bound to source workers", () => {
   const record = baseRecord();
   const evidence = record.directions[0].priceConfigCheck;
@@ -69,10 +92,10 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
   record.layerZeroAddressCheck = evidence("");
   record.readinessCheck = evidence("");
   record.runbookReview = evidence("");
-  record.rollback.dryRun = evidence("");
-  record.rollback.restoredConfigCheck = evidence("");
-  record.rollback.canaryAfterRollback = evidence("");
-  record.rollback.manualRetryPlan = evidence("");
+  record.rollback!.dryRun = evidence("");
+  record.rollback!.restoredConfigCheck = evidence("");
+  record.rollback!.canaryAfterRollback = evidence("");
+  record.rollback!.manualRetryPlan = evidence("");
 
   const errors = validateMigrationEvidenceRecord(record);
 
@@ -120,9 +143,9 @@ test("validateMigrationEvidenceRecord rejects zero and invalid account addresses
   record.directions[0].canary.senderAccount =
     "0x0000000000000000000000000000000000000000";
   record.directions[1].canary.recipientAccount = "0xabc";
-  record.rollback.ownerPauseAccount =
+  record.rollback!.ownerPauseAccount =
     "0x0000000000000000000000000000000000000000";
-  record.rollback.signerAccount = "";
+  record.rollback!.signerAccount = "";
 
   const errors = validateMigrationEvidenceRecord(record);
 
@@ -258,6 +281,7 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot
 
 function baseRecord(): MigrationEvidenceRecord {
   return {
+    evidenceType: "migration",
     ticket: "MIG-001",
     environment: "testnet",
     scope: "Ethereum Sepolia <-> Hoodi executor and DVN join rehearsal",

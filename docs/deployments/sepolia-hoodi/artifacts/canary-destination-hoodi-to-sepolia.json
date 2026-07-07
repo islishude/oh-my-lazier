@@ -1,0 +1,7 @@
+{
+  "chainId": 11155111,
+  "destinationTxHash": "0xbaa2d1d8c8109de75a2774dba659fd478abc85b7161679c79052debfcb7a48f6",
+  "destination": {
+    "packetDelivered": true
+  }
+}

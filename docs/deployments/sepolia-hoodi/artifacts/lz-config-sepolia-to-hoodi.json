@@ -1,0 +1,39 @@
+{
+  "endpoint": "0x6EDCE65403992e310A62460808c4b910D972f10f",
+  "localEid": 40161,
+  "oapp": "0x52C764a3cd1bC44A94C95eC54b8B2cf1B6298Ac3",
+  "remoteEid": 40449,
+  "activeSendLibrary": "0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE",
+  "activeReceiveLibrary": "0xdAf00F5eE2158dD58E0d3857851c432E34A3A851",
+  "receiveLibraryIsDefault": false,
+  "inspectedLibraries": {
+    "sendUln": "0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE",
+    "receiveUln": "0xdAf00F5eE2158dD58E0d3857851c432E34A3A851"
+  },
+  "executorConfig": {
+    "maxMessageSize": 10000,
+    "executor": "0xcB24624e1eD519c54EAe88Cbf1511751B8826A9C"
+  },
+  "sendUlnConfig": {
+    "confirmations": "12",
+    "requiredDVNCount": 2,
+    "optionalDVNCount": 0,
+    "optionalDVNThreshold": 0,
+    "requiredDVNs": [
+      "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+      "0x8eebf8b423B73bFCa51a1Db4B7354AA0bFCA9193"
+    ],
+    "optionalDVNs": []
+  },
+  "receiveUlnConfig": {
+    "confirmations": "12",
+    "requiredDVNCount": 2,
+    "optionalDVNCount": 0,
+    "optionalDVNThreshold": 0,
+    "requiredDVNs": [
+      "0x70c8f9E1a93769E5ce507097c2bED350D9991F21",
+      "0x8eebf8b423B73bFCa51a1Db4B7354AA0bFCA9193"
+    ],
+    "optionalDVNs": []
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "chainId": 560048,
+  "dstEid": 40161,
+  "checkedAt": "1783408703",
+  "maxAgeSeconds": "1800",
+  "expectedStaleAfter": "1800",
+  "priceFeed": {
+    "address": "0x930cb1dd458a32611091b4565E6E36004186092D",
+    "priceSnapshot": {
+      "dstGasPriceInSrcToken": "1",
+      "dstDataFeePerByteInSrcToken": "0",
+      "updatedAt": "1783408185",
+      "staleAfter": "1800"
+    }
+  },
+  "workers": [
+    {
+      "label": "OpenExecutor",
+      "address": "0x83Dc63f3d8bb376D103391603A5589820e06b76b",
+      "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D",
+      "feeModel": {
+        "baseFee": "0",
+        "dstGasOverhead": "50000",
+        "dataSizeOverheadBytes": "0",
+        "marginBps": 1000
+      }
+    },
+    {
+      "label": "OpenDVN",
+      "address": "0x31988D15273bD19a867C4b8F17923B97F04c4f4A",
+      "priceFeed": "0x930cb1dd458a32611091b4565E6E36004186092D",
+      "feeModel": {
+        "baseFee": "0",
+        "dstGasOverhead": "150000",
+        "dataSizeOverheadBytes": "0",
+        "marginBps": 1000
+      }
+    }
+  ],
+  "errors": []
+}

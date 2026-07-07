@@ -1,0 +1,8 @@
+{
+  "chainId": 560048,
+  "recipientBalance": {
+    "recipient": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+    "balance": "1000000000000000000",
+    "minBalance": "1000000000000000000"
+  }
+}
