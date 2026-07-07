@@ -6,6 +6,8 @@ services:
     enabled: true
   dvn:
     enabled: true
+tx_manager:
+  stale_broadcast_replacement_after_seconds: 900
 signers:
   - id: "0x9999999999999999999999999999999999999999"
     type: keystore

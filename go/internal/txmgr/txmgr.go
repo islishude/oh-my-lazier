@@ -11,7 +11,18 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
 )
 
-const defaultPollInterval = 5 * time.Second
+const (
+	defaultPollInterval = 5 * time.Second
+
+	// DefaultStaleBroadcastReplacementAfter is the production default before same-nonce replacement.
+	DefaultStaleBroadcastReplacementAfter = 15 * time.Minute
+)
+
+// Options controls tx manager runtime behavior.
+type Options struct {
+	// StaleBroadcastReplacementAfter is how long a broadcast row can lack a receipt before same-nonce replacement.
+	StaleBroadcastReplacementAfter time.Duration
+}
 
 // Target binds one configured chain RPC client to the signer that should consume its tx_outbox rows.
 type Target struct {
@@ -28,6 +39,7 @@ type Manager struct {
 	store        *db.Store
 	targets      []Target
 	pollInterval time.Duration
+	options      Options
 	logger       *slog.Logger
 }
 
@@ -36,17 +48,35 @@ func New(store *db.Store, logger *slog.Logger) *Manager {
 	return NewWithTargets(store, nil, logger)
 }
 
+// NewWithOptions creates a transaction manager with runtime options.
+func NewWithOptions(store *db.Store, logger *slog.Logger, options Options) *Manager {
+	return NewWithTargetsAndOptions(store, nil, logger, options)
+}
+
 // NewWithTargets creates a transaction manager with configured chain/signing targets.
 func NewWithTargets(store *db.Store, targets []Target, logger *slog.Logger) *Manager {
+	return NewWithTargetsAndOptions(store, targets, logger, Options{})
+}
+
+// NewWithTargetsAndOptions creates a transaction manager with configured targets and runtime options.
+func NewWithTargetsAndOptions(store *db.Store, targets []Target, logger *slog.Logger, options Options) *Manager {
 	copiedTargets := make([]Target, len(targets))
 	copy(copiedTargets, targets)
 	manager := &Manager{
 		store:        store,
 		targets:      copiedTargets,
 		pollInterval: defaultPollInterval,
+		options:      normalizeOptions(options),
 		logger:       logger,
 	}
 	return manager
+}
+
+func normalizeOptions(options Options) Options {
+	if options.StaleBroadcastReplacementAfter <= 0 {
+		options.StaleBroadcastReplacementAfter = DefaultStaleBroadcastReplacementAfter
+	}
+	return options
 }
 
 // Run starts the transaction manager loop until the context is canceled.

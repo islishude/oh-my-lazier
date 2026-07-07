@@ -101,6 +101,18 @@ test("local E2E worker keeps keystore password overrideable", () => {
   );
 });
 
+test("local E2E worker config enables fast RBF replacement", () => {
+  const deployScript = readFileSync("contracts/scripts/e2e-local-deploy.ts", "utf8");
+  assert.match(
+    deployScript,
+    /tx_manager:\n  stale_broadcast_replacement_after_seconds: 2/,
+  );
+  assert.match(
+    deployScript,
+    /max_priority_fee_per_gas_wei: "2000000000"/,
+  );
+});
+
 function resolver(overrides: Record<string, string>) {
   return (name: string, fallback: string) => overrides[name] ?? fallback;
 }

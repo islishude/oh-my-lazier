@@ -21,6 +21,8 @@ const (
 	ChainFamilyEVM ChainFamily = "evm"
 )
 
+const defaultTxManagerStaleBroadcastReplacementAfterSeconds = 900
+
 // DVNMode selects whether the DVN verifier only reports or also submits verification transactions.
 type DVNMode string
 
@@ -39,6 +41,8 @@ type Config struct {
 	Metrics MetricsConfig `yaml:"metrics"`
 	// Services controls which durable worker loops this process starts; omitted roles default to enabled.
 	Services ServicesConfig `yaml:"services"`
+	// TxManager controls durable transaction outbox processing behavior.
+	TxManager TxManagerConfig `yaml:"tx_manager"`
 	// Pricing controls the optional price bot that enqueues shared price snapshot updates.
 	Pricing PricingConfig `yaml:"pricing"`
 	// Signers lists local signing backends referenced by pricing and chain transaction roles.
@@ -67,6 +71,12 @@ type ServicesConfig struct {
 type ServiceToggleConfig struct {
 	// Enabled is tri-state so omitted YAML can use the caller-supplied default.
 	Enabled *bool `yaml:"enabled"`
+}
+
+// TxManagerConfig controls durable transaction outbox processing.
+type TxManagerConfig struct {
+	// StaleBroadcastReplacementAfterSeconds is how long a broadcast row can lack a receipt before same-nonce replacement.
+	StaleBroadcastReplacementAfterSeconds uint64 `yaml:"stale_broadcast_replacement_after_seconds"`
 }
 
 // EnabledOrDefault returns the configured service state or the supplied default.
@@ -344,6 +354,9 @@ func load(path string, applyEnv bool) (Config, error) {
 	if cfg.Metrics.ListenAddress == "" {
 		cfg.Metrics.ListenAddress = ":9090"
 	}
+	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
+		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds
+	}
 	if cfg.Pricing.Enabled {
 		if cfg.Pricing.IntervalSeconds == 0 {
 			cfg.Pricing.IntervalSeconds = 300
@@ -375,6 +388,9 @@ func load(path string, applyEnv bool) (Config, error) {
 func (c Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return errors.New("database_url is required")
+	}
+	if c.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
+		return errors.New("tx_manager.stale_broadcast_replacement_after_seconds is required")
 	}
 	if len(c.Chains) == 0 {
 		return errors.New("at least one chain is required")

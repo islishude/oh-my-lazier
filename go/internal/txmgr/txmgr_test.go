@@ -69,6 +69,22 @@ func TestRunReturnsProcessingError(t *testing.T) {
 	}
 }
 
+func TestNewWithTargetsDefaultsStaleBroadcastReplacementAfter(t *testing.T) {
+	manager := NewWithTargets(nil, nil, discardLogger())
+	if manager.options.StaleBroadcastReplacementAfter != DefaultStaleBroadcastReplacementAfter {
+		t.Fatalf("stale broadcast replacement after = %s, want %s", manager.options.StaleBroadcastReplacementAfter, DefaultStaleBroadcastReplacementAfter)
+	}
+}
+
+func TestNewWithTargetsAcceptsStaleBroadcastReplacementAfterOption(t *testing.T) {
+	manager := NewWithTargetsAndOptions(nil, nil, discardLogger(), Options{
+		StaleBroadcastReplacementAfter: 2 * time.Second,
+	})
+	if manager.options.StaleBroadcastReplacementAfter != 2*time.Second {
+		t.Fatalf("stale broadcast replacement after = %s, want 2s", manager.options.StaleBroadcastReplacementAfter)
+	}
+}
+
 type fakeSigner struct{}
 
 func (fakeSigner) Address() common.Address {

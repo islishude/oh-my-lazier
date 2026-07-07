@@ -5,6 +5,7 @@ import {
   createWalletClient,
   decodeEventLog,
   defineChain,
+  encodeFunctionData,
   encodeEventTopics,
   getAddress,
   http,
@@ -86,6 +87,33 @@ type PacketDetails = {
   sourceReceipt: TransactionReceipt;
 };
 
+type RunDirectionOptions = {
+  exerciseRBF?: boolean;
+};
+
+type PendingRPCTransaction = {
+  hash: Hex;
+  from: Address;
+  to: Address | null;
+  input: Hex;
+  nonce: Hex;
+  gasPrice?: Hex;
+  maxFeePerGas?: Hex;
+  maxPriorityFeePerGas?: Hex;
+};
+
+type PendingRPCBlock = {
+  transactions: readonly PendingRPCTransaction[];
+};
+
+type PendingCommitVerificationTx = {
+  hash: Hex;
+  nonce: bigint;
+  gasPrice?: bigint;
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+};
+
 const deploymentPath = path.join(tmpDir, "deployments.json");
 const deployment: LocalE2EDeployment = validateLocalE2EDeployment(
   JSON.parse(await readFile(deploymentPath, "utf8")),
@@ -102,7 +130,9 @@ logStep("loaded deployment", {
 });
 
 await waitForWorkerReady();
-await runDirection(deployment.chains.a, deployment.chains.b, amountAB);
+await runDirection(deployment.chains.a, deployment.chains.b, amountAB, {
+  exerciseRBF: true,
+});
 await runDirection(deployment.chains.b, deployment.chains.a, amountBA);
 
 console.log(
@@ -119,6 +149,7 @@ async function runDirection(
   source: ChainDeployment,
   destination: ChainDeployment,
   amountLD: bigint,
+  options: RunDirectionOptions = {},
 ) {
   const direction = directionLabel(source, destination);
   logStep("direction started", {
@@ -226,7 +257,15 @@ async function runDirection(
     payload_hash: packet.payloadHash,
   });
 
-  await submitSecondaryVerification(destinationClients, destination, packet);
+  if (options.exerciseRBF) {
+    await submitSecondaryVerificationAndExerciseRBF(
+      destinationClients,
+      destination,
+      packet,
+    );
+  } else {
+    await submitSecondaryVerification(destinationClients, destination, packet);
+  }
 
   await waitForDelivery(
     sourceClients,
@@ -247,6 +286,24 @@ async function submitSecondaryVerification(
   destination: ChainDeployment,
   packet: PacketDetails,
 ) {
+  const hash = await sendSecondaryVerification(clients, destination, packet);
+  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") {
+    throw new Error(`secondary OpenDVN verification ${hash} failed`);
+  }
+  logStep("secondary OpenDVN verification confirmed", {
+    chain: destination.name,
+    tx: hash,
+    block: receipt.blockNumber,
+    gas_used: receipt.gasUsed,
+  });
+}
+
+async function sendSecondaryVerification(
+  clients: Clients,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<Hex> {
   logStep("secondary OpenDVN verification submitting", {
     chain: destination.name,
     dvn: destination.secondaryOpenDVN,
@@ -270,16 +327,249 @@ async function submitSecondaryVerification(
     chain: destination.name,
     tx: hash,
   });
-  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success") {
-    throw new Error(`secondary OpenDVN verification ${hash} failed`);
-  }
-  logStep("secondary OpenDVN verification confirmed", {
+  return hash;
+}
+
+async function submitSecondaryVerificationAndExerciseRBF(
+  clients: Clients,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+) {
+  logStep("rbf exercise started", {
     chain: destination.name,
-    tx: hash,
-    block: receipt.blockNumber,
-    gas_used: receipt.gasUsed,
+    receive_uln: destination.receiveUln,
+    executor_signer: destination.executorSigner,
+    payload_hash: packet.payloadHash,
   });
+  await setAutomine(clients.publicClient, false);
+  try {
+    const secondaryHash = await sendSecondaryVerification(
+      clients,
+      destination,
+      packet,
+    );
+    await waitForSecondaryAndPrimaryVerifications(
+      clients.publicClient,
+      destination,
+      packet,
+      secondaryHash,
+    );
+    const original = await waitForPendingCommitVerification(
+      clients.publicClient,
+      destination,
+      packet,
+    );
+    const replacement = await waitForPendingCommitVerificationReplacement(
+      clients.publicClient,
+      destination,
+      packet,
+      original,
+    );
+    assertReplacementBumped(original, replacement, destination.name);
+    logStep("rbf replacement observed", {
+      chain: destination.name,
+      original_tx: original.hash,
+      replacement_tx: replacement.hash,
+      nonce: replacement.nonce,
+      original_max_fee_per_gas: original.maxFeePerGas,
+      replacement_max_fee_per_gas: replacement.maxFeePerGas,
+      original_max_priority_fee_per_gas: original.maxPriorityFeePerGas,
+      replacement_max_priority_fee_per_gas: replacement.maxPriorityFeePerGas,
+    });
+  } finally {
+    await setAutomine(clients.publicClient, true);
+  }
+  await mine(clients.publicClient);
+}
+
+async function waitForSecondaryAndPrimaryVerifications(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+  secondaryHash: Hex,
+) {
+  const started = Date.now();
+  let secondaryConfirmed = false;
+  while (Date.now() - started < 60_000) {
+    await mine(publicClient);
+    if (!secondaryConfirmed) {
+      let receipt: TransactionReceipt | undefined;
+      try {
+        receipt = await publicClient.getTransactionReceipt({
+          hash: secondaryHash,
+        });
+      } catch {
+        // The next mined block may include the script-submitted secondary tx.
+      }
+      if (receipt !== undefined) {
+        if (receipt.status !== "success") {
+          throw new Error(`secondary OpenDVN verification ${secondaryHash} failed`);
+        }
+        secondaryConfirmed = true;
+        logStep("secondary OpenDVN verification confirmed", {
+          chain: destination.name,
+          tx: secondaryHash,
+          block: receipt.blockNumber,
+          gas_used: receipt.gasUsed,
+        });
+      }
+    }
+    const verified = await verifiedDVNs(publicClient, destination, packet);
+    if (
+      secondaryConfirmed &&
+      verified.has(destination.primaryOpenDVN.toLowerCase()) &&
+      verified.has(destination.secondaryOpenDVN.toLowerCase())
+    ) {
+      logStep("rbf prerequisite verifications mined", {
+        chain: destination.name,
+        dvns: [...verified].sort(),
+      });
+      return;
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `${destination.name} timed out waiting for primary and secondary verification before RBF exercise`,
+  );
+}
+
+async function waitForPendingCommitVerification(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<PendingCommitVerificationTx> {
+  const started = Date.now();
+  while (Date.now() - started < 60_000) {
+    const pending = await pendingCommitVerificationTxs(
+      publicClient,
+      destination,
+      packet,
+    );
+    const tx = pending[0];
+    if (tx !== undefined) {
+      logStep("rbf original commitVerification pending", {
+        chain: destination.name,
+        tx: tx.hash,
+        nonce: tx.nonce,
+        max_fee_per_gas: tx.maxFeePerGas,
+        max_priority_fee_per_gas: tx.maxPriorityFeePerGas,
+        gas_price: tx.gasPrice,
+      });
+      return tx;
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `${destination.name} timed out waiting for pending worker commitVerification tx`,
+  );
+}
+
+async function waitForPendingCommitVerificationReplacement(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+  original: PendingCommitVerificationTx,
+): Promise<PendingCommitVerificationTx> {
+  const started = Date.now();
+  while (Date.now() - started < 90_000) {
+    const pending = await pendingCommitVerificationTxs(
+      publicClient,
+      destination,
+      packet,
+    );
+    const replacement = pending.find(
+      (tx) => tx.nonce === original.nonce && tx.hash !== original.hash,
+    );
+    if (replacement !== undefined) {
+      return replacement;
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `${destination.name} timed out waiting for pending worker commitVerification replacement`,
+  );
+}
+
+async function pendingCommitVerificationTxs(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<PendingCommitVerificationTx[]> {
+  const block = (await publicClient.request({
+    method: "eth_getBlockByNumber" as never,
+    params: ["pending", true] as never,
+  })) as PendingRPCBlock | null;
+  const calldata = commitVerificationCalldata(packet).toLowerCase();
+  return (block?.transactions ?? [])
+    .filter((tx) => {
+      return (
+        tx.to !== null &&
+        isAddressEqual(tx.from, destination.executorSigner) &&
+        isAddressEqual(tx.to, destination.receiveUln) &&
+        tx.input.toLowerCase() === calldata
+      );
+    })
+    .map((tx) => ({
+      hash: tx.hash,
+      nonce: BigInt(tx.nonce),
+      gasPrice: optionalHexBigInt(tx.gasPrice),
+      maxFeePerGas: optionalHexBigInt(tx.maxFeePerGas),
+      maxPriorityFeePerGas: optionalHexBigInt(tx.maxPriorityFeePerGas),
+    }));
+}
+
+function commitVerificationCalldata(packet: PacketDetails): Hex {
+  return encodeFunctionData({
+    abi: receiveUlnArtifact.abi,
+    functionName: "commitVerification",
+    args: [packet.packetHeader, packet.payloadHash],
+  });
+}
+
+function assertReplacementBumped(
+  original: PendingCommitVerificationTx,
+  replacement: PendingCommitVerificationTx,
+  chainName: string,
+) {
+  if (replacement.nonce !== original.nonce) {
+    throw new Error(
+      `${chainName} replacement nonce ${replacement.nonce} does not match original nonce ${original.nonce}`,
+    );
+  }
+  if (replacement.hash === original.hash) {
+    throw new Error(`${chainName} replacement hash matches original ${original.hash}`);
+  }
+  if (
+    original.maxFeePerGas !== undefined &&
+    original.maxPriorityFeePerGas !== undefined &&
+    replacement.maxFeePerGas !== undefined &&
+    replacement.maxPriorityFeePerGas !== undefined
+  ) {
+    if (replacement.maxFeePerGas <= original.maxFeePerGas) {
+      throw new Error(
+        `${chainName} replacement max fee ${replacement.maxFeePerGas} is not above original ${original.maxFeePerGas}`,
+      );
+    }
+    if (replacement.maxPriorityFeePerGas <= original.maxPriorityFeePerGas) {
+      throw new Error(
+        `${chainName} replacement priority fee ${replacement.maxPriorityFeePerGas} is not above original ${original.maxPriorityFeePerGas}`,
+      );
+    }
+    return;
+  }
+  if (original.gasPrice !== undefined && replacement.gasPrice !== undefined) {
+    if (replacement.gasPrice <= original.gasPrice) {
+      throw new Error(
+        `${chainName} replacement gas price ${replacement.gasPrice} is not above original ${original.gasPrice}`,
+      );
+    }
+    return;
+  }
+  throw new Error(`${chainName} replacement transaction is missing comparable fee fields`);
+}
+
+function optionalHexBigInt(value: Hex | undefined): bigint | undefined {
+  return value === undefined ? undefined : BigInt(value);
 }
 
 async function waitForDelivery(
@@ -840,6 +1130,14 @@ async function mine(publicClient: PublicClient) {
     method: "anvil_mine" as never,
     params: ["0x1"] as never,
   });
+}
+
+async function setAutomine(publicClient: PublicClient, enabled: boolean) {
+  await publicClient.request({
+    method: "evm_setAutomine" as never,
+    params: [enabled] as never,
+  });
+  logStep("anvil automine set", { enabled });
 }
 
 function nativeFeeFromQuote(value: unknown): bigint {

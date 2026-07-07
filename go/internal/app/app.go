@@ -186,7 +186,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	if len(txTargets) > 0 {
 		start("signer_balance", txmgr.NewBalanceMonitor(txTargets, runtimeMetrics, a.logger).Run)
-		start("txmgr", txmgr.NewWithTargets(store, txTargets, a.logger).Run)
+		start("txmgr", txmgr.NewWithTargetsAndOptions(store, txTargets, a.logger, a.txManagerOptions()).Run)
 	}
 	if a.cfg.ExecutorEnabled() {
 		start("executor.committer", executorWorker.RunCommitter)
@@ -207,6 +207,12 @@ func (a *App) Run(ctx context.Context) error {
 		cancel()
 		wg.Wait()
 		return err
+	}
+}
+
+func (a *App) txManagerOptions() txmgr.Options {
+	return txmgr.Options{
+		StaleBroadcastReplacementAfter: time.Duration(a.cfg.TxManager.StaleBroadcastReplacementAfterSeconds) * time.Second,
 	}
 }
 

@@ -750,7 +750,7 @@ func TestProcessOnceReplacesStaleBroadcastBeforeQueuedTx(t *testing.T) {
 		t.Fatalf("replacement nonce = %d, want 31", sentReplacement.Nonce())
 	}
 	if sentReplacement.Gas() != 123_456 {
-		t.Fatalf("replacement gas = %d, want re-estimated gas", sentReplacement.Gas())
+		t.Fatalf("replacement gas = %d, want original signed gas limit", sentReplacement.Gas())
 	}
 	if sentReplacement.GasFeeCap().Cmp(big.NewInt(2_200_000_000)) != 0 {
 		t.Fatalf("replacement max fee = %s, want 2200000000", sentReplacement.GasFeeCap())
@@ -881,6 +881,60 @@ func TestStaleBroadcastReplacementDefersWhenBumpExceedsCap(t *testing.T) {
 	}
 	if confirmed.Status != db.TxStatusConfirmed {
 		t.Fatalf("status after original receipt = %q, want confirmed", confirmed.Status)
+	}
+}
+
+func TestStaleBroadcastReplacementUsesConfiguredDuration(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce:       35,
+		estimatedGas:       123_456,
+		header:             dynamicHeader(),
+		suggestedGasTipCap: big.NewInt(1_000_000_000),
+	}
+	manager := NewWithOptions(store, discardLogger(), Options{
+		StaleBroadcastReplacementAfter: 2 * time.Second,
+	})
+
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "commit-verification",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02, 0x03},
+		Value:    big.NewInt(123),
+		SignerID: signer.Address().Hex(),
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	if _, err := manager.ProcessNext(t.Context(), target); err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	original, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(original) error = %v", err)
+	}
+	forceBroadcastAgeSeconds(t, id, 3)
+	client.estimateGasErr = errors.New("pending state already applied original tx")
+
+	replacedID, err := manager.ProcessStaleBroadcastReplacement(t.Context(), target)
+	if err != nil {
+		t.Fatalf("ProcessStaleBroadcastReplacement() error = %v", err)
+	}
+	if replacedID != id {
+		t.Fatalf("replacement id = %d, want %d", replacedID, id)
+	}
+	replacement, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx(replacement) error = %v", err)
+	}
+	if replacement.TxHash == original.TxHash {
+		t.Fatalf("replacement tx hash = original %s, want distinct replacement", original.TxHash)
+	}
+	if replacement.GasLimit != original.GasLimit {
+		t.Fatalf("replacement gas limit = %d, want original %d", replacement.GasLimit, original.GasLimit)
 	}
 }
 
@@ -1796,6 +1850,11 @@ func forceRetryDue(t *testing.T, id int64) {
 
 func forceBroadcastStale(t *testing.T, id int64) {
 	t.Helper()
+	forceBroadcastAgeSeconds(t, id, 16*60)
+}
+
+func forceBroadcastAgeSeconds(t *testing.T, id int64, seconds int) {
+	t.Helper()
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_POSTGRES_URL is not set")
@@ -1807,14 +1866,14 @@ func forceBroadcastStale(t *testing.T, id int64) {
 	t.Cleanup(pool.Close)
 	tag, err := pool.Exec(t.Context(), `
 		UPDATE tx_outbox
-		SET updated_at = now() - interval '16 minutes'
+		SET updated_at = now() - make_interval(secs => $2::int)
 		WHERE id = $1
-	`, id)
+	`, id, seconds)
 	if err != nil {
-		t.Fatalf("force broadcast stale: %v", err)
+		t.Fatalf("force broadcast age: %v", err)
 	}
 	if tag.RowsAffected() != 1 {
-		t.Fatalf("force broadcast stale rows = %d, want 1", tag.RowsAffected())
+		t.Fatalf("force broadcast age rows = %d, want 1", tag.RowsAffected())
 	}
 }
 

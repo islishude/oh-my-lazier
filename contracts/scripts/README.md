@@ -27,11 +27,15 @@ then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
 executor and active DVN roles; chain B uses the generated keystore signer. The
 local runner sends OFT canaries in both directions and then withdraws each
 source worker's recorded SendUln302 fee through the worker
-`withdrawFee(sendLib, recipient, amount)` passthrough. It does not start the
-price bot; deployment writes a fresh shared OpenPriceFeed snapshot batch and
-local worker fee models. Pinned SendUln302 accounts returned worker fees internally
-without forwarding native value to worker `assignJob`; operators withdraw those
-recorded fees through the same worker passthrough.
+`withdrawFee(sendLib, recipient, amount)` passthrough. On one canary direction,
+the runner disables destination Anvil automine with `evm_setAutomine`, observes
+a pending worker `commitVerification` transaction, waits for txmgr to replace it
+with a same-nonce bumped-fee transaction, and then mines the replacement before
+continuing delivery assertions. It does not start the price bot; deployment
+writes a fresh shared OpenPriceFeed snapshot batch and local worker fee models.
+Pinned SendUln302 accounts returned worker fees internally without forwarding
+native value to worker `assignJob`; operators withdraw those recorded fees
+through the same worker passthrough.
 Set `E2E_KEYSTORE_PASSWORD` to override the generated local keystore password;
 the same value is passed to the worker container.
 
@@ -56,9 +60,12 @@ then checks that ReceiveUln302 emitted `PayloadVerified` for both OpenDVNs,
 EndpointV2 emitted `PacketDelivered`, the delivery transaction sender matches
 the destination chain's configured executor signer, the primary OpenDVN verifier
 matches the destination chain's configured DVN signer, and the recipient TestOFT
-balance increased. The same run also checks each source chain's executor,
-primary OpenDVN, and secondary OpenDVN fee ledger, withdrawal events, recipient
-balance increase, SendUln302 balance decrease, and zeroed fee ledger.
+balance increased. The same run also checks txmgr replacement of one pending
+`commitVerification` transaction using the generated local
+`tx_manager.stale_broadcast_replacement_after_seconds: 2` setting, plus each
+source chain's executor, primary OpenDVN, and secondary OpenDVN fee ledger,
+withdrawal events, recipient balance increase, SendUln302 balance decrease, and
+zeroed fee ledger.
 
 When registry access is unavailable, set `ANVIL_IMAGE` to a compatible local
 Foundry image. If `oh-my-lazier-worker:e2e` already exists, set

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -27,8 +26,6 @@ const (
 
 	replacementBumpNumerator   = int64(110)
 	replacementBumpDenominator = int64(100)
-
-	staleBroadcastReplacementAfter = 15 * time.Minute
 )
 
 // ChainClient is the tx manager's RPC boundary for first-use nonce bootstrap, fee reads, and broadcasts.
@@ -217,7 +214,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 		return 0, errors.New("target client is required")
 	}
 	signerID := target.Signer.Address().Hex()
-	outboxTx, err := m.store.PrepareNextStaleBroadcastReplacement(ctx, target.ChainEID, signerID, staleBroadcastReplacementAfter)
+	outboxTx, err := m.store.PrepareNextStaleBroadcastReplacement(ctx, target.ChainEID, signerID, m.options.StaleBroadcastReplacementAfter)
 	if err != nil {
 		return 0, err
 	}
@@ -226,13 +223,17 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 	if !ok {
 		return 0, fmt.Errorf("missing fee policy for purpose %q", outboxTx.Purpose)
 	}
-	gasLimit, err := estimateGas(ctx, queued, target.Signer.Address(), target.Client)
-	if err != nil {
-		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
-			return 0, markErr
+	gasLimit := outboxTx.GasLimit
+	if gasLimit == 0 {
+		var err error
+		gasLimit, err = estimateGas(ctx, queued, target.Signer.Address(), target.Client)
+		if err != nil {
+			if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+				return 0, markErr
+			}
+			m.logger.Warn("failed stale broadcast replacement gas estimate", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", outboxTx.TxHash, "error", err.Error())
+			return outboxTx.ID, nil
 		}
-		m.logger.Warn("failed stale broadcast replacement gas estimate", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", outboxTx.TxHash, "error", err.Error())
-		return outboxTx.ID, nil
 	}
 	quote, err := quoteFee(ctx, queued, policy, target.Client)
 	if err != nil {

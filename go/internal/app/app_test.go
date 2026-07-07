@@ -280,6 +280,19 @@ func TestNewWithOptionsRejectsNegativeIndexerProgressLogInterval(t *testing.T) {
 	}
 }
 
+func TestTxManagerOptionsUsesConfiguredStaleBroadcastReplacementAfter(t *testing.T) {
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.TxManager.StaleBroadcastReplacementAfterSeconds = 7
+	worker, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	options := worker.txManagerOptions()
+	if options.StaleBroadcastReplacementAfter != 7*time.Second {
+		t.Fatalf("stale broadcast replacement after = %s, want 7s", options.StaleBroadcastReplacementAfter)
+	}
+}
+
 func TestRunPriceOnceRejectsDisabledPricing(t *testing.T) {
 	worker, err := New(testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json"), discardLogger())
 	if err != nil {
@@ -429,6 +442,9 @@ func testConfig(signerID, keystorePath string) config.Config {
 	signerAddress := config.MustEVMAddress(signerID)
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		TxManager: config.TxManagerConfig{
+			StaleBroadcastReplacementAfterSeconds: 900,
+		},
 		Signers: []config.SignerConfig{
 			{
 				ID:   signerAddress,

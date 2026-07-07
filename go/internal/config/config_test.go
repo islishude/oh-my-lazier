@@ -105,6 +105,14 @@ func TestValidateRejectsMissingConfirmations(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMissingTxManagerStaleBroadcastReplacementAfter(t *testing.T) {
+	cfg := validConfig()
+	cfg.TxManager.StaleBroadcastReplacementAfterSeconds = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing tx manager stale replacement duration error")
+	}
+}
+
 func TestValidateAcceptsSupportedRPCURLFormats(t *testing.T) {
 	for _, rpcURL := range []string{
 		"http://localhost:8545",
@@ -600,6 +608,9 @@ pathways:
 	if staticConfig.Chains[0].IndexerQueryBlockRange != 500 {
 		t.Fatalf("LoadStatic() indexer_query_block_range = %d, want default 500", staticConfig.Chains[0].IndexerQueryBlockRange)
 	}
+	if staticConfig.TxManager.StaleBroadcastReplacementAfterSeconds != 900 {
+		t.Fatalf("LoadStatic() tx_manager.stale_broadcast_replacement_after_seconds = %d, want 900", staticConfig.TxManager.StaleBroadcastReplacementAfterSeconds)
+	}
 	if staticConfig.Pathways[0].DVN.Mode != DVNModeShadow {
 		t.Fatalf("LoadStatic() pathway dvn mode = %q, want %q", staticConfig.Pathways[0].DVN.Mode, DVNModeShadow)
 	}
@@ -618,6 +629,9 @@ pathways:
 func validConfig() Config {
 	return Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
+		TxManager: TxManagerConfig{
+			StaleBroadcastReplacementAfterSeconds: 900,
+		},
 		Signers: []SignerConfig{
 			{
 				ID:   MustEVMAddress("0x9999999999999999999999999999999999999999"),

@@ -599,6 +599,8 @@ services:
     enabled: true
   dvn:
     enabled: true
+tx_manager:
+  stale_broadcast_replacement_after_seconds: 2
 signers:
   - id: "${output.signers.kms.address}"
     type: kms
@@ -631,12 +633,12 @@ ${chainList
       executor:
         signer: "${chain.executorSigner}"
         max_fee_per_gas_wei: "100000000000"
-        max_priority_fee_per_gas_wei: "1000000000"
+        max_priority_fee_per_gas_wei: "2000000000"
         min_native_balance_wei: "1000000000000000000"
       dvn:
         signer: "${chain.dvnSigner}"
         max_fee_per_gas_wei: "100000000000"
-        max_priority_fee_per_gas_wei: "1000000000"
+        max_priority_fee_per_gas_wei: "2000000000"
         min_native_balance_wei: "1000000000000000000"`,
   )
   .join("\n")}
