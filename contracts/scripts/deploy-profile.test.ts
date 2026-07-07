@@ -47,6 +47,26 @@ test("normalizeProfile requires external OApp addresses in external mode", () =>
   );
 });
 
+test("normalizeProfile requires long-term price feed submitters", () => {
+  const input = baseProfile();
+  delete (input as Record<string, unknown>).priceFeedSubmitters;
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.priceFeedSubmitters is required/,
+  );
+});
+
+test("normalizeProfile rejects owner as a long-term price feed submitter", () => {
+  const input = baseProfile();
+  input.priceFeedSubmitters = ["0x1111111111111111111111111111111111111111"];
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.priceFeedSubmitters must not include profile\.owner/,
+  );
+});
+
 test("normalizeProfile rejects tx roles that do not reference a configured signer", () => {
   const input = baseProfile();
   input.chains[0].txRoles.executor.signer =
@@ -229,6 +249,7 @@ test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config
   assert.equal(workers.openExecutor, state.chains[0].workers.openExecutor);
   assert.equal(workers.openDVN, state.chains[0].workers.openDVN);
   assert.equal(workers.priceFeed, state.chains[0].workers.priceFeed);
+  assert.equal(workers.bootstrapPriceSubmitter, profile.owner);
   assert.equal(workers.dvnVerifier, profile.chains[0].txRoles.dvn.signer);
   assert.deepEqual(workers.priceSnapshot, {
     dstGasPriceInSrcToken: "1",
@@ -263,12 +284,20 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
 });
 
 test("parameter files split TestOFT rehearsal from OpenWorkers deployment", () => {
-  const profile = normalizeProfile(baseProfile());
+  const input = baseProfile();
+  input.priceFeedSubmitters = [
+    "0x2222222222222222222222222222222222222222",
+    "0x2222222222222222222222222222222222222222",
+  ];
+  const profile = normalizeProfile(input);
 
   assert.deepEqual(openWorkersParameterFile(profile, profile.chains[0]), {
     OpenWorkers: {
       owner: "0x1111111111111111111111111111111111111111",
-      priceFeedSubmitters: ["0x1111111111111111111111111111111111111111"],
+      priceFeedSubmitters: [
+        "0x2222222222222222222222222222222222222222",
+        "0x1111111111111111111111111111111111111111",
+      ],
     },
   });
   assert.deepEqual(testOFTParameterFile(profile, profile.chains[0]), {
@@ -459,6 +488,7 @@ function baseProfile() {
       "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable",
     metricsListenAddress: ":9090",
     owner: "0x1111111111111111111111111111111111111111",
+    priceFeedSubmitters: ["0x2222222222222222222222222222222222222222"],
     initialRecipient: "0x1111111111111111111111111111111111111111",
     canaryTreasury: "0x1111111111111111111111111111111111111111",
     minOwnerNativeBalanceWei: "10000000000000000",

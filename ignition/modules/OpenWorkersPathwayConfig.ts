@@ -10,6 +10,9 @@ const OpenWorkersPathwayConfigModule = buildModule(
     const openExecutorAddress = m.getParameter<string>("openExecutor");
     const openDVNAddress = m.getParameter<string>("openDVN");
     const priceFeedAddress = m.getParameter<string>("priceFeed");
+    const bootstrapPriceSubmitter = m.getParameter<string>(
+      "bootstrapPriceSubmitter",
+    );
     const dvnVerifier = m.getParameter("dvnVerifier", defaultSender);
     const workerPathwayConfig = m.getParameter("workerPathwayConfig");
     const priceSnapshot = m.getParameter("priceSnapshot");
@@ -50,13 +53,22 @@ const OpenWorkersPathwayConfigModule = buildModule(
         after: [setOpenExecutorPathwayConfig],
       },
     );
+    const revokeBootstrapPriceSubmitter = m.call(
+      priceFeed,
+      "setSubmitter",
+      [bootstrapPriceSubmitter, false],
+      {
+        id: "RevokeBootstrapPriceSubmitter",
+        after: [setPriceSnapshot],
+      },
+    );
     const setOpenExecutorFeeModel = m.call(
       openExecutor,
       "setFeeModel",
       [remoteEid, executorFeeModel],
       {
         id: "SetOpenExecutorFeeModel",
-        after: [setPriceSnapshot],
+        after: [revokeBootstrapPriceSubmitter],
       },
     );
     const setOpenDVNPriceFeed = m.call(openDVN, "setPriceFeed", [priceFeedAddress], {

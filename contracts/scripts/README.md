@@ -270,9 +270,18 @@ changing OApp ownership or Endpoint message libraries.
 - `OpenDVN.setVerifier` for the local verifier signer
 
 `OpenWorkers` deploys `OpenPriceFeed` with explicit `priceFeedSubmitters`.
-The owner manages that allowlist, but owner status alone does not submit price
-snapshots; include the pricing signer in `priceFeedSubmitters` or authorize it
-with `OpenPriceFeed.setSubmitter` before enabling the price bot.
+In profile-driven deployments, `priceFeedSubmitters` is the long-term pricing
+signer allowlist and must not include the owner. The renderer adds the owner as
+a temporary deployment submitter so `OpenWorkersPathwayConfig` can write the
+initial price snapshot, then that module immediately revokes the owner with
+`OpenPriceFeed.setSubmitter(owner, false)`. Owner status alone does not submit
+future snapshots; the long-term pricing signer must remain in
+`priceFeedSubmitters` before enabling the price bot. Existing OpenPriceFeed
+deployments that did not authorize the owner cannot be fixed by editing the
+profile alone; either redeploy `OpenWorkers`, or have the owner run a reviewed
+`OpenPriceFeed.setSubmitter(owner, true)` transaction before rerunning the new
+pathway config that writes the initial snapshot and revokes the temporary
+authorization.
 
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`
@@ -322,6 +331,7 @@ npm run render:oft-pathway-params -- \
   --open-executor ... \
   --open-dvn ... \
   --price-feed ... \
+  --bootstrap-price-submitter <owner> \
   --layerzero-labs-dvn 0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193 \
   --confirmations 12 \
   --executor-max-message-size 10000 \

@@ -42,6 +42,7 @@
     "openExecutor": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "openDVN": "0xffffffffffffffffffffffffffffffffffffffff",
     "priceFeed": "0x1234567890123456789012345678901234567890",
+    "bootstrapPriceSubmitter": "0x3333333333333333333333333333333333333333",
     "workerPathwayConfig": {
       "enabled": true,
       "maxMessageSize": "10000",

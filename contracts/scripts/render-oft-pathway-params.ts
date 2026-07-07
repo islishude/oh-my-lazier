@@ -39,6 +39,7 @@ const input = {
   openExecutor: envAddress("OPEN_EXECUTOR"),
   openDVN: envAddress("OPEN_DVN"),
   priceFeed: envAddress("PRICE_FEED"),
+  bootstrapPriceSubmitter: envAddress("BOOTSTRAP_PRICE_SUBMITTER"),
   layerZeroLabsDVN: envAddress("LAYERZERO_LABS_DVN"),
   confirmations: envBigInt("CONFIRMATIONS"),
   maxMessageSize: Number(maxMessageSizeValue),

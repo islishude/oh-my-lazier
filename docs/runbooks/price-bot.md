@@ -6,7 +6,7 @@ This runbook covers the phase-1 shared price snapshot update path for source-cha
 
 - `pricing.enabled: true` in the validated worker config.
 - The pricing signer is present in `signers`, has `pricing.min_native_balance_wei` configured, and `laz_signer_native_balance_wei` is above `laz_signer_min_native_balance_wei` on every configured source chain.
-- The pricing signer is authorized as an `OpenPriceFeed` submitter on every configured source chain. The PriceFeed owner manages submitters, but owner status alone does not submit snapshots.
+- The pricing signer is authorized as an `OpenPriceFeed` submitter on every configured source chain. The PriceFeed owner manages submitters, but owner status alone does not submit snapshots. Profile-driven deployments temporarily authorize the owner only for initial snapshot configuration and revoke it before handoff.
 - Every configured pricing chain declares `primary_source`, `sanity_sources`, `data_fee_per_byte_wei`, a Uniswap V3 sanity route, and at least one healthy RPC URL. Use an explicit `"0"` data fee for routes that do not charge an L2-style per-byte data fee.
 - Supported primary sources are `binance`, `coinmarketcap`, and `coingecko`. `sanity_sources` may use those sources plus `uniswap`, must include `uniswap`, and must not duplicate the primary source.
 - CoinMarketCap API keys must be referenced through `coinmarketcap_api_key_env` whenever `coinmarketcap` is used as a primary or sanity source; do not put API keys in worker YAML.

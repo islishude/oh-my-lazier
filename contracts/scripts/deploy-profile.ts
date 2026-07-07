@@ -226,8 +226,8 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
     input,
     "priceFeedSubmitters",
     "profile.priceFeedSubmitters",
-    [owner],
   );
+  validateLongTermPriceSubmitters(priceFeedSubmitters, owner);
   const initialRecipient =
     optionalAddressField(input, "initialRecipient", "profile.initialRecipient") ??
     owner;
@@ -405,7 +405,7 @@ export function openWorkersParameterFile(
 ) {
   return buildOpenWorkersParameters({
     owner: profile.owner,
-    priceFeedSubmitters: profile.priceFeedSubmitters,
+    priceFeedSubmitters: priceFeedDeploymentSubmitters(profile),
   });
 }
 
@@ -443,6 +443,7 @@ export function pathwayInput(input: {
     openExecutor: sourceState.workers.openExecutor,
     openDVN: sourceState.workers.openDVN,
     priceFeed: sourceState.workers.priceFeed,
+    bootstrapPriceSubmitter: input.profile.owner,
     layerZeroLabsDVN: sourceState.layerZeroLabsDVN,
     confirmations: BigInt(input.source.confirmations),
     maxMessageSize: input.profile.pathway.maxMessageSize,
@@ -1572,6 +1573,25 @@ function feeModelInput(fee: WorkerFeeProfile) {
   };
 }
 
+function priceFeedDeploymentSubmitters(profile: DeploymentProfile): Address[] {
+  return uniqueAddresses([...profile.priceFeedSubmitters, profile.owner]);
+}
+
+function uniqueAddresses(addresses: readonly Address[]): Address[] {
+  const seen = new Set<string>();
+  const unique: Address[] = [];
+  for (const address of addresses) {
+    const normalized = getAddress(address);
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    unique.push(normalized);
+  }
+  return unique;
+}
+
 function openWorkersParameterPath(outDir: string, chain: ChainProfile): string {
   return path.join(outDir, "ignition", "parameters", `${chain.key}.open-workers.json`);
 }
@@ -1747,6 +1767,19 @@ function normalizeBuildProfileValue(value: string): string {
   return value;
 }
 
+function validateLongTermPriceSubmitters(
+  submitters: readonly Address[],
+  owner: Address,
+) {
+  for (const submitter of submitters) {
+    if (isAddressEqual(submitter, owner)) {
+      throw new Error(
+        "profile.priceFeedSubmitters must not include profile.owner; owner is added only as a temporary deployment submitter",
+      );
+    }
+  }
+}
+
 function normalizeMode(value: unknown): DeploymentMode {
   if (value === "test-oft-rehearsal" || value === "external-oapp") {
     return value;
@@ -1904,11 +1937,10 @@ function normalizeAddressArrayField(
   input: Record<string, unknown>,
   field: string,
   label: string,
-  fallback: Address[],
 ): Address[] {
   const value = input[field];
   if (value === undefined) {
-    return [...fallback];
+    throw new Error(`${label} is required`);
   }
   if (!Array.isArray(value)) {
     throw new Error(`${label} must be an array`);

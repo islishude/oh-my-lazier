@@ -26,6 +26,7 @@ function basePathwayInput() {
     openExecutor: "0x7777777777777777777777777777777777777777",
     openDVN: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     priceFeed: "0xcccccccccccccccccccccccccccccccccccccccc",
+    bootstrapPriceSubmitter: "0x3333333333333333333333333333333333333333",
     layerZeroLabsDVN: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     confirmations: 12n,
     maxMessageSize: 10_000,
@@ -153,6 +154,10 @@ test("buildOpenWorkersPathwayConfigParameters renders worker-only config", () =>
   assert.equal(rendered.openExecutor, "0x7777777777777777777777777777777777777777");
   assert.equal(rendered.openDVN, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
   assert.equal(rendered.priceFeed, "0xcccccccccccccccccccccccccccccccccccccccc");
+  assert.equal(
+    rendered.bootstrapPriceSubmitter,
+    "0x3333333333333333333333333333333333333333",
+  );
   assert.equal(rendered.dvnVerifier, "0x9999999999999999999999999999999999999999");
   assert.deepEqual(rendered.workerPathwayConfig, {
     enabled: true,
@@ -206,6 +211,7 @@ test("committed ignition parameter examples use split modules", () => {
     const workers = parameters.OpenWorkersPathwayConfig as {
       openExecutor: string;
       openDVN: string;
+      bootstrapPriceSubmitter?: string;
     };
     const executorConfig = oapp.sendConfig.find(
       (entry) => entry.configType === CONFIG_TYPE_EXECUTOR,
@@ -223,6 +229,10 @@ test("committed ignition parameter examples use split modules", () => {
       decodeUlnConfig(ulnConfig.config).requiredDVNs.some(
         (dvn) => dvn.toLowerCase() === workers.openDVN.toLowerCase(),
       ),
+    );
+    assert.equal(
+      workers.bootstrapPriceSubmitter,
+      "0x3333333333333333333333333333333333333333",
     );
   }
 });

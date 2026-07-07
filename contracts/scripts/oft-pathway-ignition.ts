@@ -86,6 +86,7 @@ export type OpenWorkersPathwayConfigParameters = {
   openExecutor: Address;
   openDVN: Address;
   priceFeed: Address;
+  bootstrapPriceSubmitter: Address;
   dvnVerifier?: Address;
   workerPathwayConfig: WorkerPathwayConfigParam;
   priceSnapshot: PriceSnapshotParam;
@@ -122,6 +123,7 @@ export type PathwayConfigInput = {
   openExecutor: Address;
   openDVN: Address;
   priceFeed: Address;
+  bootstrapPriceSubmitter: Address;
   layerZeroLabsDVN: Address;
   confirmations: bigint;
   maxMessageSize: number;
@@ -200,6 +202,7 @@ export function buildOpenWorkersPathwayConfigParameters(
     openExecutor: input.openExecutor,
     openDVN: input.openDVN,
     priceFeed: input.priceFeed,
+    bootstrapPriceSubmitter: input.bootstrapPriceSubmitter,
     workerPathwayConfig: common.workerPathwayConfig,
     priceSnapshot: common.priceSnapshot,
     executorFeeModel: common.executorFeeModel,
