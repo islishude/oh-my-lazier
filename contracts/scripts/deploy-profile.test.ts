@@ -308,18 +308,19 @@ test("command plan and phase gates keep external OApp config explicit", () => {
   assert.match(commandText, /npm run configure:oapp-endpoint/);
   assert.doesNotMatch(commandText, /--build-profile/);
   assert.doesNotMatch(commandText, /--verify/);
+  assert.doesNotMatch(commandText, /HARDHAT_IGNITION_CONFIRM/);
   assert.equal(shouldRunConfigureOApp(profile, "all", true), false);
   assert.equal(shouldRunConfigureOApp(profile, "configure-oapp", true), true);
   assert.equal(shouldRunWorkerOnlyVerify(profile, "all"), true);
   assert.equal(shouldRunWorkerOnlyVerify(profile, "verify"), false);
 });
 
-test("command plan forwards Ignition verify and build profile flags", () => {
+test("command plan forwards Ignition verify, build profile, and auto-confirm flags", () => {
   const profile = normalizeProfile(baseProfile());
   const plan = buildCommandPlan({
     profile,
     outDir: "tmp/deploy-profile",
-    ignition: { verify: true, buildProfile: "production" },
+    ignition: { verify: true, autoConfirm: true, buildProfile: "production" },
   });
   const mutatingCommands = plan.commands
     .filter((command) => command.mutates)
@@ -332,14 +333,17 @@ test("command plan forwards Ignition verify and build profile flags", () => {
   assert.equal(mutatingCommands.length, 8);
   assert.match(
     mutatingCommands[0],
-    /^SEPOLIA_RPC_URL=\.\.\. npm run deploy:test-oft -- --build-profile production --network sepolia /,
+    /^SEPOLIA_RPC_URL=\.\.\. HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true HARDHAT_IGNITION_CONFIRM_RESET=true npm run deploy:test-oft -- --build-profile production --network sepolia /,
   );
   for (const command of mutatingCommands) {
+    assert.match(command, /HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true/);
+    assert.match(command, /HARDHAT_IGNITION_CONFIRM_RESET=true/);
     assert.match(command, /--build-profile production/);
     assert.match(command, /--verify(?:\s|$)/);
   }
   assert.doesNotMatch(readOnlyCommands, /--build-profile/);
   assert.doesNotMatch(readOnlyCommands, /--verify/);
+  assert.doesNotMatch(readOnlyCommands, /HARDHAT_IGNITION_CONFIRM/);
 });
 
 test("command plan rejects invalid Ignition build profile values", () => {

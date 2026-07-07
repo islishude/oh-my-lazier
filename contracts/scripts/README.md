@@ -159,6 +159,28 @@ npm run deploy:profile -- \
   --apply
 ```
 
+Pass `--auto-confirm` to set Hardhat Ignition's confirmation environment
+variables for every deploy/configure subprocess and skip repeated
+`Confirm deploy to network ...?` prompts:
+
+```bash
+npm run deploy:profile -- \
+  --profile <profile.json> \
+  --phase all \
+  --build-profile production \
+  --verify \
+  --auto-confirm \
+  --apply
+```
+
+`hardhat-keystore` production passwords are intentionally interactive. For
+non-interactive CI or release automation, provide the Hardhat configuration
+variables directly in the process environment, such as `SEPOLIA_PRIVATE_KEY`,
+`HOODI_PRIVATE_KEY`, and `ETHERSCAN_API_KEY`; environment variables take
+precedence over keystore values and avoid the keystore password prompt. Keep
+those values in the runner's secret store, not in committed files or shell
+history.
+
 Supported phases are `render`, `deploy-test-oft`, `deploy-workers`,
 `configure-workers`, `configure-oapp`, `verify`, and `all`. In
 `external-oapp` mode, `all --apply` deploys/configures/verifies only the worker

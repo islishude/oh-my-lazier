@@ -211,6 +211,7 @@ export type CommandPlan = {
 
 export type IgnitionCommandOptions = {
   verify: boolean;
+  autoConfirm: boolean;
   buildProfile?: string;
 };
 
@@ -1030,7 +1031,7 @@ function runHardhatIgnition(input: {
       "--",
       ...hardhatIgnitionArgs(input),
     ],
-    env: hardhatEnv(input.chain),
+    env: hardhatEnv(input.chain, input.ignition),
     stdio: "inherit",
   });
 }
@@ -1078,12 +1079,19 @@ function runCommand(input: {
   }
 }
 
-function hardhatEnv(chain: ChainProfile): NodeJS.ProcessEnv {
+function hardhatEnv(
+  chain: ChainProfile,
+  ignition?: IgnitionCommandOptions,
+): NodeJS.ProcessEnv {
   const env = { ...process.env };
   const rpcURL = requiredProcessEnv(chain.rpcUrlEnv);
   env[chain.rpcUrlEnv] = rpcURL;
   const prefix = chain.network.toUpperCase().replace(/[^A-Z0-9]/g, "_");
   env[`${prefix}_RPC_URL`] = rpcURL;
+  if (ignition?.autoConfirm) {
+    env.HARDHAT_IGNITION_CONFIRM_DEPLOYMENT = "true";
+    env.HARDHAT_IGNITION_CONFIRM_RESET = "true";
+  }
   return env;
 }
 
@@ -1700,6 +1708,8 @@ function parseIgnitionCommandOptions(
 ): IgnitionCommandOptions {
   return {
     verify: flagEnabled(flags.get("verify")),
+    autoConfirm:
+      flagEnabled(flags.get("auto-confirm")) || flagEnabled(flags.get("yes")),
     buildProfile: parseBuildProfileFlag(flags.get("build-profile")),
   };
 }
@@ -1709,6 +1719,7 @@ function normalizeIgnitionCommandOptions(
 ): IgnitionCommandOptions {
   return {
     verify: options?.verify ?? false,
+    autoConfirm: options?.autoConfirm ?? false,
     buildProfile:
       options?.buildProfile === undefined
         ? undefined
@@ -1824,7 +1835,7 @@ function hardhatCommand(
   deploymentId: string,
   ignition: IgnitionCommandOptions,
 ): string {
-  return `${chain.rpcUrlEnv}=... ${script} -- ${hardhatIgnitionArgs({
+  return `${hardhatEnvPrefix(chain, ignition).join(" ")} ${script} -- ${hardhatIgnitionArgs({
     chain,
     parametersPath,
     deploymentId,
@@ -1853,6 +1864,21 @@ function hardhatIgnitionArgs(input: {
     args.push("--verify");
   }
   return args;
+}
+
+function hardhatEnvPrefix(
+  chain: ChainProfile,
+  ignition: IgnitionCommandOptions,
+): string[] {
+  return [
+    `${chain.rpcUrlEnv}=...`,
+    ...(ignition.autoConfirm
+      ? [
+        "HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true",
+        "HARDHAT_IGNITION_CONFIRM_RESET=true",
+      ]
+      : []),
+  ];
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {
