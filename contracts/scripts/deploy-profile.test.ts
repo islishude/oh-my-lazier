@@ -306,10 +306,63 @@ test("command plan and phase gates keep external OApp config explicit", () => {
   assert.match(commandText, /npm run deploy:open-workers/);
   assert.match(commandText, /npm run configure:open-workers-pathway/);
   assert.match(commandText, /npm run configure:oapp-endpoint/);
+  assert.doesNotMatch(commandText, /--build-profile/);
+  assert.doesNotMatch(commandText, /--verify/);
   assert.equal(shouldRunConfigureOApp(profile, "all", true), false);
   assert.equal(shouldRunConfigureOApp(profile, "configure-oapp", true), true);
   assert.equal(shouldRunWorkerOnlyVerify(profile, "all"), true);
   assert.equal(shouldRunWorkerOnlyVerify(profile, "verify"), false);
+});
+
+test("command plan forwards Ignition verify and build profile flags", () => {
+  const profile = normalizeProfile(baseProfile());
+  const plan = buildCommandPlan({
+    profile,
+    outDir: "tmp/deploy-profile",
+    ignition: { verify: true, buildProfile: "production" },
+  });
+  const mutatingCommands = plan.commands
+    .filter((command) => command.mutates)
+    .map((command) => command.command);
+  const readOnlyCommands = plan.commands
+    .filter((command) => !command.mutates)
+    .map((command) => command.command)
+    .join("\n");
+
+  assert.equal(mutatingCommands.length, 8);
+  assert.match(
+    mutatingCommands[0],
+    /^SEPOLIA_RPC_URL=\.\.\. npm run deploy:test-oft -- --build-profile production --network sepolia /,
+  );
+  for (const command of mutatingCommands) {
+    assert.match(command, /--build-profile production/);
+    assert.match(command, /--verify(?:\s|$)/);
+  }
+  assert.doesNotMatch(readOnlyCommands, /--build-profile/);
+  assert.doesNotMatch(readOnlyCommands, /--verify/);
+});
+
+test("command plan rejects invalid Ignition build profile values", () => {
+  const profile = normalizeProfile(baseProfile());
+
+  assert.throws(
+    () =>
+      buildCommandPlan({
+        profile,
+        outDir: "tmp/deploy-profile",
+        ignition: { buildProfile: "" },
+      }),
+    /--build-profile requires a value/,
+  );
+  assert.throws(
+    () =>
+      buildCommandPlan({
+        profile,
+        outDir: "tmp/deploy-profile",
+        ignition: { buildProfile: "prod profile" },
+      }),
+    /--build-profile cannot contain whitespace/,
+  );
 });
 
 test("isBootstrapStateUnavailable only allows missing new deployment state", () => {

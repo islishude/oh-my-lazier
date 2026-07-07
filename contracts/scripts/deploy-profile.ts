@@ -209,6 +209,11 @@ export type CommandPlan = {
   commands: PlannedCommand[];
 };
 
+export type IgnitionCommandOptions = {
+  verify: boolean;
+  buildProfile?: string;
+};
+
 type PriceFeedOverrides = Record<string, Address>;
 type RPCURLMap = Record<string, string>;
 
@@ -514,8 +519,10 @@ ${pathwayBlocks}
 export function buildCommandPlan(input: {
   profile: DeploymentProfile;
   outDir: string;
+  ignition?: Partial<IgnitionCommandOptions>;
 }): CommandPlan {
   const commands: PlannedCommand[] = [];
+  const ignition = normalizeIgnitionCommandOptions(input.ignition);
   if (input.profile.mode === "test-oft-rehearsal") {
     for (const chain of input.profile.chains) {
       commands.push({
@@ -525,6 +532,7 @@ export function buildCommandPlan(input: {
           "npm run deploy:test-oft",
           testOFTParameterPath(input.outDir, chain),
           testOFTDeploymentId(chain),
+          ignition,
         ),
         mutates: true,
         requiresApply: true,
@@ -539,6 +547,7 @@ export function buildCommandPlan(input: {
         "npm run deploy:open-workers",
         openWorkersParameterPath(input.outDir, chain),
         chain.deploymentId,
+        ignition,
       ),
       mutates: true,
       requiresApply: true,
@@ -552,6 +561,7 @@ export function buildCommandPlan(input: {
         "npm run configure:open-workers-pathway",
         openWorkersPathwayParameterPath(input.outDir, source, destination),
         openWorkersPathwayDeploymentId(source, destination),
+        ignition,
       ),
       mutates: true,
       requiresApply: true,
@@ -563,6 +573,7 @@ export function buildCommandPlan(input: {
         "npm run configure:oapp-endpoint",
         oappEndpointParameterPath(input.outDir, source, destination),
         oappEndpointDeploymentId(source, destination),
+        ignition,
       ),
       mutates: true,
       requiresApply: true,
@@ -593,6 +604,7 @@ export async function writeRenderedDeployment(input: {
   state: DeploymentState;
   outDir: string;
   rpcUrls: RPCURLMap;
+  ignition?: Partial<IgnitionCommandOptions>;
   priceSnapshotUpdatedAt?: bigint;
 }): Promise<void> {
   await writeInitialParameterFiles(input.profile, input.outDir);
@@ -630,6 +642,7 @@ export async function writeRenderedDeployment(input: {
   const commands = buildCommandPlan({
     profile: input.profile,
     outDir: input.outDir,
+    ignition: input.ignition,
   });
   await writeJSON(path.join(input.outDir, "commands.json"), commands);
   await writeFile(path.join(input.outDir, "commands.md"), renderCommands(commands));
@@ -661,19 +674,20 @@ async function main() {
   const outDir = flags.get("out") ?? "tmp/deploy-profile";
   const phase = normalizePhase(flags.get("phase") ?? "render");
   const apply = flagEnabled(flags.get("apply"));
+  const ignition = parseIgnitionCommandOptions(flags);
   const profile = normalizeProfile(
     JSON.parse(await readFile(profilePath, "utf8")),
   );
 
   await writeInitialParameterFiles(profile, outDir);
-  const commands = buildCommandPlan({ profile, outDir });
+  const commands = buildCommandPlan({ profile, outDir, ignition });
   await writeJSON(path.join(outDir, "commands.json"), commands);
   await writeFile(path.join(outDir, "commands.md"), renderCommands(commands));
 
   if (phase === "deploy-test-oft") {
     requireRehearsalMode(profile, phase);
     if (apply) {
-      runDeployTestOFT(profile, outDir);
+      runDeployTestOFT(profile, outDir, ignition);
     }
     printSummary(phase, apply, outDir, profile);
     return;
@@ -681,7 +695,7 @@ async function main() {
 
   if (phase === "deploy-workers") {
     if (apply) {
-      runDeployWorkers(profile, outDir);
+      runDeployWorkers(profile, outDir, ignition);
     }
     printSummary(phase, apply, outDir, profile);
     return;
@@ -689,9 +703,9 @@ async function main() {
 
   if (phase === "all" && apply) {
     if (profile.mode === "test-oft-rehearsal") {
-      runDeployTestOFT(profile, outDir);
+      runDeployTestOFT(profile, outDir, ignition);
     }
-    runDeployWorkers(profile, outDir);
+    runDeployWorkers(profile, outDir, ignition);
   }
 
   let state: DeploymentState;
@@ -706,13 +720,13 @@ async function main() {
     throw error;
   }
   const rpcUrls = resolveRPCURLs(profile);
-  await writeRenderedDeployment({ profile, state, outDir, rpcUrls });
+  await writeRenderedDeployment({ profile, state, outDir, rpcUrls, ignition });
 
   if ((phase === "configure-workers" || phase === "all") && apply) {
-    runConfigureWorkers(profile, outDir);
+    runConfigureWorkers(profile, outDir, ignition);
   }
   if (shouldRunConfigureOApp(profile, phase, apply)) {
-    runConfigureOApp(profile, outDir);
+    runConfigureOApp(profile, outDir, ignition);
   }
   if (phase === "verify" || (phase === "all" && apply)) {
     runVerify(profile, state, outDir, rpcUrls, {
@@ -804,7 +818,11 @@ async function loadDeploymentState(
   });
 }
 
-function runDeployTestOFT(profile: DeploymentProfile, outDir: string) {
+function runDeployTestOFT(
+  profile: DeploymentProfile,
+  outDir: string,
+  ignition: IgnitionCommandOptions,
+) {
   requireRehearsalMode(profile, "deploy-test-oft");
   for (const chain of profile.chains) {
     runHardhatIgnition({
@@ -813,11 +831,16 @@ function runDeployTestOFT(profile: DeploymentProfile, outDir: string) {
       chain,
       parametersPath: testOFTParameterPath(outDir, chain),
       deploymentId: testOFTDeploymentId(chain),
+      ignition,
     });
   }
 }
 
-function runDeployWorkers(profile: DeploymentProfile, outDir: string) {
+function runDeployWorkers(
+  profile: DeploymentProfile,
+  outDir: string,
+  ignition: IgnitionCommandOptions,
+) {
   for (const chain of profile.chains) {
     runHardhatIgnition({
       label: `deploy ${chain.key} OpenWorkers`,
@@ -825,11 +848,16 @@ function runDeployWorkers(profile: DeploymentProfile, outDir: string) {
       chain,
       parametersPath: openWorkersParameterPath(outDir, chain),
       deploymentId: chain.deploymentId,
+      ignition,
     });
   }
 }
 
-function runConfigureWorkers(profile: DeploymentProfile, outDir: string) {
+function runConfigureWorkers(
+  profile: DeploymentProfile,
+  outDir: string,
+  ignition: IgnitionCommandOptions,
+) {
   for (const [source, destination] of profileDirections(profile)) {
     runHardhatIgnition({
       label: `configure ${source.key} OpenWorkers for ${destination.key}`,
@@ -837,11 +865,16 @@ function runConfigureWorkers(profile: DeploymentProfile, outDir: string) {
       chain: source,
       parametersPath: openWorkersPathwayParameterPath(outDir, source, destination),
       deploymentId: openWorkersPathwayDeploymentId(source, destination),
+      ignition,
     });
   }
 }
 
-function runConfigureOApp(profile: DeploymentProfile, outDir: string) {
+function runConfigureOApp(
+  profile: DeploymentProfile,
+  outDir: string,
+  ignition: IgnitionCommandOptions,
+) {
   for (const [source, destination] of profileDirections(profile)) {
     runHardhatIgnition({
       label: `configure ${source.key} OApp/Endpoint for ${destination.key}`,
@@ -849,6 +882,7 @@ function runConfigureOApp(profile: DeploymentProfile, outDir: string) {
       chain: source,
       parametersPath: oappEndpointParameterPath(outDir, source, destination),
       deploymentId: oappEndpointDeploymentId(source, destination),
+      ignition,
     });
   }
 }
@@ -984,6 +1018,7 @@ function runHardhatIgnition(input: {
   chain: ChainProfile;
   parametersPath: string;
   deploymentId: string;
+  ignition: IgnitionCommandOptions;
 }) {
   runCommand({
     label: input.label,
@@ -993,12 +1028,7 @@ function runHardhatIgnition(input: {
       "--silent",
       input.script,
       "--",
-      "--network",
-      input.chain.network,
-      "--parameters",
-      input.parametersPath,
-      "--deployment-id",
-      input.deploymentId,
+      ...hardhatIgnitionArgs(input),
     ],
     env: hardhatEnv(input.chain),
     stdio: "inherit",
@@ -1665,6 +1695,47 @@ function normalizePhase(value: string): DeploymentPhase {
   }
 }
 
+function parseIgnitionCommandOptions(
+  flags: ReadonlyMap<string, string>,
+): IgnitionCommandOptions {
+  return {
+    verify: flagEnabled(flags.get("verify")),
+    buildProfile: parseBuildProfileFlag(flags.get("build-profile")),
+  };
+}
+
+function normalizeIgnitionCommandOptions(
+  options: Partial<IgnitionCommandOptions> | undefined,
+): IgnitionCommandOptions {
+  return {
+    verify: options?.verify ?? false,
+    buildProfile:
+      options?.buildProfile === undefined
+        ? undefined
+        : normalizeBuildProfileValue(options.buildProfile),
+  };
+}
+
+function parseBuildProfileFlag(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "" || value === "true") {
+    throw new Error("--build-profile requires a value");
+  }
+  return normalizeBuildProfileValue(value);
+}
+
+function normalizeBuildProfileValue(value: string): string {
+  if (value.trim() === "") {
+    throw new Error("--build-profile requires a value");
+  }
+  if (/\s/.test(value)) {
+    throw new Error("--build-profile cannot contain whitespace");
+  }
+  return value;
+}
+
 function normalizeMode(value: unknown): DeploymentMode {
   if (value === "test-oft-rehearsal" || value === "external-oapp") {
     return value;
@@ -1751,8 +1822,37 @@ function hardhatCommand(
   script: string,
   parametersPath: string,
   deploymentId: string,
+  ignition: IgnitionCommandOptions,
 ): string {
-  return `${chain.rpcUrlEnv}=... ${script} -- --network ${chain.network} --parameters ${parametersPath} --deployment-id ${deploymentId}`;
+  return `${chain.rpcUrlEnv}=... ${script} -- ${hardhatIgnitionArgs({
+    chain,
+    parametersPath,
+    deploymentId,
+    ignition,
+  }).join(" ")}`;
+}
+
+function hardhatIgnitionArgs(input: {
+  chain: ChainProfile;
+  parametersPath: string;
+  deploymentId: string;
+  ignition: IgnitionCommandOptions;
+}): string[] {
+  const args = [
+    ...(input.ignition.buildProfile === undefined
+      ? []
+      : ["--build-profile", input.ignition.buildProfile]),
+    "--network",
+    input.chain.network,
+    "--parameters",
+    input.parametersPath,
+    "--deployment-id",
+    input.deploymentId,
+  ];
+  if (input.ignition.verify) {
+    args.push("--verify");
+  }
+  return args;
 }
 
 function object(value: unknown, label: string): Record<string, unknown> {

@@ -145,6 +145,19 @@ npm run deploy:profile -- \
 `--apply` runs Hardhat Ignition with inherited terminal stdio so
 `hardhat-keystore` can prompt for the keystore password interactively. Render
 and verification commands that write artifacts still capture output to files.
+Pass `--build-profile <name>` to forward Hardhat's Ignition build profile to
+each state-changing deploy/configure command. Pass `--verify` to forward
+Ignition's deployment verification flag; the configured verifier API key, such
+as `ETHERSCAN_API_KEY`, must be available to Hardhat:
+
+```bash
+npm run deploy:profile -- \
+  --profile <profile.json> \
+  --phase all \
+  --build-profile production \
+  --verify \
+  --apply
+```
 
 Supported phases are `render`, `deploy-test-oft`, `deploy-workers`,
 `configure-workers`, `configure-oapp`, `verify`, and `all`. In
