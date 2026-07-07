@@ -1,0 +1,320 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "OpenPriceFeed",
+  "sourceName": "contracts/contracts/workers/OpenPriceFeed.sol",
+  "abi": [
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "initialOwner",
+          "type": "address"
+        },
+        {
+          "internalType": "address[]",
+          "name": "initialSubmitters",
+          "type": "address[]"
+        }
+      ],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "dstEid",
+          "type": "uint32"
+        }
+      ],
+      "name": "InvalidPriceSnapshot",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidPriceSnapshotBatch",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "submitter",
+          "type": "address"
+        }
+      ],
+      "name": "InvalidPriceSubmitter",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableInvalidOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableUnauthorizedAccount",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "submitter",
+          "type": "address"
+        }
+      ],
+      "name": "UnauthorizedPriceSubmitter",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "uint32",
+          "name": "dstEid",
+          "type": "uint32"
+        },
+        {
+          "components": [
+            {
+              "internalType": "uint256",
+              "name": "dstGasPriceInSrcToken",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint256",
+              "name": "dstDataFeePerByteInSrcToken",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint64",
+              "name": "updatedAt",
+              "type": "uint64"
+            },
+            {
+              "internalType": "uint64",
+              "name": "staleAfter",
+              "type": "uint64"
+            }
+          ],
+          "indexed": false,
+          "internalType": "struct WorkerTypes.PriceSnapshot",
+          "name": "snapshot",
+          "type": "tuple"
+        }
+      ],
+      "name": "PriceSnapshotSet",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "submitter",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "bool",
+          "name": "allowed",
+          "type": "bool"
+        }
+      ],
+      "name": "SubmitterSet",
+      "type": "event"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint32",
+          "name": "dstEid",
+          "type": "uint32"
+        }
+      ],
+      "name": "priceSnapshot",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "dstGasPriceInSrcToken",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint256",
+          "name": "dstDataFeePerByteInSrcToken",
+          "type": "uint256"
+        },
+        {
+          "internalType": "uint64",
+          "name": "updatedAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "staleAfter",
+          "type": "uint64"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint32",
+              "name": "dstEid",
+              "type": "uint32"
+            },
+            {
+              "components": [
+                {
+                  "internalType": "uint256",
+                  "name": "dstGasPriceInSrcToken",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "uint256",
+                  "name": "dstDataFeePerByteInSrcToken",
+                  "type": "uint256"
+                },
+                {
+                  "internalType": "uint64",
+                  "name": "updatedAt",
+                  "type": "uint64"
+                },
+                {
+                  "internalType": "uint64",
+                  "name": "staleAfter",
+                  "type": "uint64"
+                }
+              ],
+              "internalType": "struct WorkerTypes.PriceSnapshot",
+              "name": "snapshot",
+              "type": "tuple"
+            }
+          ],
+          "internalType": "struct WorkerTypes.PriceSnapshotUpdate[]",
+          "name": "updates",
+          "type": "tuple[]"
+        }
+      ],
+      "name": "setPriceSnapshot",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "submitter",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "allowed",
+          "type": "bool"
+        }
+      ],
+      "name": "setSubmitter",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "submitter",
+          "type": "address"
+        }
+      ],
+      "name": "submitters",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "allowed",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x6080604052346101a5576107e780380380610019816101bd565b9283398101906040818303126101a557610032816101e2565b602082015190916001600160401b0382116101a557019180601f840112156101a5578251926001600160401b0384116101a9578360051b906020806100788185016101bd565b8097815201928201019283116101a557602001905b82821061018d575050506001600160a01b0316801561017a575f80546001600160a01b03198116831782556001600160a01b0316907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09080a35f905b805182101561016b57600582901b8101602001516001600160a01b03169182156101585782600192935f52600260205260405f208360ff198254161790557f54992e75d6204e64e6576ace5c7d2782c63fbb124424beb2fbaf3199c88176186020604051858152a201906100e9565b82632806f5e160e21b5f5260045260245ffd5b6040516105f090816101f78239f35b631e4fbdf760e01b5f525f60045260245ffd5b6020809161019a846101e2565b81520191019061008d565b5f80fd5b634e487b7160e01b5f52604160045260245ffd5b6040519190601f01601f191682016001600160401b038111838210176101a957604052565b51906001600160a01b03821682036101a55756fe6080806040526004361015610012575f80fd5b5f3560e01c908163065604351461051a575080632a85fcee146102b4578063715018a6146102505780638da5cb5b1461022b57806396fbdc991461017a578063f23ab235146101165763f2fde38b14610069575f80fd5b34610112576020366003190112610112576001600160a01b0361008a610553565b6100926105a4565b1680156100e6576001600160a01b035f548273ffffffffffffffffffffffffffffffffffffffff198216175f55167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e05f80a3005b7f1e4fbdf7000000000000000000000000000000000000000000000000000000005f525f60045260245ffd5b5f80fd5b346101125760203660031901126101125760043563ffffffff8116809103610112575f526001602052608060405f2067ffffffffffffffff81549160026001820154910154906040519384526020840152818116604084015260401c166060820152f35b3461011257604036600319011261011257610193610553565b60243590811515809203610112576001600160a01b03906101b26105a4565b169081156101ff5760207f54992e75d6204e64e6576ace5c7d2782c63fbb124424beb2fbaf3199c881761891835f526002825260405f2060ff1981541660ff8316179055604051908152a2005b507fa01bd784000000000000000000000000000000000000000000000000000000005f5260045260245ffd5b34610112575f3660031901126101125760206001600160a01b035f5416604051908152f35b34610112575f366003190112610112576102686105a4565b5f6001600160a01b03815473ffffffffffffffffffffffffffffffffffffffff1981168355167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e08280a3005b346101125760203660031901126101125760043567ffffffffffffffff811161011257366023820112156101125780600401359067ffffffffffffffff82116101125736602460a084028301011161011257335f52600260205260ff60405f205416156104ee5781156104c657905f915b818310156104c45760a083028101926024840193604481013590811580156104a7575b801561048a575b610450576080869267ffffffffffffffff6104417fd036ef843065e771a1843d7069302c165f7914773a82e12e06a78ebe8fc54fa49463ffffffff61039760019a9b9c61057e565b165f52886020528261043660405f2098868a5563ffffffff610424600260648701359c8f8e9082015501926084870193866103d186610569565b169760a482549101987fffffffffffffffffffffffffffffffff000000000000000000000000000000006fffffffffffffffff00000000000000006104158c610569565b60401b1692161717905561057e565b1699604051978852602088015261058f565b16604085015261058f565b166060820152a2019190610325565b63ffffffff61045e8761057e565b7f67a0dc8d000000000000000000000000000000000000000000000000000000005f521660045260245ffd5b5067ffffffffffffffff6104a060a48301610569565b161561034f565b5067ffffffffffffffff6104bd60848301610569565b1615610348565b005b7f0743b860000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f5781904b000000000000000000000000000000000000000000000000000000005f523360045260245ffd5b34610112576020366003190112610112576020906001600160a01b0361053e610553565b165f526002825260ff60405f20541615158152f35b600435906001600160a01b038216820361011257565b3567ffffffffffffffff811681036101125790565b3563ffffffff811681036101125790565b359067ffffffffffffffff8216820361011257565b6001600160a01b035f541633036105b757565b7f118cdaa7000000000000000000000000000000000000000000000000000000005f523360045260245ffdfea164736f6c6343000823000a",
+  "deployedBytecode": "0x6080806040526004361015610012575f80fd5b5f3560e01c908163065604351461051a575080632a85fcee146102b4578063715018a6146102505780638da5cb5b1461022b57806396fbdc991461017a578063f23ab235146101165763f2fde38b14610069575f80fd5b34610112576020366003190112610112576001600160a01b0361008a610553565b6100926105a4565b1680156100e6576001600160a01b035f548273ffffffffffffffffffffffffffffffffffffffff198216175f55167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e05f80a3005b7f1e4fbdf7000000000000000000000000000000000000000000000000000000005f525f60045260245ffd5b5f80fd5b346101125760203660031901126101125760043563ffffffff8116809103610112575f526001602052608060405f2067ffffffffffffffff81549160026001820154910154906040519384526020840152818116604084015260401c166060820152f35b3461011257604036600319011261011257610193610553565b60243590811515809203610112576001600160a01b03906101b26105a4565b169081156101ff5760207f54992e75d6204e64e6576ace5c7d2782c63fbb124424beb2fbaf3199c881761891835f526002825260405f2060ff1981541660ff8316179055604051908152a2005b507fa01bd784000000000000000000000000000000000000000000000000000000005f5260045260245ffd5b34610112575f3660031901126101125760206001600160a01b035f5416604051908152f35b34610112575f366003190112610112576102686105a4565b5f6001600160a01b03815473ffffffffffffffffffffffffffffffffffffffff1981168355167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e08280a3005b346101125760203660031901126101125760043567ffffffffffffffff811161011257366023820112156101125780600401359067ffffffffffffffff82116101125736602460a084028301011161011257335f52600260205260ff60405f205416156104ee5781156104c657905f915b818310156104c45760a083028101926024840193604481013590811580156104a7575b801561048a575b610450576080869267ffffffffffffffff6104417fd036ef843065e771a1843d7069302c165f7914773a82e12e06a78ebe8fc54fa49463ffffffff61039760019a9b9c61057e565b165f52886020528261043660405f2098868a5563ffffffff610424600260648701359c8f8e9082015501926084870193866103d186610569565b169760a482549101987fffffffffffffffffffffffffffffffff000000000000000000000000000000006fffffffffffffffff00000000000000006104158c610569565b60401b1692161717905561057e565b1699604051978852602088015261058f565b16604085015261058f565b166060820152a2019190610325565b63ffffffff61045e8761057e565b7f67a0dc8d000000000000000000000000000000000000000000000000000000005f521660045260245ffd5b5067ffffffffffffffff6104a060a48301610569565b161561034f565b5067ffffffffffffffff6104bd60848301610569565b1615610348565b005b7f0743b860000000000000000000000000000000000000000000000000000000005f5260045ffd5b7f5781904b000000000000000000000000000000000000000000000000000000005f523360045260245ffd5b34610112576020366003190112610112576020906001600160a01b0361053e610553565b165f526002825260ff60405f20541615158152f35b600435906001600160a01b038216820361011257565b3567ffffffffffffffff811681036101125790565b3563ffffffff811681036101125790565b359067ffffffffffffffff8216820361011257565b6001600160a01b035f541633036105b757565b7f118cdaa7000000000000000000000000000000000000000000000000000000005f523360045260245ffdfea164736f6c6343000823000a",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/contracts/workers/OpenPriceFeed.sol",
+  "buildInfoId": "solc-0_8_35-7b8e71edb86b5029254e374c75f6d2781f84e53a"
+}

@@ -11,6 +11,7 @@ import {
 import {
   buildCommandPlan,
   buildDeploymentState,
+  deploymentPreflightArgs,
   extractOpenWorkerContracts,
   isBootstrapStateUnavailable,
   normalizeProfile,
@@ -19,6 +20,7 @@ import {
   openWorkersPathwayParameterFile,
   readPriceFeedFromWorkers,
   renderWorkerConfig,
+  resolveWorkerStartBlocks,
   shouldRunConfigureOApp,
   shouldRunWorkerOnlyVerify,
   testOFTParameterFile,
@@ -33,6 +35,7 @@ test("normalizeProfile validates rehearsal mode and LayerZero metadata", () => {
   assert.equal(profile.mode, "test-oft-rehearsal");
   assert.equal(profile.dvnMode, "active");
   assert.equal(profile.chains[0].eid, 40161);
+  assert.equal(profile.chains[0].startBlockNumber, undefined);
   assert.equal(profile.chains[0].layerZero.endpointV2, "0x6EDCE65403992e310A62460808c4b910D972f10f");
   assert.equal(profile.chains[1].eid, 40449);
 });
@@ -64,6 +67,28 @@ test("normalizeProfile rejects owner as a long-term price feed submitter", () =>
   assert.throws(
     () => normalizeProfile(input),
     /profile\.priceFeedSubmitters must not include profile\.owner/,
+  );
+});
+
+test("normalizeProfile rejects legacy top-level canary token balance", () => {
+  const input = {
+    ...baseProfile(),
+    minCanaryTokenBalance: "1000000000000000",
+  };
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.minCanaryTokenBalance is not supported/,
+  );
+});
+
+test("normalizeProfile requires chain canary token balance in rehearsal mode", () => {
+  const input = baseProfile();
+  delete (input.chains[1] as Record<string, unknown>).minCanaryTokenBalance;
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[1\]\.minCanaryTokenBalance must be a non-empty string/,
   );
 });
 
@@ -271,6 +296,10 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
       sepolia: "https://sepolia.example.invalid/rpc?key=abc",
       hoodi: "https://hoodi.example.invalid/rpc?key=def",
     },
+    workerStartBlocks: {
+      sepolia: 123456,
+      hoodi: 654321,
+    },
   });
 
   assert.match(yaml, /database_url: "postgres:\/\/laz_worker/);
@@ -281,6 +310,58 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(yaml, /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/);
   assert.match(yaml, /signer: "0x2222222222222222222222222222222222222222"/);
   assert.match(yaml, /min_native_balance_wei: "100000000000000000"/);
+  assert.match(yaml, /start_block_number: 123456/);
+  assert.match(yaml, /start_block_number: 654321/);
+});
+
+test("resolveWorkerStartBlocks queries latest height only for missing profile overrides", async () => {
+  const input = baseProfile();
+  (input.chains[1] as Record<string, unknown>).startBlockNumber = 0;
+  const profile = normalizeProfile(input);
+  const queried: string[] = [];
+
+  assert.deepEqual(
+    await resolveWorkerStartBlocks({
+      profile,
+      rpcUrls: {
+        sepolia: "https://sepolia.example.invalid/rpc",
+        hoodi: "https://hoodi.example.invalid/rpc",
+      },
+      latestBlockNumber: async (chain, rpcURL) => {
+        queried.push(`${chain.key}:${rpcURL}`);
+        return 123456n;
+      },
+    }),
+    {
+      sepolia: 123456,
+      hoodi: 0,
+    },
+  );
+  assert.deepEqual(queried, ["sepolia:https://sepolia.example.invalid/rpc"]);
+});
+
+test("resolveWorkerStartBlocks preserves explicit non-zero profile override", async () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).startBlockNumber = 111;
+  (input.chains[1] as Record<string, unknown>).startBlockNumber = 222;
+  const profile = normalizeProfile(input);
+
+  assert.deepEqual(
+    await resolveWorkerStartBlocks({
+      profile,
+      rpcUrls: {
+        sepolia: "https://sepolia.example.invalid/rpc",
+        hoodi: "https://hoodi.example.invalid/rpc",
+      },
+      latestBlockNumber: async () => {
+        throw new Error("latest block should not be queried");
+      },
+    }),
+    {
+      sepolia: 111,
+      hoodi: 222,
+    },
+  );
 });
 
 test("parameter files split TestOFT rehearsal from OpenWorkers deployment", () => {
@@ -322,6 +403,32 @@ test("deployment state paths use profile deployment ids", () => {
   assert.equal(
     testOFTDeploymentAddressPath(profile.chains[0]),
     "ignition/deployments/sepolia-test-oft/deployed_addresses.json",
+  );
+});
+
+test("deployment preflight args use chain canary token balances", () => {
+  const profile = normalizeProfile(baseProfile());
+  const state = stateWithPriceFeeds(profile);
+  const sepoliaArgs = deploymentPreflightArgs({
+    profile,
+    chain: profile.chains[0],
+    current: state.chains[0],
+    rpcURL: "https://sepolia.example.invalid/rpc",
+  });
+  const hoodiArgs = deploymentPreflightArgs({
+    profile,
+    chain: profile.chains[1],
+    current: state.chains[1],
+    rpcURL: "https://hoodi.example.invalid/rpc",
+  });
+
+  assert.equal(
+    sepoliaArgs[sepoliaArgs.indexOf("--min-canary-token-balance") + 1],
+    "1000000000000000",
+  );
+  assert.equal(
+    hoodiArgs[hoodiArgs.indexOf("--min-canary-token-balance") + 1],
+    "0",
   );
 });
 
@@ -493,7 +600,6 @@ function baseProfile() {
     canaryTreasury: "0x1111111111111111111111111111111111111111",
     minOwnerNativeBalanceWei: "10000000000000000",
     minCanaryNativeBalanceWei: "10000000000000000",
-    minCanaryTokenBalance: "1000000000000000",
     dvnMode: "active",
     services: {
       executor: true,
@@ -524,8 +630,8 @@ function baseProfile() {
         deploymentId: "sepolia-open-workers",
         testOFTDeploymentId: "sepolia-test-oft",
         initialSupply: "1000000000000000000000000",
+        minCanaryTokenBalance: "1000000000000000",
         confirmations: 12,
-        startBlockNumber: 0,
         indexerQueryBlockRange: 500,
         txRoles: {
           executor: {
@@ -552,8 +658,8 @@ function baseProfile() {
         deploymentId: "hoodi-open-workers",
         testOFTDeploymentId: "hoodi-test-oft",
         initialSupply: "0",
+        minCanaryTokenBalance: "0",
         confirmations: 12,
-        startBlockNumber: 0,
         indexerQueryBlockRange: 500,
         txRoles: {
           executor: {

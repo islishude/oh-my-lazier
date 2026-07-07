@@ -29,7 +29,13 @@ The owner must be able to:
 
 Do not use the worker hot signer as `OWNER` unless the migration ticket explicitly approves that temporary testnet shortcut.
 
-After deployment and before any funded migration step, run `npm run check:deployment-preflight` on each chain with `EXPECTED_OWNER` set to the approved operations owner. Set `CANARY_TREASURY` and the minimum native/TestOFT balances when canary transfers will be sent from a treasury instead of directly from the owner.
+After deployment and before any funded migration step, run
+`npm run check:deployment-preflight` on each chain with `EXPECTED_OWNER` set to
+the approved operations owner. Set `CANARY_TREASURY`, the minimum native
+balance, and the chain-specific minimum TestOFT balance when canary transfers
+will be sent from a treasury instead of directly from the owner. Hoodi's
+initial minimum TestOFT balance is `0` because its initial supply is `0`; raise
+that threshold only after a successful inbound Sepolia -> Hoodi canary.
 
 For the Sepolia/Hoodi rehearsal, keep these values in the testnet deployment
 profile and generate downstream artifacts from it:
@@ -43,8 +49,9 @@ npm run deploy:profile -- \
 ```
 
 The profile is the maintained operator input for owner, long-term PriceFeed
-submitters, initial recipient, worker signer addresses, fee caps, worker fee
-models, and the environment variable names that hold RPC URLs. The owner is
+submitters, initial recipient, per-chain canary TestOFT balance thresholds,
+worker signer addresses, fee caps, worker fee models, and the environment
+variable names that hold RPC URLs. The owner is
 added as a temporary deployment submitter only while the initial worker pathway
 price snapshot is configured, then `OpenWorkersPathwayConfig` revokes that
 temporary authorization. Hardhat private key configuration variables
@@ -55,7 +62,10 @@ hand; regenerate from the Ignition deployment state instead. The normal
 configuration path uses `OAppEndpointConfig` for rehearsal OApp/Endpoint state
 and `OpenWorkersPathwayConfig` for worker-side state, generated from the same
 profile and deployment state. The generated worker YAML is an operational
-artifact under `tmp/`, not a maintained policy document.
+artifact under `tmp/`, not a maintained policy document. For fresh deployments,
+omit `chains[].startBlockNumber` so the renderer writes the latest RPC block
+height to worker `chains[].start_block_number`; set it explicitly only when a
+fixed historical backfill is approved.
 
 ## Initial Supply
 

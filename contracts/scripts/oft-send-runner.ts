@@ -1,21 +1,30 @@
 import { buildCanarySendParam } from "./oft-canary.js";
+import { enrichKnownContractError } from "./contract-error.js";
 import {
   createClients,
   envAddress,
   envBigInt,
   envUint32,
   jsonStringify,
+  loadABIArtifact,
   loadArtifact,
   optionalAddress,
   optionalBigInt,
   optionalParam,
   waitForTx,
 } from "./lib.js";
-import type { Hex } from "viem";
+import type { Abi, Hex } from "viem";
 
 const testOFTArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
 );
+const workerErrorsArtifact = loadABIArtifact(
+  "contracts/artifacts/contracts/contracts/common/WorkerErrors.sol/WorkerErrors.json",
+);
+const knownSendErrorsABI = [
+  ...testOFTArtifact.abi,
+  ...workerErrorsArtifact.abi,
+] as Abi;
 
 export async function sendOFTFromEnv(label: string): Promise<void> {
   const { account, publicClient, walletClient } = createClients();
@@ -40,12 +49,15 @@ export async function sendOFTFromEnv(label: string): Promise<void> {
     extraOptions,
   });
 
-  const fee = (await publicClient.readContract({
-    address: testOFT,
-    abi: testOFTArtifact.abi,
-    functionName: "quoteSend",
-    args: [sendParam, false],
-  })) as { nativeFee: bigint; lzTokenFee: bigint };
+  const fee = (await withKnownContractErrors(
+    "TestOFT.quoteSend",
+    publicClient.readContract({
+      address: testOFT,
+      abi: testOFTArtifact.abi,
+      functionName: "quoteSend",
+      args: [sendParam, false],
+    }),
+  )) as { nativeFee: bigint; lzTokenFee: bigint };
 
   if (fee.lzTokenFee !== 0n) {
     throw new Error("OFT send only supports native-fee payment");
@@ -54,15 +66,18 @@ export async function sendOFTFromEnv(label: string): Promise<void> {
   await waitForTx(
     publicClient,
     label,
-    await walletClient.writeContract({
-      address: testOFT,
-      abi: testOFTArtifact.abi,
-      functionName: "send",
-      args: [sendParam, fee, refundAddress],
-      value: fee.nativeFee,
-      account,
-      chain: null,
-    }),
+    await withKnownContractErrors(
+      "TestOFT.send",
+      walletClient.writeContract({
+        address: testOFT,
+        abi: testOFTArtifact.abi,
+        functionName: "send",
+        args: [sendParam, fee, refundAddress],
+        value: fee.nativeFee,
+        account,
+        chain: null,
+      }),
+    ),
   );
 
   console.log(
@@ -79,6 +94,23 @@ export async function sendOFTFromEnv(label: string): Promise<void> {
       sendParam,
     }),
   );
+}
+
+async function withKnownContractErrors<T>(
+  context: string,
+  promise: Promise<T>,
+): Promise<T> {
+  try {
+    return await promise;
+  } catch (error) {
+    throw (
+      enrichKnownContractError({
+        error,
+        abi: knownSendErrorsABI,
+        context,
+      }) ?? error
+    );
+  }
 }
 
 function optionalHex(name: string): Hex | undefined {

@@ -79,8 +79,9 @@ export type ChainProfile = {
   testOFTDeploymentId?: string;
   oapp?: Address;
   initialSupply: string;
+  minCanaryTokenBalance: string;
   confirmations: number;
-  startBlockNumber: number;
+  startBlockNumber?: number;
   indexerQueryBlockRange: number;
   txRoles: {
     executor: TxRoleProfile;
@@ -129,7 +130,6 @@ export type DeploymentProfile = {
   canaryTreasury?: Address;
   minOwnerNativeBalanceWei: string;
   minCanaryNativeBalanceWei: string;
-  minCanaryTokenBalance: string;
   dvnMode: "active" | "shadow";
   services: {
     executor: boolean;
@@ -217,10 +217,20 @@ export type IgnitionCommandOptions = {
 
 type PriceFeedOverrides = Record<string, Address>;
 type RPCURLMap = Record<string, string>;
+type WorkerStartBlockMap = Record<string, number>;
+type LatestBlockNumberReader = (
+  chain: ChainProfile,
+  rpcURL: string,
+) => Promise<bigint>;
 
 export function normalizeProfile(value: unknown): DeploymentProfile {
   const input = object(value, "profile");
   const mode = normalizeMode(input.mode);
+  if (Object.hasOwn(input, "minCanaryTokenBalance")) {
+    throw new Error(
+      "profile.minCanaryTokenBalance is not supported; configure chains[].minCanaryTokenBalance",
+    );
+  }
   const owner = addressField(input, "owner", "profile.owner");
   const priceFeedSubmitters = normalizeAddressArrayField(
     input,
@@ -270,12 +280,6 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
       input,
       "minCanaryNativeBalanceWei",
       "profile.minCanaryNativeBalanceWei",
-      "0",
-    ),
-    minCanaryTokenBalance: optionalDecimalField(
-      input,
-      "minCanaryTokenBalance",
-      "profile.minCanaryTokenBalance",
       "0",
     ),
     dvnMode: normalizeDVNMode(input.dvnMode),
@@ -491,10 +495,17 @@ export function renderWorkerConfig(input: {
   profile: DeploymentProfile;
   state: DeploymentState;
   rpcUrls: RPCURLMap;
+  workerStartBlocks: WorkerStartBlockMap;
 }): string {
   const signers = input.profile.signers.map(renderSigner).join("\n");
   const chainBlocks = input.profile.chains
-    .map((chain) => renderWorkerChain(chain, input.rpcUrls[chain.key]))
+    .map((chain) =>
+      renderWorkerChain(
+        chain,
+        input.rpcUrls[chain.key],
+        workerStartBlock(input.workerStartBlocks, chain),
+      )
+    )
     .join("\n");
   const pathwayBlocks = input.state.directions
     .map((direction) => renderWorkerPathway(input.profile, direction))
@@ -608,6 +619,7 @@ export async function writeRenderedDeployment(input: {
   rpcUrls: RPCURLMap;
   ignition?: Partial<IgnitionCommandOptions>;
   priceSnapshotUpdatedAt?: bigint;
+  latestBlockNumber?: LatestBlockNumberReader;
 }): Promise<void> {
   await writeInitialParameterFiles(input.profile, input.outDir);
   for (const [source, destination] of profileDirections(input.profile)) {
@@ -633,12 +645,18 @@ export async function writeRenderedDeployment(input: {
     );
   }
   await writeJSON(path.join(input.outDir, "deployment-state.json"), input.state);
+  const workerStartBlocks = await resolveWorkerStartBlocks({
+    profile: input.profile,
+    rpcUrls: input.rpcUrls,
+    latestBlockNumber: input.latestBlockNumber,
+  });
   await writeFile(
     path.join(input.outDir, "worker.yaml"),
     renderWorkerConfig({
       profile: input.profile,
       state: input.state,
       rpcUrls: input.rpcUrls,
+      workerStartBlocks,
     }),
   );
   const commands = buildCommandPlan({
@@ -648,6 +666,38 @@ export async function writeRenderedDeployment(input: {
   });
   await writeJSON(path.join(input.outDir, "commands.json"), commands);
   await writeFile(path.join(input.outDir, "commands.md"), renderCommands(commands));
+}
+
+export async function resolveWorkerStartBlocks(input: {
+  profile: DeploymentProfile;
+  rpcUrls: RPCURLMap;
+  latestBlockNumber?: LatestBlockNumberReader;
+}): Promise<WorkerStartBlockMap> {
+  const latestBlockNumber = input.latestBlockNumber ?? readLatestBlockNumber;
+  const workerStartBlocks: WorkerStartBlockMap = {};
+  for (const chain of input.profile.chains) {
+    if (chain.startBlockNumber !== undefined) {
+      workerStartBlocks[chain.key] = chain.startBlockNumber;
+      continue;
+    }
+    const rpcURL = input.rpcUrls[chain.key];
+    if (rpcURL === undefined) {
+      throw new Error(`${chain.key} RPC URL is required to resolve start_block_number`);
+    }
+    const latest = await latestBlockNumber(chain, rpcURL);
+    workerStartBlocks[chain.key] = safeBlockNumber(
+      latest,
+      `${chain.key} latest block number`,
+    );
+  }
+  return workerStartBlocks;
+}
+
+function safeBlockNumber(value: bigint, label: string): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${label} exceeds JavaScript safe integer range`);
+  }
+  return Number(value);
 }
 
 export async function writeInitialParameterFiles(
@@ -903,38 +953,12 @@ function runVerify(
       runCommand({
         label: `deployment preflight ${chain.key}`,
         command: "npm",
-        args: [
-          "run",
-          "--silent",
-          "check:deployment-preflight",
-          "--",
-          "--rpc-url",
-          rpcUrls[chain.key],
-          "--chain-id",
-          String(chain.chainId),
-          "--test-oft",
-          current.oapp,
-          "--open-executor",
-          current.workers.openExecutor,
-          "--open-dvn",
-          current.workers.openDVN,
-          "--expected-owner",
-          profile.owner,
-          "--min-owner-native-balance",
-          profile.minOwnerNativeBalanceWei,
-          ...(profile.canaryTreasury === undefined
-            ? []
-            : [
-              "--canary-treasury",
-              profile.canaryTreasury,
-              "--min-canary-native-balance",
-              profile.minCanaryNativeBalanceWei,
-              "--min-canary-token-balance",
-              profile.minCanaryTokenBalance,
-            ]),
-          "--expected-total-supply",
-          chain.initialSupply,
-        ],
+        args: deploymentPreflightArgs({
+          profile,
+          chain,
+          current,
+          rpcURL: rpcUrls[chain.key],
+        }),
         outputPath: path.join(artifactDir, `deployment-preflight-${chain.key}.json`),
       });
     }
@@ -1012,6 +1036,46 @@ function runVerify(
       outputPath: path.join(artifactDir, "configcheck.json"),
     });
   }
+}
+
+export function deploymentPreflightArgs(input: {
+  profile: DeploymentProfile;
+  chain: ChainProfile;
+  current: ChainDeploymentState;
+  rpcURL: string;
+}): string[] {
+  return [
+    "run",
+    "--silent",
+    "check:deployment-preflight",
+    "--",
+    "--rpc-url",
+    input.rpcURL,
+    "--chain-id",
+    String(input.chain.chainId),
+    "--test-oft",
+    input.current.oapp,
+    "--open-executor",
+    input.current.workers.openExecutor,
+    "--open-dvn",
+    input.current.workers.openDVN,
+    "--expected-owner",
+    input.profile.owner,
+    "--min-owner-native-balance",
+    input.profile.minOwnerNativeBalanceWei,
+    ...(input.profile.canaryTreasury === undefined
+      ? []
+      : [
+        "--canary-treasury",
+        input.profile.canaryTreasury,
+        "--min-canary-native-balance",
+        input.profile.minCanaryNativeBalanceWei,
+        "--min-canary-token-balance",
+        input.chain.minCanaryTokenBalance,
+      ]),
+    "--expected-total-supply",
+    input.chain.initialSupply,
+  ];
 }
 
 function runHardhatIgnition(input: {
@@ -1112,6 +1176,13 @@ function publicClientFor(chain: ChainProfile, rpcURL: string): PublicClient {
   return createPublicClient({ chain: viemChain, transport: http(rpcURL) });
 }
 
+async function readLatestBlockNumber(
+  chain: ChainProfile,
+  rpcURL: string,
+): Promise<bigint> {
+  return publicClientFor(chain, rpcURL).getBlockNumber();
+}
+
 function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
   const input = object(value, pathLabel);
   const id = addressField(input, "id", `${pathLabel}.id`);
@@ -1200,8 +1271,17 @@ function normalizeChain(
       `${pathLabel}.initialSupply`,
       "0",
     ),
+    minCanaryTokenBalance:
+      mode === "test-oft-rehearsal"
+        ? decimalField(input, "minCanaryTokenBalance", `${pathLabel}.minCanaryTokenBalance`)
+        : optionalDecimalField(
+          input,
+          "minCanaryTokenBalance",
+          `${pathLabel}.minCanaryTokenBalance`,
+          "0",
+        ),
     confirmations: integerField(input, "confirmations", `${pathLabel}.confirmations`),
-    startBlockNumber: integerField(
+    startBlockNumber: optionalIntegerField(
       input,
       "startBlockNumber",
       `${pathLabel}.startBlockNumber`,
@@ -1471,14 +1551,18 @@ ${passwordLine}`;
       address: "${signer.kms.address}"${endpointLine}`;
 }
 
-function renderWorkerChain(chain: ChainProfile, rpcURL: string): string {
+function renderWorkerChain(
+  chain: ChainProfile,
+  rpcURL: string,
+  startBlockNumber: number,
+): string {
   return `  - eid: ${chain.eid}
     name: ${yamlString(chain.name)}
     family: evm
     chain_id: ${chain.chainId}
     endpoint_address: "${chain.layerZero.endpointV2}"
     confirmations: ${chain.confirmations}
-    start_block_number: ${chain.startBlockNumber}
+    start_block_number: ${startBlockNumber}
     indexer_query_block_range: ${chain.indexerQueryBlockRange}
     rpc_urls:
       - ${yamlString(rpcURL)}
@@ -1493,6 +1577,17 @@ function renderWorkerChain(chain: ChainProfile, rpcURL: string): string {
         max_fee_per_gas_wei: "${chain.txRoles.dvn.maxFeePerGasWei}"
         max_priority_fee_per_gas_wei: "${chain.txRoles.dvn.maxPriorityFeePerGasWei}"
         min_native_balance_wei: "${chain.txRoles.dvn.minNativeBalanceWei}"`;
+}
+
+function workerStartBlock(
+  workerStartBlocks: WorkerStartBlockMap,
+  chain: ChainProfile,
+): number {
+  const startBlockNumber = workerStartBlocks[chain.key];
+  if (!Number.isInteger(startBlockNumber) || startBlockNumber < 0) {
+    throw new Error(`${chain.key} start_block_number must be a non-negative integer`);
+  }
+  return startBlockNumber;
 }
 
 function renderWorkerPathway(
@@ -2032,6 +2127,19 @@ function integerField(
     throw new Error(`${label} must be >= ${min}`);
   }
   return value as number;
+}
+
+function optionalIntegerField(
+  input: Record<string, unknown>,
+  field: string,
+  label: string,
+  options?: { allowZero?: boolean },
+): number | undefined {
+  const value = input[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  return integerField(input, field, label, options);
 }
 
 function decimalField(

@@ -201,6 +201,12 @@ npm run configure:oapp-endpoint
 Use `docs/deployments/test-oft-policy.md` for the approved rehearsal TestOFT
 name, symbol, owner, constructor mint, and minting policy. Keep generated files
 under `tmp/` out of commits; rendered worker YAML may contain resolved RPC URLs.
+When a profile chain omits `startBlockNumber`, the renderer queries that
+chain's configured RPC URL and writes the latest block height to
+`chains[].start_block_number` in `worker.yaml`. Set `chains[].startBlockNumber`
+explicitly only for a fixed historical backfill, including `0` for a full
+genesis backfill. If the worker database already has a durable indexer cursor,
+that cursor remains authoritative for subsequent worker starts.
 
 After deployment, check that the deployed contracts are still controlled by the expected operations owner and, when used, that the canary treasury has enough native token and TestOFT balance for the planned transfer:
 
@@ -219,7 +225,12 @@ npm run check:deployment-preflight -- \
   --expected-total-supply 1000000000000000000000000
 ```
 
-`--canary-treasury`, `--min-canary-native-balance`, `--min-canary-token-balance`, and `--expected-total-supply` are optional. Use `--expected-total-supply 0` on Hoodi when checking the initial zero-supply deployment before any inbound canary mint.
+`--canary-treasury`, `--min-canary-native-balance`,
+`--min-canary-token-balance`, and `--expected-total-supply` are optional. In
+profile-driven deploys, `chains[].minCanaryTokenBalance` supplies the per-chain
+`--min-canary-token-balance` value. Use `0` on Hoodi while checking the initial
+zero-supply deployment before any inbound canary mint; raise the Hoodi value
+only after a funded Sepolia -> Hoodi canary has minted destination tokens.
 
 Inspect or update one TestOFT pathway pause/rate-limit state during migration:
 
@@ -492,6 +503,12 @@ npm run send:oft -- \
 ```
 
 `send:oft` calls `quoteSend` first and pays the quoted native fee. By default it sends empty caller `extraOptions` and relies on the pathway's enforced `lzReceiveOption`; this avoids duplicate executor options after the configured-pathway module has set enforced options. Pass `--extra-options 0x...` only for an explicitly approved custom options payload, or `--lz-receive-gas <gas>` only on pathways without enforced lzReceive options. `composeMsg` and `oftCmd` are always empty for the first phase. `send:oft-canary` remains as an alias with canary-specific logging for migration evidence flows.
+
+If `quoteSend` reverts with `PriceSnapshotStale(uint32,uint256,uint256)`, the
+source chain's `OpenPriceFeed.priceSnapshot(dstEid)` has passed its
+`updatedAt + staleAfter` window. Refresh the source `OpenPriceFeed` snapshot
+with `configure:workers` or the price bot, then rerun `check:price-config`
+before retrying the OFT send.
 
 Check the source-chain canary receipt after the send transaction is mined:
 
