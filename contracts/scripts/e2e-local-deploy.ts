@@ -409,17 +409,20 @@ async function configureSourceWorkers(
   );
   const priceSnapshot = {
     dstGasPriceInSrcToken: 1n,
+    dstDataFeePerByteInSrcToken: 0n,
     updatedAt: timestamp,
     staleAfter: 86_400n,
   };
   const executorFeeModel = {
     baseFee: 1n,
     dstGasOverhead: 0n,
+    dataSizeOverheadBytes: 0n,
     marginBps: 0,
   };
   const dvnFeeModel = {
     baseFee: 1n,
     dstGasOverhead: 0n,
+    dataSizeOverheadBytes: 0n,
     marginBps: 0,
   };
   await writeTx(

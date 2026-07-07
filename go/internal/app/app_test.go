@@ -553,10 +553,11 @@ func testPricingConfig() config.PricingConfig {
 		MinNativeBalanceWei:     "100000000000000000",
 		Chains: []config.PricingChainConfig{
 			{
-				EID:           40161,
-				PrimarySource: "binance",
-				SanitySources: []string{"uniswap"},
-				BinanceSymbol: "ETHUSDT",
+				EID:               40161,
+				DataFeePerByteWei: "0",
+				PrimarySource:     "binance",
+				SanitySources:     []string{"uniswap"},
+				BinanceSymbol:     "ETHUSDT",
 				Uniswap: config.UniswapPricingConfig{
 					QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:          config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
@@ -567,10 +568,11 @@ func testPricingConfig() config.PricingConfig {
 				},
 			},
 			{
-				EID:           40449,
-				PrimarySource: "binance",
-				SanitySources: []string{"uniswap"},
-				BinanceSymbol: "ETHUSDT",
+				EID:               40449,
+				DataFeePerByteWei: "0",
+				PrimarySource:     "binance",
+				SanitySources:     []string{"uniswap"},
+				BinanceSymbol:     "ETHUSDT",
 				Uniswap: config.UniswapPricingConfig{
 					QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 					TokenIn:          config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
@@ -586,9 +588,13 @@ func testPricingConfig() config.PricingConfig {
 
 func testPathwayPricingConfig() config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
 	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
 }
 
 func purposesByChain(targets []txmgr.Target) map[uint32][]string {

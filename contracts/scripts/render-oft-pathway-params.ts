@@ -63,6 +63,9 @@ function priceSnapshot(defaultUpdatedAt: bigint): PriceSnapshotInput {
     dstGasPriceInSrcToken: envBigInt(
       "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
     ),
+    dstDataFeePerByteInSrcToken: envBigInt(
+      "PRICE_SNAPSHOT_DST_DATA_FEE_PER_BYTE_IN_SRC_TOKEN",
+    ),
     updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
     staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
   };
@@ -72,6 +75,7 @@ function workerFeeModel(prefix: "EXECUTOR" | "DVN"): WorkerFeeModelInput {
   return {
     baseFee: envBigInt(`${prefix}_FEE_BASE_FEE`),
     dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
+    dataSizeOverheadBytes: envBigInt(`${prefix}_FEE_DATA_SIZE_OVERHEAD_BYTES`),
     marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
   };
 }

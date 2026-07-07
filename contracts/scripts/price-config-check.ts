@@ -11,6 +11,7 @@ import type { Abi, Address, PublicClient } from "viem";
 
 export type PriceSnapshot = {
   dstGasPriceInSrcToken: bigint;
+  dstDataFeePerByteInSrcToken: bigint;
   updatedAt: bigint;
   staleAfter: bigint;
 };
@@ -18,6 +19,7 @@ export type PriceSnapshot = {
 export type FeeModel = {
   baseFee: bigint;
   dstGasOverhead: bigint;
+  dataSizeOverheadBytes: bigint;
   marginBps: number;
 };
 
@@ -99,6 +101,9 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
   if (snapshot.dstGasPriceInSrcToken <= 0n) {
     errors.push("priceFeed dstGasPriceInSrcToken must be non-zero");
   }
+  if (snapshot.dstDataFeePerByteInSrcToken < 0n) {
+    errors.push("priceFeed dstDataFeePerByteInSrcToken must be non-negative");
+  }
   if (snapshot.updatedAt === 0n) {
     errors.push("priceFeed updatedAt is zero");
   } else if (snapshot.updatedAt > report.checkedAt) {
@@ -131,6 +136,9 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
     }
     if (worker.feeModel.dstGasOverhead < 0n) {
       errors.push(`${worker.label} dstGasOverhead must be non-negative`);
+    }
+    if (worker.feeModel.dataSizeOverheadBytes < 0n) {
+      errors.push(`${worker.label} dataSizeOverheadBytes must be non-negative`);
     }
     if (worker.feeModel.marginBps > 10_000) {
       errors.push(`${worker.label} marginBps exceeds 10000`);
@@ -187,17 +195,20 @@ function normalizePriceSnapshot(value: unknown): PriceSnapshot {
   if (Array.isArray(value)) {
     return {
       dstGasPriceInSrcToken: value[0] as bigint,
-      updatedAt: value[1] as bigint,
-      staleAfter: value[2] as bigint,
+      dstDataFeePerByteInSrcToken: value[1] as bigint,
+      updatedAt: value[2] as bigint,
+      staleAfter: value[3] as bigint,
     };
   }
   const snapshot = value as {
     dstGasPriceInSrcToken: bigint;
+    dstDataFeePerByteInSrcToken: bigint;
     updatedAt: bigint;
     staleAfter: bigint;
   };
   return {
     dstGasPriceInSrcToken: snapshot.dstGasPriceInSrcToken,
+    dstDataFeePerByteInSrcToken: snapshot.dstDataFeePerByteInSrcToken,
     updatedAt: snapshot.updatedAt,
     staleAfter: snapshot.staleAfter,
   };
@@ -208,17 +219,20 @@ function normalizeFeeModel(value: unknown): FeeModel {
     return {
       baseFee: value[0] as bigint,
       dstGasOverhead: value[1] as bigint,
-      marginBps: Number(value[2]),
+      dataSizeOverheadBytes: value[2] as bigint,
+      marginBps: Number(value[3]),
     };
   }
   const model = value as {
     baseFee: bigint;
     dstGasOverhead: bigint;
+    dataSizeOverheadBytes: bigint;
     marginBps: number;
   };
   return {
     baseFee: model.baseFee,
     dstGasOverhead: model.dstGasOverhead,
+    dataSizeOverheadBytes: model.dataSizeOverheadBytes,
     marginBps: Number(model.marginBps),
   };
 }

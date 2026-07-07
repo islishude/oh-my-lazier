@@ -34,6 +34,7 @@ pricing:
       binance_symbol: ETHUSDT
       coinmarketcap_symbol: ETH
       coingecko_id: ethereum
+      data_fee_per_byte_wei: "0"
       uniswap:
         quoter_address: "0x1111111111111111111111111111111111111111"
         token_in: "0x2222222222222222222222222222222222222222"
@@ -48,6 +49,7 @@ pricing:
       binance_symbol: ETHUSDT
       coinmarketcap_symbol: ETH
       coingecko_id: ethereum
+      data_fee_per_byte_wei: "0"
       uniswap:
         quoter_address: "0x4444444444444444444444444444444444444444"
         token_in: "0x5555555555555555555555555555555555555555"
@@ -118,10 +120,12 @@ pathways:
       executor_fee:
         fixed_fee_wei: "1000"
         dst_gas_overhead: 50000
+        data_size_overhead_bytes: 0
         margin_bps: 100
       dvn_fee:
         fixed_fee_wei: "2000"
         dst_gas_overhead: 150000
+        data_size_overhead_bytes: 0
         margin_bps: 200
     enabled: true
     max_message_size: 10000
@@ -145,10 +149,12 @@ pathways:
       executor_fee:
         fixed_fee_wei: "1000"
         dst_gas_overhead: 50000
+        data_size_overhead_bytes: 0
         margin_bps: 100
       dvn_fee:
         fixed_fee_wei: "2000"
         dst_gas_overhead: 150000
+        data_size_overhead_bytes: 0
         margin_bps: 200
     enabled: true
     max_message_size: 10000

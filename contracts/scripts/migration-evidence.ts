@@ -63,6 +63,7 @@ export type DVNJoinEvidence = {
 
 export type PriceSnapshotEvidence = {
   dstGasPriceInSrcToken: string;
+  dstDataFeePerByteInSrcToken: string;
   updatedAt: string;
   staleAfter: string;
 };
@@ -72,6 +73,7 @@ export type WorkerFeeModelEvidence = {
   priceFeed: string;
   baseFee: string;
   dstGasOverhead: string;
+  dataSizeOverheadBytes: string;
   marginBps: number;
 };
 
@@ -381,6 +383,11 @@ function validatePriceSnapshotEvidence(
     evidence.dstGasPriceInSrcToken,
     `${field}.dstGasPriceInSrcToken`,
   );
+  requireNonNegativeDecimalIntegerValue(
+    errors,
+    evidence.dstDataFeePerByteInSrcToken,
+    `${field}.dstDataFeePerByteInSrcToken`,
+  );
   if (
     checkedAt !== undefined &&
     updatedAt !== undefined &&
@@ -446,6 +453,11 @@ function validateWorkerFeeModelEvidence(
     errors,
     evidence.dstGasOverhead,
     `${field}.dstGasOverhead`,
+  );
+  requireNonNegativeDecimalIntegerValue(
+    errors,
+    evidence.dataSizeOverheadBytes,
+    `${field}.dataSizeOverheadBytes`,
   );
   requireBps(errors, evidence.marginBps, `${field}.marginBps`);
 }

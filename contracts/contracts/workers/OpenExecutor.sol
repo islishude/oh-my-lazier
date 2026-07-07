@@ -7,14 +7,10 @@ import {WorkerErrors} from "../common/WorkerErrors.sol";
 import {WorkerFeeLib} from "../common/WorkerFeeLib.sol";
 import {WorkerOptions} from "../common/WorkerOptions.sol";
 import {WorkerTypes} from "../common/WorkerTypes.sol";
-import {IPriceFeed} from "../common/IPriceFeed.sol";
 
 /// @title OpenExecutor
 /// @notice First-phase LayerZero Executor worker contract with strict option and pathway validation.
 contract OpenExecutor is ILayerZeroExecutor, WorkerAccess {
-    /// @notice Shared source-chain price feed used for destination market price snapshots.
-    IPriceFeed public immutable priceFeed;
-
     /// @notice Per-destination and per-OApp pathway configuration.
     mapping(uint32 dstEid => mapping(address sender => WorkerTypes.PathwayConfig config)) public pathwayConfig;
 
@@ -51,10 +47,7 @@ contract OpenExecutor is ILayerZeroExecutor, WorkerAccess {
     /// @notice Initializes executor ownership.
     /// @param initialOwner Initial owner address.
     /// @param sharedPriceFeed Shared price feed contract.
-    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner) {
-        require(sharedPriceFeed != address(0), "price feed required");
-        priceFeed = IPriceFeed(sharedPriceFeed);
-    }
+    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner, sharedPriceFeed) {}
 
     /// @notice Sets pathway controls for a destination and source OApp.
     /// @param dstEid Destination endpoint ID.
@@ -133,7 +126,8 @@ contract OpenExecutor is ILayerZeroExecutor, WorkerAccess {
             revert WorkerErrors.InvalidGas(parsed.lzReceiveGas, pathway.minLzReceiveGas, pathway.maxLzReceiveGas);
         }
 
-        return
-            WorkerFeeLib.quoteExecutor(dstEid, priceFeed.priceSnapshot(dstEid), feeModel[dstEid], parsed.lzReceiveGas);
+        return WorkerFeeLib.quoteExecutor(
+            dstEid, priceFeed.priceSnapshot(dstEid), feeModel[dstEid], parsed.lzReceiveGas, calldataSize
+        );
     }
 }

@@ -81,6 +81,14 @@ contract SendLibCaller {
         feed.setPriceSnapshot(updates);
     }
 
+    function callExecutorSetPriceFeed(OpenExecutor executor, address newPriceFeed) external {
+        executor.setPriceFeed(newPriceFeed);
+    }
+
+    function callDVNSetPriceFeed(OpenDVN dvn, address newPriceFeed) external {
+        dvn.setPriceFeed(newPriceFeed);
+    }
+
     function withdrawFee(address to, uint256 amount) external {
         require(fees[msg.sender] >= amount, "insufficient worker fee");
         fees[msg.sender] -= amount;
@@ -135,10 +143,13 @@ contract OpenWorkersTest {
             enabled: true, maxMessageSize: 1024, minLzReceiveGas: 50_000, maxLzReceiveGas: 500_000
         });
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
-            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            dstGasPriceInSrcToken: 10 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: 30 minutes
         });
         WorkerTypes.FeeModel memory fee =
-            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000});
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 3000});
         setPriceSnapshot(priceFeed, DST_EID, snapshot);
 
         executor.setAllowedSendLib(address(sendLib), true);
@@ -157,7 +168,10 @@ contract OpenWorkersTest {
 
     function test_priceFeedRejectsUnauthorizedUpdate() public {
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
-            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            dstGasPriceInSrcToken: 10 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: 30 minutes
         });
         WorkerTypes.PriceSnapshotUpdate[] memory updates = singleUpdate(DST_EID, snapshot);
         expectRevert(
@@ -170,7 +184,10 @@ contract OpenWorkersTest {
     function test_priceFeedOwnerCanManageSubmitterWithoutImplicitSubmitAccess() public {
         OpenPriceFeed managedFeed = new OpenPriceFeed(address(this), singleAddress(address(0xBEEF)));
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
-            dstGasPriceInSrcToken: 10 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            dstGasPriceInSrcToken: 10 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: 30 minutes
         });
         WorkerTypes.PriceSnapshotUpdate[] memory updates = singleUpdate(DST_EID, snapshot);
 
@@ -206,23 +223,32 @@ contract OpenWorkersTest {
         updates[0] = WorkerTypes.PriceSnapshotUpdate({
             dstEid: DST_EID,
             snapshot: WorkerTypes.PriceSnapshot({
-                dstGasPriceInSrcToken: 20 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+                dstGasPriceInSrcToken: 20 gwei,
+                dstDataFeePerByteInSrcToken: 2 gwei,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
             })
         });
         updates[1] = WorkerTypes.PriceSnapshotUpdate({
             dstEid: ALT_DST_EID,
             snapshot: WorkerTypes.PriceSnapshot({
-                dstGasPriceInSrcToken: 30 gwei, updatedAt: uint64(block.timestamp), staleAfter: 1 hours
+                dstGasPriceInSrcToken: 30 gwei,
+                dstDataFeePerByteInSrcToken: 3 gwei,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 1 hours
             })
         });
 
         priceFeed.setPriceSnapshot(updates);
 
-        (uint256 dstGasPriceInSrcToken,, uint64 staleAfter) = priceFeed.priceSnapshot(DST_EID);
+        (uint256 dstGasPriceInSrcToken, uint256 dstDataFeePerByteInSrcToken,, uint64 staleAfter) =
+            priceFeed.priceSnapshot(DST_EID);
         require(dstGasPriceInSrcToken == 20 gwei, "primary batch snapshot not stored");
+        require(dstDataFeePerByteInSrcToken == 2 gwei, "primary batch data fee not stored");
         require(staleAfter == 30 minutes, "primary batch staleAfter not stored");
-        (dstGasPriceInSrcToken,, staleAfter) = priceFeed.priceSnapshot(ALT_DST_EID);
+        (dstGasPriceInSrcToken, dstDataFeePerByteInSrcToken,, staleAfter) = priceFeed.priceSnapshot(ALT_DST_EID);
         require(dstGasPriceInSrcToken == 30 gwei, "alternate batch snapshot not stored");
+        require(dstDataFeePerByteInSrcToken == 3 gwei, "alternate batch data fee not stored");
         require(staleAfter == 1 hours, "alternate batch staleAfter not stored");
     }
 
@@ -237,7 +263,10 @@ contract OpenWorkersTest {
 
     function test_priceFeedRejectsInvalidSnapshot() public {
         WorkerTypes.PriceSnapshot memory invalid = WorkerTypes.PriceSnapshot({
-            dstGasPriceInSrcToken: 0, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            dstGasPriceInSrcToken: 0,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: 30 minutes
         });
         expectRevert(
             address(priceFeed),
@@ -248,7 +277,10 @@ contract OpenWorkersTest {
 
     function test_sharedPriceFeedUpdateChangesExecutorAndDVNQuotes() public {
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
-            dstGasPriceInSrcToken: 20 gwei, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+            dstGasPriceInSrcToken: 20 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: 30 minutes
         });
         setPriceSnapshot(priceFeed, DST_EID, snapshot);
 
@@ -259,7 +291,10 @@ contract OpenWorkersTest {
     }
 
     function test_workerFeeModelsStayIndependent() public {
-        executor.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 2 ether, dstGasOverhead: 1000, marginBps: 3000}));
+        executor.setFeeModel(
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 2 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 3000})
+        );
 
         uint256 executorFee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
         uint256 dvnFee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
@@ -268,15 +303,17 @@ contract OpenWorkersTest {
     }
 
     function test_executorRejectsStalePrice() public {
-        WorkerTypes.PriceSnapshot memory stale =
-            WorkerTypes.PriceSnapshot({dstGasPriceInSrcToken: 10 gwei, updatedAt: 0, staleAfter: 30 minutes});
+        WorkerTypes.PriceSnapshot memory stale = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei, dstDataFeePerByteInSrcToken: 0, updatedAt: 0, staleAfter: 30 minutes
+        });
         PriceFeedMock staleFeed = new PriceFeedMock();
         staleFeed.setPriceSnapshot(DST_EID, stale);
         OpenExecutor staleExecutor = new OpenExecutor(address(this), address(staleFeed));
         staleExecutor.setAllowedSendLib(address(sendLib), true);
         staleExecutor.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
         staleExecutor.setFeeModel(
-            DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000})
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 3000})
         );
 
         expectRevert(
@@ -287,7 +324,10 @@ contract OpenWorkersTest {
     }
 
     function test_executorRejectsInvalidBps() public {
-        executor.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 10_001}));
+        executor.setFeeModel(
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 10_001})
+        );
 
         expectRevert(
             address(sendLib),
@@ -301,14 +341,18 @@ contract OpenWorkersTest {
         zeroGasFeed.setPriceSnapshot(
             DST_EID,
             WorkerTypes.PriceSnapshot({
-                dstGasPriceInSrcToken: 0, updatedAt: uint64(block.timestamp), staleAfter: 30 minutes
+                dstGasPriceInSrcToken: 0,
+                dstDataFeePerByteInSrcToken: 0,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
             })
         );
         OpenExecutor zeroGasExecutor = new OpenExecutor(address(this), address(zeroGasFeed));
         zeroGasExecutor.setAllowedSendLib(address(sendLib), true);
         zeroGasExecutor.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
         zeroGasExecutor.setFeeModel(
-            DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000})
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 3000})
         );
 
         expectRevert(
@@ -427,6 +471,71 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_ownerCanRotateExecutorPriceFeed() public {
+        PriceFeedMock rotatedFeed = new PriceFeedMock();
+        rotatedFeed.setPriceSnapshot(
+            DST_EID,
+            WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 20 gwei,
+                dstDataFeePerByteInSrcToken: 0,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
+            })
+        );
+
+        executor.setPriceFeed(address(rotatedFeed));
+
+        require(address(executor.priceFeed()) == address(rotatedFeed), "executor price feed not rotated");
+        uint256 fee = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
+        require(fee == 1.302626 ether, "executor did not read rotated feed");
+    }
+
+    function test_workerRejectsInvalidPriceFeed() public {
+        expectRevert(
+            address(executor),
+            abi.encodeCall(executor.setPriceFeed, (address(0))),
+            WorkerErrors.InvalidPriceFeed.selector
+        );
+        expectRevert(
+            address(dvn), abi.encodeCall(dvn.setPriceFeed, (address(0))), WorkerErrors.InvalidPriceFeed.selector
+        );
+    }
+
+    function test_workerRejectsUnauthorizedPriceFeedRotation() public {
+        expectRevert(
+            address(sendLib),
+            abi.encodeCall(sendLib.callExecutorSetPriceFeed, (executor, address(priceFeed))),
+            0x118cdaa7
+        );
+        expectRevert(
+            address(sendLib), abi.encodeCall(sendLib.callDVNSetPriceFeed, (dvn, address(priceFeed))), 0x118cdaa7
+        );
+    }
+
+    function test_executorFeeIncludesCalldataDataFee() public {
+        PriceFeedMock dataFeed = new PriceFeedMock();
+        dataFeed.setPriceSnapshot(
+            DST_EID,
+            WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 10 gwei,
+                dstDataFeePerByteInSrcToken: 1 gwei,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
+            })
+        );
+        executor.setPriceFeed(address(dataFeed));
+        executor.setFeeModel(
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 100, marginBps: 0})
+        );
+
+        uint256 small = sendLib.executorFee(executor, DST_EID, OAPP, 512, lzReceiveOption(100_000, 0));
+        uint256 large = sendLib.executorFee(executor, DST_EID, OAPP, 1024, lzReceiveOption(100_000, 0));
+
+        require(small == 1.001010612 ether, "executor data fee mismatch");
+        require(large - small == 512 gwei, "executor data fee is not size based");
+    }
+
     function test_dvnFeeSuccess() public view {
         uint256 fee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
         require(fee == 1.300013 ether, "dvn fee mismatch");
@@ -455,14 +564,18 @@ contract OpenWorkersTest {
     }
 
     function test_dvnRejectsStalePrice() public {
-        WorkerTypes.PriceSnapshot memory stale =
-            WorkerTypes.PriceSnapshot({dstGasPriceInSrcToken: 10 gwei, updatedAt: 0, staleAfter: 30 minutes});
+        WorkerTypes.PriceSnapshot memory stale = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei, dstDataFeePerByteInSrcToken: 0, updatedAt: 0, staleAfter: 30 minutes
+        });
         PriceFeedMock staleFeed = new PriceFeedMock();
         staleFeed.setPriceSnapshot(DST_EID, stale);
         OpenDVN staleDVN = new OpenDVN(address(this), address(staleFeed));
         staleDVN.setAllowedSendLib(address(sendLib), true);
         staleDVN.setPathwayConfig(DST_EID, OAPP, defaultPathwayConfig());
-        staleDVN.setFeeModel(DST_EID, WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, marginBps: 3000}));
+        staleDVN.setFeeModel(
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 0, marginBps: 3000})
+        );
 
         expectRevert(
             address(sendLib),
@@ -522,6 +635,57 @@ contract OpenWorkersTest {
         require(fee == 1.300013 ether, "unexpected dvn fee");
         require(address(dvn).balance == 0, "dvn should not receive assignment value");
         require(sendLib.fees(address(dvn)) == fee, "send lib fee accounting missing");
+    }
+
+    function test_ownerCanRotateDVNPriceFeed() public {
+        PriceFeedMock rotatedFeed = new PriceFeedMock();
+        rotatedFeed.setPriceSnapshot(
+            DST_EID,
+            WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 20 gwei,
+                dstDataFeePerByteInSrcToken: 0,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
+            })
+        );
+
+        dvn.setPriceFeed(address(rotatedFeed));
+
+        require(address(dvn.priceFeed()) == address(rotatedFeed), "dvn price feed not rotated");
+        uint256 fee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
+        require(fee == 1.300026 ether, "dvn did not read rotated feed");
+    }
+
+    function test_dvnDataFeeUsesConfiguredOverheadOnly() public {
+        PriceFeedMock dataFeed = new PriceFeedMock();
+        dataFeed.setPriceSnapshot(
+            DST_EID,
+            WorkerTypes.PriceSnapshot({
+                dstGasPriceInSrcToken: 10 gwei,
+                dstDataFeePerByteInSrcToken: 2 gwei,
+                updatedAt: uint64(block.timestamp),
+                staleAfter: 30 minutes
+            })
+        );
+        dvn.setPriceFeed(address(dataFeed));
+        dvn.setFeeModel(
+            DST_EID,
+            WorkerTypes.FeeModel({baseFee: 1 ether, dstGasOverhead: 1000, dataSizeOverheadBytes: 256, marginBps: 0})
+        );
+
+        ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
+            dstEid: DST_EID,
+            packetHeader: hex"01020304",
+            payloadHash: bytes32(uint256(1)),
+            confirmations: 12,
+            sender: OAPP
+        });
+
+        uint256 quoted = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
+        uint256 assigned = sendLib.assignDVN(dvn, param, "");
+
+        require(quoted == 1.000010512 ether, "dvn data fee mismatch");
+        require(assigned == quoted, "dvn assign/get fee mismatch");
     }
 
     function test_dvnRejectsWhenPaused() public {

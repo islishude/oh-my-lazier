@@ -27,6 +27,7 @@ export type WorkerPathwayConfigParam = {
 
 export type PriceSnapshotParam = {
   dstGasPriceInSrcToken: string;
+  dstDataFeePerByteInSrcToken: string;
   updatedAt: string;
   staleAfter: string;
 };
@@ -34,6 +35,7 @@ export type PriceSnapshotParam = {
 export type WorkerFeeModelParam = {
   baseFee: string;
   dstGasOverhead: string;
+  dataSizeOverheadBytes: string;
   marginBps: number;
 };
 
@@ -97,6 +99,7 @@ export type OpenWorkersPathwayConfigParameterFile = {
 
 export type PriceSnapshotInput = {
   dstGasPriceInSrcToken: bigint;
+  dstDataFeePerByteInSrcToken: bigint;
   updatedAt: bigint;
   staleAfter: bigint;
 };
@@ -104,6 +107,7 @@ export type PriceSnapshotInput = {
 export type WorkerFeeModelInput = {
   baseFee: bigint;
   dstGasOverhead: bigint;
+  dataSizeOverheadBytes: bigint;
   marginBps: number | bigint;
 };
 
@@ -289,6 +293,10 @@ function normalizePriceSnapshot(
       config.dstGasPriceInSrcToken,
       `${label}.dstGasPriceInSrcToken`,
     ),
+    dstDataFeePerByteInSrcToken: normalizeUint256(
+      config.dstDataFeePerByteInSrcToken,
+      `${label}.dstDataFeePerByteInSrcToken`,
+    ),
     updatedAt: normalizeUint64(config.updatedAt, `${label}.updatedAt`),
     staleAfter: normalizeUint64(config.staleAfter, `${label}.staleAfter`),
   };
@@ -303,6 +311,10 @@ function normalizeWorkerFeeModel(
     dstGasOverhead: normalizeUint64(
       model.dstGasOverhead,
       `${label}.dstGasOverhead`,
+    ),
+    dataSizeOverheadBytes: normalizeUint64(
+      model.dataSizeOverheadBytes,
+      `${label}.dataSizeOverheadBytes`,
     ),
     marginBps: normalizeBps(model.marginBps, `${label}.marginBps`),
   };

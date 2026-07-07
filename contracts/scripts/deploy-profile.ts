@@ -103,6 +103,7 @@ export type PathwayProfile = {
   maxLzReceiveGas: string;
   priceSnapshot: {
     dstGasPriceInSrcToken: string;
+    dstDataFeePerByteInSrcToken: string;
     staleAfter: string;
     maxAgeSeconds: string;
   };
@@ -113,6 +114,7 @@ export type PathwayProfile = {
 export type WorkerFeeProfile = {
   fixedFeeWei: string;
   dstGasOverhead: string;
+  dataSizeOverheadBytes: string;
   marginBps: number;
 };
 
@@ -443,6 +445,9 @@ export function pathwayInput(input: {
     priceSnapshot: {
       dstGasPriceInSrcToken: BigInt(
         input.profile.pathway.priceSnapshot.dstGasPriceInSrcToken,
+      ),
+      dstDataFeePerByteInSrcToken: BigInt(
+        input.profile.pathway.priceSnapshot.dstDataFeePerByteInSrcToken,
       ),
       updatedAt:
         input.priceSnapshotUpdatedAt ?? BigInt(Math.floor(Date.now() / 1000)),
@@ -1296,6 +1301,11 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
         "dstGasPriceInSrcToken",
         `${pathLabel}.priceSnapshot.dstGasPriceInSrcToken`,
       ),
+      dstDataFeePerByteInSrcToken: decimalField(
+        priceSnapshot,
+        "dstDataFeePerByteInSrcToken",
+        `${pathLabel}.priceSnapshot.dstDataFeePerByteInSrcToken`,
+      ),
       staleAfter: decimalField(
         priceSnapshot,
         "staleAfter",
@@ -1326,6 +1336,11 @@ function normalizeWorkerFee(value: unknown, pathLabel: string): WorkerFeeProfile
       input,
       "dstGasOverhead",
       `${pathLabel}.dstGasOverhead`,
+    ),
+    dataSizeOverheadBytes: decimalField(
+      input,
+      "dataSizeOverheadBytes",
+      `${pathLabel}.dataSizeOverheadBytes`,
     ),
     marginBps,
   };
@@ -1463,10 +1478,12 @@ function renderWorkerPathway(
       executor_fee:
         fixed_fee_wei: "${profile.pathway.executorFee.fixedFeeWei}"
         dst_gas_overhead: ${profile.pathway.executorFee.dstGasOverhead}
+        data_size_overhead_bytes: ${profile.pathway.executorFee.dataSizeOverheadBytes}
         margin_bps: ${profile.pathway.executorFee.marginBps}
       dvn_fee:
         fixed_fee_wei: "${profile.pathway.dvnFee.fixedFeeWei}"
         dst_gas_overhead: ${profile.pathway.dvnFee.dstGasOverhead}
+        data_size_overhead_bytes: ${profile.pathway.dvnFee.dataSizeOverheadBytes}
         margin_bps: ${profile.pathway.dvnFee.marginBps}
     enabled: true
     max_message_size: ${profile.pathway.maxMessageSize}
@@ -1512,6 +1529,7 @@ function feeModelInput(fee: WorkerFeeProfile) {
   return {
     baseFee: BigInt(fee.fixedFeeWei),
     dstGasOverhead: BigInt(fee.dstGasOverhead),
+    dataSizeOverheadBytes: BigInt(fee.dataSizeOverheadBytes),
     marginBps: fee.marginBps,
   };
 }

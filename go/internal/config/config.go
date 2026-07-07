@@ -169,7 +169,9 @@ type WorkerFeeModelConfig struct {
 	FixedFeeWei string `yaml:"fixed_fee_wei"`
 	// DstGasOverhead is the fixed destination gas unit component added before price conversion.
 	DstGasOverhead uint64 `yaml:"dst_gas_overhead"`
-	// MarginBps is applied after fixed fee plus destination gas cost; it must not exceed 10000.
+	// DataSizeOverheadBytes is the fixed data-size component added before price conversion.
+	DataSizeOverheadBytes *uint64 `yaml:"data_size_overhead_bytes"`
+	// MarginBps is applied after fixed fee plus destination gas and data costs; it must not exceed 10000.
 	MarginBps uint16 `yaml:"margin_bps"`
 }
 
@@ -177,6 +179,8 @@ type WorkerFeeModelConfig struct {
 type PricingChainConfig struct {
 	// EID links this feed config to one configured ChainConfig endpoint ID.
 	EID uint32 `yaml:"eid"`
+	// DataFeePerByteWei is the destination-native data fee per byte used for generic data-fee quotes.
+	DataFeePerByteWei string `yaml:"data_fee_per_byte_wei"`
 	// PrimarySource is the price source the bot quotes from; supported values exclude uniswap.
 	PrimarySource string `yaml:"primary_source"`
 	// SanitySources cross-check the primary source and must include uniswap without duplicating the primary.
@@ -679,6 +683,9 @@ func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
 	if _, err := bigutil.ParseNonNegativeDecimal(fmt.Sprintf("%s.fixed_fee_wei", prefix), model.FixedFeeWei); err != nil {
 		return err
 	}
+	if model.DataSizeOverheadBytes == nil {
+		return fmt.Errorf("%s.data_size_overhead_bytes is required", prefix)
+	}
 	if model.MarginBps > 10_000 {
 		return fmt.Errorf("%s.margin_bps exceeds 10000", prefix)
 	}
@@ -686,6 +693,12 @@ func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
 }
 
 func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEnv string) error {
+	if chain.DataFeePerByteWei == "" {
+		return fmt.Errorf("pricing chain %d data_fee_per_byte_wei is required", chain.EID)
+	}
+	if _, err := bigutil.ParseNonNegativeDecimal(fmt.Sprintf("pricing chain %d data_fee_per_byte_wei", chain.EID), chain.DataFeePerByteWei); err != nil {
+		return err
+	}
 	if err := validatePrimaryPricingSourceName(chain.EID, chain.PrimarySource); err != nil {
 		return err
 	}

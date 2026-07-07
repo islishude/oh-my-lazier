@@ -50,17 +50,20 @@
     },
     "priceSnapshot": {
       "dstGasPriceInSrcToken": "1",
+      "dstDataFeePerByteInSrcToken": "0",
       "updatedAt": "1783082249",
       "staleAfter": "31536000"
     },
     "executorFeeModel": {
       "baseFee": "0",
       "dstGasOverhead": "0",
+      "dataSizeOverheadBytes": "0",
       "marginBps": 1000
     },
     "dvnFeeModel": {
       "baseFee": "0",
       "dstGasOverhead": "0",
+      "dataSizeOverheadBytes": "0",
       "marginBps": 1000
     },
     "dvnVerifier": "0x3333333333333333333333333333333333333333"

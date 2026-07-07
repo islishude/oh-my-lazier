@@ -226,6 +226,7 @@ changing OApp ownership or Endpoint message libraries.
 
 `OpenWorkersPathwayConfig` attaches to the local worker contracts and executes:
 
+- `OpenExecutor.setPriceFeed` and `OpenDVN.setPriceFeed` for the configured shared price feed
 - `OpenExecutor.setAllowedSendLib` and `OpenDVN.setAllowedSendLib`
 - `OpenExecutor.setPathwayConfig` and `OpenDVN.setPathwayConfig`
 - `OpenPriceFeed.setPriceSnapshot` with a `PriceSnapshotUpdate[]` batch
@@ -292,12 +293,15 @@ npm run render:oft-pathway-params -- \
   --enforced-lz-receive-gas 200000 \
   --max-lz-receive-gas 1000000 \
   --price-snapshot-dst-gas-price-in-src-token 1 \
+  --price-snapshot-dst-data-fee-per-byte-in-src-token 0 \
   --price-snapshot-stale-after 1800 \
   --executor-fee-base-fee 0 \
   --executor-fee-dst-gas-overhead 50000 \
+  --executor-fee-data-size-overhead-bytes 0 \
   --executor-fee-margin-bps 1000 \
   --dvn-fee-base-fee 0 \
   --dvn-fee-dst-gas-overhead 150000 \
+  --dvn-fee-data-size-overhead-bytes 0 \
   --dvn-fee-margin-bps 1000 > ignition/parameters/sepolia-to-hoodi.split.json
 ```
 
@@ -328,23 +332,28 @@ npm run configure:workers -- \
   --min-lz-receive-gas 200000 \
   --max-lz-receive-gas 1000000 \
   --price-snapshot-dst-gas-price-in-src-token 1 \
+  --price-snapshot-dst-data-fee-per-byte-in-src-token 0 \
   --price-snapshot-stale-after 3600 \
   --executor-fee-base-fee 0 \
   --executor-fee-dst-gas-overhead 50000 \
+  --executor-fee-data-size-overhead-bytes 0 \
   --executor-fee-margin-bps 1000 \
   --dvn-fee-base-fee 0 \
   --dvn-fee-dst-gas-overhead 150000 \
+  --dvn-fee-data-size-overhead-bytes 0 \
   --dvn-fee-margin-bps 1000
 ```
 
 For standard pathway setup, `configure:open-workers-pathway` writes the worker
-send-lib allowlist, pathway limits, initial shared price snapshot, worker fee
-models, and verifier authorization. `configure:workers` remains the manual
-entrypoint for later shared snapshot refreshes, fee-model changes, and outbound
-rate-limit changes. Set `--src-oapp` for external OApp deployments; rehearsal
-flows may omit it when `--test-oft` is set. Set `--rate-limit-capacity` and
-`--rate-limit-refill-per-second` together to configure TestOFT outbound rate
-limiting, which requires `--test-oft`.
+price-feed binding, send-lib allowlist, pathway limits, initial shared price
+snapshot, worker fee models, and verifier authorization. `configure:workers`
+remains the manual entrypoint for later shared snapshot refreshes, price feed
+rotations, fee-model changes, and outbound rate-limit changes. It reads each
+worker's current `priceFeed()` and sends `setPriceFeed` only when the configured
+`--price-feed` differs. Set `--src-oapp` for external OApp deployments;
+rehearsal flows may omit it when `--test-oft` is set. Set
+`--rate-limit-capacity` and `--rate-limit-refill-per-second` together to
+configure TestOFT outbound rate limiting, which requires `--test-oft`.
 
 Inspect the current LayerZero libraries and message-lib configs for one local direction:
 

@@ -36,6 +36,7 @@
     "outputs": [
       { "name": "baseFee", "type": "uint256" },
       { "name": "dstGasOverhead", "type": "uint64" },
+      { "name": "dataSizeOverheadBytes", "type": "uint64" },
       { "name": "marginBps", "type": "uint16" }
     ]
   },

@@ -232,6 +232,7 @@ test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config
   assert.equal(workers.dvnVerifier, profile.chains[0].txRoles.dvn.signer);
   assert.deepEqual(workers.priceSnapshot, {
     dstGasPriceInSrcToken: "1",
+    dstDataFeePerByteInSrcToken: "0",
     updatedAt: "1800000000",
     staleAfter: "1800",
   });
@@ -490,17 +491,20 @@ function baseProfile() {
       maxLzReceiveGas: "1000000",
       priceSnapshot: {
         dstGasPriceInSrcToken: "1",
+        dstDataFeePerByteInSrcToken: "0",
         staleAfter: "1800",
         maxAgeSeconds: "1800",
       },
       executorFee: {
         fixedFeeWei: "0",
         dstGasOverhead: "50000",
+        dataSizeOverheadBytes: "0",
         marginBps: 1000,
       },
       dvnFee: {
         fixedFeeWei: "0",
         dstGasOverhead: "150000",
+        dataSizeOverheadBytes: "0",
         marginBps: 1000,
       },
     },

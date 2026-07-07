@@ -74,7 +74,8 @@
           "priceSnapshot": {
             "updatedAt": "1799999940",
             "staleAfter": "1800",
-            "dstGasPriceInSrcToken": "1"
+            "dstGasPriceInSrcToken": "1",
+            "dstDataFeePerByteInSrcToken": "0"
           }
         },
         "executor": {
@@ -82,6 +83,7 @@
           "priceFeed": "0x4444444444444444444444444444444444444444",
           "baseFee": "1000",
           "dstGasOverhead": "50000",
+          "dataSizeOverheadBytes": "0",
           "marginBps": 100
         },
         "dvn": {
@@ -89,6 +91,7 @@
           "priceFeed": "0x4444444444444444444444444444444444444444",
           "baseFee": "2000",
           "dstGasOverhead": "150000",
+          "dataSizeOverheadBytes": "0",
           "marginBps": 200
         }
       },
@@ -169,7 +172,8 @@
           "priceSnapshot": {
             "updatedAt": "1799999940",
             "staleAfter": "1800",
-            "dstGasPriceInSrcToken": "1"
+            "dstGasPriceInSrcToken": "1",
+            "dstDataFeePerByteInSrcToken": "0"
           }
         },
         "executor": {
@@ -177,6 +181,7 @@
           "priceFeed": "0x7777777777777777777777777777777777777777",
           "baseFee": "1000",
           "dstGasOverhead": "50000",
+          "dataSizeOverheadBytes": "0",
           "marginBps": 100
         },
         "dvn": {
@@ -184,6 +189,7 @@
           "priceFeed": "0x7777777777777777777777777777777777777777",
           "baseFee": "2000",
           "dstGasOverhead": "150000",
+          "dataSizeOverheadBytes": "0",
           "marginBps": 200
         }
       },

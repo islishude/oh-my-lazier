@@ -490,9 +490,10 @@ type pathwayConfig struct {
 }
 
 type feeModel struct {
-	BaseFee        *big.Int
-	DstGasOverhead uint64
-	MarginBps      uint16
+	BaseFee               *big.Int
+	DstGasOverhead        uint64
+	DataSizeOverheadBytes uint64
+	MarginBps             uint16
 }
 
 func callPathwayConfig(ctx context.Context, caller ChainClient, to common.Address, dstEID uint32, sender common.Address) (pathwayConfig, error) {
@@ -532,8 +533,8 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 	if err != nil {
 		return feeModel{}, err
 	}
-	if len(values) != 3 {
-		return feeModel{}, fmt.Errorf("feeModel returned %d values, want 3", len(values))
+	if len(values) != 4 {
+		return feeModel{}, fmt.Errorf("feeModel returned %d values, want 4", len(values))
 	}
 	baseFee, ok := values[0].(*big.Int)
 	if !ok {
@@ -543,11 +544,20 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 	if !ok {
 		return feeModel{}, fmt.Errorf("feeModel dstGasOverhead returned %T, want uint64", values[1])
 	}
-	margin, ok := uint16Value(values[2])
+	dataOverhead, ok := uint64Value(values[2])
 	if !ok {
-		return feeModel{}, fmt.Errorf("feeModel marginBps returned %T, want uint16", values[2])
+		return feeModel{}, fmt.Errorf("feeModel dataSizeOverheadBytes returned %T, want uint64", values[2])
 	}
-	return feeModel{BaseFee: baseFee, DstGasOverhead: overhead, MarginBps: margin}, nil
+	margin, ok := uint16Value(values[3])
+	if !ok {
+		return feeModel{}, fmt.Errorf("feeModel marginBps returned %T, want uint16", values[3])
+	}
+	return feeModel{
+		BaseFee:               baseFee,
+		DstGasOverhead:        overhead,
+		DataSizeOverheadBytes: dataOverhead,
+		MarginBps:             margin,
+	}, nil
 }
 
 func (c *checker) compareFeeModel(path string, actual feeModel, expected config.WorkerFeeModelConfig) {
@@ -561,6 +571,11 @@ func (c *checker) compareFeeModel(path string, actual feeModel, expected config.
 	}
 	if actual.DstGasOverhead != expected.DstGasOverhead {
 		c.add(path+".dst_gas_overhead", "worker destination gas overhead %d does not match configured %d", actual.DstGasOverhead, expected.DstGasOverhead)
+	}
+	if expected.DataSizeOverheadBytes == nil {
+		c.add(path+".data_size_overhead_bytes", "configured data_size_overhead_bytes is required")
+	} else if actual.DataSizeOverheadBytes != *expected.DataSizeOverheadBytes {
+		c.add(path+".data_size_overhead_bytes", "worker data size overhead %d does not match configured %d", actual.DataSizeOverheadBytes, *expected.DataSizeOverheadBytes)
 	}
 	if actual.MarginBps != expected.MarginBps {
 		c.add(path+".margin_bps", "worker margin bps %d does not match configured %d", actual.MarginBps, expected.MarginBps)

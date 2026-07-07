@@ -15,6 +15,7 @@ library WorkerTypes {
     /// @notice Shared market price inputs for one destination endpoint.
     struct PriceSnapshot {
         uint256 dstGasPriceInSrcToken;
+        uint256 dstDataFeePerByteInSrcToken;
         uint64 updatedAt;
         uint64 staleAfter;
     }
@@ -29,6 +30,7 @@ library WorkerTypes {
     struct FeeModel {
         uint256 baseFee;
         uint64 dstGasOverhead;
+        uint64 dataSizeOverheadBytes;
         uint16 marginBps;
     }
 

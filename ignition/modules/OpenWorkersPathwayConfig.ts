@@ -20,11 +20,17 @@ const OpenWorkersPathwayConfigModule = buildModule(
     const openDVN = m.contractAt("OpenDVN", openDVNAddress);
     const priceFeed = m.contractAt("OpenPriceFeed", priceFeedAddress);
 
+    const setOpenExecutorPriceFeed = m.call(
+      openExecutor,
+      "setPriceFeed",
+      [priceFeedAddress],
+      { id: "SetOpenExecutorPriceFeed" },
+    );
     const setOpenExecutorAllowedSendLib = m.call(
       openExecutor,
       "setAllowedSendLib",
       [sendUln, true],
-      { id: "SetOpenExecutorAllowedSendLib" },
+      { id: "SetOpenExecutorAllowedSendLib", after: [setOpenExecutorPriceFeed] },
     );
     const setOpenExecutorPathwayConfig = m.call(
       openExecutor,
@@ -53,13 +59,17 @@ const OpenWorkersPathwayConfigModule = buildModule(
         after: [setPriceSnapshot],
       },
     );
+    const setOpenDVNPriceFeed = m.call(openDVN, "setPriceFeed", [priceFeedAddress], {
+      id: "SetOpenDVNPriceFeed",
+      after: [setOpenExecutorFeeModel],
+    });
     const setOpenDVNAllowedSendLib = m.call(
       openDVN,
       "setAllowedSendLib",
       [sendUln, true],
       {
         id: "SetOpenDVNAllowedSendLib",
-        after: [setOpenExecutorFeeModel],
+        after: [setOpenDVNPriceFeed],
       },
     );
     const setOpenDVNPathwayConfig = m.call(

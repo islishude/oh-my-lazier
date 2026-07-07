@@ -9,6 +9,7 @@ import {
   optionalUint64,
   waitForTx,
 } from "./lib.js";
+import { shouldSetPriceFeed } from "./worker-price-feed.js";
 
 const testOFTArtifact = loadArtifact(
   "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
@@ -99,6 +100,26 @@ for (const [label, address, abi] of [
   ["OpenExecutor", openExecutor, openExecutorArtifact.abi],
   ["OpenDVN", openDVN, openDVNArtifact.abi],
 ] as const) {
+  const currentPriceFeed = (await publicClient.readContract({
+    address,
+    abi,
+    functionName: "priceFeed",
+  })) as string;
+  if (shouldSetPriceFeed(currentPriceFeed, priceFeed)) {
+    await waitForTx(
+      publicClient,
+      `${label}.setPriceFeed`,
+      await walletClient.writeContract({
+        address,
+        abi,
+        functionName: "setPriceFeed",
+        args: [priceFeed],
+        account,
+        chain: null,
+      }),
+    );
+  }
+
   await waitForTx(
     publicClient,
     `${label}.setAllowedSendLib`,
@@ -162,6 +183,9 @@ function priceSnapshot(defaultUpdatedAt: bigint) {
     dstGasPriceInSrcToken: envBigInt(
       "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
     ),
+    dstDataFeePerByteInSrcToken: envBigInt(
+      "PRICE_SNAPSHOT_DST_DATA_FEE_PER_BYTE_IN_SRC_TOKEN",
+    ),
     updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
     staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
   };
@@ -171,6 +195,7 @@ function workerFeeModel(prefix: "EXECUTOR" | "DVN") {
   return {
     baseFee: envBigInt(`${prefix}_FEE_BASE_FEE`),
     dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
+    dataSizeOverheadBytes: envBigInt(`${prefix}_FEE_DATA_SIZE_OVERHEAD_BYTES`),
     marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
   };
 }

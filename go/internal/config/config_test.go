@@ -419,6 +419,12 @@ func TestValidateRejectsInvalidPathwayPricingFeeModel(t *testing.T) {
 			},
 		},
 		{
+			name: "missing data size overhead",
+			mutate: func(pricing *PathwayPricingConfig) {
+				pricing.ExecutorFee.DataSizeOverheadBytes = nil
+			},
+		},
+		{
 			name: "margin too high",
 			mutate: func(pricing *PathwayPricingConfig) {
 				pricing.DVNFee.MarginBps = 10_001
@@ -453,6 +459,15 @@ func TestValidateRejectsIncompletePricingChains(t *testing.T) {
 	cfg.Pricing.Chains = cfg.Pricing.Chains[:1]
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want incomplete pricing chains error")
+	}
+}
+
+func TestValidateRejectsMissingPricingChainDataFee(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.Chains[0].DataFeePerByteWei = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing data fee per byte error")
 	}
 }
 
@@ -753,10 +768,11 @@ func validPricingConfig() PricingConfig {
 		MinNativeBalanceWei:     "100000000000000000",
 		Chains: []PricingChainConfig{
 			{
-				EID:           40161,
-				PrimarySource: "binance",
-				SanitySources: []string{"uniswap"},
-				BinanceSymbol: "ETHUSDT",
+				EID:               40161,
+				DataFeePerByteWei: "0",
+				PrimarySource:     "binance",
+				SanitySources:     []string{"uniswap"},
+				BinanceSymbol:     "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:          MustEVMAddress("0x2222222222222222222222222222222222222222"),
@@ -767,10 +783,11 @@ func validPricingConfig() PricingConfig {
 				},
 			},
 			{
-				EID:           40449,
-				PrimarySource: "binance",
-				SanitySources: []string{"uniswap"},
-				BinanceSymbol: "ETHUSDT",
+				EID:               40449,
+				DataFeePerByteWei: "0",
+				PrimarySource:     "binance",
+				SanitySources:     []string{"uniswap"},
+				BinanceSymbol:     "ETHUSDT",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),
 					TokenIn:          MustEVMAddress("0x5555555555555555555555555555555555555555"),
@@ -786,7 +803,11 @@ func validPricingConfig() PricingConfig {
 
 func validPathwayPricingConfig() PathwayPricingConfig {
 	return PathwayPricingConfig{
-		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, MarginBps: 100},
-		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, MarginBps: 200},
+		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
+		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
 	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
 }

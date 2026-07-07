@@ -388,7 +388,7 @@ func (f *fakeChainClient) callWorker(to common.Address, method *abi.Method, args
 		return method.Outputs.Pack(f.priceSubmitters[priceSubmitterKey(to, args[0].(common.Address))])
 	case "feeModel":
 		model := f.workerFeeModels[workerFeeModelKey(to, args[0].(uint32))]
-		return method.Outputs.Pack(model.BaseFee, model.DstGasOverhead, model.MarginBps)
+		return method.Outputs.Pack(model.BaseFee, model.DstGasOverhead, model.DataSizeOverheadBytes, model.MarginBps)
 	case "verifiers":
 		return method.Outputs.Pack(f.verifiers[verifierKey(to, args[0].(common.Address))])
 	default:
@@ -525,8 +525,8 @@ func testDVNRole() config.DVNTxRoleConfig {
 
 func testPathwayPricingConfig() config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50_000, MarginBps: 100},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150_000, MarginBps: 200},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
 	}
 }
 
@@ -564,7 +564,19 @@ func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
 	if err != nil {
 		t.Fatalf("invalid fixed fee %q", cfg.FixedFeeWei)
 	}
-	return feeModel{BaseFee: baseFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}
+	if cfg.DataSizeOverheadBytes == nil {
+		t.Fatal("missing data size overhead")
+	}
+	return feeModel{
+		BaseFee:               baseFee,
+		DstGasOverhead:        cfg.DstGasOverhead,
+		DataSizeOverheadBytes: *cfg.DataSizeOverheadBytes,
+		MarginBps:             cfg.MarginBps,
+	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
 }
 
 func addr(raw string) common.Address {

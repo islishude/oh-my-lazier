@@ -58,9 +58,10 @@ func TestBotEnqueueOnceQueuesSharedPriceFeedUpdates(t *testing.T) {
 		`price_feed=0x4444444444444444444444444444444444444444`,
 	)
 	assertRequestMatchesSnapshot(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), 40449, PriceSnapshot{
-		DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
-		UpdatedAt:             1_700_000_000,
-		StaleAfter:            1800,
+		DstGasPriceInSrcToken:       big.NewInt(1_000_000_000),
+		DstDataFeePerByteInSrcToken: big.NewInt(0),
+		UpdatedAt:                   1_700_000_000,
+		StaleAfter:                  1800,
 	})
 }
 
@@ -68,7 +69,12 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
 	sources := testSources()
-	sources[40161] = ChainSources{Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}}
+	sources[40161] = ChainSources{
+		Primary:           fixedPrice{price: big.NewRat(2000, 1)},
+		Sanity:            []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}},
+		Gas:               fixedGas{price: big.NewInt(1_000_000_000)},
+		DataFeePerByteWei: big.NewInt(0),
+	}
 	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -89,8 +95,8 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
 	logger, logs := captureLogger(slog.LevelInfo)
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas},
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)},
 	}, logger)
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -135,7 +141,7 @@ func TestBotEnqueueOnceDeduplicatesSharedPriceFeed(t *testing.T) {
 	duplicate.SrcOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999998")
 	duplicate.DstOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999997")
 	duplicate.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
-	duplicate.Pricing.DVNFee = config.WorkerFeeModelConfig{FixedFeeWei: "3000", DstGasOverhead: 250_000, MarginBps: 300}
+	duplicate.Pricing.DVNFee = config.WorkerFeeModelConfig{FixedFeeWei: "3000", DstGasOverhead: 250_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 300}
 	pathways = []config.PathwayConfig{pathways[0], duplicate}
 	registry := testRegistryWithPathways(t, pathways)
 	store := &fakeStore{}
@@ -166,9 +172,10 @@ func TestBotEnqueueOnceBatchesSameSourcePriceFeedTargets(t *testing.T) {
 	store := &fakeStore{}
 	sources := testSources()
 	sources[40500] = ChainSources{
-		Primary: fixedPrice{price: big.NewRat(500, 1)},
-		Sanity:  []PriceReader{fixedPrice{price: big.NewRat(500, 1)}},
-		Gas:     fixedGas{price: big.NewInt(3_000_000_000)},
+		Primary:           fixedPrice{price: big.NewRat(500, 1)},
+		Sanity:            []PriceReader{fixedPrice{price: big.NewRat(500, 1)}},
+		Gas:               fixedGas{price: big.NewInt(3_000_000_000)},
+		DataFeePerByteWei: big.NewInt(0),
 	}
 	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
 	if err != nil {
@@ -186,17 +193,19 @@ func TestBotEnqueueOnceBatchesSameSourcePriceFeedTargets(t *testing.T) {
 		{
 			DstEid: 40449,
 			Snapshot: PriceSnapshot{
-				DstGasPriceInSrcToken: big.NewInt(1_000_000_000),
-				UpdatedAt:             1_700_000_000,
-				StaleAfter:            1800,
+				DstGasPriceInSrcToken:       big.NewInt(1_000_000_000),
+				DstDataFeePerByteInSrcToken: big.NewInt(0),
+				UpdatedAt:                   1_700_000_000,
+				StaleAfter:                  1800,
 			},
 		},
 		{
 			DstEid: 40500,
 			Snapshot: PriceSnapshot{
-				DstGasPriceInSrcToken: big.NewInt(750_000_000),
-				UpdatedAt:             1_700_000_000,
-				StaleAfter:            1800,
+				DstGasPriceInSrcToken:       big.NewInt(750_000_000),
+				DstDataFeePerByteInSrcToken: big.NewInt(0),
+				UpdatedAt:                   1_700_000_000,
+				StaleAfter:                  1800,
 			},
 		},
 	})
@@ -214,8 +223,8 @@ func TestBotEnqueueOnGasSpikeBatchesSameSourcePriceFeedTargets(t *testing.T) {
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
 	alternateGas := &mutableGas{price: big.NewInt(3_000_000_000)}
 	sources := testSources()
-	sources[40449] = ChainSources{Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas}
-	sources[40500] = ChainSources{Primary: fixedPrice{price: big.NewRat(500, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(500, 1)}}, Gas: alternateGas}
+	sources[40449] = ChainSources{Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)}
+	sources[40500] = ChainSources{Primary: fixedPrice{price: big.NewRat(500, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(500, 1)}}, Gas: alternateGas, DataFeePerByteWei: big.NewInt(0)}
 	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -241,17 +250,19 @@ func TestBotEnqueueOnGasSpikeBatchesSameSourcePriceFeedTargets(t *testing.T) {
 		{
 			DstEid: 40449,
 			Snapshot: PriceSnapshot{
-				DstGasPriceInSrcToken: big.NewInt(1_150_000_000),
-				UpdatedAt:             1_700_000_000,
-				StaleAfter:            1800,
+				DstGasPriceInSrcToken:       big.NewInt(1_150_000_000),
+				DstDataFeePerByteInSrcToken: big.NewInt(0),
+				UpdatedAt:                   1_700_000_000,
+				StaleAfter:                  1800,
 			},
 		},
 		{
 			DstEid: 40500,
 			Snapshot: PriceSnapshot{
-				DstGasPriceInSrcToken: big.NewInt(900_000_000),
-				UpdatedAt:             1_700_000_000,
-				StaleAfter:            1800,
+				DstGasPriceInSrcToken:       big.NewInt(900_000_000),
+				DstDataFeePerByteInSrcToken: big.NewInt(0),
+				UpdatedAt:                   1_700_000_000,
+				StaleAfter:                  1800,
 			},
 		},
 	})
@@ -274,6 +285,13 @@ func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
 			mutate: func(pathway *config.PathwayConfig) {
 				pathway.SourceWorkers.OpenExecutor = config.MustEVMAddress("0x9999999999999999999999999999999999999995")
 				pathway.Pricing.DVNFee.MarginBps = 999
+			},
+		},
+		{
+			name: "executor",
+			mutate: func(pathway *config.PathwayConfig) {
+				pathway.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
+				pathway.Pricing.ExecutorFee.DataSizeOverheadBytes = uint64Ptr(1)
 			},
 		},
 	}
@@ -448,16 +466,20 @@ func testPathways() []config.PathwayConfig {
 
 func testPathwayPricingConfig(executorBase string, executorOverhead uint64, executorMargin uint16, dvnBase string, dvnOverhead uint64, dvnMargin uint16) config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: executorBase, DstGasOverhead: executorOverhead, MarginBps: executorMargin},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: dvnBase, DstGasOverhead: dvnOverhead, MarginBps: dvnMargin},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: executorBase, DstGasOverhead: executorOverhead, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: executorMargin},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: dvnBase, DstGasOverhead: dvnOverhead, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: dvnMargin},
 	}
 }
 
 func testSources() map[uint32]ChainSources {
 	return map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}},
+		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
 	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	return &value
 }
 
 func testExecutorRole() config.ExecutorTxRoleConfig {

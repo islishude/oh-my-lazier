@@ -219,6 +219,7 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot
         updatedAt: "900",
         staleAfter: "120",
         dstGasPriceInSrcToken: "0",
+        dstDataFeePerByteInSrcToken: "-1",
       },
     },
     executor: {
@@ -226,6 +227,7 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot
       priceFeed: "0x9999999999999999999999999999999999999999",
       baseFee: "-1",
       dstGasOverhead: "-1",
+      dataSizeOverheadBytes: "-1",
       marginBps: 10001,
     },
     dvn: {
@@ -233,6 +235,7 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot
       priceFeed: "0x4444444444444444444444444444444444444444",
       baseFee: "0",
       dstGasOverhead: "150000",
+      dataSizeOverheadBytes: "0",
       marginBps: 100,
     },
   };
@@ -242,11 +245,13 @@ test("validateMigrationEvidenceRecord rejects stale or mismatched price snapshot
   assert.deepEqual(errors, [
     "directions[0].priceConfigCheck.dstEid must equal direction dstEid 40449",
     "directions[0].priceConfigCheck.priceFeed.priceSnapshot.dstGasPriceInSrcToken must be a positive decimal integer string",
+    "directions[0].priceConfigCheck.priceFeed.priceSnapshot.dstDataFeePerByteInSrcToken must be a non-negative decimal integer string",
     "directions[0].priceConfigCheck.priceFeed.priceSnapshot.updatedAt age exceeds 60s",
     "directions[0].priceConfigCheck.priceFeed.priceSnapshot.staleAfter must equal expectedStaleAfter 1800",
     "directions[0].priceConfigCheck.executor.priceFeed must equal priceFeed.address 0x4444444444444444444444444444444444444444",
     "directions[0].priceConfigCheck.executor.baseFee must be a non-negative decimal integer string",
     "directions[0].priceConfigCheck.executor.dstGasOverhead must be a non-negative decimal integer string",
+    "directions[0].priceConfigCheck.executor.dataSizeOverheadBytes must be a non-negative decimal integer string",
     "directions[0].priceConfigCheck.executor.marginBps must be between 0 and 10000 bps",
   ]);
 });
@@ -426,6 +431,7 @@ function priceConfigEvidence(
         updatedAt: "950",
         staleAfter: "1800",
         dstGasPriceInSrcToken: "2",
+        dstDataFeePerByteInSrcToken: "0",
       },
     },
     executor: {
@@ -433,6 +439,7 @@ function priceConfigEvidence(
       priceFeed,
       baseFee: "1000",
       dstGasOverhead: "50000",
+      dataSizeOverheadBytes: "0",
       marginBps: 100,
     },
     dvn: {
@@ -440,6 +447,7 @@ function priceConfigEvidence(
       priceFeed,
       baseFee: "2000",
       dstGasOverhead: "150000",
+      dataSizeOverheadBytes: "0",
       marginBps: 200,
     },
   };

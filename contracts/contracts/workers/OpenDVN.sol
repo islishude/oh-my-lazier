@@ -7,14 +7,10 @@ import {WorkerAccess} from "../common/WorkerAccess.sol";
 import {WorkerErrors} from "../common/WorkerErrors.sol";
 import {WorkerFeeLib} from "../common/WorkerFeeLib.sol";
 import {WorkerTypes} from "../common/WorkerTypes.sol";
-import {IPriceFeed} from "../common/IPriceFeed.sol";
 
 /// @title OpenDVN
 /// @notice First-phase LayerZero DVN worker contract with strict pathway validation.
 contract OpenDVN is ILayerZeroDVN, WorkerAccess {
-    /// @notice Shared source-chain price feed used for destination market price snapshots.
-    IPriceFeed public immutable priceFeed;
-
     /// @notice Per-destination and per-OApp pathway configuration.
     mapping(uint32 dstEid => mapping(address sender => WorkerTypes.PathwayConfig config)) public pathwayConfig;
 
@@ -73,10 +69,7 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
     /// @notice Initializes DVN ownership.
     /// @param initialOwner Initial owner address.
     /// @param sharedPriceFeed Shared price feed contract.
-    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner) {
-        require(sharedPriceFeed != address(0), "price feed required");
-        priceFeed = IPriceFeed(sharedPriceFeed);
-    }
+    constructor(address initialOwner, address sharedPriceFeed) WorkerAccess(initialOwner, sharedPriceFeed) {}
 
     /// @notice Sets pathway controls for a destination and source OApp.
     /// @param dstEid Destination endpoint ID.

@@ -8,6 +8,7 @@ library WorkerErrors {
     error UnauthorizedVerifier(address verifier);
     error PathwayDisabled(uint32 dstEid, address sender);
     error MessageTooLarge(uint256 size, uint256 maxSize);
+    error InvalidPriceFeed(address priceFeed);
     error InvalidPriceSnapshot(uint32 dstEid);
     error InvalidPriceSnapshotBatch();
     error InvalidPriceSubmitter(address submitter);

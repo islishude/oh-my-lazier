@@ -126,9 +126,10 @@ type Settings struct {
 
 // FeeModel controls one worker role's source-chain quote inputs.
 type FeeModel struct {
-	FixedFee       *big.Int
-	DstGasOverhead uint64
-	MarginBps      uint16
+	FixedFee              *big.Int
+	DstGasOverhead        uint64
+	DataSizeOverheadBytes uint64
+	MarginBps             uint16
 }
 
 // Validate checks settings required for enabled price updates.
@@ -167,9 +168,10 @@ func (m FeeModel) Validate(prefix string) error {
 
 // ChainSources are the price and gas inputs for one configured chain.
 type ChainSources struct {
-	Primary PriceReader
-	Sanity  []PriceReader
-	Gas     GasPriceReader
+	Primary           PriceReader
+	Sanity            []PriceReader
+	Gas               GasPriceReader
+	DataFeePerByteWei *big.Int
 }
 
 // EnqueueOnce computes current price snapshots and enqueues shared price-feed update batches.
@@ -291,12 +293,17 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 		if err != nil {
 			return 0, err
 		}
+		dstDataFeePerByte, err := b.currentDstDataFeePerByte(target.DstEID)
+		if err != nil {
+			return 0, err
+		}
 		snapshot, err := BuildPriceSnapshot(PriceInputs{
-			SrcNativeUSD:      srcPrice,
-			DstNativeUSD:      dstPrice,
-			DstGasPriceWei:    dstGasPrice,
-			UpdatedAtUnix:     uint64(b.now().Unix()),
-			StaleAfterSeconds: uint64(b.settings.StaleAfter.Seconds()),
+			SrcNativeUSD:         srcPrice,
+			DstNativeUSD:         dstPrice,
+			DstGasPriceWei:       dstGasPrice,
+			DstDataFeePerByteWei: dstDataFeePerByte,
+			UpdatedAtUnix:        uint64(b.now().Unix()),
+			StaleAfterSeconds:    uint64(b.settings.StaleAfter.Seconds()),
 		})
 		if err != nil {
 			return 0, err
@@ -361,6 +368,17 @@ func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, 
 		return nil, fmt.Errorf("pricing gas source for chain %d returned non-positive gas price", dstEID)
 	}
 	return dstGasPrice, nil
+}
+
+func (b *Bot) currentDstDataFeePerByte(dstEID uint32) (*big.Int, error) {
+	dstSources, ok := b.sources[dstEID]
+	if !ok || dstSources.DataFeePerByteWei == nil {
+		return nil, fmt.Errorf("pricing data fee source for chain %d is not configured", dstEID)
+	}
+	if dstSources.DataFeePerByteWei.Sign() < 0 {
+		return nil, fmt.Errorf("pricing data fee source for chain %d returned negative data fee", dstEID)
+	}
+	return bigutil.Clone(dstSources.DataFeePerByteWei), nil
 }
 
 func (b *Bot) uniquePriceUpdates() ([]pricedUpdate, error) {
@@ -470,7 +488,15 @@ func feeModelFromConfig(cfg config.WorkerFeeModelConfig) (FeeModel, error) {
 	if err != nil {
 		return FeeModel{}, errors.New("fixed_fee_wei must be a non-negative integer")
 	}
-	model := FeeModel{FixedFee: fixedFee, DstGasOverhead: cfg.DstGasOverhead, MarginBps: cfg.MarginBps}
+	if cfg.DataSizeOverheadBytes == nil {
+		return FeeModel{}, errors.New("data_size_overhead_bytes is required")
+	}
+	model := FeeModel{
+		FixedFee:              fixedFee,
+		DstGasOverhead:        cfg.DstGasOverhead,
+		DataSizeOverheadBytes: *cfg.DataSizeOverheadBytes,
+		MarginBps:             cfg.MarginBps,
+	}
 	if err := model.Validate("fee model"); err != nil {
 		return FeeModel{}, err
 	}
@@ -479,9 +505,15 @@ func feeModelFromConfig(cfg config.WorkerFeeModelConfig) (FeeModel, error) {
 
 func feeModelsEqual(left, right FeeModel) bool {
 	if left.FixedFee == nil || right.FixedFee == nil {
-		return left.FixedFee == right.FixedFee && left.DstGasOverhead == right.DstGasOverhead && left.MarginBps == right.MarginBps
+		return left.FixedFee == right.FixedFee &&
+			left.DstGasOverhead == right.DstGasOverhead &&
+			left.DataSizeOverheadBytes == right.DataSizeOverheadBytes &&
+			left.MarginBps == right.MarginBps
 	}
-	return left.FixedFee.Cmp(right.FixedFee) == 0 && left.DstGasOverhead == right.DstGasOverhead && left.MarginBps == right.MarginBps
+	return left.FixedFee.Cmp(right.FixedFee) == 0 &&
+		left.DstGasOverhead == right.DstGasOverhead &&
+		left.DataSizeOverheadBytes == right.DataSizeOverheadBytes &&
+		left.MarginBps == right.MarginBps
 }
 
 // SourcePrice is one USD/native price observed from a configured data source.
@@ -549,18 +581,20 @@ func DeviationBps(left, right *big.Rat) uint64 {
 
 // PriceInputs are the source data used to construct WorkerTypes.PriceSnapshot.
 type PriceInputs struct {
-	SrcNativeUSD      *big.Rat
-	DstNativeUSD      *big.Rat
-	DstGasPriceWei    *big.Int
-	UpdatedAtUnix     uint64
-	StaleAfterSeconds uint64
+	SrcNativeUSD         *big.Rat
+	DstNativeUSD         *big.Rat
+	DstGasPriceWei       *big.Int
+	DstDataFeePerByteWei *big.Int
+	UpdatedAtUnix        uint64
+	StaleAfterSeconds    uint64
 }
 
 // PriceSnapshot mirrors WorkerTypes.PriceSnapshot for ABI encoding.
 type PriceSnapshot struct {
-	DstGasPriceInSrcToken *big.Int `abi:"dstGasPriceInSrcToken"`
-	UpdatedAt             uint64   `abi:"updatedAt"`
-	StaleAfter            uint64   `abi:"staleAfter"`
+	DstGasPriceInSrcToken       *big.Int `abi:"dstGasPriceInSrcToken"`
+	DstDataFeePerByteInSrcToken *big.Int `abi:"dstDataFeePerByteInSrcToken"`
+	UpdatedAt                   uint64   `abi:"updatedAt"`
+	StaleAfter                  uint64   `abi:"staleAfter"`
 }
 
 // PriceSnapshotUpdate mirrors WorkerTypes.PriceSnapshotUpdate for ABI encoding.
@@ -580,6 +614,9 @@ func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	if inputs.DstGasPriceWei == nil || inputs.DstGasPriceWei.Sign() <= 0 {
 		return PriceSnapshot{}, errors.New("destination gas price must be positive")
 	}
+	if inputs.DstDataFeePerByteWei == nil || inputs.DstDataFeePerByteWei.Sign() < 0 {
+		return PriceSnapshot{}, errors.New("destination data fee per byte must be non-negative")
+	}
 	if inputs.UpdatedAtUnix == 0 {
 		return PriceSnapshot{}, errors.New("updated_at is required")
 	}
@@ -589,10 +626,14 @@ func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	dstGasPriceInSrcToken := new(big.Rat).SetInt(inputs.DstGasPriceWei)
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
+	dstDataFeePerByteInSrcToken := new(big.Rat).SetInt(inputs.DstDataFeePerByteWei)
+	dstDataFeePerByteInSrcToken.Mul(dstDataFeePerByteInSrcToken, inputs.DstNativeUSD)
+	dstDataFeePerByteInSrcToken.Quo(dstDataFeePerByteInSrcToken, inputs.SrcNativeUSD)
 	return PriceSnapshot{
-		DstGasPriceInSrcToken: bigutil.CeilRat(dstGasPriceInSrcToken),
-		UpdatedAt:             inputs.UpdatedAtUnix,
-		StaleAfter:            inputs.StaleAfterSeconds,
+		DstGasPriceInSrcToken:       bigutil.CeilRat(dstGasPriceInSrcToken),
+		DstDataFeePerByteInSrcToken: bigutil.CeilRat(dstDataFeePerByteInSrcToken),
+		UpdatedAt:                   inputs.UpdatedAtUnix,
+		StaleAfter:                  inputs.StaleAfterSeconds,
 	}, nil
 }
 
@@ -641,6 +682,9 @@ func BuildSetPriceSnapshotTx(chainEID uint32, priceFeed common.Address, signerID
 func (s PriceSnapshot) Validate() error {
 	if s.DstGasPriceInSrcToken == nil || s.DstGasPriceInSrcToken.Sign() <= 0 {
 		return errors.New("price snapshot destination gas price must be positive")
+	}
+	if s.DstDataFeePerByteInSrcToken == nil || s.DstDataFeePerByteInSrcToken.Sign() < 0 {
+		return errors.New("price snapshot destination data fee per byte must be non-negative")
 	}
 	if s.UpdatedAt == 0 {
 		return errors.New("price snapshot updated_at is required")

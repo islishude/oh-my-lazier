@@ -63,11 +63,12 @@ func TestSelectPriceWithSanityRejectsAnyDeviatingSource(t *testing.T) {
 
 func TestBuildPriceSnapshotConvertsDestinationGasPriceToSourceToken(t *testing.T) {
 	snapshot, err := BuildPriceSnapshot(PriceInputs{
-		SrcNativeUSD:      big.NewRat(2000, 1),
-		DstNativeUSD:      big.NewRat(1000, 1),
-		DstGasPriceWei:    big.NewInt(2_000_000_000),
-		UpdatedAtUnix:     1_700_000_000,
-		StaleAfterSeconds: 1800,
+		SrcNativeUSD:         big.NewRat(2000, 1),
+		DstNativeUSD:         big.NewRat(1000, 1),
+		DstGasPriceWei:       big.NewInt(2_000_000_000),
+		DstDataFeePerByteWei: big.NewInt(0),
+		UpdatedAtUnix:        1_700_000_000,
+		StaleAfterSeconds:    1800,
 	})
 	if err != nil {
 		t.Fatalf("BuildPriceSnapshot() error = %v", err)
@@ -75,21 +76,28 @@ func TestBuildPriceSnapshotConvertsDestinationGasPriceToSourceToken(t *testing.T
 	if snapshot.DstGasPriceInSrcToken.Cmp(big.NewInt(1_000_000_000)) != 0 {
 		t.Fatalf("dst gas price = %s, want 1000000000", snapshot.DstGasPriceInSrcToken)
 	}
+	if snapshot.DstDataFeePerByteInSrcToken.Sign() != 0 {
+		t.Fatalf("dst data fee per byte = %s, want 0", snapshot.DstDataFeePerByteInSrcToken)
+	}
 }
 
 func TestBuildPriceSnapshotRoundsUpFractionalWei(t *testing.T) {
 	snapshot, err := BuildPriceSnapshot(PriceInputs{
-		SrcNativeUSD:      big.NewRat(3, 1),
-		DstNativeUSD:      big.NewRat(2, 1),
-		DstGasPriceWei:    big.NewInt(10),
-		UpdatedAtUnix:     1,
-		StaleAfterSeconds: 2,
+		SrcNativeUSD:         big.NewRat(3, 1),
+		DstNativeUSD:         big.NewRat(2, 1),
+		DstGasPriceWei:       big.NewInt(10),
+		DstDataFeePerByteWei: big.NewInt(10),
+		UpdatedAtUnix:        1,
+		StaleAfterSeconds:    2,
 	})
 	if err != nil {
 		t.Fatalf("BuildPriceSnapshot() error = %v", err)
 	}
 	if snapshot.DstGasPriceInSrcToken.Cmp(big.NewInt(7)) != 0 {
 		t.Fatalf("dst gas price = %s, want rounded-up 7", snapshot.DstGasPriceInSrcToken)
+	}
+	if snapshot.DstDataFeePerByteInSrcToken.Cmp(big.NewInt(7)) != 0 {
+		t.Fatalf("dst data fee per byte = %s, want rounded-up 7", snapshot.DstDataFeePerByteInSrcToken)
 	}
 }
 
@@ -149,8 +157,9 @@ func TestBuildSetPriceSnapshotTx(t *testing.T) {
 
 func testPriceSnapshot() PriceSnapshot {
 	return PriceSnapshot{
-		DstGasPriceInSrcToken: big.NewInt(2_000_000_000),
-		UpdatedAt:             1_700_000_000,
-		StaleAfter:            1800,
+		DstGasPriceInSrcToken:       big.NewInt(2_000_000_000),
+		DstDataFeePerByteInSrcToken: big.NewInt(0),
+		UpdatedAt:                   1_700_000_000,
+		StaleAfter:                  1800,
 	}
 }

@@ -3,11 +3,15 @@ pragma solidity ^0.8.35;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ISendLib} from "@layerzerolabs/lz-evm-protocol-v2/contracts/interfaces/ISendLib.sol";
+import {IPriceFeed} from "./IPriceFeed.sol";
 import {WorkerErrors} from "./WorkerErrors.sol";
 
 /// @title WorkerAccess
 /// @notice Owner-managed SendLib allowlist, pause switch, and native-token withdrawals.
 abstract contract WorkerAccess is Ownable {
+    /// @notice Shared source-chain price feed used for destination market price snapshots.
+    IPriceFeed public priceFeed;
+
     /// @notice Whether a LayerZero send library is allowed to assign or quote jobs.
     mapping(address sendLib => bool allowed) public allowedSendLib;
 
@@ -34,9 +38,17 @@ abstract contract WorkerAccess is Ownable {
     /// @param amount Amount withdrawn.
     event SendLibFeeWithdrawn(address indexed sendLib, address indexed recipient, uint256 amount);
 
-    /// @notice Initializes worker ownership.
+    /// @notice Emitted when the worker price feed changes.
+    /// @param previousPriceFeed Previous price feed address.
+    /// @param newPriceFeed New price feed address.
+    event PriceFeedSet(address indexed previousPriceFeed, address indexed newPriceFeed);
+
+    /// @notice Initializes worker ownership and price feed.
     /// @param initialOwner Initial owner address.
-    constructor(address initialOwner) Ownable(initialOwner) {}
+    /// @param initialPriceFeed Initial shared price feed contract.
+    constructor(address initialOwner, address initialPriceFeed) Ownable(initialOwner) {
+        _setPriceFeed(initialPriceFeed);
+    }
 
     /// @notice Accepts native-token payments or refunds sent directly to the worker.
     receive() external payable {}
@@ -52,6 +64,12 @@ abstract contract WorkerAccess is Ownable {
     function setAllowedSendLib(address sendLib, bool allowed) external onlyOwner {
         allowedSendLib[sendLib] = allowed;
         emit AllowedSendLibSet(sendLib, allowed);
+    }
+
+    /// @notice Updates the shared source-chain price feed used for worker fee quotes.
+    /// @param newPriceFeed New shared price feed contract.
+    function setPriceFeed(address newPriceFeed) external onlyOwner {
+        _setPriceFeed(newPriceFeed);
     }
 
     /// @notice Updates the global assignment pause flag.
@@ -78,5 +96,12 @@ abstract contract WorkerAccess is Ownable {
         if (!allowedSendLib[sendLib]) revert WorkerErrors.UnauthorizedSendLib(sendLib);
         ISendLib(sendLib).withdrawFee(recipient, amount);
         emit SendLibFeeWithdrawn(sendLib, recipient, amount);
+    }
+
+    function _setPriceFeed(address newPriceFeed) internal {
+        if (newPriceFeed == address(0)) revert WorkerErrors.InvalidPriceFeed(newPriceFeed);
+        address previousPriceFeed = address(priceFeed);
+        priceFeed = IPriceFeed(newPriceFeed);
+        emit PriceFeedSet(previousPriceFeed, newPriceFeed);
     }
 }

@@ -63,6 +63,7 @@ function baseReport(): PriceConfigReport {
       address: "0x3333333333333333333333333333333333333333",
       priceSnapshot: {
         dstGasPriceInSrcToken: 2n,
+        dstDataFeePerByteInSrcToken: 0n,
         updatedAt: 950n,
         staleAfter: 1800n,
       },
@@ -75,6 +76,7 @@ function baseReport(): PriceConfigReport {
         feeModel: {
           baseFee: 1n,
           dstGasOverhead: 50_000n,
+          dataSizeOverheadBytes: 0n,
           marginBps: 100,
         },
       },
@@ -85,6 +87,7 @@ function baseReport(): PriceConfigReport {
         feeModel: {
           baseFee: 1n,
           dstGasOverhead: 150_000n,
+          dataSizeOverheadBytes: 0n,
           marginBps: 100,
         },
       },

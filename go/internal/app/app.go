@@ -379,7 +379,16 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			}
 			sanityReaders = append(sanityReaders, reader)
 		}
-		sources[cfg.EID] = pricing.ChainSources{Primary: primary, Sanity: sanityReaders, Gas: configuredChain.RPC}
+		dataFeePerByte, err := bigutil.ParseNonNegativeDecimal("data_fee_per_byte_wei", cfg.DataFeePerByteWei)
+		if err != nil {
+			return nil, fmt.Errorf("pricing chain %d data fee per byte: %w", cfg.EID, err)
+		}
+		sources[cfg.EID] = pricing.ChainSources{
+			Primary:           primary,
+			Sanity:            sanityReaders,
+			Gas:               configuredChain.RPC,
+			DataFeePerByteWei: dataFeePerByte,
+		}
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
 }

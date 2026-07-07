@@ -33,17 +33,20 @@ function basePathwayInput() {
     maxLzReceiveGas: 1_000_000n,
     priceSnapshot: {
       dstGasPriceInSrcToken: 2n,
+      dstDataFeePerByteInSrcToken: 1n,
       updatedAt: 1_700_000_000n,
       staleAfter: 1800n,
     },
     executorFeeModel: {
       baseFee: 1000n,
       dstGasOverhead: 50_000n,
+      dataSizeOverheadBytes: 128n,
       marginBps: 1000,
     },
     dvnFeeModel: {
       baseFee: 2000n,
       dstGasOverhead: 150_000n,
+      dataSizeOverheadBytes: 256n,
       marginBps: 500n,
     },
     enforcedLzReceiveGas: 200_000n,
@@ -159,17 +162,20 @@ test("buildOpenWorkersPathwayConfigParameters renders worker-only config", () =>
   });
   assert.deepEqual(rendered.priceSnapshot, {
     dstGasPriceInSrcToken: "2",
+    dstDataFeePerByteInSrcToken: "1",
     updatedAt: "1700000000",
     staleAfter: "1800",
   });
   assert.deepEqual(rendered.executorFeeModel, {
     baseFee: "1000",
     dstGasOverhead: "50000",
+    dataSizeOverheadBytes: "128",
     marginBps: 1000,
   });
   assert.deepEqual(rendered.dvnFeeModel, {
     baseFee: "2000",
     dstGasOverhead: "150000",
+    dataSizeOverheadBytes: "256",
     marginBps: 500,
   });
   assert.equal(Object.hasOwn(rendered, "sendConfig"), false);

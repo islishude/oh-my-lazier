@@ -7,6 +7,7 @@
           {
             "components": [
               { "internalType": "uint256", "name": "dstGasPriceInSrcToken", "type": "uint256" },
+              { "internalType": "uint256", "name": "dstDataFeePerByteInSrcToken", "type": "uint256" },
               { "internalType": "uint64", "name": "updatedAt", "type": "uint64" },
               { "internalType": "uint64", "name": "staleAfter", "type": "uint64" }
             ],
