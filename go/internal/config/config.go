@@ -179,11 +179,13 @@ type WorkerFeeModelConfig struct {
 type PricingChainConfig struct {
 	// EID links this feed config to one configured ChainConfig endpoint ID.
 	EID uint32 `yaml:"eid"`
+	// NativeAssetID identifies the chain's native gas asset for same-asset conversion shortcuts.
+	NativeAssetID string `yaml:"native_asset_id"`
 	// DataFeePerByteWei is the destination-native data fee per byte used for generic data-fee quotes.
 	DataFeePerByteWei string `yaml:"data_fee_per_byte_wei"`
-	// PrimarySource is the price source the bot quotes from; supported values exclude uniswap.
+	// PrimarySource is the price source the bot quotes from for cross-asset pathways; supported values exclude uniswap.
 	PrimarySource string `yaml:"primary_source"`
-	// SanitySources cross-check the primary source and must include uniswap without duplicating the primary.
+	// SanitySources cross-check the primary source for cross-asset pathways and must include uniswap without duplicating the primary.
 	SanitySources []string `yaml:"sanity_sources"`
 	// BinanceSymbol is required when binance is selected as primary or sanity source.
 	BinanceSymbol string `yaml:"binance_symbol"`
@@ -647,6 +649,7 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 		return err
 	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
+	pricingChains := make(map[uint32]PricingChainConfig, len(c.Pricing.Chains))
 	for _, chain := range c.Pricing.Chains {
 		if _, ok := chains[chain.EID]; !ok {
 			return fmt.Errorf("pricing chain eid %d is not configured", chain.EID)
@@ -655,12 +658,22 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 			return fmt.Errorf("duplicate pricing chain eid %d", chain.EID)
 		}
 		seen[chain.EID] = struct{}{}
-		if err := validatePricingChainSources(chain, c.Pricing.CoinMarketCapAPIKeyEnv); err != nil {
+		if err := validatePricingChainBase(chain); err != nil {
 			return err
 		}
+		pricingChains[chain.EID] = chain
 	}
 	if len(seen) != len(chains) {
 		return errors.New("pricing must configure every chain when enabled")
+	}
+	requiresMarketSources := pricingMarketSourceRequirements(c.Pathways, pricingChains)
+	for _, chain := range c.Pricing.Chains {
+		if !requiresMarketSources[chain.EID] && !pricingChainHasMarketSources(chain) {
+			continue
+		}
+		if err := validatePricingChainSources(chain, c.Pricing.CoinMarketCapAPIKeyEnv); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -692,13 +705,57 @@ func validateWorkerFeeModel(prefix string, model WorkerFeeModelConfig) error {
 	return nil
 }
 
-func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEnv string) error {
+func validatePricingChainBase(chain PricingChainConfig) error {
 	if chain.DataFeePerByteWei == "" {
 		return fmt.Errorf("pricing chain %d data_fee_per_byte_wei is required", chain.EID)
 	}
 	if _, err := bigutil.ParseNonNegativeDecimal(fmt.Sprintf("pricing chain %d data_fee_per_byte_wei", chain.EID), chain.DataFeePerByteWei); err != nil {
 		return err
 	}
+	if chain.NativeAssetID == "" {
+		return fmt.Errorf("pricing chain %d native_asset_id is required", chain.EID)
+	}
+	if strings.TrimSpace(chain.NativeAssetID) != chain.NativeAssetID {
+		return fmt.Errorf("pricing chain %d native_asset_id must not contain leading or trailing whitespace", chain.EID)
+	}
+	if chain.NativeAssetID != strings.ToLower(chain.NativeAssetID) {
+		return fmt.Errorf("pricing chain %d native_asset_id must be lowercase", chain.EID)
+	}
+	return nil
+}
+
+func pricingMarketSourceRequirements(pathways []PathwayConfig, pricingChains map[uint32]PricingChainConfig) map[uint32]bool {
+	requiresMarketSources := make(map[uint32]bool)
+	for _, pathway := range pathways {
+		srcChain, srcOK := pricingChains[pathway.SrcEID]
+		dstChain, dstOK := pricingChains[pathway.DstEID]
+		if !srcOK || !dstOK {
+			continue
+		}
+		if srcChain.NativeAssetID == dstChain.NativeAssetID {
+			continue
+		}
+		requiresMarketSources[pathway.SrcEID] = true
+		requiresMarketSources[pathway.DstEID] = true
+	}
+	return requiresMarketSources
+}
+
+func pricingChainHasMarketSources(chain PricingChainConfig) bool {
+	return chain.PrimarySource != "" ||
+		len(chain.SanitySources) != 0 ||
+		chain.BinanceSymbol != "" ||
+		chain.CoinMarketCapSymbol != "" ||
+		chain.CoinGeckoID != "" ||
+		!chain.Uniswap.QuoterAddress.IsZero() ||
+		!chain.Uniswap.TokenIn.IsZero() ||
+		!chain.Uniswap.TokenOut.IsZero() ||
+		chain.Uniswap.Fee != 0 ||
+		chain.Uniswap.AmountInWei != "" ||
+		chain.Uniswap.TokenOutDecimals != 0
+}
+
+func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEnv string) error {
 	if err := validatePrimaryPricingSourceName(chain.EID, chain.PrimarySource); err != nil {
 		return err
 	}

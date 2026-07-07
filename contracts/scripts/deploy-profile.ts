@@ -40,24 +40,24 @@ export type DeploymentPhase =
 
 export type SignerProfile =
   | {
-    id: Address;
-    type: "keystore";
-    keystore: {
-      path: string;
-      passwordEnv?: string;
-      passwordFile?: string;
-    };
-  }
+      id: Address;
+      type: "keystore";
+      keystore: {
+        path: string;
+        passwordEnv?: string;
+        passwordFile?: string;
+      };
+    }
   | {
-    id: Address;
-    type: "kms";
-    kms: {
-      keyId: string;
-      region: string;
-      address: Address;
-      endpoint?: string;
+      id: Address;
+      type: "kms";
+      kms: {
+        keyId: string;
+        region: string;
+        address: Address;
+        endpoint?: string;
+      };
     };
-  };
 
 export type LayerZeroAddresses = Pick<
   ExpectedLayerZeroChain,
@@ -72,6 +72,7 @@ export type ChainProfile = {
   key: string;
   network: string;
   name: string;
+  nativeAssetId: string;
   eid: number;
   chainId: number;
   rpcUrlEnv: string;
@@ -239,8 +240,11 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
   );
   validateLongTermPriceSubmitters(priceFeedSubmitters, owner);
   const initialRecipient =
-    optionalAddressField(input, "initialRecipient", "profile.initialRecipient") ??
-    owner;
+    optionalAddressField(
+      input,
+      "initialRecipient",
+      "profile.initialRecipient",
+    ) ?? owner;
   const canaryTreasury = optionalAddressField(
     input,
     "canaryTreasury",
@@ -284,12 +288,20 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
     ),
     dvnMode: normalizeDVNMode(input.dvnMode),
     services: {
-      executor: optionalBoolean(services.executor, true, "profile.services.executor"),
+      executor: optionalBoolean(
+        services.executor,
+        true,
+        "profile.services.executor",
+      ),
       dvn: optionalBoolean(services.dvn, true, "profile.services.dvn"),
     },
     signers,
     token: {
-      name: optionalString(token.name, "Oh My Lazier Test OFT", "profile.token.name"),
+      name: optionalString(
+        token.name,
+        "Oh My Lazier Test OFT",
+        "profile.token.name",
+      ),
       symbol: optionalString(token.symbol, "OMLTOFT", "profile.token.symbol"),
     },
     chains,
@@ -302,7 +314,12 @@ export function extractOpenWorkerContracts(
   chainKey: string,
 ): OpenWorkerContracts {
   const deployed = object(deployedAddresses, `${chainKey}.deployed_addresses`);
-  const openExecutor = moduleAddress(deployed, "OpenWorkers", "OpenExecutor", chainKey);
+  const openExecutor = moduleAddress(
+    deployed,
+    "OpenWorkers",
+    "OpenExecutor",
+    chainKey,
+  );
   const openDVN = moduleAddress(deployed, "OpenWorkers", "OpenDVN", chainKey);
   const priceFeed = optionalModuleAddress(
     deployed,
@@ -333,7 +350,8 @@ export function buildDeploymentState(input: {
       input.workerDeployedAddresses[chain.key],
       chain.key,
     );
-    const priceFeed = workers.priceFeed ?? input.priceFeedOverrides?.[chain.key];
+    const priceFeed =
+      workers.priceFeed ?? input.priceFeedOverrides?.[chain.key];
     if (priceFeed === undefined) {
       throw new Error(
         `${chain.key} deployed_addresses.json is missing OpenWorkers#OpenPriceFeed; rerun with ${chain.rpcUrlEnv} set so OpenExecutor.priceFeed() and OpenDVN.priceFeed() can be hydrated`,
@@ -343,10 +361,10 @@ export function buildDeploymentState(input: {
       input.profile.mode === "external-oapp"
         ? requiredOApp(chain)
         : extractTestOFTAddress(
-          input.testOFTDeployedAddresses?.[chain.key] ??
-          input.workerDeployedAddresses[chain.key],
-          chain.key,
-        );
+            input.testOFTDeployedAddresses?.[chain.key] ??
+              input.workerDeployedAddresses[chain.key],
+            chain.key,
+          );
     return {
       key: chain.key,
       network: chain.network,
@@ -504,7 +522,7 @@ export function renderWorkerConfig(input: {
         chain,
         input.rpcUrls[chain.key],
         workerStartBlock(input.workerStartBlocks, chain),
-      )
+      ),
     )
     .join("\n");
   const pathwayBlocks = input.state.directions
@@ -520,13 +538,53 @@ services:
     enabled: ${input.profile.services.dvn}
 signers:
 ${signers}
-pricing:
-  enabled: false
+${renderPricingConfig(input.profile)}
 chains:
 ${chainBlocks}
 pathways:
 ${pathwayBlocks}
 `;
+}
+
+function renderPricingConfig(profile: DeploymentProfile): string {
+  const signer = pricingSigner(profile);
+  const pricingFeePolicy = profile.chains[0]?.txRoles.executor;
+  if (pricingFeePolicy === undefined) {
+    throw new Error("profile.chains must include at least one chain");
+  }
+  const pricingChains = profile.chains
+    .map(
+      (chain) => `    - eid: ${chain.eid}
+      native_asset_id: ${chain.nativeAssetId}
+      data_fee_per_byte_wei: "0"`,
+    )
+    .join("\n");
+  return `pricing:
+  enabled: true
+  signer: "${signer}"
+  interval_seconds: 300
+  stale_after_seconds: 1800
+  gas_spike_bps: 1000
+  max_fee_per_gas_wei: "${pricingFeePolicy.maxFeePerGasWei}"
+  max_priority_fee_per_gas_wei: "${pricingFeePolicy.maxPriorityFeePerGasWei}"
+  min_native_balance_wei: "${pricingFeePolicy.minNativeBalanceWei}"
+  chains:
+${pricingChains}`;
+}
+
+function pricingSigner(profile: DeploymentProfile): Address {
+  const localSigners = new Set(
+    profile.signers.map((signer) => signer.id.toLowerCase()),
+  );
+  const submitter = profile.priceFeedSubmitters.find((candidate) =>
+    localSigners.has(candidate.toLowerCase()),
+  );
+  if (submitter === undefined) {
+    throw new Error(
+      "profile.priceFeedSubmitters must include a configured signer for worker pricing",
+    );
+  }
+  return submitter;
 }
 
 export function buildCommandPlan(input: {
@@ -606,7 +664,11 @@ export function buildCommandPlan(input: {
       command: `${source.rpcUrlEnv}=... npm run inspect:lz-config -- --chain-id ${source.chainId} --endpoint ${source.layerZero.endpointV2} --remote-eid ${destination.eid} --send-uln ${source.layerZero.sendUln302} --receive-uln ${source.layerZero.receiveUln302} --oapp <${source.key} OApp>`,
       mutates: false,
       requiresApply: false,
-      output: path.join(input.outDir, "artifacts", `lz-config-${direction}.json`),
+      output: path.join(
+        input.outDir,
+        "artifacts",
+        `lz-config-${direction}.json`,
+      ),
     });
   }
   return { applyRequiredForMutations: true, commands };
@@ -644,7 +706,10 @@ export async function writeRenderedDeployment(input: {
       }),
     );
   }
-  await writeJSON(path.join(input.outDir, "deployment-state.json"), input.state);
+  await writeJSON(
+    path.join(input.outDir, "deployment-state.json"),
+    input.state,
+  );
   const workerStartBlocks = await resolveWorkerStartBlocks({
     profile: input.profile,
     rpcUrls: input.rpcUrls,
@@ -665,7 +730,10 @@ export async function writeRenderedDeployment(input: {
     ignition: input.ignition,
   });
   await writeJSON(path.join(input.outDir, "commands.json"), commands);
-  await writeFile(path.join(input.outDir, "commands.md"), renderCommands(commands));
+  await writeFile(
+    path.join(input.outDir, "commands.md"),
+    renderCommands(commands),
+  );
 }
 
 export async function resolveWorkerStartBlocks(input: {
@@ -682,7 +750,9 @@ export async function resolveWorkerStartBlocks(input: {
     }
     const rpcURL = input.rpcUrls[chain.key];
     if (rpcURL === undefined) {
-      throw new Error(`${chain.key} RPC URL is required to resolve start_block_number`);
+      throw new Error(
+        `${chain.key} RPC URL is required to resolve start_block_number`,
+      );
     }
     const latest = await latestBlockNumber(chain, rpcURL);
     workerStartBlocks[chain.key] = safeBlockNumber(
@@ -827,9 +897,9 @@ async function loadDeploymentState(
   const overrides: PriceFeedOverrides = {};
   let workerArtifacts:
     | {
-      openExecutorAbi: Abi;
-      openDVNAbi: Abi;
-    }
+        openExecutorAbi: Abi;
+        openDVNAbi: Abi;
+      }
     | undefined;
   for (const chain of profile.chains) {
     const workerRaw = JSON.parse(
@@ -915,7 +985,11 @@ function runConfigureWorkers(
       label: `configure ${source.key} OpenWorkers for ${destination.key}`,
       script: "configure:open-workers-pathway",
       chain: source,
-      parametersPath: openWorkersPathwayParameterPath(outDir, source, destination),
+      parametersPath: openWorkersPathwayParameterPath(
+        outDir,
+        source,
+        destination,
+      ),
       deploymentId: openWorkersPathwayDeploymentId(source, destination),
       ignition,
     });
@@ -959,7 +1033,10 @@ function runVerify(
           current,
           rpcURL: rpcUrls[chain.key],
         }),
-        outputPath: path.join(artifactDir, `deployment-preflight-${chain.key}.json`),
+        outputPath: path.join(
+          artifactDir,
+          `deployment-preflight-${chain.key}.json`,
+        ),
       });
     }
   }
@@ -1066,13 +1143,13 @@ export function deploymentPreflightArgs(input: {
     ...(input.profile.canaryTreasury === undefined
       ? []
       : [
-        "--canary-treasury",
-        input.profile.canaryTreasury,
-        "--min-canary-native-balance",
-        input.profile.minCanaryNativeBalanceWei,
-        "--min-canary-token-balance",
-        input.chain.minCanaryTokenBalance,
-      ]),
+          "--canary-treasury",
+          input.profile.canaryTreasury,
+          "--min-canary-native-balance",
+          input.profile.minCanaryNativeBalanceWei,
+          "--min-canary-token-balance",
+          input.chain.minCanaryTokenBalance,
+        ]),
     "--expected-total-supply",
     input.chain.initialSupply,
   ];
@@ -1113,7 +1190,9 @@ function runCommand(input: {
 }) {
   const stdio = input.stdio ?? "pipe";
   if (input.outputPath !== undefined && stdio !== "pipe") {
-    throw new Error(`${input.label} cannot capture output with inherited stdio`);
+    throw new Error(
+      `${input.label} cannot capture output with inherited stdio`,
+    );
   }
   const result = spawnSync(input.command, input.args, {
     env: input.env ?? process.env,
@@ -1162,7 +1241,10 @@ function hardhatEnv(
 
 function resolveRPCURLs(profile: DeploymentProfile): RPCURLMap {
   return Object.fromEntries(
-    profile.chains.map((chain) => [chain.key, requiredProcessEnv(chain.rpcUrlEnv)]),
+    profile.chains.map((chain) => [
+      chain.key,
+      requiredProcessEnv(chain.rpcUrlEnv),
+    ]),
   );
 }
 
@@ -1225,7 +1307,10 @@ function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
         keyId: stringField(kms, "keyId", `${pathLabel}.kms.keyId`),
         region: stringField(kms, "region", `${pathLabel}.kms.region`),
         address,
-        endpoint: optionalStringValue(kms.endpoint, `${pathLabel}.kms.endpoint`),
+        endpoint: optionalStringValue(
+          kms.endpoint,
+          `${pathLabel}.kms.endpoint`,
+        ),
       },
     };
   }
@@ -1256,10 +1341,18 @@ function normalizeChain(
     key,
     network,
     name: stringField(input, "name", `${pathLabel}.name`),
+    nativeAssetId: normalizeNativeAssetID(
+      input.nativeAssetId,
+      `${pathLabel}.nativeAssetId`,
+    ),
     eid,
     chainId: chainID,
     rpcUrlEnv: envVarNameField(input, "rpcUrlEnv", `${pathLabel}.rpcUrlEnv`),
-    deploymentId: stringField(input, "deploymentId", `${pathLabel}.deploymentId`),
+    deploymentId: stringField(
+      input,
+      "deploymentId",
+      `${pathLabel}.deploymentId`,
+    ),
     testOFTDeploymentId: optionalStringValue(
       input.testOFTDeploymentId,
       `${pathLabel}.testOFTDeploymentId`,
@@ -1273,14 +1366,22 @@ function normalizeChain(
     ),
     minCanaryTokenBalance:
       mode === "test-oft-rehearsal"
-        ? decimalField(input, "minCanaryTokenBalance", `${pathLabel}.minCanaryTokenBalance`)
+        ? decimalField(
+            input,
+            "minCanaryTokenBalance",
+            `${pathLabel}.minCanaryTokenBalance`,
+          )
         : optionalDecimalField(
-          input,
-          "minCanaryTokenBalance",
-          `${pathLabel}.minCanaryTokenBalance`,
-          "0",
-        ),
-    confirmations: integerField(input, "confirmations", `${pathLabel}.confirmations`),
+            input,
+            "minCanaryTokenBalance",
+            `${pathLabel}.minCanaryTokenBalance`,
+            "0",
+          ),
+    confirmations: integerField(
+      input,
+      "confirmations",
+      `${pathLabel}.confirmations`,
+    ),
     startBlockNumber: optionalIntegerField(
       input,
       "startBlockNumber",
@@ -1360,7 +1461,11 @@ function normalizeTxRoles(
 ) {
   const roles = object(value, pathLabel);
   return {
-    executor: normalizeTxRole(roles.executor, `${pathLabel}.executor`, signerIDs),
+    executor: normalizeTxRole(
+      roles.executor,
+      `${pathLabel}.executor`,
+      signerIDs,
+    ),
     dvn: normalizeTxRole(roles.dvn, `${pathLabel}.dvn`, signerIDs),
   };
 }
@@ -1406,14 +1511,26 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
     `${pathLabel}.priceSnapshot`,
   );
   return {
-    maxMessageSize: integerField(input, "maxMessageSize", `${pathLabel}.maxMessageSize`),
+    maxMessageSize: integerField(
+      input,
+      "maxMessageSize",
+      `${pathLabel}.maxMessageSize`,
+    ),
     enforcedLzReceiveGas: decimalField(
       input,
       "enforcedLzReceiveGas",
       `${pathLabel}.enforcedLzReceiveGas`,
     ),
-    minLzReceiveGas: decimalField(input, "minLzReceiveGas", `${pathLabel}.minLzReceiveGas`),
-    maxLzReceiveGas: decimalField(input, "maxLzReceiveGas", `${pathLabel}.maxLzReceiveGas`),
+    minLzReceiveGas: decimalField(
+      input,
+      "minLzReceiveGas",
+      `${pathLabel}.minLzReceiveGas`,
+    ),
+    maxLzReceiveGas: decimalField(
+      input,
+      "maxLzReceiveGas",
+      `${pathLabel}.maxLzReceiveGas`,
+    ),
     priceSnapshot: {
       dstGasPriceInSrcToken: decimalField(
         priceSnapshot,
@@ -1436,12 +1553,18 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
         `${pathLabel}.priceSnapshot.maxAgeSeconds`,
       ),
     },
-    executorFee: normalizeWorkerFee(input.executorFee, `${pathLabel}.executorFee`),
+    executorFee: normalizeWorkerFee(
+      input.executorFee,
+      `${pathLabel}.executorFee`,
+    ),
     dvnFee: normalizeWorkerFee(input.dvnFee, `${pathLabel}.dvnFee`),
   };
 }
 
-function normalizeWorkerFee(value: unknown, pathLabel: string): WorkerFeeProfile {
+function normalizeWorkerFee(
+  value: unknown,
+  pathLabel: string,
+): WorkerFeeProfile {
   const input = object(value, pathLabel);
   const marginBps = integerField(input, "marginBps", `${pathLabel}.marginBps`, {
     allowZero: true,
@@ -1503,7 +1626,10 @@ function deploymentDirections(
   if (chains.length !== 2) {
     throw new Error("deployment state requires exactly two chains");
   }
-  return [directionState(chains[0], chains[1]), directionState(chains[1], chains[0])];
+  return [
+    directionState(chains[0], chains[1]),
+    directionState(chains[1], chains[0]),
+  ];
 }
 
 function directionState(
@@ -1585,7 +1711,9 @@ function workerStartBlock(
 ): number {
   const startBlockNumber = workerStartBlocks[chain.key];
   if (!Number.isInteger(startBlockNumber) || startBlockNumber < 0) {
-    throw new Error(`${chain.key} start_block_number must be a non-negative integer`);
+    throw new Error(
+      `${chain.key} start_block_number must be a non-negative integer`,
+    );
   }
   return startBlockNumber;
 }
@@ -1633,7 +1761,14 @@ function renderCommands(plan: CommandPlan): string {
     "",
   ];
   for (const command of plan.commands) {
-    lines.push(`## ${command.label}`, "", "```bash", command.command, "```", "");
+    lines.push(
+      `## ${command.label}`,
+      "",
+      "```bash",
+      command.command,
+      "```",
+      "",
+    );
     if (command.output !== undefined) {
       lines.push(`Output: \`${command.output}\``, "");
     }
@@ -1641,7 +1776,9 @@ function renderCommands(plan: CommandPlan): string {
   return `${lines.join("\n")}\n`;
 }
 
-function profileDirections(profile: DeploymentProfile): [ChainProfile, ChainProfile][] {
+function profileDirections(
+  profile: DeploymentProfile,
+): [ChainProfile, ChainProfile][] {
   if (profile.chains.length !== 2) {
     throw new Error("profile requires exactly two chains");
   }
@@ -1688,11 +1825,21 @@ function uniqueAddresses(addresses: readonly Address[]): Address[] {
 }
 
 function openWorkersParameterPath(outDir: string, chain: ChainProfile): string {
-  return path.join(outDir, "ignition", "parameters", `${chain.key}.open-workers.json`);
+  return path.join(
+    outDir,
+    "ignition",
+    "parameters",
+    `${chain.key}.open-workers.json`,
+  );
 }
 
 function testOFTParameterPath(outDir: string, chain: ChainProfile): string {
-  return path.join(outDir, "ignition", "parameters", `${chain.key}.test-oft.json`);
+  return path.join(
+    outDir,
+    "ignition",
+    "parameters",
+    `${chain.key}.test-oft.json`,
+  );
 }
 
 function openWorkersPathwayParameterPath(
@@ -1784,8 +1931,8 @@ function printSummary(
     outDir,
     parameters: path.join(outDir, "ignition", "parameters"),
     ...(phase === "deploy-test-oft" ||
-      phase === "deploy-workers" ||
-      options?.deploymentState === false
+    phase === "deploy-workers" ||
+    options?.deploymentState === false
       ? {}
       : { workerConfig: path.join(outDir, "worker.yaml") }),
     commands: path.join(outDir, "commands.md"),
@@ -1793,12 +1940,12 @@ function printSummary(
   if (options?.deploymentState !== undefined) {
     Object.assign(summary, { deploymentState: options.deploymentState });
     if (!options.deploymentState) {
-      Object.assign(summary, { status: path.join(outDir, "render-status.json") });
+      Object.assign(summary, {
+        status: path.join(outDir, "render-status.json"),
+      });
     }
   }
-  console.log(
-    jsonStringify(summary),
-  );
+  console.log(jsonStringify(summary));
 }
 
 function normalizePhase(value: string): DeploymentPhase {
@@ -1963,12 +2110,14 @@ function hardhatCommand(
   deploymentId: string,
   ignition: IgnitionCommandOptions,
 ): string {
-  return `${hardhatEnvPrefix(chain, ignition).join(" ")} ${script} -- ${hardhatIgnitionArgs({
-    chain,
-    parametersPath,
-    deploymentId,
-    ignition,
-  }).join(" ")}`;
+  return `${hardhatEnvPrefix(chain, ignition).join(" ")} ${script} -- ${hardhatIgnitionArgs(
+    {
+      chain,
+      parametersPath,
+      deploymentId,
+      ignition,
+    },
+  ).join(" ")}`;
 }
 
 function hardhatIgnitionArgs(input: {
@@ -2002,9 +2151,9 @@ function hardhatEnvPrefix(
     `${chain.rpcUrlEnv}=...`,
     ...(ignition.autoConfirm
       ? [
-        "HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true",
-        "HARDHAT_IGNITION_CONFIRM_RESET=true",
-      ]
+          "HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true",
+          "HARDHAT_IGNITION_CONFIRM_RESET=true",
+        ]
       : []),
   ];
 }
@@ -2077,7 +2226,10 @@ function optionalString(
   return value;
 }
 
-function optionalStringValue(value: unknown, label: string): string | undefined {
+function optionalStringValue(
+  value: unknown,
+  label: string,
+): string | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -2085,6 +2237,17 @@ function optionalStringValue(value: unknown, label: string): string | undefined 
     throw new Error(`${label} must be a string`);
   }
   return value;
+}
+
+function normalizeNativeAssetID(value: unknown, label: string): string {
+  const assetID = optionalStringValue(value, label) ?? "eth";
+  if (assetID.trim() !== assetID) {
+    throw new Error(`${label} must not contain leading or trailing whitespace`);
+  }
+  if (assetID.toLowerCase() !== assetID) {
+    throw new Error(`${label} must be lowercase`);
+  }
+  return assetID;
 }
 
 function envVarNameField(

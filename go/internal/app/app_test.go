@@ -554,6 +554,7 @@ func testPricingConfig() config.PricingConfig {
 		Chains: []config.PricingChainConfig{
 			{
 				EID:               40161,
+				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "binance",
 				SanitySources:     []string{"uniswap"},
@@ -569,6 +570,7 @@ func testPricingConfig() config.PricingConfig {
 			},
 			{
 				EID:               40449,
+				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "binance",
 				SanitySources:     []string{"uniswap"},

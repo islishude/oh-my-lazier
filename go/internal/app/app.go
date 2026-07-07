@@ -330,54 +330,61 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			return nil, err
 		}
 		readers := make(map[string]pricing.PriceReader)
-		if cfg.BinanceSymbol != "" {
+		usesBinance := pricingChainUsesSource(cfg, "binance")
+		if usesBinance {
 			reader, err := pricing.NewBinancePriceReader(binanceClient, cfg.BinanceSymbol)
 			if err != nil {
 				return nil, err
 			}
 			readers["binance"] = reader
 		}
-		if cfg.CoinMarketCapSymbol != "" && coinMarketCapClient != nil {
+		if pricingChainUsesSource(cfg, "coinmarketcap") && coinMarketCapClient != nil {
 			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCapSymbol)
 			if err != nil {
 				return nil, err
 			}
 			readers["coinmarketcap"] = reader
 		}
-		if cfg.CoinGeckoID != "" {
+		if pricingChainUsesSource(cfg, "coingecko") {
 			reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGeckoID)
 			if err != nil {
 				return nil, err
 			}
 			readers["coingecko"] = reader
 		}
-		amountIn, err := bigutil.ParsePositiveDecimal("uniswap amount_in_wei", cfg.Uniswap.AmountInWei)
-		if err != nil {
-			return nil, err
-		}
-		sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, pricing.UniswapV3Config{
-			QuoterAddress:    cfg.Uniswap.QuoterAddress.Common(),
-			TokenIn:          cfg.Uniswap.TokenIn.Common(),
-			TokenOut:         cfg.Uniswap.TokenOut.Common(),
-			Fee:              cfg.Uniswap.Fee,
-			AmountIn:         amountIn,
-			TokenOutDecimals: cfg.Uniswap.TokenOutDecimals,
-		})
-		if err != nil {
-			return nil, err
-		}
-		readers["uniswap"] = sanity
-		primary := readers[cfg.PrimarySource]
-		if primary == nil {
-			return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
-		}
-		sanityReaders := make([]pricing.PriceReader, 0, len(cfg.SanitySources))
-		for _, source := range cfg.SanitySources {
-			reader := readers[source]
-			if reader == nil {
-				return nil, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
+		if pricingChainUsesSource(cfg, "uniswap") {
+			amountIn, err := bigutil.ParsePositiveDecimal("uniswap amount_in_wei", cfg.Uniswap.AmountInWei)
+			if err != nil {
+				return nil, err
 			}
-			sanityReaders = append(sanityReaders, reader)
+			sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, pricing.UniswapV3Config{
+				QuoterAddress:    cfg.Uniswap.QuoterAddress.Common(),
+				TokenIn:          cfg.Uniswap.TokenIn.Common(),
+				TokenOut:         cfg.Uniswap.TokenOut.Common(),
+				Fee:              cfg.Uniswap.Fee,
+				AmountIn:         amountIn,
+				TokenOutDecimals: cfg.Uniswap.TokenOutDecimals,
+			})
+			if err != nil {
+				return nil, err
+			}
+			readers["uniswap"] = sanity
+		}
+		var primary pricing.PriceReader
+		var sanityReaders []pricing.PriceReader
+		if cfg.PrimarySource != "" || len(cfg.SanitySources) != 0 {
+			primary = readers[cfg.PrimarySource]
+			if primary == nil {
+				return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
+			}
+			sanityReaders = make([]pricing.PriceReader, 0, len(cfg.SanitySources))
+			for _, source := range cfg.SanitySources {
+				reader := readers[source]
+				if reader == nil {
+					return nil, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
+				}
+				sanityReaders = append(sanityReaders, reader)
+			}
 		}
 		dataFeePerByte, err := bigutil.ParseNonNegativeDecimal("data_fee_per_byte_wei", cfg.DataFeePerByteWei)
 		if err != nil {
@@ -388,6 +395,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			Sanity:            sanityReaders,
 			Gas:               configuredChain.RPC,
 			DataFeePerByteWei: dataFeePerByte,
+			NativeAssetID:     cfg.NativeAssetID,
 		}
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
@@ -402,6 +410,18 @@ func pricingUsesSource(chains []config.PricingChainConfig, source string) bool {
 			if sanity == source {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func pricingChainUsesSource(chain config.PricingChainConfig, source string) bool {
+	if chain.PrimarySource == source {
+		return true
+	}
+	for _, sanity := range chain.SanitySources {
+		if sanity == source {
+			return true
 		}
 	}
 	return false

@@ -471,6 +471,32 @@ func TestValidateRejectsMissingPricingChainDataFee(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsSameNativePricingWithoutMarketSources(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = sameNativePricingConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUppercasePricingNativeAssetID(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = sameNativePricingConfig()
+	cfg.Pricing.Chains[0].NativeAssetID = "ETH"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want uppercase native asset id error")
+	}
+}
+
+func TestValidateRejectsCrossAssetPricingWithoutMarketSources(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = sameNativePricingConfig()
+	cfg.Pricing.Chains[1].NativeAssetID = "hoodi-eth"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing market source error")
+	}
+}
+
 func TestValidateAcceptsPricingWithoutPriorityFeeCap(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
@@ -769,6 +795,7 @@ func validPricingConfig() PricingConfig {
 		Chains: []PricingChainConfig{
 			{
 				EID:               40161,
+				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "binance",
 				SanitySources:     []string{"uniswap"},
@@ -784,6 +811,7 @@ func validPricingConfig() PricingConfig {
 			},
 			{
 				EID:               40449,
+				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "binance",
 				SanitySources:     []string{"uniswap"},
@@ -799,6 +827,18 @@ func validPricingConfig() PricingConfig {
 			},
 		},
 	}
+}
+
+func sameNativePricingConfig() PricingConfig {
+	pricing := validPricingConfig()
+	for idx, chain := range pricing.Chains {
+		pricing.Chains[idx] = PricingChainConfig{
+			EID:               chain.EID,
+			NativeAssetID:     "eth",
+			DataFeePerByteWei: "0",
+		}
+	}
+	return pricing
 }
 
 func validPathwayPricingConfig() PathwayPricingConfig {

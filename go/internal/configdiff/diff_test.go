@@ -73,6 +73,7 @@ func validConfig() config.Config {
 			Chains: []config.PricingChainConfig{
 				{
 					EID:               40161,
+					NativeAssetID:     "eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "binance",
 					SanitySources:     []string{"uniswap"},
@@ -88,6 +89,7 @@ func validConfig() config.Config {
 				},
 				{
 					EID:               40449,
+					NativeAssetID:     "hoodi-eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "binance",
 					SanitySources:     []string{"uniswap"},

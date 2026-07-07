@@ -172,6 +172,7 @@ type ChainSources struct {
 	Sanity            []PriceReader
 	Gas               GasPriceReader
 	DataFeePerByteWei *big.Int
+	NativeAssetID     string
 }
 
 // EnqueueOnce computes current price snapshots and enqueues shared price-feed update batches.
@@ -273,10 +274,6 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 	if err != nil {
 		return 0, err
 	}
-	srcPrice, err := b.chainPrice(ctx, batch.SrcEID)
-	if err != nil {
-		return 0, err
-	}
 	updates := make([]PriceSnapshotUpdate, 0, len(batch.Targets))
 	gasByKey := make(map[string]*big.Int, len(batch.Targets))
 	dstEIDs := make([]uint32, 0, len(batch.Targets))
@@ -285,7 +282,7 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 		if err != nil {
 			return 0, err
 		}
-		dstPrice, err := b.chainPrice(ctx, target.DstEID)
+		srcPrice, dstPrice, err := b.pathwayPrices(ctx, target.SrcEID, target.DstEID)
 		if err != nil {
 			return 0, err
 		}
@@ -353,6 +350,29 @@ func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
 		}
 	}
 	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowSanityFallback)
+}
+
+func (b *Bot) pathwayPrices(ctx context.Context, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
+	srcSources, ok := b.sources[srcEID]
+	if !ok {
+		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", srcEID)
+	}
+	dstSources, ok := b.sources[dstEID]
+	if !ok {
+		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", dstEID)
+	}
+	if srcSources.NativeAssetID != "" && srcSources.NativeAssetID == dstSources.NativeAssetID {
+		return big.NewRat(1, 1), big.NewRat(1, 1), nil
+	}
+	srcPrice, err := b.chainPrice(ctx, srcEID)
+	if err != nil {
+		return nil, nil, err
+	}
+	dstPrice, err := b.chainPrice(ctx, dstEID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcPrice, dstPrice, nil
 }
 
 func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {

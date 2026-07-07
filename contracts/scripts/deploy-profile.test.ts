@@ -35,9 +35,14 @@ test("normalizeProfile validates rehearsal mode and LayerZero metadata", () => {
   assert.equal(profile.mode, "test-oft-rehearsal");
   assert.equal(profile.dvnMode, "active");
   assert.equal(profile.chains[0].eid, 40161);
+  assert.equal(profile.chains[0].nativeAssetId, "eth");
   assert.equal(profile.chains[0].startBlockNumber, undefined);
-  assert.equal(profile.chains[0].layerZero.endpointV2, "0x6EDCE65403992e310A62460808c4b910D972f10f");
+  assert.equal(
+    profile.chains[0].layerZero.endpointV2,
+    "0x6EDCE65403992e310A62460808c4b910D972f10f",
+  );
   assert.equal(profile.chains[1].eid, 40449);
+  assert.equal(profile.chains[1].nativeAssetId, "eth");
 });
 
 test("normalizeProfile requires external OApp addresses in external mode", () => {
@@ -67,6 +72,16 @@ test("normalizeProfile rejects owner as a long-term price feed submitter", () =>
   assert.throws(
     () => normalizeProfile(input),
     /profile\.priceFeedSubmitters must not include profile\.owner/,
+  );
+});
+
+test("normalizeProfile rejects uppercase native asset ids", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).nativeAssetId = "ETH";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.nativeAssetId must be lowercase/,
   );
 });
 
@@ -115,7 +130,8 @@ test("normalizeProfile rejects zero tx role minimum native balance", () => {
 
 test("normalizeProfile rejects Hardhat private key env injection", () => {
   const input = baseProfile();
-  (input.chains[0] as Record<string, unknown>).privateKeyEnv = "SEPOLIA_PRIVATE_KEY";
+  (input.chains[0] as Record<string, unknown>).privateKeyEnv =
+    "SEPOLIA_PRIVATE_KEY";
 
   assert.throws(
     () => normalizeProfile(input),
@@ -126,7 +142,10 @@ test("normalizeProfile rejects Hardhat private key env injection", () => {
 test("extractOpenWorkerContracts and buildDeploymentState require OpenWorkers price feed", () => {
   const profile = normalizeProfile(baseProfile());
   const workerDeployedAddresses = {
-    sepolia: deployedWorkers("0x1111111111111111111111111111111111111111", false),
+    sepolia: deployedWorkers(
+      "0x1111111111111111111111111111111111111111",
+      false,
+    ),
     hoodi: deployedWorkers("0x2222222222222222222222222222222222222222", false),
   };
   const testOFTDeployedAddresses = {
@@ -160,10 +179,22 @@ test("extractOpenWorkerContracts and buildDeploymentState require OpenWorkers pr
     generatedAt: "2026-07-05T00:00:00.000Z",
   });
 
-  assert.equal(state.chains[0].workers.priceFeed, "0x1111111111111111111111111111111111111114");
-  assert.equal(state.chains[0].oapp, "0x1111111111111111111111111111111111111111");
-  assert.equal(state.directions[0].receiveLib, profile.chains[1].layerZero.receiveUln302);
-  assert.equal(state.directions[1].sourceWorkers.openDVN, state.chains[1].workers.openDVN);
+  assert.equal(
+    state.chains[0].workers.priceFeed,
+    "0x1111111111111111111111111111111111111114",
+  );
+  assert.equal(
+    state.chains[0].oapp,
+    "0x1111111111111111111111111111111111111111",
+  );
+  assert.equal(
+    state.directions[0].receiveLib,
+    profile.chains[1].layerZero.receiveUln302,
+  );
+  assert.equal(
+    state.directions[1].sourceWorkers.openDVN,
+    state.chains[1].workers.openDVN,
+  );
 });
 
 test("buildDeploymentState uses profile OApps in external mode without TestOFT state", () => {
@@ -178,8 +209,14 @@ test("buildDeploymentState uses profile OApps in external mode without TestOFT s
   });
 
   assert.equal(state.mode, "external-oapp");
-  assert.equal(state.chains[0].oapp, "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa");
-  assert.equal(state.chains[1].oapp, "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB");
+  assert.equal(
+    state.chains[0].oapp,
+    "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa",
+  );
+  assert.equal(
+    state.chains[1].oapp,
+    "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
+  );
 });
 
 test("readPriceFeedFromWorkers hydrates only matching worker price feeds", async () => {
@@ -306,9 +343,21 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(yaml, /src_oapp: "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"/);
   assert.match(yaml, /dst_oapp: "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"/);
   assert.match(yaml, /mode: active/);
-  assert.match(yaml, /source_workers:\n      open_executor: "0x1111111111111111111111111111111111111112"/);
-  assert.match(yaml, /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/);
+  assert.match(
+    yaml,
+    /source_workers:\n      open_executor: "0x1111111111111111111111111111111111111112"/,
+  );
+  assert.match(
+    yaml,
+    /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/,
+  );
   assert.match(yaml, /signer: "0x2222222222222222222222222222222222222222"/);
+  assert.match(yaml, /pricing:\n  enabled: true/);
+  assert.match(
+    yaml,
+    /signer: "0x2222222222222222222222222222222222222222"\n  interval_seconds: 300/,
+  );
+  assert.match(yaml, /native_asset_id: eth/);
   assert.match(yaml, /min_native_balance_wei: "100000000000000000"/);
   assert.match(yaml, /start_block_number: 123456/);
   assert.match(yaml, /start_block_number: 654321/);
@@ -435,7 +484,9 @@ test("deployment preflight args use chain canary token balances", () => {
 test("command plan and phase gates keep external OApp config explicit", () => {
   const profile = normalizeProfile(externalProfile());
   const plan = buildCommandPlan({ profile, outDir: "tmp/deploy-profile" });
-  const commandText = plan.commands.map((command) => command.command).join("\n");
+  const commandText = plan.commands
+    .map((command) => command.command)
+    .join("\n");
 
   assert.doesNotMatch(commandText, /deploy:test-oft/);
   assert.doesNotMatch(commandText, /PRIVATE_KEY/);
@@ -523,7 +574,9 @@ test("isBootstrapStateUnavailable only allows missing new deployment state", () 
   assert.equal(isBootstrapStateUnavailable(missingArtifact), false);
   assert.equal(
     isBootstrapStateUnavailable(
-      new Error("sepolia deployed_addresses.json is missing OpenWorkers#OpenExecutor"),
+      new Error(
+        "sepolia deployed_addresses.json is missing OpenWorkers#OpenExecutor",
+      ),
     ),
     true,
   );
@@ -535,7 +588,9 @@ test("isBootstrapStateUnavailable only allows missing new deployment state", () 
   );
   assert.equal(
     isBootstrapStateUnavailable(
-      new Error("hoodi deployed_addresses.json is missing OpenWorkers#OpenPriceFeed"),
+      new Error(
+        "hoodi deployed_addresses.json is missing OpenWorkers#OpenPriceFeed",
+      ),
     ),
     false,
   );
@@ -551,8 +606,12 @@ function stateWithPriceFeeds(profile: DeploymentProfile) {
     testOFTDeployedAddresses:
       profile.mode === "test-oft-rehearsal"
         ? {
-            sepolia: deployedTestOFT("0x1111111111111111111111111111111111111111"),
-            hoodi: deployedTestOFT("0x2222222222222222222222222222222222222222"),
+            sepolia: deployedTestOFT(
+              "0x1111111111111111111111111111111111111111",
+            ),
+            hoodi: deployedTestOFT(
+              "0x2222222222222222222222222222222222222222",
+            ),
           }
         : undefined,
     generatedAt: "2026-07-05T00:00:00.000Z",

@@ -88,6 +88,45 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	}
 }
 
+func TestBotEnqueueOnceUsesSameNativeAssetConversionWithoutPriceReaders(t *testing.T) {
+	pathways := testPathways()
+	registry := testRegistryWithPathways(t, []config.PathwayConfig{pathways[0]})
+	store := &fakeStore{}
+	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
+		40161: {
+			Primary:           failingPrice{},
+			Sanity:            []PriceReader{failingPrice{}},
+			Gas:               fixedGas{price: big.NewInt(1_000_000_000)},
+			DataFeePerByteWei: big.NewInt(0),
+			NativeAssetID:     "eth",
+		},
+		40449: {
+			Primary:           failingPrice{},
+			Sanity:            []PriceReader{failingPrice{}},
+			Gas:               fixedGas{price: big.NewInt(2_000_000_000)},
+			DataFeePerByteWei: big.NewInt(123),
+			NativeAssetID:     "eth",
+		},
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("enqueued requests = %d, want 1", len(store.requests))
+	}
+	assertRequestMatchesSnapshot(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), 40449, PriceSnapshot{
+		DstGasPriceInSrcToken:       big.NewInt(2_000_000_000),
+		DstDataFeePerByteInSrcToken: big.NewInt(123),
+		UpdatedAt:                   1_700_000_000,
+		StaleAfter:                  1800,
+	})
+}
+
 func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	registry := testRegistry(t)
 	store := &fakeStore{}
@@ -338,6 +377,12 @@ type fixedPrice struct {
 
 func (p fixedPrice) PriceUSD(context.Context) (SourcePrice, error) {
 	return SourcePrice{Source: "fixed", USD: p.price}, nil
+}
+
+type failingPrice struct{}
+
+func (failingPrice) PriceUSD(context.Context) (SourcePrice, error) {
+	return SourcePrice{}, context.Canceled
 }
 
 type fixedGas struct {

@@ -294,6 +294,14 @@ profile alone; either redeploy `OpenWorkers`, or have the owner run a reviewed
 pathway config that writes the initial snapshot and revokes the temporary
 authorization.
 
+The profile renderer enables the worker price bot in the generated
+`worker.yaml`. Chains default to `nativeAssetId: "eth"`, so the Sepolia/Hoodi
+testnet profile writes same-native pricing chains that use destination RPC gas
+prices directly without requiring a Uniswap route on Hoodi. Set a different
+lowercase `nativeAssetId` on any chain whose native gas asset differs; those
+cross-asset pathways must provide market price sources and the required Uniswap
+sanity route in the worker config before starting the price bot.
+
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`
 and OApp/Endpoint parameters at
