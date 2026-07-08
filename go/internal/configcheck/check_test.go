@@ -33,35 +33,35 @@ func TestCheckWithClientsReportsMismatches(t *testing.T) {
 			clients[40161].chainID = big.NewInt(1)
 		},
 		"missingCode": func(clients map[uint32]*fakeChainClient) {
-			delete(clients[40161].code, addr("0x9999999999999999999999999999999999999999"))
+			delete(clients[40161].code, common.HexToAddress("0x9999999999999999999999999999999999999999"))
 		},
 		"peer": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].peers[addr("0x7777777777777777777777777777777777777777")][40449] = common.Hash{}
+			clients[40161].peers[common.HexToAddress("0x7777777777777777777777777777777777777777")][40449] = common.Hash{}
 		},
 		"sendLibrary": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].sendLibraries[pathKey(addr("0x7777777777777777777777777777777777777777"), 40449)] = addr("0x1212121212121212121212121212121212121212")
+			clients[40161].sendLibraries[pathKey(common.HexToAddress("0x7777777777777777777777777777777777777777"), 40449)] = common.HexToAddress("0x1212121212121212121212121212121212121212")
 		},
 		"requiredDVNs": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].ulnConfigs[configKey(addr("0x7777777777777777777777777777777777777777"), addr("0x9999999999999999999999999999999999999999"), 40449)] = ulnConfig{
+			clients[40161].ulnConfigs[configKey(common.HexToAddress("0x7777777777777777777777777777777777777777"), common.HexToAddress("0x9999999999999999999999999999999999999999"), 40449)] = ulnConfig{
 				Confirmations:        12,
 				RequiredDVNCount:     1,
 				OptionalDVNCount:     nilDVNCount,
 				OptionalDVNThreshold: 0,
-				RequiredDVNs:         []common.Address{addr("0x3333333333333333333333333333333333333333")},
+				RequiredDVNs:         []common.Address{common.HexToAddress("0x3333333333333333333333333333333333333333")},
 			}
 		},
 		"workerGas": func(clients map[uint32]*fakeChainClient) {
-			cfg := clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40449, addr("0x7777777777777777777777777777777777777777"))]
+			cfg := clients[40161].workerPathways[workerPathwayKey(common.HexToAddress("0x2222222222222222222222222222222222222222"), 40449, common.HexToAddress("0x7777777777777777777777777777777777777777"))]
 			cfg.MaxLzReceiveGas = big.NewInt(1)
-			clients[40161].workerPathways[workerPathwayKey(addr("0x2222222222222222222222222222222222222222"), 40449, addr("0x7777777777777777777777777777777777777777"))] = cfg
+			clients[40161].workerPathways[workerPathwayKey(common.HexToAddress("0x2222222222222222222222222222222222222222"), 40449, common.HexToAddress("0x7777777777777777777777777777777777777777"))] = cfg
 		},
 		"priceFeed": func(clients map[uint32]*fakeChainClient) {
-			clients[40161].priceFeeds[addr("0x2222222222222222222222222222222222222222")] = addr("0x1212121212121212121212121212121212121212")
+			clients[40161].priceFeeds[common.HexToAddress("0x2222222222222222222222222222222222222222")] = common.HexToAddress("0x1212121212121212121212121212121212121212")
 		},
 		"feeModel": func(clients map[uint32]*fakeChainClient) {
-			model := clients[40161].workerFeeModels[workerFeeModelKey(addr("0x2222222222222222222222222222222222222222"), 40449)]
+			model := clients[40161].workerFeeModels[workerFeeModelKey(common.HexToAddress("0x2222222222222222222222222222222222222222"), 40449)]
 			model.MarginBps = 999
-			clients[40161].workerFeeModels[workerFeeModelKey(addr("0x2222222222222222222222222222222222222222"), 40449)] = model
+			clients[40161].workerFeeModels[workerFeeModelKey(common.HexToAddress("0x2222222222222222222222222222222222222222"), 40449)] = model
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -142,7 +142,7 @@ func TestCheckWithClientsReportsMissingDestinationVerifierAuthorization(t *testi
 
 func TestCheckWithClientsReportsMissingPricingSubmitterAuthorization(t *testing.T) {
 	registry, clients := testRegistryAndClients(t)
-	signer := addr("0x9999999999999999999999999999999999999999")
+	signer := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	for _, pathway := range registry.Pathways() {
 		clients[pathway.SrcEID].priceSubmitters[priceSubmitterKey(pathway.SourceWorkers.PriceFeed, signer)] = true
 	}
@@ -164,12 +164,46 @@ func TestCheckWithClientsReportsMissingPricingSubmitterAuthorization(t *testing.
 	}
 }
 
-func TestRenderTextIncludesIssuePaths(t *testing.T) {
+func TestRenderTextReportsPassedCheck(t *testing.T) {
+	output := RenderText(Report{OK: true})
+	const want = "on-chain config check passed\n"
+	if output != want {
+		t.Fatalf("RenderText() = %q, want %q", output, want)
+	}
+}
+
+func TestRenderTextReportsSingleIssue(t *testing.T) {
 	output := RenderText(Report{
 		Issues: []Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
 	})
-	if !strings.Contains(output, "chains[40161].chain_id") {
-		t.Fatalf("RenderText() = %q, want issue path", output)
+	const want = "on-chain config check failed (1 issue)\n" +
+		"[1] chains[40161].chain_id\n" +
+		"    wrong\n"
+	if output != want {
+		t.Fatalf("RenderText() = %q, want %q", output, want)
+	}
+}
+
+func TestRenderTextReportsMultipleIssues(t *testing.T) {
+	output := RenderText(Report{
+		Issues: []Issue{
+			{
+				Path:    "chains[40161].rpc_urls",
+				Message: "rpc chain_id mismatch for chain ethereum-sepolia, expected 11155111: provider http://wrong returned 560048",
+			},
+			{
+				Path:    "pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888].source_workers.open_executor",
+				Message: "worker pathway max_lz_receive_gas 1 does not match configured 200000",
+			},
+		},
+	})
+	const want = "on-chain config check failed (2 issues)\n" +
+		"[1] chains[40161].rpc_urls\n" +
+		"    rpc chain_id mismatch for chain ethereum-sepolia, expected 11155111: provider http://wrong returned 560048\n" +
+		"[2] pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888].source_workers.open_executor\n" +
+		"    worker pathway max_lz_receive_gas 1 does not match configured 200000\n"
+	if output != want {
+		t.Fatalf("RenderText() = %q, want %q", output, want)
 	}
 }
 
@@ -418,11 +452,11 @@ func expectedULNConfig(configured chain.Chain, openDVN common.Address) ulnConfig
 func externalDVN(eid uint32) common.Address {
 	switch eid {
 	case 40161:
-		return addr("0xdddddddddddddddddddddddddddddddddddddddd")
+		return common.HexToAddress("0xdddddddddddddddddddddddddddddddddddddddd")
 	case 40449:
-		return addr("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+		return common.HexToAddress("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 	default:
-		return addr("0xffffffffffffffffffffffffffffffffffffffff")
+		return common.HexToAddress("0xffffffffffffffffffffffffffffffffffffffff")
 	}
 }
 
@@ -525,8 +559,8 @@ func testDVNRole() config.DVNTxRoleConfig {
 
 func testPathwayPricingConfig() config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50_000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150_000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 200},
 	}
 }
 
@@ -573,14 +607,6 @@ func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
 		DataSizeOverheadBytes: *cfg.DataSizeOverheadBytes,
 		MarginBps:             cfg.MarginBps,
 	}
-}
-
-func uint64Ptr(value uint64) *uint64 {
-	return &value
-}
-
-func addr(raw string) common.Address {
-	return common.HexToAddress(raw)
 }
 
 func chainClients(clients map[uint32]*fakeChainClient) map[uint32]ChainClient {

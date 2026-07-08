@@ -843,11 +843,7 @@ func sameNativePricingConfig() PricingConfig {
 
 func validPathwayPricingConfig() PathwayPricingConfig {
 	return PathwayPricingConfig{
-		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
-		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
+		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 100},
+		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 200},
 	}
-}
-
-func uint64Ptr(value uint64) *uint64 {
-	return &value
 }

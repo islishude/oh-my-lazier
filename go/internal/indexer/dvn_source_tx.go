@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -94,8 +95,8 @@ type dvnAssignmentEvent struct {
 }
 
 func latestUnmatchedDVNFee(fees []dvnFeeEvent, sendLib common.Address) int {
-	for i := len(fees) - 1; i >= 0; i-- {
-		if !fees[i].Matched && fees[i].Log.Address == sendLib {
+	for i, fee := range slices.Backward(fees) {
+		if !fee.Matched && fee.Log.Address == sendLib {
 			return i
 		}
 	}

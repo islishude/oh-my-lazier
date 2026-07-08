@@ -590,13 +590,9 @@ func testPricingConfig() config.PricingConfig {
 
 func testPathwayPricingConfig() config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 100},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 200},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 100},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 200},
 	}
-}
-
-func uint64Ptr(value uint64) *uint64 {
-	return &value
 }
 
 func purposesByChain(targets []txmgr.Target) map[uint32][]string {

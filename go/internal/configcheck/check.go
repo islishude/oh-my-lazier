@@ -70,15 +70,23 @@ type Report struct {
 	Issues []Issue `json:"issues"`
 }
 
+func (r Report) issueLabel() string {
+	if len(r.Issues) == 1 {
+		return "issue"
+	}
+	return "issues"
+}
+
 // RenderText renders a report for operator runbooks and startup errors.
 func RenderText(report Report) string {
 	if report.OK {
 		return "on-chain config check passed\n"
 	}
 	var out strings.Builder
-	out.WriteString("on-chain config check failed\n")
-	for _, issue := range report.Issues {
-		fmt.Fprintf(&out, "- %s: %s\n", issue.Path, issue.Message)
+	fmt.Fprintf(&out, "on-chain config check failed (%d %s)\n", len(report.Issues), report.issueLabel())
+	for i, issue := range report.Issues {
+		fmt.Fprintf(&out, "[%d] %s\n", i+1, issue.Path)
+		fmt.Fprintf(&out, "    %s\n", issue.Message)
 	}
 	return out.String()
 }

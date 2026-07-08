@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
@@ -406,10 +407,8 @@ func pricingUsesSource(chains []config.PricingChainConfig, source string) bool {
 		if chain.PrimarySource == source {
 			return true
 		}
-		for _, sanity := range chain.SanitySources {
-			if sanity == source {
-				return true
-			}
+		if slices.Contains(chain.SanitySources, source) {
+			return true
 		}
 	}
 	return false
@@ -419,12 +418,7 @@ func pricingChainUsesSource(chain config.PricingChainConfig, source string) bool
 	if chain.PrimarySource == source {
 		return true
 	}
-	for _, sanity := range chain.SanitySources {
-		if sanity == source {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(chain.SanitySources, source)
 }
 
 func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker, error) {

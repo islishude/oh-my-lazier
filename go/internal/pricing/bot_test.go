@@ -180,7 +180,7 @@ func TestBotEnqueueOnceDeduplicatesSharedPriceFeed(t *testing.T) {
 	duplicate.SrcOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999998")
 	duplicate.DstOApp = config.MustEVMAddress("0x9999999999999999999999999999999999999997")
 	duplicate.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
-	duplicate.Pricing.DVNFee = config.WorkerFeeModelConfig{FixedFeeWei: "3000", DstGasOverhead: 250_000, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: 300}
+	duplicate.Pricing.DVNFee = config.WorkerFeeModelConfig{FixedFeeWei: "3000", DstGasOverhead: 250_000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 300}
 	pathways = []config.PathwayConfig{pathways[0], duplicate}
 	registry := testRegistryWithPathways(t, pathways)
 	store := &fakeStore{}
@@ -330,7 +330,7 @@ func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
 			name: "executor",
 			mutate: func(pathway *config.PathwayConfig) {
 				pathway.SourceWorkers.OpenDVN = config.MustEVMAddress("0x9999999999999999999999999999999999999996")
-				pathway.Pricing.ExecutorFee.DataSizeOverheadBytes = uint64Ptr(1)
+				pathway.Pricing.ExecutorFee.DataSizeOverheadBytes = new(uint64(1))
 			},
 		},
 	}
@@ -511,8 +511,8 @@ func testPathways() []config.PathwayConfig {
 
 func testPathwayPricingConfig(executorBase string, executorOverhead uint64, executorMargin uint16, dvnBase string, dvnOverhead uint64, dvnMargin uint16) config.PathwayPricingConfig {
 	return config.PathwayPricingConfig{
-		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: executorBase, DstGasOverhead: executorOverhead, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: executorMargin},
-		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: dvnBase, DstGasOverhead: dvnOverhead, DataSizeOverheadBytes: uint64Ptr(0), MarginBps: dvnMargin},
+		ExecutorFee: config.WorkerFeeModelConfig{FixedFeeWei: executorBase, DstGasOverhead: executorOverhead, DataSizeOverheadBytes: new(uint64(0)), MarginBps: executorMargin},
+		DVNFee:      config.WorkerFeeModelConfig{FixedFeeWei: dvnBase, DstGasOverhead: dvnOverhead, DataSizeOverheadBytes: new(uint64(0)), MarginBps: dvnMargin},
 	}
 }
 
@@ -521,10 +521,6 @@ func testSources() map[uint32]ChainSources {
 		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
 		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
 	}
-}
-
-func uint64Ptr(value uint64) *uint64 {
-	return &value
 }
 
 func testExecutorRole() config.ExecutorTxRoleConfig {
