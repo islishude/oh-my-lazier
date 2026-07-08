@@ -27,7 +27,9 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - No non-EVM chain support.
 - Worker chain configs must declare `family: evm`.
 - No self-only DVN.
-- Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.
+- Required DVNs must include OpenDVN and at least one independent external DVN.
+  The current Sepolia/Hoodi rehearsal uses the LayerZero Labs DVN as that
+  external DVN.
 - Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.
 
 ## Review Sequence
@@ -92,8 +94,8 @@ Required state:
 - OpenExecutor and OpenDVN allow only intended SendLib addresses.
 - Worker pathway config is enabled only for approved OApps.
 - Endpoint executor config points to each pathway's configured `source_workers.open_executor` only after the executor migration step.
-- Source SendUln config includes each pathway's configured `source_workers.open_dvn` plus an independent LayerZero Labs DVN only during the DVN join step.
-- Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same independent LayerZero Labs DVN only during the DVN join step.
+- Source SendUln config includes each pathway's configured `source_workers.open_dvn` plus the approved independent external DVN only during the DVN join step.
+- Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same approved independent external DVN only during the DVN join step.
 - Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
 - Source OpenPriceFeed `priceSnapshot(dstEid)` is fresh, the pricing signer is an authorized PriceFeed submitter, OpenExecutor/OpenDVN `priceFeed()` both point to the configured feed, and each worker's `feeModel(dstEid)` matches the approved price evidence.
@@ -119,7 +121,7 @@ Reject mainnet readiness if:
 
 - any critical security finding remains open
 - self-only DVN is proposed
-- required DVNs do not include an independent LayerZero Labs DVN
+- required DVNs do not include an independent external DVN
 - confirmations are missing, zero, or do not match the approved LayerZero ULN configuration
 - signer inventory or rollback signer is missing
 - price snapshot evidence is missing, stale, or not produced through the approved pricing path

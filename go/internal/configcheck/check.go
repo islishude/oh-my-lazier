@@ -490,7 +490,7 @@ type pathwayConfig struct {
 }
 
 type feeModel struct {
-	BaseFee               *big.Int
+	FixedFee              *big.Int
 	DstGasOverhead        uint64
 	DataSizeOverheadBytes uint64
 	MarginBps             uint16
@@ -536,7 +536,7 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 	if len(values) != 4 {
 		return feeModel{}, fmt.Errorf("feeModel returned %d values, want 4", len(values))
 	}
-	baseFee, ok := values[0].(*big.Int)
+	abiBaseFee, ok := values[0].(*big.Int)
 	if !ok {
 		return feeModel{}, fmt.Errorf("feeModel baseFee returned %T, want *big.Int", values[0])
 	}
@@ -553,7 +553,7 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 		return feeModel{}, fmt.Errorf("feeModel marginBps returned %T, want uint16", values[3])
 	}
 	return feeModel{
-		BaseFee:               baseFee,
+		FixedFee:              abiBaseFee,
 		DstGasOverhead:        overhead,
 		DataSizeOverheadBytes: dataOverhead,
 		MarginBps:             margin,
@@ -561,13 +561,13 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 }
 
 func (c *checker) compareFeeModel(path string, actual feeModel, expected config.WorkerFeeModelConfig) {
-	expectedBaseFee, err := bigutil.ParseDecimal("configured fixed_fee_wei", expected.FixedFeeWei)
+	expectedFixedFee, err := bigutil.ParseDecimal("configured fixed_fee_wei", expected.FixedFeeWei)
 	if err != nil {
-		c.add(path+".base_fee", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
+		c.add(path+".fixed_fee_wei", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
 		return
 	}
-	if actual.BaseFee == nil || actual.BaseFee.Cmp(expectedBaseFee) != 0 {
-		c.add(path+".base_fee", "worker base fee %s does not match configured %s", bigString(actual.BaseFee), expectedBaseFee)
+	if actual.FixedFee == nil || actual.FixedFee.Cmp(expectedFixedFee) != 0 {
+		c.add(path+".fixed_fee_wei", "worker ABI baseFee %s does not match configured fixed_fee_wei %s", bigString(actual.FixedFee), expectedFixedFee)
 	}
 	if actual.DstGasOverhead != expected.DstGasOverhead {
 		c.add(path+".dst_gas_overhead", "worker destination gas overhead %d does not match configured %d", actual.DstGasOverhead, expected.DstGasOverhead)

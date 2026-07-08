@@ -21,7 +21,7 @@ const requiredDocs: RequiredDoc[] = [
       "No ordered execution.",
       "No non-EVM chain support.",
       "No self-only DVN.",
-      "Required DVNs must include both OpenDVN and an independent LayerZero Labs DVN.",
+      "Required DVNs must include OpenDVN and at least one independent external DVN.",
       "Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.",
       "npm run check:migration-evidence -- --migration-evidence <record.json>",
       "npm run check:runbooks",

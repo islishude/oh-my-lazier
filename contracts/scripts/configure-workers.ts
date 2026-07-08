@@ -193,7 +193,7 @@ function priceSnapshot(defaultUpdatedAt: bigint) {
 
 function workerFeeModel(prefix: "EXECUTOR" | "DVN") {
   return {
-    baseFee: envBigInt(`${prefix}_FEE_BASE_FEE`),
+    baseFee: envBigInt(`${prefix}_FEE_FIXED_FEE_WEI`),
     dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
     dataSizeOverheadBytes: envBigInt(`${prefix}_FEE_DATA_SIZE_OVERHEAD_BYTES`),
     marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),

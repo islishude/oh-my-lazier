@@ -82,8 +82,9 @@ LayerZero phase-1 boundary:
 - Worker chain configs must declare `family: evm`; other chain families are rejected in phase 1.
 - `composeMsg`, `lzCompose`, native drop, ordered execution, and non-EVM chains
   remain out of scope.
-- Self-only DVN is rejected; required DVNs must include OpenDVN and an
-  independent LayerZero Labs DVN.
+- Self-only DVN is rejected; required DVNs must include OpenDVN and at least
+  one independent external DVN. The current Sepolia/Hoodi deployment evidence
+  uses the LayerZero Labs DVN as that external DVN.
 - Confirmations are fixed at 12 unless the maintained scope documentation is updated.
 
 RPC quorum and safety:
@@ -101,6 +102,10 @@ Operational readiness:
   readiness runbooks exist.
 - `npm run check:runbooks` verifies the required runbook coverage anchors.
 - Migration evidence must pass `npm run check:migration-evidence`.
+- Sepolia/Hoodi deployment evidence is attached under
+  `docs/deployments/sepolia-hoodi/` and passes
+  `npm run check:migration-evidence`; this is deployment evidence, not final
+  mainnet approval.
 
 ## Open Release-Readiness Item
 
@@ -138,7 +143,7 @@ Required closure before M9 completion:
 
 - No final exhaustive security review or equivalent human approval has been
   recorded.
-- No funded testnet deployment, canary transfer, DVN join, or rollback evidence
-  has been attached.
-- M9 must remain in progress until S-001 and the external migration evidence are
-  closed.
+- No final migration ticket, rollback evidence, or mainnet approval record has
+  been attached.
+- M9 must remain in progress until S-001, migration-specific rollback evidence,
+  and final human approval are closed.

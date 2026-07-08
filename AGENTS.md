@@ -4,7 +4,7 @@
 
 - Treat [README.md](README.md), [docs/runbooks](docs/runbooks), [docs/deployments](docs/deployments), and [docs/security](docs/security) as maintained documentation. Keep them aligned with behavior changes.
 - This repo is still in active development. Do not keep compatibility shims, fallback config/schema paths, dual decoders, retired fixtures, or legacy tests unless explicitly requested.
-- Phase 1 supports EVM chains only. required DVNs are `OpenDVN` plus an independent 3rd-party DVN.
+- Phase 1 supports EVM chains only. Required DVNs are `OpenDVN` plus at least one independent 3rd-party DVN.
 - Do not add non-EVM support, `composeMsg`, `lzCompose`, native drop, ordered execution, self-only DVN, hot config reload, or live testnet/mainnet execution unless maintained scope docs are updated first.
 - For repo-local schema changes, update `go/migrations/001_initial_schema.sql`. Do not add separate data migrations unless explicitly requested.
 
@@ -56,7 +56,7 @@
 make check
 ```
 
-`make check` currently runs compile, TypeScript typecheck, LayerZero ABI drift check, pricing ABI drift check, Solidity tests, TypeScript script tests, Go tests, runbook check, migration evidence check, `golangci-lint`, Go format check, and Solidity format check.
+`make check` currently runs compile, TypeScript typecheck, LayerZero ABI drift check, pricing ABI drift check, Solidity tests, TypeScript script tests, Go tests, runbook check, `golangci-lint`, Go format check, and Solidity format check.
 
 Use targeted gates when the change touches those areas:
 
@@ -65,7 +65,7 @@ make test-integration
 make security-check
 make docker-smoke
 npm run check:runbooks
-MIGRATION_EVIDENCE=docs/deployments/testnet-migration-evidence.example.json npm run check:migration-evidence
+npm run check:migration-evidence -- --migration-evidence docs/deployments/sepolia-hoodi/migration-evidence.json
 ```
 
 - `make test-integration` is the Docker Compose Postgres plus Rustack KMS stack.

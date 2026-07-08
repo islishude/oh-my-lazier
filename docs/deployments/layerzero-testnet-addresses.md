@@ -39,7 +39,11 @@ Run this immediately before any funded testnet migration or mainnet proposal.
 | LayerZero Labs DVN                    | `0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193` |
 | LayerZero Labs lzRead DVN             | `0x530fbe405189204ef459fa4b767167e4d41e3a37` |
 
-Use `LayerZero Labs DVN`, not the lzRead DVN, for the phase-1 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration.
+Use `LayerZero Labs DVN`, not the lzRead DVN, for the current Sepolia/Hoodi
+`requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration. It is the
+current testnet external DVN selection; changing the external DVN requires
+updating the deployment profile, evidence expectations, and maintained scope
+docs first.
 
 ## Hoodi
 
@@ -57,7 +61,11 @@ Use `LayerZero Labs DVN`, not the lzRead DVN, for the phase-1 `requiredDVNs = [O
 | LayerZero Labs DVN                    | `0xa78a78a13074ed93ad447a26ec57121f29e8fec2` |
 | LayerZero Labs lzRead DVN             | not currently published in `dvnDeployments.json` |
 
-Use `LayerZero Labs DVN`, not the lzRead DVN, for the phase-1 `requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration.
+Use `LayerZero Labs DVN`, not the lzRead DVN, for the current Sepolia/Hoodi
+`requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration. It is the
+current testnet external DVN selection; changing the external DVN requires
+updating the deployment profile, evidence expectations, and maintained scope
+docs first.
 
 ## Direction Inputs
 

@@ -100,7 +100,10 @@ config diff artifacts, LayerZero config before snapshots, and rollback evidence
 for previous Executor/ULN configs, rollback dry-run output, restored config
 check, post-rollback canary, owner pause account, signer account, drain status,
 and manual retry plan. Records with `"evidenceType": "deployment"` omit those
-migration-only artifacts.
+migration-only artifacts. The LayerZero Labs DVN label is the current
+Sepolia/Hoodi external DVN evidence expectation; the worker-side on-chain
+config check only requires the configured OpenDVN plus at least one independent
+external DVN.
 
 Use the profile-driven deployment entrypoint for Sepolia/Hoodi rehearsal and
 real external OApp deployments. The profile is the only operator-edited input;
@@ -384,11 +387,11 @@ npm run render:oft-pathway-params -- \
   --price-snapshot-dst-gas-price-in-src-token 1 \
   --price-snapshot-dst-data-fee-per-byte-in-src-token 0 \
   --price-snapshot-stale-after 1800 \
-  --executor-fee-base-fee 0 \
+  --executor-fee-fixed-fee-wei 0 \
   --executor-fee-dst-gas-overhead 50000 \
   --executor-fee-data-size-overhead-bytes 0 \
   --executor-fee-margin-bps 1000 \
-  --dvn-fee-base-fee 0 \
+  --dvn-fee-fixed-fee-wei 0 \
   --dvn-fee-dst-gas-overhead 150000 \
   --dvn-fee-data-size-overhead-bytes 0 \
   --dvn-fee-margin-bps 1000 > ignition/parameters/sepolia-to-hoodi.split.json
@@ -423,15 +426,19 @@ npm run configure:workers -- \
   --price-snapshot-dst-gas-price-in-src-token 1 \
   --price-snapshot-dst-data-fee-per-byte-in-src-token 0 \
   --price-snapshot-stale-after 3600 \
-  --executor-fee-base-fee 0 \
+  --executor-fee-fixed-fee-wei 0 \
   --executor-fee-dst-gas-overhead 50000 \
   --executor-fee-data-size-overhead-bytes 0 \
   --executor-fee-margin-bps 1000 \
-  --dvn-fee-base-fee 0 \
+  --dvn-fee-fixed-fee-wei 0 \
   --dvn-fee-dst-gas-overhead 150000 \
   --dvn-fee-data-size-overhead-bytes 0 \
   --dvn-fee-margin-bps 1000
 ```
+
+The low-level script flags use fixed-fee terminology to match worker YAML and
+deployment profiles. Rendered Ignition parameters and on-chain worker reads
+still expose the ABI field name `baseFee`.
 
 For standard pathway setup, `configure:open-workers-pathway` writes the worker
 price-feed binding, send-lib allowlist, pathway limits, initial shared price

@@ -388,7 +388,7 @@ func (f *fakeChainClient) callWorker(to common.Address, method *abi.Method, args
 		return method.Outputs.Pack(f.priceSubmitters[priceSubmitterKey(to, args[0].(common.Address))])
 	case "feeModel":
 		model := f.workerFeeModels[workerFeeModelKey(to, args[0].(uint32))]
-		return method.Outputs.Pack(model.BaseFee, model.DstGasOverhead, model.DataSizeOverheadBytes, model.MarginBps)
+		return method.Outputs.Pack(model.FixedFee, model.DstGasOverhead, model.DataSizeOverheadBytes, model.MarginBps)
 	case "verifiers":
 		return method.Outputs.Pack(f.verifiers[verifierKey(to, args[0].(common.Address))])
 	default:
@@ -560,7 +560,7 @@ func verifierKey(openDVN, verifier common.Address) string {
 
 func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
 	t.Helper()
-	baseFee, err := bigutil.ParseDecimal("fixed_fee_wei", cfg.FixedFeeWei)
+	fixedFee, err := bigutil.ParseDecimal("fixed_fee_wei", cfg.FixedFeeWei)
 	if err != nil {
 		t.Fatalf("invalid fixed fee %q", cfg.FixedFeeWei)
 	}
@@ -568,7 +568,7 @@ func testFeeModel(t *testing.T, cfg config.WorkerFeeModelConfig) feeModel {
 		t.Fatal("missing data size overhead")
 	}
 	return feeModel{
-		BaseFee:               baseFee,
+		FixedFee:              fixedFee,
 		DstGasOverhead:        cfg.DstGasOverhead,
 		DataSizeOverheadBytes: *cfg.DataSizeOverheadBytes,
 		MarginBps:             cfg.MarginBps,
