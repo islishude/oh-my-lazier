@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createPublicClient,
@@ -22,9 +22,16 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { buildCanarySendParam } from "./oft-canary.js";
 import {
+  sourceExecutorFeeTotal,
   sourceWorkerFeeClaims,
   type SourceWorkerFeeClaim,
 } from "./e2e-fee-withdrawal.js";
+import {
+  multiSendIndexerEvidence,
+  packetsFromSourceReceipt,
+  requirePacketCount,
+  type PacketDetails,
+} from "./e2e-local-indexer-evidence.js";
 import {
   assertCanaryDestinationReceipt,
   assertCanaryRecipientBalance,
@@ -79,14 +86,6 @@ type Clients = {
   walletClient: WalletClient;
 };
 
-type PacketDetails = {
-  guid: Hex;
-  nonce: bigint;
-  packetHeader: Hex;
-  payloadHash: Hex;
-  sourceReceipt: TransactionReceipt;
-};
-
 type RunDirectionOptions = {
   exerciseRBF?: boolean;
 };
@@ -115,12 +114,17 @@ type PendingCommitVerificationTx = {
 };
 
 const deploymentPath = path.join(tmpDir, "deployments.json");
+const multiSendIndexerEvidencePath = path.join(
+  tmpDir,
+  "multi-oft-send-indexer.json",
+);
 const deployment: LocalE2EDeployment = validateLocalE2EDeployment(
   JSON.parse(await readFile(deploymentPath, "utf8")),
 );
 
 const amountAB = 1n * 10n ** 18n;
 const amountBA = amountAB / 2n;
+const multiSendAmountsAB = [amountAB / 4n, amountAB / 5n] as const;
 
 logStep("loaded deployment", {
   path: deploymentPath,
@@ -134,6 +138,11 @@ await runDirection(deployment.chains.a, deployment.chains.b, amountAB, {
   exerciseRBF: true,
 });
 await runDirection(deployment.chains.b, deployment.chains.a, amountBA);
+await runMultiSendIndexerScenario(
+  deployment.chains.a,
+  deployment.chains.b,
+  multiSendAmountsAB,
+);
 
 console.log(
   jsonStringify({
@@ -249,7 +258,15 @@ async function runDirection(
     source,
     feeClaims,
   );
-  const packet = packetFromSourceReceipt(sourceReceipt, source);
+  const [packet] = requirePacketCount(
+    packetsFromSourceReceipt({
+      receipt: sourceReceipt,
+      endpoint: source.endpoint,
+      endpointAbi: endpointArtifact.abi,
+    }),
+    1,
+    "source receipt",
+  );
   logStep("packet extracted", {
     direction,
     guid: packet.guid,
@@ -278,6 +295,144 @@ async function runDirection(
   logStep("direction completed", {
     direction,
     min_balance: balanceBefore + amountLD,
+  });
+}
+
+async function runMultiSendIndexerScenario(
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  amountsLD: readonly bigint[],
+) {
+  const direction = directionLabel(source, destination);
+  logStep("multi-send indexer scenario started", {
+    direction,
+    src_eid: source.eid,
+    dst_eid: destination.eid,
+    amounts_ld: amountsLD,
+  });
+  const sourceClients = clientsFor(source);
+  const destinationClients = clientsFor(destination);
+  const balanceBefore = await balanceOf(
+    destinationClients.publicClient,
+    destination.oft,
+    deployer.address,
+  );
+  const sendParams = amountsLD.map((amountLD) =>
+    buildCanarySendParam({
+      dstEid: destination.eid,
+      recipient: deployer.address,
+      amountLD,
+      minAmountLD: amountLD,
+      lzReceiveGas: BigInt(deployment.parameters.lzReceiveGas),
+    }),
+  );
+  const quote = multiSendQuoteFromReturn(
+    await sourceClients.publicClient.readContract({
+      address: source.oft,
+      abi: oftArtifact.abi,
+      functionName: "quoteMultiSend",
+      args: [sendParams, false],
+    }),
+  );
+  logStep("quoted TestOFT multiSend", {
+    direction,
+    total_native_fee: quote.totalFee.nativeFee,
+    per_send_native_fees: quote.fees.map((fee) => fee.nativeFee),
+  });
+  const hash = await sourceClients.walletClient.writeContract({
+    address: source.oft,
+    abi: oftArtifact.abi,
+    functionName: "multiSend",
+    args: [sendParams, false, deployer.address],
+    account: deployer,
+    chain: null,
+    value: quote.totalFee.nativeFee,
+  });
+  logStep("TestOFT multiSend submitted", { direction, tx: hash });
+  const sourceReceipt =
+    await sourceClients.publicClient.waitForTransactionReceipt({ hash });
+  if (sourceReceipt.status !== "success") {
+    throw new Error(`${source.name} TestOFT multiSend ${hash} failed`);
+  }
+  const packets = requirePacketCount(
+    packetsFromSourceReceipt({
+      receipt: sourceReceipt,
+      endpoint: source.endpoint,
+      endpointAbi: endpointArtifact.abi,
+    }),
+    amountsLD.length,
+    "multi-send source receipt",
+  );
+  logStep("TestOFT multiSend confirmed", {
+    direction,
+    tx: hash,
+    block: sourceReceipt.blockNumber,
+    gas_used: sourceReceipt.gasUsed,
+    packet_guids: packets.map((packet) => packet.guid),
+  });
+
+  const executorFee = sourceExecutorFeeTotal({
+    sourceName: source.name,
+    logs: sourceReceipt.logs,
+    sendLib: source.sendUln,
+    sendLibAbi: sendUlnArtifact.abi,
+    openExecutor: source.openExecutor,
+  });
+  const feeClaims = sourceWorkerFeeClaims({
+    sourceName: source.name,
+    logs: sourceReceipt.logs,
+    sendLib: source.sendUln,
+    sendLibAbi: sendUlnArtifact.abi,
+    openExecutor: source.openExecutor,
+    primaryOpenDVN: source.primaryOpenDVN,
+    secondaryOpenDVN: source.secondaryOpenDVN,
+    executorFee,
+  });
+  logStep("multi-send source worker fee claims decoded", {
+    direction,
+    claims: feeClaims.map((claim) => ({
+      role: claim.role,
+      worker: claim.worker,
+      amount: claim.amount.toString(),
+    })),
+  });
+  await withdrawSourceWorkerFees(sourceClients, source, feeClaims);
+
+  const evidence = multiSendIndexerEvidence({
+    srcEid: source.eid,
+    dstEid: destination.eid,
+    packets,
+  });
+  await writeFile(multiSendIndexerEvidencePath, `${jsonStringify(evidence)}\n`);
+  logStep("multi-send indexer evidence written", {
+    path: multiSendIndexerEvidencePath,
+    tx: evidence.sourceTxHash,
+    packets: evidence.expectedPackets.length,
+  });
+
+  for (const packet of packets) {
+    await submitSecondaryVerification(destinationClients, destination, packet);
+  }
+  let minBalance = balanceBefore;
+  for (let index = 0; index < packets.length; index++) {
+    const amountLD = amountsLD[index];
+    const packet = packets[index];
+    if (amountLD === undefined || packet === undefined) {
+      throw new Error("multi-send amount or packet missing");
+    }
+    minBalance += amountLD;
+    await waitForDelivery(
+      sourceClients,
+      destinationClients,
+      source,
+      destination,
+      packet,
+      minBalance,
+    );
+  }
+  logStep("multi-send indexer scenario completed", {
+    direction,
+    min_balance: minBalance,
   });
 }
 
@@ -703,37 +858,6 @@ async function waitForDelivery(
   );
 }
 
-function packetFromSourceReceipt(
-  receipt: TransactionReceipt,
-  source: ChainDeployment,
-): PacketDetails {
-  for (const log of receipt.logs) {
-    if (!isAddressEqual(log.address, source.endpoint)) {
-      continue;
-    }
-    if (log.topics[0] !== eventTopic(endpointArtifact, "PacketSent")) {
-      continue;
-    }
-    const decoded = decodeEventLog({
-      abi: endpointArtifact.abi,
-      eventName: "PacketSent",
-      data: log.data,
-      topics: mutableTopics(log.topics),
-    });
-    const args = decoded.args as unknown as { encodedPayload: Hex };
-    const encodedPayload = args.encodedPayload;
-    if ((encodedPayload.length - 2) / 2 < 113) {
-      throw new Error("PacketSent encodedPayload is shorter than PacketV1");
-    }
-    const packetHeader = sliceHex(encodedPayload, 0, 81);
-    const payloadHash = keccak256(sliceHex(encodedPayload, 81));
-    const guid = sliceHex(encodedPayload, 81, 113);
-    const nonce = BigInt(sliceHex(packetHeader, 1, 9));
-    return { guid, nonce, packetHeader, payloadHash, sourceReceipt: receipt };
-  }
-  throw new Error("source receipt is missing PacketSent");
-}
-
 async function withdrawSourceWorkerFees(
   clients: Clients,
   source: ChainDeployment,
@@ -1154,6 +1278,52 @@ function nativeFeeFromQuote(value: unknown): bigint {
   throw new Error(`unexpected quoteSend return: ${jsonStringify(value)}`);
 }
 
+type MessagingFee = {
+  nativeFee: bigint;
+  lzTokenFee: bigint;
+};
+
+function multiSendQuoteFromReturn(value: unknown): {
+  totalFee: MessagingFee;
+  fees: MessagingFee[];
+} {
+  const record = value as {
+    totalFee?: unknown;
+    fees?: unknown;
+    0?: unknown;
+    1?: unknown;
+  };
+  const totalFee = messagingFeeFromUnknown(
+    Array.isArray(value) ? value[0] : record.totalFee ?? record[0],
+  );
+  const feesValue = Array.isArray(value) ? value[1] : record.fees ?? record[1];
+  if (!Array.isArray(feesValue)) {
+    throw new Error(`unexpected quoteMultiSend fees return: ${jsonStringify(value)}`);
+  }
+  return {
+    totalFee,
+    fees: feesValue.map((fee) => messagingFeeFromUnknown(fee)),
+  };
+}
+
+function messagingFeeFromUnknown(value: unknown): MessagingFee {
+  if (Array.isArray(value)) {
+    return { nativeFee: BigInt(value[0]), lzTokenFee: BigInt(value[1]) };
+  }
+  const record = value as {
+    nativeFee?: bigint;
+    lzTokenFee?: bigint;
+    0?: bigint;
+    1?: bigint;
+  };
+  const nativeFee = record.nativeFee ?? record[0];
+  const lzTokenFee = record.lzTokenFee ?? record[1];
+  if (nativeFee === undefined || lzTokenFee === undefined) {
+    throw new Error(`unexpected MessagingFee return: ${jsonStringify(value)}`);
+  }
+  return { nativeFee, lzTokenFee };
+}
+
 function eventTopic(artifact: Artifact, eventName: string): Hex {
   const topic = encodeEventTopics({
     abi: artifact.abi,
@@ -1163,11 +1333,6 @@ function eventTopic(artifact: Artifact, eventName: string): Hex {
     throw new Error(`event ${eventName} did not produce a single topic`);
   }
   return topic;
-}
-
-function sliceHex(value: Hex, start: number, end?: number): Hex {
-  const body = value.slice(2);
-  return `0x${body.slice(start * 2, end === undefined ? undefined : end * 2)}` as Hex;
 }
 
 function mutableTopics(topics: readonly Hex[]): [Hex, ...Hex[]] {

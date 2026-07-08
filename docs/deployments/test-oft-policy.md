@@ -22,6 +22,7 @@ The owner must be able to:
 
 - configure OFT peers
 - mint TestOFT supply with the owner-only `mint(address,uint256)` function
+- exercise TestOFT `multiSend` during local and testnet rehearsal checks
 - pause and unpause TestOFT send/receive pathways
 - configure outbound rate limits
 - configure worker allowlists, pathway limits, PriceFeed submitters, and fee models
@@ -94,3 +95,12 @@ limited to the OFT burn/mint flow:
 - pause and rate-limit controls gate the flow per pathway
 
 Changing this policy requires updating this document, the affected runbooks, and migration evidence expectations before deployment.
+
+## Multi-Send Rehearsal
+
+`TestOFT` includes `quoteMultiSend` and `multiSend` so local and testnet
+rehearsals can produce multiple OFT sends from one source-chain transaction.
+The local dual-Anvil E2E uses this to check that the DB-backed indexer stores
+both packet rows and their executor/DVN jobs for the same source transaction
+hash. Do not add separate Ignition deployment modules or deployment-profile
+phases for this capability; it is part of the TestOFT rehearsal contract.

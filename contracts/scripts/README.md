@@ -27,7 +27,12 @@ then runs `npm run e2e:run-local`. Chain A uses the generated KMS signer for
 executor and active DVN roles; chain B uses the generated keystore signer. The
 local runner sends OFT canaries in both directions and then withdraws each
 source worker's recorded SendUln302 fee through the worker
-`withdrawFee(sendLib, recipient, amount)` passthrough. On one canary direction,
+`withdrawFee(sendLib, recipient, amount)` passthrough. The runner also calls
+`TestOFT.multiSend` on the A -> B direction to emit two
+OFT sends in one source transaction, writes
+`tmp/e2e/multi-oft-send-indexer.json`, and runs `go/cmd/e2eindexcheck` through
+the `make` target to prove the indexer persisted both packet, executor-job, and
+DVN-job rows for that single source transaction. On one canary direction,
 the runner disables destination Anvil automine with `evm_setAutomine`, observes
 a pending worker `commitVerification` transaction, waits for txmgr to replace it
 with a same-nonce bumped-fee transaction, and then mines the replacement before

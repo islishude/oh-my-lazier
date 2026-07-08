@@ -7,14 +7,48 @@ import {OpenPriceFeed} from "../contracts/workers/OpenPriceFeed.sol";
 import {TestOFT} from "../contracts/oft/TestOFT.sol";
 import {WorkerErrors} from "../contracts/common/WorkerErrors.sol";
 import {WorkerTypes} from "../contracts/common/WorkerTypes.sol";
-import {Origin} from "@layerzerolabs/lz-evm-protocol-v2/contracts/interfaces/ILayerZeroEndpointV2.sol";
+import {
+    MessagingFee,
+    MessagingParams,
+    MessagingReceipt,
+    Origin
+} from "@layerzerolabs/lz-evm-protocol-v2/contracts/interfaces/ILayerZeroEndpointV2.sol";
 import {ILayerZeroDVN} from "@layerzerolabs/lz-evm-messagelib-v2/contracts/uln/interfaces/ILayerZeroDVN.sol";
+import {OFTReceipt, SendParam} from "@layerzerolabs/lz-evm-oapp-v2/contracts/oft/interfaces/IOFT.sol";
 
 contract EndpointMock {
     address public delegate;
+    uint64 public nextNonce = 1;
+    uint256 public nativeFee = 7 wei;
+    uint256 public lzTokenFee;
+    uint256 public sendCount;
 
     function setDelegate(address value) external {
         delegate = value;
+    }
+
+    function setMessagingFee(uint256 nativeFee_, uint256 lzTokenFee_) external {
+        nativeFee = nativeFee_;
+        lzTokenFee = lzTokenFee_;
+    }
+
+    function quote(MessagingParams calldata, address) external view returns (MessagingFee memory) {
+        return MessagingFee({nativeFee: nativeFee, lzTokenFee: lzTokenFee});
+    }
+
+    function send(MessagingParams calldata params, address) external payable returns (MessagingReceipt memory) {
+        require(msg.value >= nativeFee, "insufficient native fee");
+        uint64 nonce = nextNonce++;
+        sendCount++;
+        return MessagingReceipt({
+            guid: keccak256(abi.encode(msg.sender, params.dstEid, params.receiver, nonce, params.message)),
+            nonce: nonce,
+            fee: MessagingFee({nativeFee: nativeFee, lzTokenFee: lzTokenFee})
+        });
+    }
+
+    function lzToken() external pure returns (address) {
+        return address(0);
     }
 }
 
@@ -131,13 +165,16 @@ contract OpenWorkersTest {
     OpenPriceFeed internal priceFeed;
     SendLibCaller internal sendLib;
     TestOFTHarness internal oft;
+    EndpointMock internal endpoint;
 
     function setUp() public {
         priceFeed = new OpenPriceFeed(address(this), singleAddress(address(this)));
         executor = new OpenExecutor(address(this), address(priceFeed));
         dvn = new OpenDVN(address(this), address(priceFeed));
         sendLib = new SendLibCaller();
-        oft = new TestOFTHarness(address(new EndpointMock()), address(this), address(this), 1_000_000 ether);
+        endpoint = new EndpointMock();
+        oft = new TestOFTHarness(address(endpoint), address(this), address(this), 1_000_000 ether);
+        oft.setPeer(DST_EID, addressToBytes32(address(oft)));
 
         WorkerTypes.PathwayConfig memory pathway = WorkerTypes.PathwayConfig({
             enabled: true, maxMessageSize: 1024, minLzReceiveGas: 50_000, maxLzReceiveGas: 500_000
@@ -541,6 +578,56 @@ contract OpenWorkersTest {
         require(fee == 1.300013 ether, "dvn fee mismatch");
     }
 
+    function test_testOFTMultiSendRejectsEmptyBatch() public {
+        SendParam[] memory params = new SendParam[](0);
+        expectRevert(address(oft), abi.encodeCall(oft.quoteMultiSend, (params, false)), TestOFT.EmptyMultiSend.selector);
+    }
+
+    function test_testOFTMultiSendRejectsNativeFeeMismatch() public {
+        SendParam[] memory params = new SendParam[](1);
+        params[0] = sendParam(1 ether);
+
+        expectRevert(
+            address(oft),
+            6 wei,
+            abi.encodeCall(oft.multiSend, (params, false, address(this))),
+            TestOFT.MultiSendNativeFeeMismatch.selector
+        );
+    }
+
+    function test_testOFTSingleSendStillRequiresExactNativeFee() public {
+        SendParam memory param = sendParam(1 ether);
+        expectRevert(
+            address(oft),
+            8 wei,
+            abi.encodeCall(oft.send, (param, MessagingFee({nativeFee: 7 wei, lzTokenFee: 0}), address(this))),
+            bytes4(keccak256("NotEnoughNative(uint256)"))
+        );
+    }
+
+    function test_testOFTMultiSendDebitsAndReturnsReceipts() public {
+        SendParam[] memory params = new SendParam[](2);
+        params[0] = sendParam(5 ether);
+        params[1] = sendParam(6 ether);
+
+        (MessagingFee memory totalFee, MessagingFee[] memory fees) = oft.quoteMultiSend(params, false);
+        require(totalFee.nativeFee == 14 wei, "total native fee mismatch");
+        require(totalFee.lzTokenFee == 0, "total lz fee mismatch");
+        require(fees.length == 2, "fee count mismatch");
+        require(fees[0].nativeFee == 7 wei && fees[1].nativeFee == 7 wei, "per-send native fee mismatch");
+
+        uint256 balanceBefore = oft.balanceOf(address(this));
+        (MessagingReceipt[] memory receipts, OFTReceipt[] memory oftReceipts) =
+            oft.multiSend{value: totalFee.nativeFee}(params, false, address(this));
+
+        require(endpoint.sendCount() == 2, "endpoint send count mismatch");
+        require(receipts.length == 2 && oftReceipts.length == 2, "receipt count mismatch");
+        require(receipts[0].nonce == 1 && receipts[1].nonce == 2, "receipt nonce mismatch");
+        require(oftReceipts[0].amountSentLD == 5 ether, "first sent amount mismatch");
+        require(oftReceipts[1].amountReceivedLD == 6 ether, "second received amount mismatch");
+        require(oft.balanceOf(address(this)) == balanceBefore - 11 ether, "multi-send debit mismatch");
+    }
+
     function test_executorWithdraw() public {
         uint256 beforeBalance = address(this).balance;
         (bool funded,) = payable(address(executor)).call{value: 1 ether}("");
@@ -866,7 +953,11 @@ contract OpenWorkersTest {
     }
 
     function expectRevert(address target, bytes memory callData, bytes4 selector) internal {
-        (bool ok, bytes memory data) = target.call(callData);
+        expectRevert(target, 0, callData, selector);
+    }
+
+    function expectRevert(address target, uint256 value, bytes memory callData, bytes4 selector) internal {
+        (bool ok, bytes memory data) = target.call{value: value}(callData);
         require(!ok, "expected revert");
         require(bytes4(data) == selector, "unexpected revert");
     }
@@ -889,5 +980,21 @@ contract OpenWorkersTest {
 
     function executorOptionEntry(uint8 optionType, bytes memory payload) internal pure returns (bytes memory) {
         return bytes.concat(bytes1(uint8(1)), bytes2(uint16(payload.length + 1)), bytes1(optionType), payload);
+    }
+
+    function sendParam(uint256 amount) internal pure returns (SendParam memory) {
+        return SendParam({
+            dstEid: DST_EID,
+            to: addressToBytes32(address(0xBEEF)),
+            amountLD: amount,
+            minAmountLD: amount,
+            extraOptions: "",
+            composeMsg: "",
+            oftCmd: ""
+        });
+    }
+
+    function addressToBytes32(address value) internal pure returns (bytes32) {
+        return bytes32(uint256(uint160(value)));
     }
 }

@@ -11,6 +11,7 @@ import {
   type Hex,
 } from "viem";
 import {
+  sourceExecutorFeeTotal,
   sourceWorkerFeeClaims,
   type FeeEventLog,
 } from "./e2e-fee-withdrawal.js";
@@ -46,6 +47,49 @@ test("sourceWorkerFeeClaims maps executor and DVN fees by worker address", () =>
     { role: "primary_open_dvn", worker: primaryOpenDVN, amount: 17n },
     { role: "secondary_open_dvn", worker: secondaryOpenDVN, amount: 31n },
   ]);
+});
+
+test("sourceWorkerFeeClaims aggregates multiple send fee events", () => {
+  const logs = [
+    executorFeePaidLog({ executor: openExecutor, fee: 5n }),
+    dvnFeePaidLog({
+      requiredDVNs: [primaryOpenDVN, secondaryOpenDVN],
+      fees: [17n, 31n],
+    }),
+    executorFeePaidLog({ executor: openExecutor, fee: 7n }),
+    dvnFeePaidLog({
+      requiredDVNs: [primaryOpenDVN, secondaryOpenDVN],
+      fees: [19n, 37n],
+    }),
+  ];
+
+  assert.equal(
+    sourceExecutorFeeTotal({
+      sourceName: "local-a",
+      logs,
+      sendLib,
+      sendLibAbi,
+      openExecutor,
+    }),
+    12n,
+  );
+  assert.deepEqual(
+    sourceWorkerFeeClaims({
+      sourceName: "local-a",
+      logs,
+      sendLib,
+      sendLibAbi,
+      openExecutor,
+      primaryOpenDVN,
+      secondaryOpenDVN,
+      executorFee: 12n,
+    }),
+    [
+      { role: "open_executor", worker: openExecutor, amount: 12n },
+      { role: "primary_open_dvn", worker: primaryOpenDVN, amount: 36n },
+      { role: "secondary_open_dvn", worker: secondaryOpenDVN, amount: 68n },
+    ],
+  );
 });
 
 test("sourceWorkerFeeClaims rejects missing source DVN fee entries", () => {
@@ -110,6 +154,23 @@ function dvnFeePaidLog(input: {
     data: encodeAbiParameters(
       [{ type: "address[]" }, { type: "address[]" }, { type: "uint256[]" }],
       [input.requiredDVNs, [], input.fees],
+    ),
+  };
+}
+
+function executorFeePaidLog(input: {
+  executor: Address;
+  fee: bigint;
+}): FeeEventLog {
+  return {
+    address: sendLib,
+    topics: encodeEventTopics({
+      abi: sendLibAbi,
+      eventName: "ExecutorFeePaid",
+    }) as readonly Hex[],
+    data: encodeAbiParameters(
+      [{ type: "address" }, { type: "uint256" }],
+      [input.executor, input.fee],
     ),
   };
 }

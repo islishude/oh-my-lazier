@@ -36,6 +36,50 @@ export type SourceWorkerFeeClaimInput = {
   executorFee: bigint;
 };
 
+export type SourceExecutorFeeTotalInput = {
+  sourceName: string;
+  logs: readonly FeeEventLog[];
+  sendLib: Address;
+  sendLibAbi: Abi;
+  openExecutor: Address;
+};
+
+export function sourceExecutorFeeTotal(
+  input: SourceExecutorFeeTotalInput,
+): bigint {
+  let total = 0n;
+  let found = false;
+  for (const log of input.logs) {
+    if (!isAddressEqual(log.address, input.sendLib)) {
+      continue;
+    }
+    if (log.topics[0] !== eventTopic(input.sendLibAbi, "ExecutorFeePaid")) {
+      continue;
+    }
+    const decoded = decodeEventLog({
+      abi: input.sendLibAbi,
+      eventName: "ExecutorFeePaid",
+      data: log.data,
+      topics: mutableTopics(log.topics),
+    });
+    const args = decoded.args as unknown as {
+      executor: Address;
+      fee: bigint;
+    };
+    if (!isAddressEqual(args.executor, input.openExecutor)) {
+      throw new Error(
+        `${input.sourceName} ExecutorFeePaid executor ${args.executor} does not match expected ${input.openExecutor}`,
+      );
+    }
+    total += args.fee;
+    found = true;
+  }
+  if (!found) {
+    throw new Error(`${input.sourceName} source receipt is missing SendUln302 ExecutorFeePaid`);
+  }
+  return total;
+}
+
 export function sourceWorkerFeeClaims(
   input: SourceWorkerFeeClaimInput,
 ): SourceWorkerFeeClaim[] {
@@ -65,6 +109,8 @@ export function sourceWorkerFeeClaims(
 function sourceDVNFeeMap(
   input: SourceWorkerFeeClaimInput,
 ): Map<string, bigint> {
+  const fees = new Map<string, bigint>();
+  let found = false;
   for (const log of input.logs) {
     if (!isAddressEqual(log.address, input.sendLib)) {
       continue;
@@ -89,17 +135,21 @@ function sourceDVNFeeMap(
         `${input.sourceName} DVNFeePaid has ${args.fees.length} fees for ${expectedFeeCount} DVNs`,
       );
     }
-    const fees = new Map<string, bigint>();
-    for (let index = 0; index < args.requiredDVNs.length; index++) {
+    const dvns = [...args.requiredDVNs, ...args.optionalDVNs];
+    for (let index = 0; index < dvns.length; index++) {
       const fee = args.fees[index];
       if (fee === undefined) {
         throw new Error(`${input.sourceName} DVNFeePaid fee ${index} missing`);
       }
-      fees.set(getAddress(args.requiredDVNs[index]).toLowerCase(), fee);
+      const key = getAddress(dvns[index]).toLowerCase();
+      fees.set(key, (fees.get(key) ?? 0n) + fee);
     }
-    return fees;
+    found = true;
   }
-  throw new Error(`${input.sourceName} source receipt is missing SendUln302 DVNFeePaid`);
+  if (!found) {
+    throw new Error(`${input.sourceName} source receipt is missing SendUln302 DVNFeePaid`);
+  }
+  return fees;
 }
 
 function requiredDVNFee(

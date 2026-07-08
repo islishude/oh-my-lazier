@@ -90,7 +90,8 @@ e2e-local:
 	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" $(E2E_COMPOSE) --profile worker up -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
-	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local
+	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local; \
+	go run ./go/cmd/e2eindexcheck -config "$(E2E_TMP_DIR)/worker.host.yaml" -evidence "$(E2E_TMP_DIR)/multi-oft-send-indexer.json"
 
 e2e-ci:
 	rm -rf $(E2E_TMP_DIR)
@@ -136,7 +137,8 @@ e2e-ci:
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" \
 	E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" \
 	E2E_WORKER_READY_URL="$(E2E_CI_WORKER_READY_URL)" \
-	npm run e2e:run-local
+	npm run e2e:run-local; \
+	go run ./go/cmd/e2eindexcheck -config "$(E2E_TMP_DIR)/worker.host.yaml" -evidence "$(E2E_TMP_DIR)/multi-oft-send-indexer.json"
 
 security-check:
 	npm run check:security-review
