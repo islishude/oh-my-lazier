@@ -1,17 +1,17 @@
 {
   "OpenWorkers": {
-    "owner": "0x3333333333333333333333333333333333333333",
+    "owner": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
     "priceFeedSubmitters": [
-      "0x4444444444444444444444444444444444444444",
-      "0x3333333333333333333333333333333333333333"
+      "0x00011FaD1656B9DfD1ac2D1cadc6D40A35EFa42D",
+      "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6"
     ]
   },
   "TestOFT": {
     "tokenName": "Oh My Lazier Test OFT",
     "tokenSymbol": "OMLTOFT",
     "endpoint": "0x3aCAAf60502791D199a5a5F0B173D78229eBFe32",
-    "delegate": "0x3333333333333333333333333333333333333333",
-    "initialRecipient": "0x3333333333333333333333333333333333333333",
+    "delegate": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
+    "initialRecipient": "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
     "initialSupply": "0n"
   }
 }
