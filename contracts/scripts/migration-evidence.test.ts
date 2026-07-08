@@ -12,6 +12,15 @@ test("validateMigrationEvidenceRecord accepts complete migration evidence", () =
   assert.deepEqual(validateMigrationEvidenceRecord(baseRecord()), []);
 });
 
+test("validateMigrationEvidenceRecord accepts non-LayerZero external DVN labels", () => {
+  const record = baseRecord();
+  for (const direction of record.directions) {
+    direction.dvnJoin.requiredDVNs = ["OpenDVN", "Independent DVN"];
+  }
+
+  assert.deepEqual(validateMigrationEvidenceRecord(record), []);
+});
+
 test("validateMigrationEvidenceRecord accepts deployment evidence without migration-only artifacts", () => {
   const record = baseRecord();
   record.evidenceType = "deployment";
@@ -115,8 +124,7 @@ test("validateMigrationEvidenceRecord rejects missing required artifacts", () =>
     "directions[0].canary.destinationReceipt.ref must be a non-empty string",
     "directions[0].canary.recipientBalanceCheck.ref must be a non-empty string",
     "directions[0].dvnJoin.confirmations must be a positive integer",
-    "directions[0].dvnJoin.requiredDVNs must include layerzero labs dvn",
-    "directions[0].dvnJoin.requiredDVNs must not be self-only",
+    "directions[0].dvnJoin.requiredDVNs must include at least one independent external dvn",
     "directions[0].dvnJoin.optionalDVNsDisabled must be true",
     "directions[0].dvnJoin.configCheck.ref must be a non-empty string",
     "directions[0].dvnVerificationReceipt.expectedDstEid must equal direction dstEid 40161",

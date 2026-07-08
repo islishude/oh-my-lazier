@@ -29,7 +29,7 @@ import {
   workerDeploymentAddressPath,
 } from "./deploy-profile.js";
 
-test("normalizeProfile validates rehearsal mode and LayerZero metadata", () => {
+test("normalizeProfile validates rehearsal mode and generic external DVNs", () => {
   const profile = normalizeProfile(baseProfile());
 
   assert.equal(profile.mode, "test-oft-rehearsal");
@@ -37,12 +37,61 @@ test("normalizeProfile validates rehearsal mode and LayerZero metadata", () => {
   assert.equal(profile.chains[0].eid, 40161);
   assert.equal(profile.chains[0].nativeAssetId, "eth");
   assert.equal(profile.chains[0].startBlockNumber, undefined);
+  assert.deepEqual(profile.chains[0].externalDVNs, [
+    "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa",
+  ]);
+  assert.equal(profile.chains[0].includeLayerZeroLabsDVN, false);
   assert.equal(
     profile.chains[0].layerZero.endpointV2,
     "0x6EDCE65403992e310A62460808c4b910D972f10f",
   );
   assert.equal(profile.chains[1].eid, 40449);
   assert.equal(profile.chains[1].nativeAssetId, "eth");
+  assert.deepEqual(profile.chains[1].externalDVNs, [
+    "0x9999999999999999999999999999999999999999",
+  ]);
+  assert.equal(profile.chains[1].includeLayerZeroLabsDVN, false);
+});
+
+test("normalizeProfile rejects legacy LayerZero Labs DVN profile fields", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).layerZero = {
+    endpointV2: "0x6EDCE65403992e310A62460808c4b910D972f10f",
+    sendUln302: "0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE",
+    receiveUln302: "0xdAf00F5eE2158dD58E0d3857851c432E34A3A851",
+    layerZeroLabsDVN: "0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193",
+  };
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /layerZero\.layerZeroLabsDVN is not supported/,
+  );
+});
+
+test("normalizeProfile accepts opt-in LayerZero Labs DVN metadata", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;
+  (input.chains[0] as Record<string, unknown>).externalDVNs = [];
+
+  const profile = normalizeProfile(input);
+
+  assert.equal(profile.chains[0].includeLayerZeroLabsDVN, true);
+  assert.deepEqual(profile.chains[0].externalDVNs, []);
+});
+
+test("normalizeProfile rejects opt-in LayerZero Labs DVN for unknown local chain metadata", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;
+  (input.chains[0] as Record<string, unknown>).layerZero = {
+    endpointV2: "0x3333333333333333333333333333333333333333",
+    sendUln302: "0x4444444444444444444444444444444444444444",
+    receiveUln302: "0x5555555555555555555555555555555555555555",
+  };
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.includeLayerZeroLabsDVN has no repo-known LayerZero Labs DVN metadata/,
+  );
 });
 
 test("normalizeProfile requires external OApp addresses in external mode", () => {
@@ -294,7 +343,7 @@ test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config
   assert.deepEqual(
     uln.requiredDVNs.map((address) => address.toLowerCase()).sort(),
     [
-      profile.chains[0].layerZero.layerZeroLabsDVN.toLowerCase(),
+      profile.chains[0].externalDVNs[0].toLowerCase(),
       state.chains[0].workers.openDVN.toLowerCase(),
     ].sort(),
   );
@@ -321,6 +370,53 @@ test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config
   });
   assert.equal(Object.hasOwn(workers, "sendConfig"), false);
   assert.equal(Object.hasOwn(workers, "enforcedOptions"), false);
+});
+
+test("oappEndpointParameterFile appends opt-in LayerZero Labs DVN", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;
+  (input.chains[0] as Record<string, unknown>).externalDVNs = [];
+  const profile = normalizeProfile(input);
+  const state = stateWithPriceFeeds(profile);
+  const oapp = oappEndpointParameterFile({
+    profile,
+    state,
+    source: profile.chains[0],
+    destination: profile.chains[1],
+    priceSnapshotUpdatedAt: 1_800_000_000n,
+  }).OAppEndpointConfig;
+
+  const uln = decodeUlnConfig(oapp.sendConfig[1].config);
+
+  assert.equal(uln.requiredDVNCount, 2);
+  assert.deepEqual(
+    uln.requiredDVNs.map((address) => address.toLowerCase()).sort(),
+    [
+      "0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193",
+      state.chains[0].workers.openDVN.toLowerCase(),
+    ].sort(),
+  );
+});
+
+test("oappEndpointParameterFile rejects duplicate explicit and opt-in DVNs", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;
+  (input.chains[0] as Record<string, unknown>).externalDVNs = [
+    "0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193",
+  ];
+  const profile = normalizeProfile(input);
+  const state = stateWithPriceFeeds(profile);
+
+  assert.throws(
+    () =>
+      oappEndpointParameterFile({
+        profile,
+        state,
+        source: profile.chains[0],
+        destination: profile.chains[1],
+      }),
+    /duplicate DVN address/,
+  );
 });
 
 test("renderWorkerConfig emits external OApps, active DVN signer, and worker contracts", () => {
@@ -556,6 +652,25 @@ test("command plan rejects invalid Ignition build profile values", () => {
   );
 });
 
+test("pathway rendering rejects profiles without an external DVN", () => {
+  const input = baseProfile();
+  delete (input.chains[0] as Record<string, unknown>).externalDVNs;
+  const profile = normalizeProfile(input);
+  const state = stateWithPriceFeeds(profile);
+
+  assert.deepEqual(profile.chains[0].externalDVNs, []);
+  assert.throws(
+    () =>
+      oappEndpointParameterFile({
+        profile,
+        state,
+        source: profile.chains[0],
+        destination: profile.chains[1],
+      }),
+    /required DVNs must include at least two addresses/,
+  );
+});
+
 test("isBootstrapStateUnavailable only allows missing new deployment state", () => {
   const missingDeploymentState = new Error(
     "ENOENT: no such file or directory, open 'ignition/deployments/sepolia-open-workers/deployed_addresses.json'",
@@ -692,6 +807,7 @@ function baseProfile() {
         minCanaryTokenBalance: "1000000000000000",
         confirmations: 12,
         indexerQueryBlockRange: 500,
+        externalDVNs: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
         txRoles: {
           executor: {
             signer: "0x2222222222222222222222222222222222222222",
@@ -720,6 +836,7 @@ function baseProfile() {
         minCanaryTokenBalance: "0",
         confirmations: 12,
         indexerQueryBlockRange: 500,
+        externalDVNs: ["0x9999999999999999999999999999999999999999"],
         txRoles: {
           executor: {
             signer: "0x2222222222222222222222222222222222222222",

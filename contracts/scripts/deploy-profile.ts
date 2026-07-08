@@ -17,6 +17,7 @@ import {
 import { jsonStringify, loadArtifact, parseCLIParams } from "./lib.js";
 import {
   expectedLayerZeroChains,
+  requireLayerZeroLabsDVNForLibraries,
   type ExpectedLayerZeroChain,
 } from "./lz-addresses.js";
 import {
@@ -61,7 +62,7 @@ export type SignerProfile =
 
 export type LayerZeroAddresses = Pick<
   ExpectedLayerZeroChain,
-  "endpointV2" | "sendUln302" | "receiveUln302" | "layerZeroLabsDVN"
+  "endpointV2" | "sendUln302" | "receiveUln302"
 > & {
   chainKey?: string;
   nativeChainId: number;
@@ -84,6 +85,8 @@ export type ChainProfile = {
   confirmations: number;
   startBlockNumber?: number;
   indexerQueryBlockRange: number;
+  externalDVNs: Address[];
+  includeLayerZeroLabsDVN: boolean;
   txRoles: {
     executor: TxRoleProfile;
     dvn: TxRoleProfile;
@@ -160,7 +163,8 @@ export type ChainDeploymentState = {
   endpoint: Address;
   sendUln: Address;
   receiveUln: Address;
-  layerZeroLabsDVN: Address;
+  externalDVNs: Address[];
+  includeLayerZeroLabsDVN: boolean;
   oapp: Address;
   workers: {
     openExecutor: Address;
@@ -374,7 +378,8 @@ export function buildDeploymentState(input: {
       endpoint: chain.layerZero.endpointV2,
       sendUln: chain.layerZero.sendUln302,
       receiveUln: chain.layerZero.receiveUln302,
-      layerZeroLabsDVN: chain.layerZero.layerZeroLabsDVN,
+      externalDVNs: chain.externalDVNs,
+      includeLayerZeroLabsDVN: chain.includeLayerZeroLabsDVN,
       oapp,
       workers: {
         openExecutor: workers.openExecutor,
@@ -445,6 +450,22 @@ export function testOFTParameterFile(
   });
 }
 
+function requiredDVNsForPathway(
+  source: ChainProfile,
+  sourceState: ChainDeploymentState,
+): Address[] {
+  const dvns = [sourceState.workers.openDVN, ...source.externalDVNs];
+  if (source.includeLayerZeroLabsDVN) {
+    dvns.push(
+      requireLayerZeroLabsDVNForLibraries(
+        source.layerZero,
+        `${source.key}.includeLayerZeroLabsDVN`,
+      ),
+    );
+  }
+  return dvns;
+}
+
 export function pathwayInput(input: {
   profile: DeploymentProfile;
   state: DeploymentState;
@@ -466,7 +487,7 @@ export function pathwayInput(input: {
     openDVN: sourceState.workers.openDVN,
     priceFeed: sourceState.workers.priceFeed,
     bootstrapPriceSubmitter: input.profile.owner,
-    layerZeroLabsDVN: sourceState.layerZeroLabsDVN,
+    requiredDVNs: requiredDVNsForPathway(input.source, sourceState),
     confirmations: BigInt(input.source.confirmations),
     maxMessageSize: input.profile.pathway.maxMessageSize,
     minLzReceiveGas: BigInt(input.profile.pathway.minLzReceiveGas),
@@ -1337,6 +1358,18 @@ function normalizeChain(
       `${pathLabel}.privateKeyEnv is not supported; store Hardhat private key config variables with hardhat keystore`,
     );
   }
+  const layerZero = normalizeLayerZero(input.layerZero, pathLabel, eid, chainID);
+  const includeLayerZeroLabsDVN = optionalBoolean(
+    input.includeLayerZeroLabsDVN,
+    false,
+    `${pathLabel}.includeLayerZeroLabsDVN`,
+  );
+  if (includeLayerZeroLabsDVN) {
+    requireLayerZeroLabsDVNForLibraries(
+      layerZero,
+      `${pathLabel}.includeLayerZeroLabsDVN`,
+    );
+  }
   return {
     key,
     network,
@@ -1393,8 +1426,14 @@ function normalizeChain(
       "indexerQueryBlockRange",
       `${pathLabel}.indexerQueryBlockRange`,
     ),
+    externalDVNs: optionalAddressArrayField(
+      input,
+      "externalDVNs",
+      `${pathLabel}.externalDVNs`,
+    ),
+    includeLayerZeroLabsDVN,
     txRoles: normalizeTxRoles(input.txRoles, `${pathLabel}.txRoles`, signerIDs),
-    layerZero: normalizeLayerZero(input.layerZero, pathLabel, eid, chainID),
+    layerZero,
   };
 }
 
@@ -1406,6 +1445,11 @@ function normalizeLayerZero(
 ): LayerZeroAddresses {
   if (value !== undefined) {
     const input = object(value, `${pathLabel}.layerZero`);
+    if (Object.hasOwn(input, "layerZeroLabsDVN")) {
+      throw new Error(
+        `${pathLabel}.layerZero.layerZeroLabsDVN is not supported; configure ${pathLabel}.externalDVNs or ${pathLabel}.includeLayerZeroLabsDVN instead`,
+      );
+    }
     return {
       chainKey: optionalStringValue(
         input.chainKey,
@@ -1428,11 +1472,6 @@ function normalizeLayerZero(
         "receiveUln302",
         `${pathLabel}.layerZero.receiveUln302`,
       ),
-      layerZeroLabsDVN: addressField(
-        input,
-        "layerZeroLabsDVN",
-        `${pathLabel}.layerZero.layerZeroLabsDVN`,
-      ),
     };
   }
   const layerZero = expectedLayerZeroChains.find(
@@ -1450,7 +1489,6 @@ function normalizeLayerZero(
     endpointV2: layerZero.endpointV2,
     sendUln302: layerZero.sendUln302,
     receiveUln302: layerZero.receiveUln302,
-    layerZeroLabsDVN: layerZero.layerZeroLabsDVN,
   };
 }
 
@@ -2191,6 +2229,26 @@ function normalizeAddressArrayField(
   }
   if (value.length === 0) {
     throw new Error(`${label} must not be empty`);
+  }
+  return value.map((entry, index) => {
+    if (typeof entry !== "string") {
+      throw new Error(`${label}[${index}] must be an address`);
+    }
+    return normalizeAddress(entry, `${label}[${index}]`);
+  });
+}
+
+function optionalAddressArrayField(
+  input: Record<string, unknown>,
+  field: string,
+  label: string,
+): Address[] {
+  const value = input[field];
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
   }
   return value.map((entry, index) => {
     if (typeof entry !== "string") {

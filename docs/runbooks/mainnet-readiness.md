@@ -28,8 +28,9 @@ This runbook is the final review index before any mainnet deployment proposal. P
 - Worker chain configs must declare `family: evm`.
 - No self-only DVN.
 - Required DVNs must include OpenDVN and at least one independent external DVN.
-  The current Sepolia/Hoodi rehearsal uses the LayerZero Labs DVN as that
-  external DVN.
+  LayerZero Labs DVN is an optional external DVN choice, not a required
+  provider; deployment profiles can opt into repo-known metadata with
+  `chains[].includeLayerZeroLabsDVN` when it exists for the local chain.
 - Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.
 
 ## Review Sequence

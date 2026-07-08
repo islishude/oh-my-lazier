@@ -1,19 +1,14 @@
 import {
   DEPLOYMENTS_V2_URL,
-  DVN_DEPLOYMENTS_URL,
   expectedLayerZeroChains,
   verifyLayerZeroAddresses,
-  type DVNDeploymentRecord,
   type DeploymentRecord,
 } from "./lz-addresses.js";
 import { jsonStringify } from "./lib.js";
 
-const [deployments, dvns] = await Promise.all([
-  fetchJSON<DeploymentRecord[]>(DEPLOYMENTS_V2_URL),
-  fetchJSON<DVNDeploymentRecord[]>(DVN_DEPLOYMENTS_URL),
-]);
+const deployments = await fetchJSON<DeploymentRecord[]>(DEPLOYMENTS_V2_URL);
 
-const errors = verifyLayerZeroAddresses({ deployments, dvns });
+const errors = verifyLayerZeroAddresses({ deployments });
 if (errors.length > 0) {
   console.error(jsonStringify({ ok: false, errors }));
   process.exit(1);
@@ -22,7 +17,7 @@ if (errors.length > 0) {
 console.log(
   jsonStringify({
     ok: true,
-    sources: [DEPLOYMENTS_V2_URL, DVN_DEPLOYMENTS_URL],
+    sources: [DEPLOYMENTS_V2_URL],
     chains: expectedLayerZeroChains.map((chain) => ({
       chainKey: chain.chainKey,
       eid: chain.eid,

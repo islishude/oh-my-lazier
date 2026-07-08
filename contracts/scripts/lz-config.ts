@@ -170,9 +170,12 @@ export function rollbackConfigPlan(
 
 export function requiredDVNsConfig(
   confirmations: bigint,
-  dvns: Address[],
+  dvns: readonly Address[],
 ): UlnConfig {
   const requiredDVNs = sortUniqueAddresses(dvns);
+  if (requiredDVNs.length < 2) {
+    throw new Error("required DVNs must include at least two addresses");
+  }
   return {
     confirmations,
     requiredDVNCount: requiredDVNs.length,
@@ -183,7 +186,7 @@ export function requiredDVNsConfig(
   };
 }
 
-function sortUniqueAddresses(addresses: Address[]): Address[] {
+function sortUniqueAddresses(addresses: readonly Address[]): Address[] {
   const sorted = [...addresses].sort((left, right) =>
     left.toLowerCase().localeCompare(right.toLowerCase()),
   );

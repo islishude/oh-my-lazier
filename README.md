@@ -94,8 +94,9 @@ Phase 1 is EVM-only.
 
 - Worker chain configs must declare `family: evm`.
 - Required DVNs are the configured `OpenDVN` plus at least one independent
-  external DVN; the current Sepolia/Hoodi rehearsal uses the LayerZero Labs DVN
-  as that external DVN.
+  external DVN. LayerZero Labs DVN is an optional external DVN choice, not a
+  required provider; deployment profiles can opt into the repo-known
+  Sepolia/Hoodi address with `chains[].includeLayerZeroLabsDVN`.
 - Basic OFT send is supported.
 - `composeMsg`, `lzCompose`, native drop, ordered execution, self-only DVN, and non-EVM chains are out of scope.
 - Executor options must contain exactly one zero-value executor `lzReceive` option.

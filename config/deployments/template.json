@@ -45,6 +45,8 @@
       "minCanaryTokenBalance": "1000000000000000",
       "confirmations": 12,
       "indexerQueryBlockRange": 500,
+      "externalDVNs": [],
+      "includeLayerZeroLabsDVN": true,
       "txRoles": {
         "executor": {
           "signer": "0x2222222222222222222222222222222222222222",
@@ -74,6 +76,8 @@
       "minCanaryTokenBalance": "0",
       "confirmations": 12,
       "indexerQueryBlockRange": 500,
+      "externalDVNs": [],
+      "includeLayerZeroLabsDVN": true,
       "txRoles": {
         "executor": {
           "signer": "0x2222222222222222222222222222222222222222",

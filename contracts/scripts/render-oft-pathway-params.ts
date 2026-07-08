@@ -4,9 +4,12 @@ import {
   envUint32,
   jsonStringify,
   optionalAddress,
+  optionalAddressList,
   optionalBigInt,
+  optionalBool,
   optionalUint64,
 } from "./lib.js";
+import { requireLayerZeroLabsDVNForLibraries } from "./lz-addresses.js";
 import type {
   PriceSnapshotInput,
   WorkerFeeModelInput,
@@ -27,20 +30,34 @@ const enforcedLzReceiveGas = envBigInt("ENFORCED_LZ_RECEIVE_GAS");
 const minLzReceiveGas =
   optionalBigInt("MIN_LZ_RECEIVE_GAS") ?? enforcedLzReceiveGas;
 const priceUpdatedAt = BigInt(Math.floor(Date.now() / 1000));
+const openDVN = envAddress("OPEN_DVN");
+const endpoint = envAddress("ENDPOINT");
+const sendUln = envAddress("SEND_ULN");
+const receiveUln = envAddress("RECEIVE_ULN");
+const includeLayerZeroLabsDVN =
+  optionalBool("INCLUDE_LAYERZERO_LABS_DVN") ?? false;
+const requiredDVNs = resolveRequiredDVNs({
+  openDVN,
+  endpoint,
+  sendUln,
+  receiveUln,
+  explicit: optionalAddressList("REQUIRED_DVNS"),
+  includeLayerZeroLabsDVN,
+});
 
 const input = {
   oapp: envAddress("OAPP"),
-  endpoint: envAddress("ENDPOINT"),
+  endpoint,
   delegate,
   remoteEid: envUint32("REMOTE_EID"),
   remoteOApp: envAddress("REMOTE_OAPP"),
-  sendUln: envAddress("SEND_ULN"),
-  receiveUln: envAddress("RECEIVE_ULN"),
+  sendUln,
+  receiveUln,
   openExecutor: envAddress("OPEN_EXECUTOR"),
-  openDVN: envAddress("OPEN_DVN"),
+  openDVN,
   priceFeed: envAddress("PRICE_FEED"),
   bootstrapPriceSubmitter: envAddress("BOOTSTRAP_PRICE_SUBMITTER"),
-  layerZeroLabsDVN: envAddress("LAYERZERO_LABS_DVN"),
+  requiredDVNs,
   confirmations: envBigInt("CONFIRMATIONS"),
   maxMessageSize: Number(maxMessageSizeValue),
   minLzReceiveGas,
@@ -58,6 +75,31 @@ const parameters = {
 };
 
 console.log(jsonStringify(parameters));
+
+function resolveRequiredDVNs(input: {
+  openDVN: `0x${string}`;
+  endpoint: `0x${string}`;
+  sendUln: `0x${string}`;
+  receiveUln: `0x${string}`;
+  explicit?: `0x${string}`[];
+  includeLayerZeroLabsDVN: boolean;
+}) {
+  const dvns = input.explicit ?? [input.openDVN];
+  if (!input.includeLayerZeroLabsDVN) {
+    return dvns;
+  }
+  return [
+    ...dvns,
+    requireLayerZeroLabsDVNForLibraries(
+      {
+        endpointV2: input.endpoint,
+        sendUln302: input.sendUln,
+        receiveUln302: input.receiveUln,
+      },
+      "INCLUDE_LAYERZERO_LABS_DVN",
+    ),
+  ];
+}
 
 function priceSnapshot(defaultUpdatedAt: bigint): PriceSnapshotInput {
   return {

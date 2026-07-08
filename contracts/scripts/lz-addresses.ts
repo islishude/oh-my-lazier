@@ -3,8 +3,6 @@ import { getAddress, isAddressEqual, type Address } from "viem";
 
 export const DEPLOYMENTS_V2_URL =
   "https://docs.layerzero.network/public/data/deploymentsV2.json";
-export const DVN_DEPLOYMENTS_URL =
-  "https://docs.layerzero.network/public/data/dvnDeployments.json";
 
 export type ExpectedLayerZeroChain = {
   chainKey: string;
@@ -16,8 +14,7 @@ export type ExpectedLayerZeroChain = {
   executor: Address;
   lzExecutor: Address;
   deadDVN: Address;
-  layerZeroLabsDVN: Address;
-  layerZeroLabsReadDVN?: Address;
+  layerZeroLabsDVN?: Address;
 };
 
 export type DeploymentRecord = {
@@ -32,16 +29,6 @@ export type DeploymentRecord = {
   deadDVN?: { address?: string };
 };
 
-export type DVNDeploymentRecord = {
-  chainKey?: string;
-  nativeChainId?: number;
-  eid?: string | number;
-  version?: number;
-  id?: string;
-  lzReadCompatible?: boolean;
-  dvnAddress?: string;
-};
-
 export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
   {
     chainKey: ChainKey.SEPOLIA,
@@ -54,9 +41,6 @@ export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
     lzExecutor: getAddress("0x34a561197e4eAe356D41B0B02C59F12a5C576C5A"),
     deadDVN: getAddress("0x8b450b0acF56E1B0e25C581bB04FBAbeeb0644b8"),
     layerZeroLabsDVN: getAddress("0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193"),
-    layerZeroLabsReadDVN: getAddress(
-      "0x530fbe405189204ef459fa4b767167e4d41e3a37",
-    ),
   },
   {
     chainKey: ChainKey.HOODI_TESTNET,
@@ -68,13 +52,50 @@ export const expectedLayerZeroChains: readonly ExpectedLayerZeroChain[] = [
     executor: getAddress("0x701f3927871EfcEa1235dB722f9E608aE120d243"),
     lzExecutor: getAddress("0x4Cf1B3Fa61465c2c907f82fC488B43223BA0CF93"),
     deadDVN: getAddress("0x88B27057A9e00c5F05DDa29241027afF63f9e6e0"),
-    layerZeroLabsDVN: getAddress("0xa78a78a13074ed93ad447a26ec57121f29e8fec2"),
+    layerZeroLabsDVN: getAddress("0xa78a78a13074eD93aD447a26Ec57121f29E8feC2"),
   },
 ] as const;
 
+export function expectedLayerZeroChainForLibraries(input: {
+  endpointV2: Address;
+  sendUln302: Address;
+  receiveUln302: Address;
+}): ExpectedLayerZeroChain | undefined {
+  return expectedLayerZeroChains.find(
+    (chain) =>
+      isAddressEqual(chain.endpointV2, input.endpointV2) &&
+      isAddressEqual(chain.sendUln302, input.sendUln302) &&
+      isAddressEqual(chain.receiveUln302, input.receiveUln302),
+  );
+}
+
+export function layerZeroLabsDVNForLibraries(input: {
+  endpointV2: Address;
+  sendUln302: Address;
+  receiveUln302: Address;
+}): Address | undefined {
+  return expectedLayerZeroChainForLibraries(input)?.layerZeroLabsDVN;
+}
+
+export function requireLayerZeroLabsDVNForLibraries(
+  input: {
+    endpointV2: Address;
+    sendUln302: Address;
+    receiveUln302: Address;
+  },
+  label: string,
+): Address {
+  const dvn = layerZeroLabsDVNForLibraries(input);
+  if (dvn === undefined) {
+    throw new Error(
+      `${label} has no repo-known LayerZero Labs DVN metadata for EndpointV2 ${input.endpointV2}, SendUln302 ${input.sendUln302}, and ReceiveUln302 ${input.receiveUln302}; configure externalDVNs or REQUIRED_DVNS explicitly`,
+    );
+  }
+  return dvn;
+}
+
 export function verifyLayerZeroAddresses(input: {
   deployments: readonly DeploymentRecord[];
-  dvns: readonly DVNDeploymentRecord[];
   expected?: readonly ExpectedLayerZeroChain[];
 }): string[] {
   const expected = input.expected ?? expectedLayerZeroChains;
@@ -139,43 +160,9 @@ export function verifyLayerZeroAddresses(input: {
       deployment.deadDVN?.address,
       chain.deadDVN,
     );
-
-    const pushDVN = findLayerZeroLabsDVN(input.dvns, chain, false);
-    compareAddress(
-      errors,
-      chain.chainKey,
-      "LayerZero Labs DVN",
-      pushDVN?.dvnAddress,
-      chain.layerZeroLabsDVN,
-    );
-    if (chain.layerZeroLabsReadDVN !== undefined) {
-      const readDVN = findLayerZeroLabsDVN(input.dvns, chain, true);
-      compareAddress(
-        errors,
-        chain.chainKey,
-        "LayerZero Labs lzRead DVN",
-        readDVN?.dvnAddress,
-        chain.layerZeroLabsReadDVN,
-      );
-    }
   }
 
   return errors;
-}
-
-function findLayerZeroLabsDVN(
-  records: readonly DVNDeploymentRecord[],
-  chain: ExpectedLayerZeroChain,
-  lzReadCompatible: boolean,
-): DVNDeploymentRecord | undefined {
-  return records.find(
-    (record) =>
-      record.chainKey?.toLowerCase() === chain.chainKey &&
-      String(record.eid) === chain.eid &&
-      record.version === 2 &&
-      record.id === "layerzero-labs" &&
-      Boolean(record.lzReadCompatible) === lzReadCompatible,
-  );
 }
 
 function compareAddress(

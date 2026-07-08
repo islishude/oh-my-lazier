@@ -6,6 +6,7 @@ import {
 import {
   createPublicClientFromEnv,
   envAddress,
+  envAddressList,
   envBigInt,
   jsonStringify,
   loadABIArtifact,
@@ -44,7 +45,7 @@ const expectedReceiver = optionalAddress("EXPECTED_RECEIVER");
 const status: DVNVerificationStatus = assertDVNVerificationReceipt({
   logs: receipt.logs,
   receiveUln: envAddress("RECEIVE_ULN"),
-  requiredDVNs: [envAddress("OPEN_DVN"), envAddress("LAYERZERO_LABS_DVN")],
+  requiredDVNs: envAddressList("REQUIRED_DVNS"),
   minConfirmations: envBigInt("CONFIRMATIONS"),
   receiveUlnAbi: receiveUlnArtifact.abi,
   endpoint,

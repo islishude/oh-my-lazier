@@ -13,7 +13,8 @@ Sources:
 - LayerZero chain page: `https://docs.layerzero.network/v2/deployments/chains/sepolia`
 - LayerZero chain page: `https://docs.layerzero.network/v2/deployments/chains/hoodi-testnet`
 - Protocol contract data: `https://docs.layerzero.network/public/data/deploymentsV2.json`
-- DVN data: `https://docs.layerzero.network/public/data/dvnDeployments.json`
+- DVN data for optional external-DVN selection:
+  `https://docs.layerzero.network/public/data/dvnDeployments.json`
 
 Refresh check:
 
@@ -22,6 +23,9 @@ npm run check:lz-addresses
 ```
 
 Run this immediately before any funded testnet migration or mainnet proposal.
+The automated check validates protocol addresses from `deploymentsV2.json`;
+operator-selected external DVNs are reviewed through profile and evidence
+inputs instead.
 
 ## Ethereum Sepolia
 
@@ -39,11 +43,12 @@ Run this immediately before any funded testnet migration or mainnet proposal.
 | LayerZero Labs DVN                    | `0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193` |
 | LayerZero Labs lzRead DVN             | `0x530fbe405189204ef459fa4b767167e4d41e3a37` |
 
-Use `LayerZero Labs DVN`, not the lzRead DVN, for the current Sepolia/Hoodi
-`requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration. It is the
-current testnet external DVN selection; changing the external DVN requires
-updating the deployment profile, evidence expectations, and maintained scope
-docs first.
+LayerZero Labs DVN is one optional external DVN choice for Sepolia/Hoodi
+rehearsal. If it is selected, use the push DVN address, not the lzRead DVN,
+with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles or inside
+`REQUIRED_DVNS` for lower-level scripts. `render:oft-pathway-params` can also
+append it with `--include-layerzero-labs-dvn` or
+`INCLUDE_LAYERZERO_LABS_DVN=true`.
 
 ## Hoodi
 
@@ -61,11 +66,12 @@ docs first.
 | LayerZero Labs DVN                    | `0xa78a78a13074ed93ad447a26ec57121f29e8fec2` |
 | LayerZero Labs lzRead DVN             | not currently published in `dvnDeployments.json` |
 
-Use `LayerZero Labs DVN`, not the lzRead DVN, for the current Sepolia/Hoodi
-`requiredDVNs = [OpenDVN, LayerZero Labs DVN]` push-DVN configuration. It is the
-current testnet external DVN selection; changing the external DVN requires
-updating the deployment profile, evidence expectations, and maintained scope
-docs first.
+LayerZero Labs DVN is one optional external DVN choice for Sepolia/Hoodi
+rehearsal. If it is selected, use the push DVN address, not the lzRead DVN,
+with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles or inside
+`REQUIRED_DVNS` for lower-level scripts. `render:oft-pathway-params` can also
+append it with `--include-layerzero-labs-dvn` or
+`INCLUDE_LAYERZERO_LABS_DVN=true`.
 
 ## Direction Inputs
 
@@ -75,7 +81,8 @@ For Ethereum Sepolia -> Hoodi:
 - `ENDPOINT=0x6EDCE65403992e310A62460808c4b910D972f10f`
 - `SEND_ULN=0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE`
 - `RECEIVE_ULN=0xdAf00F5eE2158dD58E0d3857851c432E34A3A851`
-- `LAYERZERO_LABS_DVN=0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193`
+- Profile convenience: `includeLayerZeroLabsDVN: true`
+- `REQUIRED_DVNS=<sepolia-open-dvn>,0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193`
 
 For Hoodi -> Ethereum Sepolia:
 
@@ -83,6 +90,7 @@ For Hoodi -> Ethereum Sepolia:
 - `ENDPOINT=0x3aCAAf60502791D199a5a5F0B173D78229eBFe32`
 - `SEND_ULN=0x45841dd1ca50265Da7614fC43A361e526c0e6160`
 - `RECEIVE_ULN=0xd682ECF100f6F4284138AA925348633B0611Ae21`
-- `LAYERZERO_LABS_DVN=0xa78a78a13074ed93ad447a26ec57121f29e8fec2`
+- Profile convenience: `includeLayerZeroLabsDVN: true`
+- `REQUIRED_DVNS=<hoodi-open-dvn>,0xa78a78a13074ed93ad447a26ec57121f29e8fec2`
 
 Re-check the source URLs immediately before any funded testnet migration or mainnet proposal; LayerZero metadata is external operational state.

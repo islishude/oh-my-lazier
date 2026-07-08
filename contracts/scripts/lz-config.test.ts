@@ -25,16 +25,15 @@ test("executor config ABI round trips", () => {
 
 test("required DVN config sorts addresses and disables optional DVNs", () => {
   const openDVN = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as const;
-  const layerZeroLabsDVN =
-    "0x1111111111111111111111111111111111111111" as const;
+  const externalDVN = "0x1111111111111111111111111111111111111111" as const;
 
-  const config = requiredDVNsConfig(12n, [openDVN, layerZeroLabsDVN]);
+  const config = requiredDVNsConfig(12n, [openDVN, externalDVN]);
 
   assert.equal(config.confirmations, 12n);
   assert.equal(config.requiredDVNCount, 2);
   assert.equal(config.optionalDVNCount, NIL_DVN_COUNT);
   assert.equal(config.optionalDVNThreshold, 0);
-  assert.deepEqual(config.requiredDVNs, [layerZeroLabsDVN, openDVN]);
+  assert.deepEqual(config.requiredDVNs, [externalDVN, openDVN]);
   assert.deepEqual(config.optionalDVNs, []);
 });
 
@@ -64,6 +63,16 @@ test("required DVN config rejects duplicate addresses case-insensitively", () =>
         "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB",
       ]),
     /duplicate DVN address/,
+  );
+});
+
+test("required DVN config rejects self-only required sets", () => {
+  assert.throws(
+    () =>
+      requiredDVNsConfig(12n, [
+        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ]),
+    /required DVNs must include at least two addresses/,
   );
 });
 

@@ -52,11 +52,7 @@ export function optionalParam(name: string): string | undefined {
 }
 
 export function envAddress(name: string): Address {
-  const value = requiredEnv(name);
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-    throw new Error(`${name} must be an EVM address`);
-  }
-  return value as Address;
+  return parseAddress(requiredEnv(name), name);
 }
 
 export function optionalAddress(name: string): Address | undefined {
@@ -64,10 +60,29 @@ export function optionalAddress(name: string): Address | undefined {
   if (value === undefined || value === "") {
     return undefined;
   }
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
-    throw new Error(`${name} must be an EVM address`);
+  return parseAddress(value, name);
+}
+
+export function envAddressList(name: string): Address[] {
+  return parseAddressList(requiredEnv(name), name);
+}
+
+export function optionalAddressList(name: string): Address[] | undefined {
+  const value = optionalParam(name);
+  if (value === undefined || value === "") {
+    return undefined;
   }
-  return value as Address;
+  return parseAddressList(value, name);
+}
+
+export function parseAddressList(value: string, label: string): Address[] {
+  const parts = value.split(",");
+  if (parts.length === 0) {
+    throw new Error(`${label} must contain at least one EVM address`);
+  }
+  return parts.map((part, index) =>
+    parseAddress(part.trim(), `${label}[${index}]`),
+  );
 }
 
 export function envBigInt(name: string): bigint {
@@ -236,6 +251,13 @@ export function jsonStringify(value: unknown): string {
     (_key, item) => (typeof item === "bigint" ? item.toString() : item),
     2,
   );
+}
+
+function parseAddress(value: string, label: string): Address {
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    throw new Error(`${label} must be an EVM address`);
+  }
+  return value as Address;
 }
 
 function normalizePrivateKey(value: string): Hex {

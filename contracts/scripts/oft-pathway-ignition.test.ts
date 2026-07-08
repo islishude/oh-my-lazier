@@ -9,6 +9,8 @@ import {
   NIL_DVN_COUNT,
 } from "./lz-config.js";
 import {
+  buildOpenDVNPathwayConfigParameters,
+  buildOpenDVNWorkerParameters,
   buildOAppEndpointConfigParameters,
   buildOpenWorkersParameters,
   buildOpenWorkersPathwayConfigParameters,
@@ -27,7 +29,10 @@ function basePathwayInput() {
     openDVN: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     priceFeed: "0xcccccccccccccccccccccccccccccccccccccccc",
     bootstrapPriceSubmitter: "0x3333333333333333333333333333333333333333",
-    layerZeroLabsDVN: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    requiredDVNs: [
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    ],
     confirmations: 12n,
     maxMessageSize: 10_000,
     minLzReceiveGas: 200_000n,
@@ -65,6 +70,27 @@ test("buildOpenWorkersParameters renders explicit price feed submitters", () => 
     }),
     {
       OpenWorkers: {
+        owner: "0x1111111111111111111111111111111111111111",
+        priceFeedSubmitters: [
+          "0x1111111111111111111111111111111111111111",
+          "0x2222222222222222222222222222222222222222",
+        ],
+      },
+    },
+  );
+});
+
+test("buildOpenDVNWorkerParameters renders standalone DVN deployment params", () => {
+  assert.deepEqual(
+    buildOpenDVNWorkerParameters({
+      owner: "0x1111111111111111111111111111111111111111",
+      priceFeedSubmitters: [
+        "0x1111111111111111111111111111111111111111",
+        "0x2222222222222222222222222222222222222222",
+      ],
+    }),
+    {
+      OpenDVNWorker: {
         owner: "0x1111111111111111111111111111111111111111",
         priceFeedSubmitters: [
           "0x1111111111111111111111111111111111111111",
@@ -187,6 +213,42 @@ test("buildOpenWorkersPathwayConfigParameters renders worker-only config", () =>
   assert.equal(Object.hasOwn(rendered, "enforcedOptions"), false);
 });
 
+test("buildOpenDVNPathwayConfigParameters renders standalone DVN config", () => {
+  const rendered = buildOpenDVNPathwayConfigParameters({
+    ...basePathwayInput(),
+    dvnVerifier: "0x9999999999999999999999999999999999999999",
+  }).OpenDVNPathwayConfig;
+
+  assert.equal(rendered.oapp, "0x1111111111111111111111111111111111111111");
+  assert.equal(rendered.remoteEid, 40449);
+  assert.equal(rendered.sendUln, "0x5555555555555555555555555555555555555555");
+  assert.equal(rendered.openDVN, "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+  assert.equal(rendered.priceFeed, "0xcccccccccccccccccccccccccccccccccccccccc");
+  assert.equal(
+    rendered.bootstrapPriceSubmitter,
+    "0x3333333333333333333333333333333333333333",
+  );
+  assert.equal(rendered.dvnVerifier, "0x9999999999999999999999999999999999999999");
+  assert.deepEqual(rendered.workerPathwayConfig, {
+    enabled: true,
+    maxMessageSize: "10000",
+    minLzReceiveGas: "200000",
+    maxLzReceiveGas: "1000000",
+  });
+  assert.deepEqual(rendered.priceSnapshot, {
+    dstGasPriceInSrcToken: "2",
+    dstDataFeePerByteInSrcToken: "1",
+    updatedAt: "1700000000",
+    staleAfter: "1800",
+  });
+  assert.deepEqual(rendered.dvnFeeModel, {
+    baseFee: "2000",
+    dstGasOverhead: "150000",
+    dataSizeOverheadBytes: "256",
+    marginBps: 500,
+  });
+});
+
 test("committed ignition parameter examples use split modules", () => {
   for (const file of [
     "ignition/parameters/sepolia.json",
@@ -232,7 +294,7 @@ test("committed ignition parameter examples use split modules", () => {
     );
     assert.equal(
       workers.bootstrapPriceSubmitter,
-      "0x3333333333333333333333333333333333333333",
+      "0x7890476F9dc46aD626B4fCca4c67E28c468be2e6",
     );
   }
 });
@@ -257,6 +319,31 @@ test("pathway config builders validate worker gas bounds", () => {
         maxLzReceiveGas: 1_000_000n,
       }),
     /minLzReceiveGas must not exceed maxLzReceiveGas/,
+  );
+});
+
+test("OApp endpoint config requires local OpenDVN in required DVNs", () => {
+  assert.throws(
+    () =>
+      buildOAppEndpointConfigParameters({
+        ...basePathwayInput(),
+        requiredDVNs: [
+          "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "0x9999999999999999999999999999999999999999",
+        ],
+      }),
+    /requiredDVNs must include openDVN/,
+  );
+});
+
+test("OApp endpoint config rejects self-only required DVNs", () => {
+  assert.throws(
+    () =>
+      buildOAppEndpointConfigParameters({
+        ...basePathwayInput(),
+        requiredDVNs: ["0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      }),
+    /required DVNs must include at least two addresses/,
   );
 });
 

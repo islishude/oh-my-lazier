@@ -83,8 +83,9 @@ LayerZero phase-1 boundary:
 - `composeMsg`, `lzCompose`, native drop, ordered execution, and non-EVM chains
   remain out of scope.
 - Self-only DVN is rejected; required DVNs must include OpenDVN and at least
-  one independent external DVN. The current Sepolia/Hoodi deployment evidence
-  uses the LayerZero Labs DVN as that external DVN.
+  one independent external DVN. LayerZero Labs DVN is an optional external DVN
+  choice, not a required provider; deployment profiles can opt into the
+  repo-known Sepolia/Hoodi address with `chains[].includeLayerZeroLabsDVN`.
 - Confirmations are fixed at 12 unless the maintained scope documentation is updated.
 
 RPC quorum and safety:

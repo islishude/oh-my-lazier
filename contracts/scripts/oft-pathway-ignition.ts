@@ -48,6 +48,15 @@ export type OpenWorkersParameterFile = {
   OpenWorkers: OpenWorkersParameters;
 };
 
+export type OpenDVNWorkerParameters = {
+  owner: Address;
+  priceFeedSubmitters: Address[];
+};
+
+export type OpenDVNWorkerParameterFile = {
+  OpenDVNWorker: OpenDVNWorkerParameters;
+};
+
 export type TestOFTParameters = {
   tokenName: string;
   tokenSymbol: string;
@@ -98,6 +107,23 @@ export type OpenWorkersPathwayConfigParameterFile = {
   OpenWorkersPathwayConfig: OpenWorkersPathwayConfigParameters;
 };
 
+export type OpenDVNPathwayConfigParameters = {
+  oapp: Address;
+  remoteEid: number;
+  sendUln: Address;
+  openDVN: Address;
+  priceFeed: Address;
+  bootstrapPriceSubmitter: Address;
+  dvnVerifier?: Address;
+  workerPathwayConfig: WorkerPathwayConfigParam;
+  priceSnapshot: PriceSnapshotParam;
+  dvnFeeModel: WorkerFeeModelParam;
+};
+
+export type OpenDVNPathwayConfigParameterFile = {
+  OpenDVNPathwayConfig: OpenDVNPathwayConfigParameters;
+};
+
 export type PriceSnapshotInput = {
   dstGasPriceInSrcToken: bigint;
   dstDataFeePerByteInSrcToken: bigint;
@@ -124,7 +150,7 @@ export type PathwayConfigInput = {
   openDVN: Address;
   priceFeed: Address;
   bootstrapPriceSubmitter: Address;
-  layerZeroLabsDVN: Address;
+  requiredDVNs: readonly Address[];
   confirmations: bigint;
   maxMessageSize: number;
   minLzReceiveGas: bigint;
@@ -137,12 +163,40 @@ export type PathwayConfigInput = {
   receiveLibraryGracePeriod?: number;
 };
 
+export type OpenDVNPathwayConfigInput = {
+  oapp: Address;
+  remoteEid: number;
+  sendUln: Address;
+  openDVN: Address;
+  priceFeed: Address;
+  bootstrapPriceSubmitter: Address;
+  maxMessageSize: number;
+  minLzReceiveGas: bigint;
+  maxLzReceiveGas: bigint;
+  priceSnapshot: PriceSnapshotInput;
+  dvnFeeModel: WorkerFeeModelInput;
+  dvnVerifier?: Address;
+  receiveLibraryGracePeriod?: number;
+};
+
 export function buildOpenWorkersParameters(input: {
   owner: Address;
   priceFeedSubmitters: Address[];
 }): OpenWorkersParameterFile {
   return {
     OpenWorkers: {
+      owner: input.owner,
+      priceFeedSubmitters: input.priceFeedSubmitters,
+    },
+  };
+}
+
+export function buildOpenDVNWorkerParameters(input: {
+  owner: Address;
+  priceFeedSubmitters: Address[];
+}): OpenDVNWorkerParameterFile {
+  return {
+    OpenDVNWorker: {
       owner: input.owner,
       priceFeedSubmitters: input.priceFeedSubmitters,
     },
@@ -205,7 +259,10 @@ export function buildOpenWorkersPathwayConfigParameters(
     bootstrapPriceSubmitter: input.bootstrapPriceSubmitter,
     workerPathwayConfig: common.workerPathwayConfig,
     priceSnapshot: common.priceSnapshot,
-    executorFeeModel: common.executorFeeModel,
+    executorFeeModel: normalizeWorkerFeeModel(
+      input.executorFeeModel,
+      "executorFeeModel",
+    ),
     dvnFeeModel: common.dvnFeeModel,
   };
   if (input.dvnVerifier !== undefined) {
@@ -214,7 +271,69 @@ export function buildOpenWorkersPathwayConfigParameters(
   return { OpenWorkersPathwayConfig: params };
 }
 
+export function buildOpenDVNPathwayConfigParameters(
+  input: OpenDVNPathwayConfigInput,
+): OpenDVNPathwayConfigParameterFile {
+  const common = buildWorkerPathwayParameters(input);
+  const params: OpenDVNPathwayConfigParameters = {
+    oapp: input.oapp,
+    remoteEid: common.remoteEid,
+    sendUln: input.sendUln,
+    openDVN: input.openDVN,
+    priceFeed: input.priceFeed,
+    bootstrapPriceSubmitter: input.bootstrapPriceSubmitter,
+    workerPathwayConfig: common.workerPathwayConfig,
+    priceSnapshot: common.priceSnapshot,
+    dvnFeeModel: common.dvnFeeModel,
+  };
+  if (input.dvnVerifier !== undefined) {
+    params.dvnVerifier = input.dvnVerifier;
+  }
+  return { OpenDVNPathwayConfig: params };
+}
+
 function buildCommonPathwayParameters(input: PathwayConfigInput) {
+  if (!includesAddress(input.requiredDVNs, input.openDVN)) {
+    throw new Error("requiredDVNs must include openDVN");
+  }
+  const common = buildWorkerPathwayParameters(input);
+  const ulnConfig = requiredDVNsConfig(input.confirmations, input.requiredDVNs);
+  const encodedUlnConfig = encodeUlnConfig(ulnConfig);
+  return {
+    ...common,
+    sendConfig: [
+      {
+        eid: common.remoteEid,
+        configType: CONFIG_TYPE_EXECUTOR,
+        config: encodeExecutorConfig({
+          maxMessageSize: common.maxMessageSize,
+          executor: input.openExecutor,
+        }),
+      },
+      {
+        eid: common.remoteEid,
+        configType: CONFIG_TYPE_ULN,
+        config: encodedUlnConfig,
+      },
+    ],
+    receiveConfig: [
+      {
+        eid: common.remoteEid,
+        configType: CONFIG_TYPE_ULN,
+        config: encodedUlnConfig,
+      },
+    ],
+    enforcedOptions: [
+      {
+        eid: common.remoteEid,
+        msgType: OFT_MSG_TYPE_SEND,
+        options: buildLzReceiveOption(input.enforcedLzReceiveGas),
+      },
+    ],
+  };
+}
+
+function buildWorkerPathwayParameters(input: OpenDVNPathwayConfigInput) {
   const remoteEid = normalizeUint32(input.remoteEid, "remoteEid");
   const maxMessageSize = normalizeUint32(
     input.maxMessageSize,
@@ -235,13 +354,9 @@ function buildCommonPathwayParameters(input: PathwayConfigInput) {
   if (input.minLzReceiveGas > input.maxLzReceiveGas) {
     throw new Error("minLzReceiveGas must not exceed maxLzReceiveGas");
   }
-  const ulnConfig = requiredDVNsConfig(input.confirmations, [
-    input.openDVN,
-    input.layerZeroLabsDVN,
-  ]);
-  const encodedUlnConfig = encodeUlnConfig(ulnConfig);
   return {
     remoteEid,
+    maxMessageSize,
     receiveLibraryGracePeriod,
     workerPathwayConfig: {
       enabled: true,
@@ -250,41 +365,14 @@ function buildCommonPathwayParameters(input: PathwayConfigInput) {
       maxLzReceiveGas,
     },
     priceSnapshot: normalizePriceSnapshot(input.priceSnapshot, "priceSnapshot"),
-    executorFeeModel: normalizeWorkerFeeModel(
-      input.executorFeeModel,
-      "executorFeeModel",
-    ),
     dvnFeeModel: normalizeWorkerFeeModel(input.dvnFeeModel, "dvnFeeModel"),
-    sendConfig: [
-      {
-        eid: remoteEid,
-        configType: CONFIG_TYPE_EXECUTOR,
-        config: encodeExecutorConfig({
-          maxMessageSize,
-          executor: input.openExecutor,
-        }),
-      },
-      {
-        eid: remoteEid,
-        configType: CONFIG_TYPE_ULN,
-        config: encodedUlnConfig,
-      },
-    ],
-    receiveConfig: [
-      {
-        eid: remoteEid,
-        configType: CONFIG_TYPE_ULN,
-        config: encodedUlnConfig,
-      },
-    ],
-    enforcedOptions: [
-      {
-        eid: remoteEid,
-        msgType: OFT_MSG_TYPE_SEND,
-        options: buildLzReceiveOption(input.enforcedLzReceiveGas),
-      },
-    ],
   };
+}
+
+function includesAddress(addresses: readonly Address[], target: Address): boolean {
+  return addresses.some(
+    (address) => address.toLowerCase() === target.toLowerCase(),
+  );
 }
 
 function normalizePriceSnapshot(

@@ -25,9 +25,7 @@ const endpointAbi = loadAbi(
 const receiveUln = getAddress("0x1111111111111111111111111111111111111111");
 const endpoint = getAddress("0x2222222222222222222222222222222222222222");
 const openDVN = getAddress("0x3333333333333333333333333333333333333333");
-const layerZeroLabsDVN = getAddress(
-  "0x4444444444444444444444444444444444444444",
-);
+const externalDVN = getAddress("0x4444444444444444444444444444444444444444");
 const payloadHash =
   "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -35,11 +33,11 @@ test("assertDVNVerificationReceipt verifies both required DVNs and Endpoint Pack
   const status = assertDVNVerificationReceipt({
     logs: [
       payloadVerifiedLog({ dvn: openDVN, confirmations: 12n }),
-      payloadVerifiedLog({ dvn: layerZeroLabsDVN, confirmations: 12n }),
+      payloadVerifiedLog({ dvn: externalDVN, confirmations: 12n }),
       packetVerifiedLog(),
     ],
     receiveUln,
-    requiredDVNs: [openDVN, layerZeroLabsDVN],
+    requiredDVNs: [openDVN, externalDVN],
     minConfirmations: 12n,
     receiveUlnAbi,
     endpoint,
@@ -64,7 +62,7 @@ test("assertDVNVerificationReceipt rejects missing required DVN", () => {
       assertDVNVerificationReceipt({
         logs: [payloadVerifiedLog({ dvn: openDVN, confirmations: 12n })],
         receiveUln,
-        requiredDVNs: [openDVN, layerZeroLabsDVN],
+        requiredDVNs: [openDVN, externalDVN],
         minConfirmations: 12n,
         receiveUlnAbi,
       }),
@@ -78,10 +76,10 @@ test("assertDVNVerificationReceipt rejects insufficient confirmations", () => {
       assertDVNVerificationReceipt({
         logs: [
           payloadVerifiedLog({ dvn: openDVN, confirmations: 11n }),
-          payloadVerifiedLog({ dvn: layerZeroLabsDVN, confirmations: 12n }),
+          payloadVerifiedLog({ dvn: externalDVN, confirmations: 12n }),
         ],
         receiveUln,
-        requiredDVNs: [openDVN, layerZeroLabsDVN],
+        requiredDVNs: [openDVN, externalDVN],
         minConfirmations: 12n,
         receiveUlnAbi,
       }),
@@ -95,10 +93,10 @@ test("assertDVNVerificationReceipt rejects missing PacketVerified when endpoint 
       assertDVNVerificationReceipt({
         logs: [
           payloadVerifiedLog({ dvn: openDVN, confirmations: 12n }),
-          payloadVerifiedLog({ dvn: layerZeroLabsDVN, confirmations: 12n }),
+          payloadVerifiedLog({ dvn: externalDVN, confirmations: 12n }),
         ],
         receiveUln,
-        requiredDVNs: [openDVN, layerZeroLabsDVN],
+        requiredDVNs: [openDVN, externalDVN],
         minConfirmations: 12n,
         receiveUlnAbi,
         endpoint,
@@ -114,10 +112,10 @@ test("assertDVNVerificationReceipt rejects mismatched expected packet header", (
       assertDVNVerificationReceipt({
         logs: [
           payloadVerifiedLog({ dvn: openDVN, confirmations: 12n }),
-          payloadVerifiedLog({ dvn: layerZeroLabsDVN, confirmations: 12n }),
+          payloadVerifiedLog({ dvn: externalDVN, confirmations: 12n }),
         ],
         receiveUln,
-        requiredDVNs: [openDVN, layerZeroLabsDVN],
+        requiredDVNs: [openDVN, externalDVN],
         minConfirmations: 12n,
         receiveUlnAbi,
         expectedPayloadHash: payloadHash,

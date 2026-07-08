@@ -6,6 +6,7 @@ import {
 import {
   createClients,
   envAddress,
+  envAddressList,
   envBigInt,
   envUint32,
   jsonStringify,
@@ -23,14 +24,10 @@ const oapp = envAddress("OAPP");
 const remoteEid = envUint32("REMOTE_EID");
 const sendUln = envAddress("SEND_ULN");
 const receiveUln = envAddress("RECEIVE_ULN");
-const openDVN = envAddress("OPEN_DVN");
-const layerZeroLabsDVN = envAddress("LAYERZERO_LABS_DVN");
+const requiredDVNs = envAddressList("REQUIRED_DVNS");
 const confirmations = envBigInt("CONFIRMATIONS");
 
-const ulnConfig = requiredDVNsConfig(confirmations, [
-  openDVN,
-  layerZeroLabsDVN,
-]);
+const ulnConfig = requiredDVNsConfig(confirmations, requiredDVNs);
 const encodedUlnConfig = encodeUlnConfig(ulnConfig);
 
 await waitForTx(

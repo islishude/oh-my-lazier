@@ -567,13 +567,14 @@ function validateDVNJoin(
     const required = new Set(
       dvnJoin.requiredDVNs.map((value) => value.toLowerCase()),
     );
-    for (const label of ["opendvn", "layerzero labs dvn"]) {
-      if (!required.has(label)) {
-        errors.push(`${field}.requiredDVNs must include ${label}`);
-      }
+    if (!required.has("opendvn")) {
+      errors.push(`${field}.requiredDVNs must include opendvn`);
     }
-    if (required.size < 2) {
-      errors.push(`${field}.requiredDVNs must not be self-only`);
+    const hasExternalDVN = [...required].some((label) => label !== "opendvn");
+    if (!hasExternalDVN) {
+      errors.push(
+        `${field}.requiredDVNs must include at least one independent external dvn`,
+      );
     }
   }
   if (dvnJoin.optionalDVNsDisabled !== true) {

@@ -8,7 +8,9 @@ Before any funded testnet migration, confirm the committed LayerZero address lis
 npm run check:lz-addresses
 ```
 
-The check compares `docs/deployments/layerzero-testnet-addresses.md` values encoded in the script against LayerZero's current `deploymentsV2.json` and `dvnDeployments.json` metadata.
+The check compares protocol contract values encoded in the script against
+LayerZero's current `deploymentsV2.json` metadata. External DVN selection is
+operator configuration and is not required by this check.
 
 Run the local dual-Anvil E2E from the repository root:
 
@@ -92,24 +94,27 @@ Sepolia `40161` <-> Hoodi `40449`, that each direction records source and
 destination worker contracts, deployment preflight, LayerZero config after,
 shared price snapshot evidence tied to the destination EID and freshness window,
 drain, canary amount/sender/recipient/minimum balance/receipt/balance-check
-evidence, DVN join config with positive `confirmations` and
-`requiredDVNs = [OpenDVN, LayerZero Labs DVN]`, and DVN verification evidence
-tied to the exact payload hash and PacketV1 identity. Records with
+evidence, DVN join config with positive `confirmations` and `requiredDVNs`
+containing OpenDVN plus an independent external DVN, and DVN verification
+evidence tied to the exact payload hash and PacketV1 identity. Records with
 `"evidenceType": "migration"` additionally require migration ticket contacts,
 config diff artifacts, LayerZero config before snapshots, and rollback evidence
 for previous Executor/ULN configs, rollback dry-run output, restored config
 check, post-rollback canary, owner pause account, signer account, drain status,
 and manual retry plan. Records with `"evidenceType": "deployment"` omit those
-migration-only artifacts. The LayerZero Labs DVN label is the current
-Sepolia/Hoodi external DVN evidence expectation; the worker-side on-chain
-config check only requires the configured OpenDVN plus at least one independent
-external DVN.
+migration-only artifacts. LayerZero Labs DVN may be used as the external DVN
+for Sepolia/Hoodi rehearsal, but it is not required by the evidence checker;
+the worker-side on-chain config check only requires the configured OpenDVN plus
+at least one independent external DVN.
 
 Use the profile-driven deployment entrypoint for Sepolia/Hoodi rehearsal and
 real external OApp deployments. The profile is the only operator-edited input;
 it stores owner, signer addresses, fee caps, gas limits, fee models, OApp mode,
-and environment variable names for RPC URLs, but not secret values. Hardhat
-private key configuration variables are defined in `hardhat.config.ts`; store
+environment variable names for RPC URLs, optional `chains[].externalDVNs` for
+arbitrary third-party DVNs, and optional `chains[].includeLayerZeroLabsDVN` for
+auto-adding the repo-known LayerZero Labs push DVN. These fields build the
+required-DVN set but do not store secret values. Hardhat private key
+configuration variables are defined in `hardhat.config.ts`; store
 them with `hardhat-keystore` before running state-changing Ignition commands:
 
 ```bash
@@ -218,7 +223,9 @@ rollouts:
 ```bash
 npm run deploy:test-oft
 npm run deploy:open-workers
+npm run deploy:open-dvn-worker
 npm run configure:open-workers-pathway
+npm run configure:open-dvn-pathway
 npm run configure:oapp-endpoint
 ```
 
@@ -304,6 +311,12 @@ changing OApp ownership or Endpoint message libraries.
 - `OpenExecutor.withdrawFee` and `OpenDVN.withdrawFee` for allowed send-lib worker fees
 - `OpenDVN.setVerifier` for the local verifier signer
 
+`OpenDVNWorker` and `OpenDVNPathwayConfig` are the standalone third-party DVN
+variants. `OpenDVNWorker` deploys `OpenPriceFeed` plus `OpenDVN` without an
+executor. `OpenDVNPathwayConfig` attaches to that DVN and writes only the DVN
+price-feed binding, SendUln allowlist, pathway limits, initial price snapshot,
+DVN fee model, and verifier authorization.
+
 `OpenWorkers` deploys `OpenPriceFeed` with explicit `priceFeedSubmitters`.
 In profile-driven deployments, `priceFeedSubmitters` is the long-term pricing
 signer allowlist and must not include the owner. The renderer adds the owner as
@@ -379,7 +392,7 @@ npm run render:oft-pathway-params -- \
   --open-dvn ... \
   --price-feed ... \
   --bootstrap-price-submitter <owner> \
-  --layerzero-labs-dvn 0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193 \
+  --include-layerzero-labs-dvn \
   --confirmations 12 \
   --executor-max-message-size 10000 \
   --enforced-lz-receive-gas 200000 \
@@ -398,6 +411,11 @@ npm run render:oft-pathway-params -- \
 ```
 
 `--min-lz-receive-gas` defaults to `--enforced-lz-receive-gas`.
+Use `--required-dvns <open-dvn>,<external-dvn>` or `REQUIRED_DVNS` for explicit
+full-list control or arbitrary third-party DVNs.
+`--include-layerzero-labs-dvn` or `INCLUDE_LAYERZERO_LABS_DVN=true` appends the
+repo-known LayerZero Labs push DVN for the local Endpoint/SendUln/ReceiveUln
+tuple; if no metadata exists, pass the external DVN explicitly.
 `--price-snapshot-updated-at` defaults to the render script's current Unix
 timestamp; regenerate parameters shortly before signing so the shared price
 snapshot remains fresh for the approved stale window. `--dvn-verifier` defaults
@@ -492,7 +510,8 @@ npm run configure:lz-executor -- \
   --executor-max-message-size 10000
 ```
 
-Configure ULN302 on one local chain so OpenDVN and the LayerZero Labs DVN are both required:
+Configure ULN302 on one local chain with OpenDVN plus at least one independent
+external DVN:
 
 ```bash
 npm run configure:lz-dvn -- \
@@ -504,8 +523,7 @@ npm run configure:lz-dvn -- \
   --remote-eid 40449 \
   --send-uln ... \
   --receive-uln ... \
-  --open-dvn ... \
-  --layerzero-labs-dvn ... \
+  --required-dvns <open-dvn>,<external-dvn> \
   --confirmations 12
 ```
 
@@ -590,13 +608,18 @@ npm run check:dvn-verification -- \
   --chain-id 560048 \
   --tx-hash ... \
   --receive-uln ... \
-  --open-dvn ... \
-  --layerzero-labs-dvn ... \
+  --required-dvns <open-dvn>,<external-dvn> \
   --confirmations 12 \
   --endpoint ...
 ```
 
-`check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for both OpenDVN and the LayerZero Labs DVN with at least `CONFIRMATIONS`. For the active OpenDVN path, the worker transaction calls `OpenDVN.submitVerification`, and OpenDVN calls `ReceiveUln302.verify` so the `PayloadVerified.dvn` field is the OpenDVN address. When `ENDPOINT` is set, it also requires EndpointV2 `PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and filters the checked `PayloadVerified` logs to one payload hash.
+`check:dvn-verification` requires ReceiveUln302 `PayloadVerified` logs for
+every address in `REQUIRED_DVNS` with at least `CONFIRMATIONS`. For the active
+OpenDVN path, the worker transaction calls `OpenDVN.submitVerification`, and
+OpenDVN calls `ReceiveUln302.verify` so the `PayloadVerified.dvn` field is the
+OpenDVN address. When `ENDPOINT` is set, it also requires EndpointV2
+`PacketVerified` in the same receipt. `EXPECTED_PAYLOAD_HASH` is optional and
+filters the checked `PayloadVerified` logs to one payload hash.
 Set `EXPECTED_SRC_EID`, `EXPECTED_DST_EID`, `EXPECTED_NONCE`, `EXPECTED_SENDER`, and `EXPECTED_RECEIVER` to also require the `PayloadVerified` PacketV1 header to match the exact migration direction and packet identity.
 
 Run the LayerZero config module or lower-level scripts on both chains with the
