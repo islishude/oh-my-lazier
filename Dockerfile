@@ -16,7 +16,9 @@ FROM alpine:3.24
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 worker
 
 WORKDIR /app
-COPY --from=build /src/go/bin/ /usr/local/bin/
+COPY --from=build /src/go/bin/worker \
+    /src/go/bin/txretry /src/go/bin/readinesscheck \
+    /src/go/bin/configcheck /src/go/bin/draincheck  /usr/local/bin/
 COPY config/example.yaml /app/config/example.yaml
 
 USER worker
