@@ -60,6 +60,7 @@ type loopRetryRecorder interface {
 type Options struct {
 	IndexerProgressLogInterval    time.Duration
 	IndexerProgressLogIntervalSet bool
+	SkipOnchainCheck              bool
 }
 
 // App owns the configured worker process and its durable service loops.
@@ -99,17 +100,24 @@ func normalizeOptions(options Options) (Options, error) {
 
 // Run connects dependencies and runs all worker loops until cancellation.
 func (a *App) Run(ctx context.Context) error {
+	if err := a.cfg.Validate(); err != nil {
+		return err
+	}
 	registry, err := chain.NewRegistry(a.cfg.Chains, a.cfg.Pathways)
 	if err != nil {
 		return err
 	}
 	defer registry.Close()
 
-	a.logger.Info("worker starting and checking on-chain config...")
-	if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
-		return err
-	} else if !report.OK {
-		return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
+	if a.options.SkipOnchainCheck {
+		a.logger.Warn("worker starting with on-chain config check skipped")
+	} else {
+		a.logger.Info("worker starting and checking on-chain config...")
+		if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
+			return err
+		} else if !report.OK {
+			return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
+		}
 	}
 
 	a.logger.Info("connecting to database and running migrations...")

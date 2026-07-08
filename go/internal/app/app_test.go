@@ -240,6 +240,9 @@ func TestNewWithOptionsDefaultsIndexerProgressLogInterval(t *testing.T) {
 	if !worker.options.IndexerProgressLogIntervalSet {
 		t.Fatal("IndexerProgressLogIntervalSet = false, want true")
 	}
+	if worker.options.SkipOnchainCheck {
+		t.Fatal("SkipOnchainCheck = true, want false")
+	}
 }
 
 func TestNewWithOptionsAcceptsIndexerProgressLogInterval(t *testing.T) {
@@ -277,6 +280,93 @@ func TestNewWithOptionsRejectsNegativeIndexerProgressLogInterval(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "indexer progress log interval") {
 		t.Fatalf("NewWithOptions() error = %v, want interval error", err)
+	}
+}
+
+func TestRunChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
+	originalCheck := checkOnChainConfig
+	defer func() { checkOnChainConfig = originalCheck }()
+	calls := 0
+	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
+		calls++
+		return configcheck.Report{
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+		}, nil
+	}
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://invalid:invalid@127.0.0.1:1/db?sslmode=disable"
+	worker, err := New(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	err = worker.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want on-chain config error")
+	}
+	if calls != 1 {
+		t.Fatalf("checkOnChainConfig calls = %d, want 1", calls)
+	}
+	if !strings.Contains(err.Error(), "on-chain config check failed") {
+		t.Fatalf("Run() error = %v, want on-chain config error", err)
+	}
+}
+
+func TestRunSkipOnchainCheckBypassesOnChainConfigCheck(t *testing.T) {
+	originalCheck := checkOnChainConfig
+	defer func() { checkOnChainConfig = originalCheck }()
+	calls := 0
+	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
+		calls++
+		return configcheck.Report{
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+		}, nil
+	}
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://invalid:invalid@127.0.0.1:1/db?sslmode=disable"
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err = worker.Run(ctx)
+	if err == nil {
+		t.Fatal("Run() error = nil, want database error after skipped check")
+	}
+	if calls != 0 {
+		t.Fatalf("checkOnChainConfig calls = %d, want 0", calls)
+	}
+	if strings.Contains(err.Error(), "on-chain config check failed") {
+		t.Fatalf("Run() error = %v, want database/setup error after skipped check", err)
+	}
+}
+
+func TestRunSkipOnchainCheckStillRejectsInvalidLocalConfig(t *testing.T) {
+	originalCheck := checkOnChainConfig
+	defer func() { checkOnChainConfig = originalCheck }()
+	calls := 0
+	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
+		calls++
+		return configcheck.Report{OK: true}, nil
+	}
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.Pathways[0].DstEID = 49999
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	err = worker.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want local config validation error")
+	}
+	if calls != 0 {
+		t.Fatalf("checkOnChainConfig calls = %d, want 0", calls)
+	}
+	if !strings.Contains(err.Error(), "pathway destination eid 49999 is not configured") {
+		t.Fatalf("Run() error = %v, want local config validation error", err)
 	}
 }
 
@@ -457,25 +547,27 @@ func testConfig(signerID, keystorePath string) config.Config {
 		},
 		Chains: []config.ChainConfig{
 			{
-				EID:             40161,
-				Name:            "ethereum-sepolia",
-				Family:          config.ChainFamilyEVM,
-				ChainID:         11155111,
-				EndpointAddress: config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
-				Confirmations:   12,
-				RPCURLs:         []string{"http://localhost:8545"},
+				EID:                    40161,
+				Name:                   "ethereum-sepolia",
+				Family:                 config.ChainFamilyEVM,
+				ChainID:                11155111,
+				EndpointAddress:        config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
+				Confirmations:          12,
+				RPCURLs:                []string{"http://localhost:8545"},
+				IndexerQueryBlockRange: 500,
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(signerAddress),
 				},
 			},
 			{
-				EID:             40449,
-				Name:            "hoodi",
-				Family:          config.ChainFamilyEVM,
-				ChainID:         560048,
-				EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
-				Confirmations:   12,
-				RPCURLs:         []string{"http://localhost:8546"},
+				EID:                    40449,
+				Name:                   "hoodi",
+				Family:                 config.ChainFamilyEVM,
+				ChainID:                560048,
+				EndpointAddress:        config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
+				Confirmations:          12,
+				RPCURLs:                []string{"http://localhost:8546"},
+				IndexerQueryBlockRange: 500,
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(signerAddress),
 				},

@@ -54,5 +54,9 @@ EID, deployed code, OApp peers, send/receive libraries, ULN required DVNs, and
 the configured `pathways[].source_workers` pathway configuration. Every
 configured RPC URL must return the configured `chain_id` from `eth_chainId`.
 Worker startup and `price-once` run the same check before database sync.
+The long-running worker can be started with `-skip-onchain-check` only when an
+operator intentionally bypasses this on-chain check; local YAML/schema
+validation still runs, and `configcheck` plus `pricebot-once` keep the normal
+on-chain gate.
 
 The command compares chains by `eid`, pricing chains by `eid`, and pathways by `(src_eid, dst_eid, src_oapp, dst_oapp)` so list reordering does not create review noise.

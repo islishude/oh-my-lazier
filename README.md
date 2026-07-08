@@ -87,6 +87,7 @@ go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <
 
 Worker binaries default to `-log-level info`. Use `-log-level debug` when investigating normal skip/defer reasons such as indexer caught-up windows, disabled pathways, not-yet-confirmed DVN jobs, or deferred tx manager work.
 The long-running worker also defaults to `-indexer-progress-log-interval 1m`, which limits indexer progress `Info` logs to one aggregated line per chain per interval; set it to `0` to disable periodic progress `Info` logs and rely on `/metrics` plus debug logs.
+Use `go run ./go/cmd/worker -config <worker.yaml> -skip-onchain-check` only as a long-running worker startup bypass for the on-chain config check. It does not skip local YAML/schema validation, and it does not affect `configcheck` or `pricebot-once`.
 
 ## Phase 1 Scope
 

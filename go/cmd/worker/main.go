@@ -17,6 +17,7 @@ func main() {
 	configPath := flag.String("config", "config/example.yaml", "worker config path")
 	logLevelName := flag.String("log-level", logging.DefaultLevelName, "minimum log level: debug, info, warn, or error")
 	indexerProgressLogInterval := flag.Duration("indexer-progress-log-interval", app.DefaultIndexerProgressLogInterval, "minimum interval between indexer progress info logs; 0 disables periodic progress info logs")
+	skipOnchainCheck := flag.Bool("skip-onchain-check", false, "skip the startup on-chain config check; local config validation still runs")
 	flag.Parse()
 
 	logLevel, err := logging.ParseLevel(*logLevelName)
@@ -41,6 +42,7 @@ func main() {
 	worker, err := app.NewWithOptions(cfg, logger, app.Options{
 		IndexerProgressLogInterval:    *indexerProgressLogInterval,
 		IndexerProgressLogIntervalSet: true,
+		SkipOnchainCheck:              *skipOnchainCheck,
 	})
 	if err != nil {
 		logger.Error("create worker", "error", err)
