@@ -40,6 +40,10 @@ abstract contract OFTPauseAndRateLimit is OFT {
     /// @param config New token bucket configuration.
     event OutboundRateLimitSet(uint32 indexed dstEid, WorkerTypes.RateLimitConfig config);
 
+    /// @notice Emitted when an outbound rate limit is removed.
+    /// @param dstEid Destination endpoint ID.
+    event OutboundRateLimitCleared(uint32 indexed dstEid);
+
     /// @notice Initializes the OFT with LayerZero endpoint and delegate ownership.
     /// @param name_ ERC20 token name.
     /// @param symbol_ ERC20 token symbol.
@@ -79,6 +83,15 @@ abstract contract OFTPauseAndRateLimit is OFT {
         state.tokens = config.capacity;
         state.updatedAt = uint64(block.timestamp);
         emit OutboundRateLimitSet(dstEid, config);
+    }
+
+    /// @notice Removes the outbound token-bucket limit for one destination endpoint.
+    /// @param dstEid Destination endpoint ID.
+    function clearOutboundRateLimit(uint32 dstEid) external onlyOwner {
+        outboundRateLimitConfigured[dstEid] = false;
+        delete outboundRateLimitConfig[dstEid];
+        delete outboundRateLimitState[dstEid];
+        emit OutboundRateLimitCleared(dstEid);
     }
 
     /// @notice Applies send pause and rate-limit checks before burning outbound OFT tokens.
@@ -128,11 +141,16 @@ abstract contract OFTPauseAndRateLimit is OFT {
         uint256 tokens = state.tokens;
         uint64 updatedAt = state.updatedAt;
 
-        // Refill is capped at capacity so long idle periods cannot accumulate more than one bucket.
-        if (block.timestamp > updatedAt && config.refillPerSecond > 0) {
-            uint256 refill = (block.timestamp - updatedAt) * config.refillPerSecond;
-            tokens = tokens + refill;
-            if (tokens > config.capacity) tokens = config.capacity;
+        if (tokens > config.capacity) {
+            tokens = config.capacity;
+        }
+
+        // Refill is capped at capacity, and the multiplication is bounded before it is evaluated.
+        if (block.timestamp > updatedAt && config.refillPerSecond > 0 && tokens < config.capacity) {
+            uint256 elapsed = block.timestamp - updatedAt;
+            uint256 missing = config.capacity - tokens;
+            uint256 refill = config.refillPerSecond > missing / elapsed ? missing : elapsed * config.refillPerSecond;
+            tokens += refill;
         }
 
         if (amount > tokens) revert WorkerErrors.RateLimitExceeded(dstEid, amount, tokens);

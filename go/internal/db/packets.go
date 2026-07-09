@@ -44,10 +44,10 @@ func (s *Store) UpsertPacket(ctx context.Context, packet PacketRecord) error {
 			packet_header, message, payload_hash, options, status
 		)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (guid) DO UPDATE SET
-			src_eid = EXCLUDED.src_eid,
-			dst_eid = EXCLUDED.dst_eid,
-			nonce = EXCLUDED.nonce,
+			ON CONFLICT (guid) DO UPDATE SET
+				src_eid = EXCLUDED.src_eid,
+				dst_eid = EXCLUDED.dst_eid,
+				nonce = EXCLUDED.nonce,
 			sender = EXCLUDED.sender,
 			receiver = EXCLUDED.receiver,
 			send_lib = EXCLUDED.send_lib,
@@ -55,13 +55,12 @@ func (s *Store) UpsertPacket(ctx context.Context, packet PacketRecord) error {
 			src_block_number = EXCLUDED.src_block_number,
 			src_log_index = EXCLUDED.src_log_index,
 			encoded_packet = EXCLUDED.encoded_packet,
-			packet_header = EXCLUDED.packet_header,
-			message = EXCLUDED.message,
-			payload_hash = EXCLUDED.payload_hash,
-			options = EXCLUDED.options,
-			status = EXCLUDED.status,
-			updated_at = now()
-	`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, bytes.Clone(packet.EncodedPacket), bytes.Clone(packet.PacketHeader), bytes.Clone(packet.Message), packet.PayloadHash.Bytes(), bytes.Clone(packet.Options), packet.Status)
+				packet_header = EXCLUDED.packet_header,
+				message = EXCLUDED.message,
+				payload_hash = EXCLUDED.payload_hash,
+				options = EXCLUDED.options,
+				updated_at = now()
+		`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, bytes.Clone(packet.EncodedPacket), bytes.Clone(packet.PacketHeader), bytes.Clone(packet.Message), packet.PayloadHash.Bytes(), bytes.Clone(packet.Options), packet.Status)
 	return err
 }
 

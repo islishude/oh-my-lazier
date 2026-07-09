@@ -1,9 +1,11 @@
 import {
+  assertConfiguredChain,
   createPublicClientFromEnv,
   envAddress,
   envBigInt,
   envUint32,
   jsonStringify,
+  isMainModule,
   loadArtifact,
   optionalBigInt,
 } from "./lib.js";
@@ -237,7 +239,7 @@ function normalizeFeeModel(value: unknown): FeeModel {
   };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const priceFeedArtifact = loadArtifact(
     "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
   );
@@ -247,8 +249,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const openDVNArtifact = loadArtifact(
     "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
   );
+  const publicClient = createPublicClientFromEnv();
+  await assertConfiguredChain(publicClient);
   const report = await readPriceConfigReport({
-    publicClient: createPublicClientFromEnv(),
+    publicClient,
     dstEid: envUint32("DST_EID"),
     checkedAt: BigInt(Math.floor(Date.now() / 1000)),
     maxAgeSeconds: envBigInt("MAX_PRICE_AGE_SECONDS"),

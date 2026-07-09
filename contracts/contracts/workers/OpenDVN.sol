@@ -127,7 +127,7 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
         whenNotPaused
         returns (uint256 fee)
     {
-        fee = _quote(param.dstEid, param.confirmations, param.sender, param.packetHeader.length, options);
+        fee = _quote(param.dstEid, param.confirmations, param.sender, options);
         bytes32 jobId = keccak256(abi.encode(param.dstEid, param.packetHeader, param.payloadHash, param.sender));
         emit DVNJobAssigned(jobId, param.dstEid, param.sender, msg.sender, param.confirmations, fee);
     }
@@ -144,17 +144,16 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
         override
         returns (uint256 fee)
     {
-        return _quote(dstEid, confirmations, sender, 0, options);
+        return _quote(dstEid, confirmations, sender, options);
     }
 
     /// @notice Validates assignment inputs and calculates DVN fee.
     /// @param dstEid Destination endpoint ID.
     /// @param confirmations Required source-chain confirmations, reserved for future per-confirmation pricing.
     /// @param sender Source OApp sender.
-    /// @param messageSize Packet header size checked during assignment.
     /// @param options DVN options, which must be empty in phase 1.
     /// @return Quoted DVN fee.
-    function _quote(uint32 dstEid, uint64 confirmations, address sender, uint256 messageSize, bytes calldata options)
+    function _quote(uint32 dstEid, uint64 confirmations, address sender, bytes calldata options)
         internal
         view
         returns (uint256)
@@ -165,9 +164,6 @@ contract OpenDVN is ILayerZeroDVN, WorkerAccess {
 
         WorkerTypes.PathwayConfig memory pathway = pathwayConfig[dstEid][sender];
         if (!pathway.enabled) revert WorkerErrors.PathwayDisabled(dstEid, sender);
-        if (messageSize > pathway.maxMessageSize) {
-            revert WorkerErrors.MessageTooLarge(messageSize, pathway.maxMessageSize);
-        }
 
         return WorkerFeeLib.quoteDVN(dstEid, priceFeed.priceSnapshot(dstEid), feeModel[dstEid]);
     }

@@ -94,6 +94,11 @@ export type ChainProfile = {
   layerZero: LayerZeroAddresses;
 };
 
+const hardhatNetworks = new Map<string, { chainId: number; eid: number }>([
+  ["sepolia", { chainId: 11155111, eid: 40161 }],
+  ["hoodi", { chainId: 560048, eid: 40449 }],
+]);
+
 export type TxRoleProfile = {
   signer: Address;
   maxFeePerGasWei: string;
@@ -1358,7 +1363,9 @@ function normalizeChain(
       `${pathLabel}.privateKeyEnv is not supported; store Hardhat private key config variables with hardhat keystore`,
     );
   }
+  validateHardhatNetworkChain(pathLabel, network, chainID, eid);
   const layerZero = normalizeLayerZero(input.layerZero, pathLabel, eid, chainID);
+  validateLayerZeroChain(pathLabel, eid, chainID, layerZero);
   const includeLayerZeroLabsDVN = optionalBoolean(
     input.includeLayerZeroLabsDVN,
     false,
@@ -1435,6 +1442,46 @@ function normalizeChain(
     txRoles: normalizeTxRoles(input.txRoles, `${pathLabel}.txRoles`, signerIDs),
     layerZero,
   };
+}
+
+function validateHardhatNetworkChain(
+  pathLabel: string,
+  network: string,
+  chainID: number,
+  eid: number,
+): void {
+  const expected = hardhatNetworks.get(network);
+  if (expected === undefined) {
+    return;
+  }
+  if (expected.chainId !== chainID) {
+    throw new Error(
+      `${pathLabel}.network ${network} uses chainId ${expected.chainId}, but ${pathLabel}.chainId is ${chainID}`,
+    );
+  }
+  if (expected.eid !== eid) {
+    throw new Error(
+      `${pathLabel}.network ${network} uses eid ${expected.eid}, but ${pathLabel}.eid is ${eid}`,
+    );
+  }
+}
+
+function validateLayerZeroChain(
+  pathLabel: string,
+  eid: number,
+  chainID: number,
+  layerZero: LayerZeroAddresses,
+): void {
+  if (Number(layerZero.eid) !== eid) {
+    throw new Error(
+      `${pathLabel}.layerZero.eid ${layerZero.eid} does not match ${pathLabel}.eid ${eid}`,
+    );
+  }
+  if (layerZero.nativeChainId !== chainID) {
+    throw new Error(
+      `${pathLabel}.layerZero.nativeChainId ${layerZero.nativeChainId} does not match ${pathLabel}.chainId ${chainID}`,
+    );
+  }
 }
 
 function normalizeLayerZero(

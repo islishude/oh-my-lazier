@@ -4,6 +4,7 @@ import {
   requiredDVNsConfig,
 } from "./lz-config.js";
 import {
+  assertConfiguredChain,
   createClients,
   envAddress,
   envAddressList,
@@ -19,6 +20,7 @@ const endpointArtifact = loadABIArtifact(
 );
 
 const { account, publicClient, walletClient } = createClients();
+await assertConfiguredChain(publicClient);
 const endpoint = envAddress("ENDPOINT");
 const oapp = envAddress("OAPP");
 const remoteEid = envUint32("REMOTE_EID");
@@ -49,7 +51,7 @@ await waitForTx(
       ],
     ],
     account,
-    chain: null,
+    chain: walletClient.chain,
   }),
 );
 
@@ -72,7 +74,7 @@ await waitForTx(
       ],
     ],
     account,
-    chain: null,
+    chain: walletClient.chain,
   }),
 );
 

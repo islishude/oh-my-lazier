@@ -1,6 +1,8 @@
 import {
+  assertConfiguredChain,
   createPublicClientFromEnv,
   envAddress,
+  isMainModule,
   jsonStringify,
   loadArtifact,
   optionalAddress,
@@ -202,7 +204,7 @@ async function readTotalSupply(
   })) as bigint;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const testOFTArtifact = loadArtifact(
     "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
   );
@@ -213,8 +215,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
   );
 
+  const publicClient = createPublicClientFromEnv();
+  await assertConfiguredChain(publicClient);
   const report = await readDeploymentPreflight({
-    publicClient: createPublicClientFromEnv(),
+    publicClient,
     testOFT: envAddress("TEST_OFT"),
     openExecutor: envAddress("OPEN_EXECUTOR"),
     openDVN: envAddress("OPEN_DVN"),

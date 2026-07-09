@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   createPublicClient,
   createWalletClient,
@@ -197,6 +198,28 @@ export function createClients(): ChainClients {
 export function createPublicClientFromEnv(): PublicClient {
   const { rpcURL, chain } = chainFromEnv();
   return createPublicClient({ chain, transport: http(rpcURL) });
+}
+
+export async function assertConfiguredChain(
+  publicClient: PublicClient,
+): Promise<void> {
+  const configuredChainID = publicClient.chain?.id;
+  if (configuredChainID === undefined) {
+    throw new Error("public client is missing configured CHAIN_ID");
+  }
+  const rpcChainID = await publicClient.getChainId();
+  if (rpcChainID !== configuredChainID) {
+    throw new Error(
+      `RPC chain id ${rpcChainID} does not match configured CHAIN_ID ${configuredChainID}`,
+    );
+  }
+}
+
+export function isMainModule(importMetaURL: string): boolean {
+  const entrypoint = process.argv[1];
+  return (
+    entrypoint !== undefined && importMetaURL === pathToFileURL(entrypoint).href
+  );
 }
 
 function chainFromEnv() {

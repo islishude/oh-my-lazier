@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
@@ -42,13 +43,12 @@ func (s *Store) UpsertDVNJob(ctx context.Context, job DVNJobRecord) error {
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO dvn_jobs (guid, assigned, assigned_fee, confirmations_required, status)
 		VALUES ($1, true, $2, $3, $4)
-		ON CONFLICT (guid) DO UPDATE SET
-			assigned = true,
-			assigned_fee = EXCLUDED.assigned_fee,
-			confirmations_required = EXCLUDED.confirmations_required,
-			status = EXCLUDED.status,
-			updated_at = now()
-	`, job.GUID.Bytes(), fee, job.ConfirmationsRequired, job.Status)
+			ON CONFLICT (guid) DO UPDATE SET
+				assigned = true,
+				assigned_fee = EXCLUDED.assigned_fee,
+				confirmations_required = EXCLUDED.confirmations_required,
+				updated_at = now()
+		`, job.GUID.Bytes(), fee, job.ConfirmationsRequired, job.Status)
 	return err
 }
 
@@ -149,6 +149,31 @@ func (s *Store) ListDVNWork(ctx context.Context, status string, limit int) ([]DV
 		return nil, err
 	}
 	return work, nil
+}
+
+// DeferDVNJob postpones a non-terminal DVN job without changing its durable status.
+func (s *Store) DeferDVNJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error {
+	if guid == (common.Hash{}) {
+		return errors.New("dvn job guid is required")
+	}
+	if expectedStatus == "" {
+		return errors.New("dvn status is required")
+	}
+	if delay <= 0 {
+		return errors.New("dvn defer delay must be positive")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE dvn_jobs
+		SET next_retry_at = now() + $3::interval, updated_at = now()
+		WHERE guid = $1 AND status = $2
+	`, guid.Bytes(), expectedStatus, pgInterval(delay))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("dvn job %s is not in status %s", guid, expectedStatus)
+	}
+	return nil
 }
 
 // MarkDVNWaitingConfirmations records that the source packet has not reached required confirmations yet.

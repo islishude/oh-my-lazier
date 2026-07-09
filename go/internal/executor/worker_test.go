@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -345,8 +346,14 @@ func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessDelivererOnce() error = %v", err)
 	}
-	if processed {
-		t.Fatal("processed = true, want false")
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.ExecutorExecutable) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.ExecutorExecutable)
 	}
 	if store.request.Purpose != "" {
 		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
@@ -397,6 +404,22 @@ func TestProcessDelivererOnceMarksDeliveredWhenEndpointPayloadCleared(t *testing
 	}
 }
 
+func TestCheckDeliveryStateKeepsPayloadExecutableWhenLazyNonceAdvanced(t *testing.T) {
+	packet := testPacketRecord()
+	state, err := CheckDeliveryState(
+		context.Background(),
+		fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: packet.Nonce.Uint64(), lazyInboundNonce: packet.Nonce.Uint64()},
+		common.HexToAddress("0x4444444444444444444444444444444444444444"),
+		packet,
+	)
+	if err != nil {
+		t.Fatalf("CheckDeliveryState() error = %v", err)
+	}
+	if state != DeliveryExecutable {
+		t.Fatalf("delivery state = %v, want %v", state, DeliveryExecutable)
+	}
+}
+
 type fakeStore struct {
 	work           []db.ExecutorWorkItem
 	workByStatus   map[string][]db.ExecutorWorkItem
@@ -404,6 +427,8 @@ type fakeStore struct {
 	expectedStatus string
 	nextStatus     string
 	request        db.TxRequest
+	deferredGUID   common.Hash
+	deferredStatus string
 }
 
 func (s *fakeStore) ListExecutorWork(_ context.Context, status string, _ int) ([]db.ExecutorWorkItem, error) {
@@ -460,6 +485,12 @@ func (s *fakeStore) EnqueueExecutorTx(_ context.Context, guid common.Hash, expec
 	s.nextStatus = nextStatus
 	s.request = request
 	return 123, nil
+}
+
+func (s *fakeStore) DeferExecutorJob(_ context.Context, guid common.Hash, expectedStatus string, _ time.Duration) error {
+	s.deferredGUID = guid
+	s.deferredStatus = expectedStatus
+	return nil
 }
 
 type failingCaller struct{}

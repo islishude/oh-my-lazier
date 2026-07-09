@@ -42,12 +42,8 @@ const OAppEndpointConfigModule = buildModule("OAppEndpointConfig", (m) => {
     endpointAddress,
   );
 
-  const setDelegate = m.call(oappCore, "setDelegate", [delegate], {
-    id: "SetOAppDelegate",
-  });
   const setPeer = m.call(oappCore, "setPeer", [remoteEid, remotePeer], {
     id: "SetOAppPeer",
-    after: [setDelegate],
   });
   const setSendLibrary = m.call(
     endpoint,
@@ -73,9 +69,13 @@ const OAppEndpointConfigModule = buildModule("OAppEndpointConfig", (m) => {
     [oappCore, receiveUln, receiveConfig],
     { id: "SetEndpointReceiveConfig", after: [setSendConfig] },
   );
-  m.call(oappOptions, "setEnforcedOptions", [enforcedOptions], {
+  const setEnforcedOptions = m.call(oappOptions, "setEnforcedOptions", [enforcedOptions], {
     id: "SetOAppEnforcedOptions",
     after: [setReceiveConfig],
+  });
+  m.call(oappCore, "setDelegate", [delegate], {
+    id: "SetOAppDelegate",
+    after: [setEnforcedOptions],
   });
 
   return { oappCore, oappOptions, endpoint };

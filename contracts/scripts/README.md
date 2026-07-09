@@ -282,7 +282,7 @@ npm run oft:pathway -- \
   --oft-pathway-action inspect
 ```
 
-For state-changing actions, include `--private-key`. Supported `--oft-pathway-action` values are `pause-send`, `unpause-send`, `pause-receive`, `unpause-receive`, `drain`, and `set-rate-limit`. `drain` sets `capacity=0` and `refillPerSecond=0`; `set-rate-limit` requires `--rate-limit-capacity` and `--rate-limit-refill-per-second`.
+For state-changing actions, include `--private-key`. Supported `--oft-pathway-action` values are `pause-send`, `unpause-send`, `pause-receive`, `unpause-receive`, `drain`, `set-rate-limit`, and `clear-rate-limit`. `drain` sets `capacity=0` and `refillPerSecond=0`; `set-rate-limit` requires `--rate-limit-capacity` and `--rate-limit-refill-per-second`; `clear-rate-limit` removes the configured limiter and returns the pathway to unrestricted send capacity.
 
 ```bash
 npm run oft:pathway -- \
@@ -575,6 +575,10 @@ source chain's `OpenPriceFeed.priceSnapshot(dstEid)` has passed its
 `updatedAt + staleAfter` window. Refresh the source `OpenPriceFeed` snapshot
 with `configure:workers` or the price bot, then rerun `check:price-config`
 before retrying the OFT send.
+
+`OpenPriceFeed` rejects future `updatedAt` values and `staleAfter` windows above
+one day; keep profile and price-bot freshness windows within that contract
+limit.
 
 Check the source-chain canary receipt after the send transaction is mined:
 

@@ -4,6 +4,7 @@ import {
   type DVNVerificationStatus,
 } from "./dvn-verification-status.js";
 import {
+  assertConfiguredChain,
   createPublicClientFromEnv,
   envAddress,
   envAddressList,
@@ -25,6 +26,7 @@ const endpointArtifact = loadABIArtifact(
 
 const txHash = requiredEnv("TX_HASH") as Hex;
 const publicClient = createPublicClientFromEnv();
+await assertConfiguredChain(publicClient);
 const receipt = await publicClient.getTransactionReceipt({ hash: txHash });
 if (receipt.status !== "success") {
   throw new Error(`transaction ${txHash} did not succeed`);

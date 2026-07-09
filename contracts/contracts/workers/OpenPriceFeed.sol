@@ -8,6 +8,9 @@ import {WorkerTypes} from "../common/WorkerTypes.sol";
 /// @title OpenPriceFeed
 /// @notice Submitter-managed shared market price snapshots for source-chain workers.
 contract OpenPriceFeed is Ownable {
+    /// @notice Maximum accepted price freshness window.
+    uint64 public constant MAX_PRICE_SNAPSHOT_STALE_AFTER = 1 days;
+
     /// @notice Price snapshot by destination endpoint ID.
     mapping(uint32 dstEid => WorkerTypes.PriceSnapshot snapshot) public priceSnapshot;
 
@@ -52,7 +55,10 @@ contract OpenPriceFeed is Ownable {
         for (uint256 i = 0; i < updates.length; i++) {
             WorkerTypes.PriceSnapshotUpdate calldata update = updates[i];
             WorkerTypes.PriceSnapshot calldata snapshot = update.snapshot;
-            if (snapshot.dstGasPriceInSrcToken == 0 || snapshot.updatedAt == 0 || snapshot.staleAfter == 0) {
+            if (
+                snapshot.dstGasPriceInSrcToken == 0 || snapshot.updatedAt == 0 || snapshot.updatedAt > block.timestamp
+                    || snapshot.staleAfter == 0 || snapshot.staleAfter > MAX_PRICE_SNAPSHOT_STALE_AFTER
+            ) {
                 revert WorkerErrors.InvalidPriceSnapshot(update.dstEid);
             }
             priceSnapshot[update.dstEid] = snapshot;

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { EndpointId } from "@layerzerolabs/lz-definitions";
-import { jsonStringify, requiredEnv } from "./lib.js";
+import { isMainModule, jsonStringify, requiredEnv } from "./lib.js";
 
 const sepoliaEid = EndpointId.SEPOLIA_V2_TESTNET;
 const hoodiEid = EndpointId.HOODI_V2_TESTNET;
@@ -830,7 +830,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const path = requiredEnv("MIGRATION_EVIDENCE");
   const record = JSON.parse(
     readFileSync(path, "utf8"),

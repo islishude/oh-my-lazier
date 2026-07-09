@@ -156,6 +156,24 @@ func TestUpdateHeadProviderStatusesAllowsLaggingProviderRecovery(t *testing.T) {
 	}
 }
 
+func TestUpdateHeadProviderStatusesAllowsConflictProviderRecovery(t *testing.T) {
+	canonicalHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	client := &Client{providers: []Provider{
+		{URL: "provider-a", Status: ProviderHealthy},
+		{URL: "provider-b", Status: ProviderConflict},
+	}}
+
+	client.updateHeadProviderStatuses([]providerHead{
+		{URL: "provider-a", Number: big.NewInt(43), Hash: canonicalHash},
+		{URL: "provider-b", Number: big.NewInt(43), Hash: canonicalHash},
+	}, HeadResult{Number: big.NewInt(43), Hash: canonicalHash.Hex()})
+
+	providers := client.Providers()
+	if providers[1].Status != ProviderHealthy {
+		t.Fatalf("provider-b status = %q, want %q", providers[1].Status, ProviderHealthy)
+	}
+}
+
 func testReceipt() *gethtypes.Receipt {
 	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	return &gethtypes.Receipt{

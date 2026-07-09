@@ -107,14 +107,22 @@ func (m *Manager) runLoop(ctx context.Context, processOnce func(context.Context)
 func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 	processed := false
 	for _, target := range m.targets {
+		signerID := "<nil>"
+		if target.Signer != nil {
+			signerID = target.Signer.Address().Hex()
+		}
 		id, err := m.ProcessReceipts(ctx, target, 1)
 		if errors.Is(err, ErrNoReceiptUpdate) {
 			// No mined receipt yet; queued work may still be available.
 		} else if err != nil {
-			return processed, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
+			m.logger.Warn("tx receipt processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			continue
 		} else {
 			processed = true
-			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessStaleBroadcastReplacement(ctx, target)
@@ -124,20 +132,28 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			// Replacement fee would exceed configured caps; keep polling the original tx hash.
 			continue
 		} else if err != nil {
-			return processed, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
+			m.logger.Warn("stale tx replacement processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			continue
 		} else {
 			processed = true
-			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessFailedRetry(ctx, target)
 		if errors.Is(err, db.ErrNoFailedTxRetry) {
 			// No due failed retry; queued work may still be available.
 		} else if err != nil {
-			return processed, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
+			m.logger.Warn("failed tx retry processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			continue
 		} else {
 			processed = true
-			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessNext(ctx, target)
@@ -148,10 +164,14 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			continue
 		}
 		if err != nil {
-			return processed, err
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return processed, ctxErr
+			}
+			m.logger.Warn("queued tx processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			continue
 		}
 		processed = true
-		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", target.Signer.Address())
+		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
 	}
 	return processed, nil
 }

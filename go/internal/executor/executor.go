@@ -23,6 +23,7 @@ type Store interface {
 	MarkExecutorExecutable(ctx context.Context, guid common.Hash) error
 	MarkExecutorDeliveredFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error
 	EnqueueExecutorTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest) (int64, error)
+	DeferExecutorJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error
 }
 
 // Worker runs executor commit and delivery workflows.
@@ -86,8 +87,11 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if !pathway.Enabled {
+		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, string(packets.ExecutorVerifiable), loopInterval); err != nil {
+			return false, err
+		}
 		w.logger.Debug("skipped executor commit workflow", "reason", "pathway_disabled", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status)
-		return false, nil
+		return true, nil
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
@@ -106,8 +110,11 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 		return true, nil
 	case CommitVerifiable:
 	default:
+		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, string(packets.ExecutorVerifiable), loopInterval); err != nil {
+			return false, err
+		}
 		w.logger.Debug("skipped executor commit workflow", "reason", "commit_not_verifiable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status, "commit_state", commitStateLabel(state))
-		return false, nil
+		return true, nil
 	}
 	request, err := BuildCommitVerificationTx(item.Packet, pathway.ReceiveLib, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {
@@ -132,8 +139,11 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 		return false, err
 	}
 	if !pathway.Enabled {
+		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+			return false, err
+		}
 		w.logger.Debug("skipped executor commit readiness", "reason", "pathway_disabled", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status)
-		return false, nil
+		return true, nil
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
@@ -165,8 +175,11 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 		w.logger.Info("executor job waiting for dvn verification", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorWaitingDVNVerification))
 		return true, nil
 	}
+	if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+		return false, err
+	}
 	w.logger.Debug("skipped executor commit readiness", "reason", "commit_not_verifiable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "commit_state", commitStateLabel(state))
-	return false, nil
+	return true, nil
 }
 
 // ProcessDelivererOnce enqueues one lzReceive transaction for an executable packet.
@@ -203,8 +216,11 @@ func (w *Worker) processExecutableReadiness(ctx context.Context) (bool, error) {
 		return true, nil
 	case DeliveryExecutable:
 	default:
+		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, string(packets.ExecutorCommitted), loopInterval); err != nil {
+			return false, err
+		}
 		w.logger.Debug("skipped executor executable readiness", "reason", "delivery_not_executable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", item.Job.Status, "delivery_state", deliveryStateLabel(state))
-		return false, nil
+		return true, nil
 	}
 	if err := w.store.MarkExecutorExecutable(ctx, item.Packet.GUID); err != nil {
 		return false, err
@@ -236,8 +252,11 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 		return true, nil
 	case DeliveryExecutable:
 	default:
+		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+			return false, err
+		}
 		w.logger.Debug("skipped executor delivery workflow", "reason", "delivery_not_executable", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "delivery_state", deliveryStateLabel(state))
-		return false, nil
+		return true, nil
 	}
 	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {

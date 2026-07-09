@@ -543,21 +543,45 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 		return nil, fmt.Errorf("pricing sources for chain %d are not configured", eid)
 	}
 	var primary SourcePrice
+	var primaryErr error
 	if chainSources.Primary != nil {
 		price, err := chainSources.Primary.PriceUSD(ctx)
 		if err == nil {
 			primary = price
+		} else {
+			primaryErr = err
 		}
 	}
 	sanityPrices := make([]SourcePrice, 0, len(chainSources.Sanity))
+	var sanityErrs []error
+	sanityConfigured := 0
 	for _, reader := range chainSources.Sanity {
 		if reader == nil {
 			continue
 		}
+		sanityConfigured++
 		price, err := reader.PriceUSD(ctx)
-		if err == nil {
+		if err != nil {
+			sanityErrs = append(sanityErrs, err)
+			continue
+		}
+		if price.USD == nil || price.USD.Sign() <= 0 {
+			sanityErrs = append(sanityErrs, fmt.Errorf("%s returned non-positive price", price.Source))
+			continue
+		}
+		{
 			sanityPrices = append(sanityPrices, price)
 		}
+	}
+	if primary.USD != nil && primary.USD.Sign() > 0 && sanityConfigured > 0 && len(sanityPrices) == 0 {
+		err := fmt.Errorf("no healthy sanity price source for chain %d", eid)
+		if len(sanityErrs) > 0 {
+			return nil, errors.Join(append([]error{err}, sanityErrs...)...)
+		}
+		return nil, err
+	}
+	if primary.USD == nil && primaryErr != nil && len(sanityPrices) == 0 && !policy.AllowSanityFallback {
+		return nil, primaryErr
 	}
 	return SelectPriceWithSanity(primary, sanityPrices, policy.MaxDeviationBps, policy.AllowSanityFallback)
 }

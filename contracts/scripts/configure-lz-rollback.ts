@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { rollbackConfigPlan, type LzConfigSnapshot } from "./lz-config.js";
 import {
+  assertConfiguredChain,
   createClients,
   jsonStringify,
   loadABIArtifact,
@@ -24,6 +25,7 @@ if (optionalBool("DRY_RUN") === true) {
 }
 
 const { account, publicClient, walletClient } = createClients();
+await assertConfiguredChain(publicClient);
 
 for (const batch of plan.batches) {
   await waitForTx(
@@ -35,7 +37,7 @@ for (const batch of plan.batches) {
       functionName: "setConfig",
       args: [snapshot.oapp, batch.library, batch.configs],
       account,
-      chain: null,
+      chain: walletClient.chain,
     }),
   );
 }

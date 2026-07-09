@@ -175,7 +175,7 @@ func TestApplyExecutorDestinationLogsDefersConfiguredMissingSourceState(t *testi
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{}
 
-	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, common.Address{}, []gethtypes.Log{
 		testPacketVerifiedLog(t, packet),
 	}, destinationLogObserver{})
 	if err != nil {
@@ -197,7 +197,7 @@ func TestApplyExecutorDestinationLogsDefersConfiguredMissingExecutorJob(t *testi
 		},
 	}
 
-	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, common.Address{}, []gethtypes.Log{
 		testPacketVerifiedLog(t, packet),
 	}, destinationLogObserver{})
 	if err != nil {
@@ -216,7 +216,7 @@ func TestApplyExecutorDestinationLogsSkipsExternalMissingPackets(t *testing.T) {
 	packet.Sender = common.HexToAddress("0x1212121212121212121212121212121212121212")
 	store := &fakeDestinationStore{}
 
-	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, common.Address{}, []gethtypes.Log{
 		testPacketVerifiedLog(t, packet),
 	}, destinationLogObserver{})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestApplyExecutorDestinationLogsSkipsDisabledMissingSourceState(t *testing.
 	pathway.Enabled = false
 	store := &fakeDestinationStore{}
 
-	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, common.Address{}, []gethtypes.Log{
 		testPacketVerifiedLog(t, packet),
 	}, destinationLogObserver{})
 	if err != nil {
@@ -260,7 +260,7 @@ func TestApplyExecutorDestinationLogsSkipsDisabledMissingExecutorJob(t *testing.
 		},
 	}
 
-	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, common.Address{}, []gethtypes.Log{
 		testPacketVerifiedLog(t, packet),
 	}, destinationLogObserver{})
 	if err != nil {
@@ -331,6 +331,71 @@ func TestApplyExecutorDestinationLogsDoesNotLetAlertOverrideDelivered(t *testing
 	}
 	if store.failedGUID != (common.Hash{}) {
 		t.Fatalf("failed guid = %s, want zero", store.failedGUID)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsUnexpectedAlertExecutor(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byGUID: map[common.Hash]db.PacketRecord{
+			packet.GUID: packet,
+		},
+		executorJobs: map[common.Hash]db.ExecutorJobRecord{
+			packet.GUID: {
+				GUID:   packet.GUID,
+				Status: string(packets.ExecutorLzReceiveTxEnqueued),
+			},
+		},
+	}
+
+	result, err := applyExecutorDestinationLogs(
+		context.Background(),
+		store,
+		packet.DstEID,
+		[]chain.Pathway{testIndexerPathway()},
+		common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		[]gethtypes.Log{
+			testLzReceiveAlertLogWithExecutor(t, packet, common.HexToAddress("0x9999999999999999999999999999999999999999"), []byte{0xde, 0xad}),
+		},
+		destinationLogObserver{},
+	)
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+	if store.failedGUID != (common.Hash{}) {
+		t.Fatalf("failed guid = %s, want zero", store.failedGUID)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsUnexpectedAlertExecutorForMissingPacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{}
+
+	result, err := applyExecutorDestinationLogs(
+		context.Background(),
+		store,
+		packet.DstEID,
+		[]chain.Pathway{testIndexerPathway()},
+		common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		[]gethtypes.Log{
+			testLzReceiveAlertLogWithExecutor(t, packet, common.HexToAddress("0x9999999999999999999999999999999999999999"), []byte{0xde, 0xad}),
+		},
+		destinationLogObserver{},
+	)
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
 	}
 }
 
@@ -651,6 +716,10 @@ func testPacketDeliveredLog(t *testing.T, packetRecord db.PacketRecord) gethtype
 }
 
 func testLzReceiveAlertLog(t *testing.T, packetRecord db.PacketRecord, reason []byte) gethtypes.Log {
+	return testLzReceiveAlertLogWithExecutor(t, packetRecord, common.HexToAddress("0x9999999999999999999999999999999999999999"), reason)
+}
+
+func testLzReceiveAlertLogWithExecutor(t *testing.T, packetRecord db.PacketRecord, executor common.Address, reason []byte) gethtypes.Log {
 	t.Helper()
 	data, err := endpointEventInputs(t, "LzReceiveAlert").NonIndexed().Pack(
 		originFromPacketRecord(packetRecord),
@@ -668,7 +737,7 @@ func testLzReceiveAlertLog(t *testing.T, packetRecord db.PacketRecord, reason []
 		Topics: []common.Hash{
 			lzabi.LzReceiveAlertTopic(),
 			common.BytesToHash(packetRecord.Receiver.Bytes()),
-			common.BytesToHash(common.HexToAddress("0x9999999999999999999999999999999999999999").Bytes()),
+			common.BytesToHash(executor.Bytes()),
 		},
 		Data:   data,
 		TxHash: common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333"),

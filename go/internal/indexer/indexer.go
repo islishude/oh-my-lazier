@@ -594,7 +594,8 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64,
 }
 
 func (i *Indexer) applyExecutorDestinationLogs(ctx context.Context, logs []gethtypes.Log) (destinationApplyResult, error) {
-	return applyExecutorDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs, destinationLogObserver{
+	expectedExecutor := common.HexToAddress(i.chain.TxRoles.Executor.SignerID)
+	return applyExecutorDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, expectedExecutor, logs, destinationLogObserver{
 		executorApplied: func(packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log) {
 			topic := logTopic(log)
 			i.logger.Info(

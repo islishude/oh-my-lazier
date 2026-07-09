@@ -9,11 +9,13 @@ This review covers `TestOFT` pause controls and outbound token-bucket limits use
 - `pauseSend(uint32 dstEid, bool paused)`: blocks outbound burns for one destination endpoint.
 - `pauseReceive(uint32 srcEid, bool paused)`: blocks inbound mints from one source endpoint.
 - `setOutboundRateLimit(uint32 dstEid, RateLimitConfig config)`: configures outbound token-bucket capacity and refill rate.
+- `clearOutboundRateLimit(uint32 dstEid)`: removes the configured outbound token-bucket limit and returns the pathway to unrestricted send capacity.
 
 Operational properties:
 
 - unset outbound rate limits are unrestricted
 - setting `capacity = 0` and `refillPerSecond = 0` is explicit drain mode
+- clearing a rate limit deletes both config and bucket state
 - setting a rate limit resets current bucket tokens to `capacity`
 - refill is capped at `capacity`, so idle periods cannot accumulate more than one bucket
 - send pause is checked before token debit
@@ -24,7 +26,7 @@ Implementation evidence:
 - `contracts/contracts/oft/OFTPauseAndRateLimit.sol`
 - `contracts/test/OpenWorkers.t.sol` pause and rate-limit tests
 - `contracts/scripts/configure-workers.ts` optional `--rate-limit-capacity` and `--rate-limit-refill-per-second`
-- `npm run oft:pathway` for inspecting and changing TestOFT pathway pause/drain/rate-limit state
+- `npm run oft:pathway` for inspecting and changing TestOFT pathway pause/drain/rate-limit/clear state
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` for confirming worker DB state has no in-flight packet, job, or outbox work before a config switch
 
 ## Migration Usage
@@ -35,7 +37,7 @@ Before switching Executor or DVN config:
 2. Run canary transfers and confirm `ExecutorFeePaid`, commit, delivery, and destination balance.
 3. For drain, run `npm run oft:pathway -- --oft-pathway-action drain` or `npm run oft:pathway -- --oft-pathway-action pause-send`.
 4. Run `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` until it reports `ready: true` before changing DVN required sets.
-5. After validation, restore the approved rate limit with `--oft-pathway-action set-rate-limit` and unpause sends with `--oft-pathway-action unpause-send`.
+5. After validation, restore the approved rate limit with `--oft-pathway-action set-rate-limit`, or remove a temporary limiter with `--oft-pathway-action clear-rate-limit`, then unpause sends with `--oft-pathway-action unpause-send`.
 
 `pauseSend` is preferred when the operator wants an immediate hard stop. Zero-capacity rate limit is preferred when documenting an explicit drain configuration alongside other pathway setup.
 
@@ -44,6 +46,7 @@ Before switching Executor or DVN config:
 - Confirm every pathway has a documented steady-state capacity and refill rate.
 - Confirm the canary amount is below steady-state capacity.
 - Confirm drain mode uses both capacity and refill set to zero.
+- Confirm temporary rate limits are cleared only when unrestricted send capacity is the approved steady state.
 - Confirm no migration relies on inbound `pauseReceive` unless rollback explicitly requires blocking destination mint.
 - Confirm `configdiff` captures any worker-side pathway changes before the on-chain rate-limit operation.
 - Confirm monitoring includes `laz_packets_total`, `laz_executor_jobs_total`, and `laz_pathway_paused` during drain.

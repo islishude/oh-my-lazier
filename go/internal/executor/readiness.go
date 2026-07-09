@@ -151,9 +151,6 @@ func CheckDeliveryState(ctx context.Context, caller ContractCaller, endpoint com
 	if origin.Nonce > inboundNonce {
 		return DeliveryNotExecutable, nil
 	}
-	if origin.Nonce <= lazyInboundNonce {
-		return DeliveryDelivered, nil
-	}
 	return DeliveryExecutable, nil
 }
 

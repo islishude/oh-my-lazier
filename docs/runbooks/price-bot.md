@@ -44,7 +44,7 @@ After the tx manager broadcasts and confirms the queued transactions:
 
 1. Confirm the tx outbox rows for the pricing signer reached a terminal confirmed status.
 2. Run `npm run check:price-config` on the source chain for the target `DST_EID`.
-3. Confirm `updatedAt` is recent and `staleAfter` matches the approved config.
+3. Confirm `updatedAt` is recent, not in the future, and `staleAfter` matches the approved config without exceeding the contract's one-day maximum.
 4. Confirm shared `dstGasPriceInSrcToken`, `dstDataFeePerByteInSrcToken`, and stale window match the recorded gas/data/price inputs, and each worker's `dstGasOverhead`, `dataSizeOverheadBytes`, `marginBps`, and ABI-facing `baseFee` match the approved executor/DVN fee models derived from `fixed_fee_wei`.
 5. Confirm `gas_spike_bps` matches the approved config and is included in config-diff review evidence.
 6. Confirm `getFee`/`getFeeOnSend` succeeds before the stale window expires.

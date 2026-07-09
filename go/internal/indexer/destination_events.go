@@ -58,11 +58,11 @@ type destinationApplyResult struct {
 
 // ApplyExecutorDestinationLogs applies known EndpointV2 destination logs for one destination chain.
 func ApplyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, logs []gethtypes.Log) (int, error) {
-	result, err := applyExecutorDestinationLogs(ctx, store, dstEID, nil, logs, destinationLogObserver{})
+	result, err := applyExecutorDestinationLogs(ctx, store, dstEID, nil, common.Address{}, logs, destinationLogObserver{})
 	return result.applied, err
 }
 
-func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, pathways []chain.Pathway, logs []gethtypes.Log, observer destinationLogObserver) (destinationApplyResult, error) {
+func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, pathways []chain.Pathway, expectedExecutor common.Address, logs []gethtypes.Log, observer destinationLogObserver) (destinationApplyResult, error) {
 	if store == nil {
 		return destinationApplyResult{}, fmt.Errorf("executor destination store is required")
 	}
@@ -73,7 +73,7 @@ func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 	for _, log := range logs {
 		packet, ok, err := packetForDestinationLog(ctx, store, dstEID, log)
 		if errors.Is(err, pgx.ErrNoRows) {
-			pathway, matches, matchErr := executorDestinationLogPathway(pathways, dstEID, log)
+			pathway, matches, matchErr := executorDestinationLogPathway(pathways, dstEID, expectedExecutor, log)
 			if matchErr != nil {
 				return result, matchErr
 			}
@@ -104,6 +104,12 @@ func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		}
 		if packet.DstEID != dstEID {
 			return result, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+		}
+		if !executorDestinationLogExecutorAllowed(log, expectedExecutor) {
+			if observer.executorSkipped != nil {
+				observer.executorSkipped("unexpected_executor", packet, db.ExecutorJobRecord{}, log)
+			}
+			continue
 		}
 		job, err := store.GetExecutorJob(ctx, packet.GUID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -282,7 +288,7 @@ func pathwayForDestinationIdentity(pathways []chain.Pathway, dstEID, srcEID uint
 	return chain.Pathway{}, false
 }
 
-func executorDestinationLogPathway(pathways []chain.Pathway, dstEID uint32, log gethtypes.Log) (chain.Pathway, bool, error) {
+func executorDestinationLogPathway(pathways []chain.Pathway, dstEID uint32, expectedExecutor common.Address, log gethtypes.Log) (chain.Pathway, bool, error) {
 	if len(pathways) == 0 || len(log.Topics) == 0 {
 		return chain.Pathway{}, false, nil
 	}
@@ -306,11 +312,22 @@ func executorDestinationLogPathway(pathways []chain.Pathway, dstEID uint32, log 
 		if err != nil {
 			return chain.Pathway{}, false, err
 		}
+		if expectedExecutor != (common.Address{}) && event.Executor != expectedExecutor {
+			return chain.Pathway{}, false, nil
+		}
 		pathway, ok := pathwayForDestinationIdentity(pathways, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver)
 		return pathway, ok, nil
 	default:
 		return chain.Pathway{}, false, nil
 	}
+}
+
+func executorDestinationLogExecutorAllowed(log gethtypes.Log, expectedExecutor common.Address) bool {
+	if expectedExecutor == (common.Address{}) || len(log.Topics) == 0 || log.Topics[0] != lzabi.LzReceiveAlertTopic() {
+		return true
+	}
+	event, err := lzabi.DecodeLzReceiveAlert(log)
+	return err == nil && event.Executor == expectedExecutor
 }
 
 func pathwayForPayloadVerified(pathways []chain.Pathway, dstEID uint32, event lzabi.PayloadVerified) (chain.Pathway, bool) {

@@ -1,5 +1,6 @@
 import { CONFIG_TYPE_EXECUTOR, encodeExecutorConfig } from "./lz-config.js";
 import {
+  assertConfiguredChain,
   createClients,
   envAddress,
   envBigInt,
@@ -14,6 +15,7 @@ const endpointArtifact = loadABIArtifact(
 );
 
 const { account, publicClient, walletClient } = createClients();
+await assertConfiguredChain(publicClient);
 const endpoint = envAddress("ENDPOINT");
 const oapp = envAddress("OAPP");
 const remoteEid = envUint32("REMOTE_EID");
@@ -42,7 +44,7 @@ await waitForTx(
       [{ eid: remoteEid, configType: CONFIG_TYPE_EXECUTOR, config }],
     ],
     account,
-    chain: null,
+    chain: walletClient.chain,
   }),
 );
 

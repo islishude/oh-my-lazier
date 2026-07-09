@@ -183,9 +183,6 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	heads := make([]providerHead, 0, len(c.providers))
 	var transientErrs []error
 	for index, provider := range c.snapshotProviders() {
-		if provider.Status == ProviderConflict {
-			continue
-		}
 		header, err := c.headerByNumberFromProvider(ctx, index, nil)
 		if err != nil {
 			transientErrs = append(transientErrs, fmt.Errorf("%s: %w", provider.URL, err))

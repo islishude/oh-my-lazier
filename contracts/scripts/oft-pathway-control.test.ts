@@ -8,7 +8,14 @@ import {
 
 test("expectedStateForAction maps drain to zero-capacity rate limit", () => {
   assert.deepEqual(expectedStateForAction("drain"), {
+    outboundRateLimitConfigured: true,
     outboundRateLimitConfig: { capacity: 0n, refillPerSecond: 0n },
+  });
+});
+
+test("expectedStateForAction maps clear-rate-limit to unconfigured state", () => {
+  assert.deepEqual(expectedStateForAction("clear-rate-limit"), {
+    outboundRateLimitConfigured: false,
   });
 });
 

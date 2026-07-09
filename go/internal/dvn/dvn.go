@@ -52,6 +52,7 @@ type Store interface {
 	MarkDVNVerifiedFromChain(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error
 	MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
 	MarkDVNReorgDetected(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
+	DeferDVNJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error
 	PauseChain(ctx context.Context, eid uint32) error
 	PausePathwayForPacket(ctx context.Context, guid common.Hash) error
 }
@@ -217,6 +218,9 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 				}
 				w.logger.Info("dvn job waiting for source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
 			} else {
+				if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+					return false, err
+				}
 				w.logger.Debug("skipped dvn confirmations", "reason", "insufficient_confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
 			}
 			return true, nil

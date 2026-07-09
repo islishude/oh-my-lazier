@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
@@ -49,13 +50,11 @@ func (s *Store) UpsertExecutorJob(ctx context.Context, job ExecutorJobRecord) er
 	_, err := s.pool.Exec(ctx, `
 		INSERT INTO executor_jobs (guid, assigned, assigned_fee, status, last_error)
 		VALUES ($1, true, $2, $3, $4)
-		ON CONFLICT (guid) DO UPDATE SET
-			assigned = true,
-			assigned_fee = EXCLUDED.assigned_fee,
-			status = EXCLUDED.status,
-			last_error = EXCLUDED.last_error,
-			updated_at = now()
-	`, job.GUID.Bytes(), fee, job.Status, lastError)
+			ON CONFLICT (guid) DO UPDATE SET
+				assigned = true,
+				assigned_fee = EXCLUDED.assigned_fee,
+				updated_at = now()
+		`, job.GUID.Bytes(), fee, job.Status, lastError)
 	return err
 }
 
@@ -143,6 +142,31 @@ func (s *Store) ListExecutorWork(ctx context.Context, status string, limit int) 
 		return nil, err
 	}
 	return work, nil
+}
+
+// DeferExecutorJob postpones a non-terminal executor job without changing its durable status.
+func (s *Store) DeferExecutorJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error {
+	if guid == (common.Hash{}) {
+		return errors.New("executor job guid is required")
+	}
+	if expectedStatus == "" {
+		return errors.New("executor status is required")
+	}
+	if delay <= 0 {
+		return errors.New("executor defer delay must be positive")
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE executor_jobs
+		SET next_retry_at = now() + $3::interval, updated_at = now()
+		WHERE guid = $1 AND status = $2
+	`, guid.Bytes(), expectedStatus, pgInterval(delay))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("executor job %s is not in status %s", guid, expectedStatus)
+	}
+	return nil
 }
 
 // EnqueueExecutorTx inserts an outbox tx and advances packet/job status atomically.

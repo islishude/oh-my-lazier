@@ -6,6 +6,7 @@ import {
   decodeUlnConfig,
 } from "./lz-config.js";
 import {
+  assertConfiguredChain,
   createPublicClientFromEnv,
   envAddress,
   envUint32,
@@ -18,6 +19,7 @@ const endpointArtifact = loadABIArtifact(
 );
 
 const publicClient = createPublicClientFromEnv();
+await assertConfiguredChain(publicClient);
 const endpoint = envAddress("ENDPOINT");
 const oapp = envAddress("OAPP");
 const remoteEid = envUint32("REMOTE_EID");

@@ -540,6 +540,94 @@ func TestRetryFailedTxRequeuesNoNonceRowInPlace(t *testing.T) {
 	}
 }
 
+func TestRetryFailedTxRequeuesAssignedSignFailureInPlace(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	const signerID = "0x5555555555555555555555555555555555555555"
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_outbox WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test rows: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, "DELETE FROM tx_nonce_cursors WHERE signer_id = $1", signerID); err != nil {
+		t.Fatalf("delete test cursor: %v", err)
+	}
+	if inserted, err := store.BootstrapTxNonceCursor(ctx, 40161, signerID, 77); err != nil {
+		t.Fatalf("BootstrapTxNonceCursor() error = %v", err)
+	} else if !inserted {
+		t.Fatal("BootstrapTxNonceCursor() inserted = false, want true")
+	}
+	id, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: 40161,
+		Purpose:  "sign-failed-retry",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x01, 0x02},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	claimed, err := store.ClaimNextNonce(ctx, 40161, signerID)
+	if err != nil {
+		t.Fatalf("ClaimNextNonce() error = %v", err)
+	}
+	if claimed.ID != id || claimed.Nonce != 77 {
+		t.Fatalf("claimed = %d/%d, want %d/77", claimed.ID, claimed.Nonce, id)
+	}
+	if err := store.MarkTxFailed(ctx, id, errors.New("sign failed"), TxFailureSignFailed); err != nil {
+		t.Fatalf("MarkTxFailed() error = %v", err)
+	}
+
+	retryID, err := store.RetryFailedTx(ctx, id)
+	if err != nil {
+		t.Fatalf("RetryFailedTx() error = %v", err)
+	}
+	if retryID != id {
+		t.Fatalf("retry id = %d, want original id %d", retryID, id)
+	}
+	retryTx, err := store.GetOutboxTx(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if retryTx.Status != TxStatusQueued {
+		t.Fatalf("status = %q, want %q", retryTx.Status, TxStatusQueued)
+	}
+	if retryTx.Nonce != 77 {
+		t.Fatalf("nonce = %d, want 77", retryTx.Nonce)
+	}
+	if retryTx.TxHash != (common.Hash{}) {
+		t.Fatalf("tx hash = %s, want zero hash", retryTx.TxHash)
+	}
+	if retryTx.Attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", retryTx.Attempts)
+	}
+	if retryTx.FailureKind != "" || retryTx.NextRetryAt != nil {
+		t.Fatalf("failure metadata = %q/%v, want cleared", retryTx.FailureKind, retryTx.NextRetryAt)
+	}
+}
+
 func TestPrepareNextFailedTxRetryStopsAtAttemptCapAndStatsExposeRetryState(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -702,11 +790,12 @@ func TestUpsertPacketPersistsIndexedPacket(t *testing.T) {
 	}
 
 	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
 	cleanPacketRows(ctx, t, store, packet.GUID)
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() insert error = %v", err)
 	}
-	packet.Status = string(packets.ExecutorAssigned)
+	packet.Status = string(packets.ExecutorNew)
 	packet.SrcBlockNumber = 124
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() update error = %v", err)
@@ -800,6 +889,30 @@ func TestUpsertExecutorJobPersistsAssignment(t *testing.T) {
 	}
 	if job.Status != string(packets.ExecutorAssigned) {
 		t.Fatalf("GetExecutorJob() status = %q, want %q", job.Status, packets.ExecutorAssigned)
+	}
+	if err := store.MarkExecutorWaitingDVNVerification(ctx, packet.GUID, string(packets.ExecutorAssigned)); err != nil {
+		t.Fatalf("MarkExecutorWaitingDVNVerification() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(99),
+		Status:      string(packets.ExecutorAssigned),
+		LastError:   "stale index replay",
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() conflict update error = %v", err)
+	}
+	job, err = store.GetExecutorJob(ctx, packet.GUID)
+	if err != nil {
+		t.Fatalf("GetExecutorJob() after conflict update error = %v", err)
+	}
+	if job.Status != string(packets.ExecutorWaitingDVNVerification) {
+		t.Fatalf("GetExecutorJob() status after conflict update = %q, want %q", job.Status, packets.ExecutorWaitingDVNVerification)
+	}
+	if job.AssignedFee == nil || job.AssignedFee.Cmp(big.NewInt(99)) != 0 {
+		t.Fatalf("GetExecutorJob() assigned fee after conflict update = %v, want 99", job.AssignedFee)
+	}
+	if job.LastError != "" {
+		t.Fatalf("GetExecutorJob() last error after conflict update = %q, want empty", job.LastError)
 	}
 }
 
@@ -917,6 +1030,27 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	}
 	if err := store.MarkDVNWaitingConfirmations(ctx, packet.GUID, string(packets.DVNAssigned)); err != nil {
 		t.Fatalf("MarkDVNWaitingConfirmations() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		AssignedFee:           big.NewInt(99),
+		ConfirmationsRequired: 15,
+		Status:                string(packets.DVNAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() conflict update error = %v", err)
+	}
+	job, err := store.GetDVNJob(ctx, packet.GUID)
+	if err != nil {
+		t.Fatalf("GetDVNJob() after conflict update error = %v", err)
+	}
+	if job.Status != string(packets.DVNWaitingConfirmations) {
+		t.Fatalf("GetDVNJob() status after conflict update = %q, want %q", job.Status, packets.DVNWaitingConfirmations)
+	}
+	if job.AssignedFee == nil || job.AssignedFee.Cmp(big.NewInt(99)) != 0 {
+		t.Fatalf("GetDVNJob() assigned fee after conflict update = %v, want 99", job.AssignedFee)
+	}
+	if job.ConfirmationsRequired != 15 {
+		t.Fatalf("GetDVNJob() confirmations after conflict update = %d, want 15", job.ConfirmationsRequired)
 	}
 	if err := store.MarkDVNQuorumChecking(ctx, packet.GUID, string(packets.DVNWaitingConfirmations)); err != nil {
 		t.Fatalf("MarkDVNQuorumChecking() error = %v", err)

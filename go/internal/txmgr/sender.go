@@ -73,7 +73,7 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 		return 0, errors.New("target client is required")
 	}
 	signerID := target.Signer.Address().Hex()
-	queued, err := m.store.PeekQueuedTx(ctx, target.ChainEID, signerID)
+	queued, err := m.store.PeekSendableTx(ctx, target.ChainEID, signerID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, ErrNoQueuedTx
 	}
@@ -103,26 +103,30 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 		m.logger.Debug("deferred tx outbox row", "reason", "estimate_gas_error", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "error", err.Error())
 		return 0, fmt.Errorf("%w: estimate gas for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
 	}
-	claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
-	if errors.Is(err, db.ErrNonceCursorMissing) {
-		rpcNonce, nonceErr := target.Client.PendingNonceAt(ctx, target.Signer.Address())
-		if nonceErr != nil {
-			return 0, nonceErr
+	if queued.Status == db.TxStatusQueued {
+		claimed, err := m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
+		if errors.Is(err, db.ErrNonceCursorMissing) {
+			rpcNonce, nonceErr := target.Client.PendingNonceAt(ctx, target.Signer.Address())
+			if nonceErr != nil {
+				return 0, nonceErr
+			}
+			if _, nonceErr := m.store.BootstrapTxNonceCursor(ctx, target.ChainEID, signerID, rpcNonce); nonceErr != nil {
+				return 0, nonceErr
+			}
+			m.logger.Info("bootstrapped tx nonce cursor", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "rpc_nonce", rpcNonce)
+			claimed, err = m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
 		}
-		if _, nonceErr := m.store.BootstrapTxNonceCursor(ctx, target.ChainEID, signerID, rpcNonce); nonceErr != nil {
-			return 0, nonceErr
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoQueuedTx
 		}
-		m.logger.Info("bootstrapped tx nonce cursor", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "rpc_nonce", rpcNonce)
-		claimed, err = m.store.ClaimTxNonce(ctx, queued.ID, target.ChainEID, signerID)
+		if err != nil {
+			return 0, err
+		}
+		m.logger.Info("claimed tx nonce", "id", claimed.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "nonce", claimed.Nonce)
+	} else if queued.Status != db.TxStatusNonceAssigned {
+		return 0, fmt.Errorf("outbox tx %d has unsupported sendable status %s", queued.ID, queued.Status)
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, ErrNoQueuedTx
-	}
-	if err != nil {
-		return 0, err
-	}
-	m.logger.Info("claimed tx nonce", "id", claimed.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "nonce", claimed.Nonce)
-	outboxTx, err := m.store.GetOutboxTx(ctx, claimed.ID)
+	outboxTx, err := m.store.GetOutboxTx(ctx, queued.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -247,11 +251,14 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 	}
 	quote, err := quoteFee(ctx, queued, policy, target.Client)
 	if err != nil {
+		if errors.Is(err, ErrTxDeferred) {
+			if markErr := m.store.MarkTxReplacementDeferred(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
+				return 0, markErr
+			}
+			return 0, ErrTxDeferred
+		}
 		if markErr := m.store.MarkTxReplacementAttemptFailed(ctx, outboxTx.ID, outboxTx.TxHash, err); markErr != nil {
 			return 0, markErr
-		}
-		if errors.Is(err, ErrTxDeferred) {
-			return 0, ErrTxDeferred
 		}
 		return 0, err
 	}
@@ -502,15 +509,22 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 }
 
 func signOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer) (*types.Transaction, error) {
-	return signOutboxTxWithStatus(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusNonceAssigned)
+	return signOutboxTxWithStatuses(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusNonceAssigned)
 }
 
 func signReplacementOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer) (*types.Transaction, error) {
-	return signOutboxTxWithStatus(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusBroadcast)
+	return signOutboxTxWithStatuses(ctx, outboxTx, chainID, gasLimit, quote, signer, db.TxStatusSigned, db.TxStatusBroadcast)
 }
 
-func signOutboxTxWithStatus(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer, signableStatus string) (*types.Transaction, error) {
-	if outboxTx.Status != signableStatus {
+func signOutboxTxWithStatuses(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer, signableStatuses ...string) (*types.Transaction, error) {
+	signable := false
+	for _, status := range signableStatuses {
+		if outboxTx.Status == status {
+			signable = true
+			break
+		}
+	}
+	if !signable {
 		return nil, fmt.Errorf("outbox tx %d status %q is not signable", outboxTx.ID, outboxTx.Status)
 	}
 	if gasLimit == 0 {

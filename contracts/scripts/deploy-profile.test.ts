@@ -68,6 +68,32 @@ test("normalizeProfile rejects legacy LayerZero Labs DVN profile fields", () => 
   );
 });
 
+test("normalizeProfile rejects Hardhat network and chain id mismatches", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).chainId = 560048;
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.network sepolia uses chainId 11155111, but profile\.chains\[0\]\.chainId is 560048/,
+  );
+});
+
+test("normalizeProfile rejects Hardhat network and EID mismatches with custom LayerZero", () => {
+  const input = baseProfile();
+  const chain = input.chains[0] as Record<string, unknown>;
+  chain.eid = 40449;
+  chain.layerZero = {
+    endpointV2: "0x3aCAAf60502791D199a5a5F0B173D78229eBFe32",
+    sendUln302: "0x45841dd1ca50265Da7614fC43A361e526c0e6160",
+    receiveUln302: "0xd682ECF100f6F4284138AA925348633B0611Ae21",
+  };
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.network sepolia uses eid 40161, but profile\.chains\[0\]\.eid is 40449/,
+  );
+});
+
 test("normalizeProfile accepts opt-in LayerZero Labs DVN metadata", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;

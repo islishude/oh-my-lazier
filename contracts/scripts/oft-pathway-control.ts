@@ -1,4 +1,5 @@
 import {
+  assertConfiguredChain,
   createClients,
   createPublicClientFromEnv,
   envAddress,
@@ -7,6 +8,7 @@ import {
   jsonStringify,
   loadArtifact,
   requiredEnv,
+  isMainModule,
   waitForTx,
 } from "./lib.js";
 import type { Abi, Address, PublicClient } from "viem";
@@ -18,6 +20,7 @@ export type OFTPathwayAction =
   | "pause-receive"
   | "unpause-receive"
   | "drain"
+  | "clear-rate-limit"
   | "set-rate-limit";
 
 export type RateLimitConfig = {
@@ -38,6 +41,7 @@ export type OFTPathwayState = {
 export type ExpectedOFTPathwayState = {
   sendPaused?: boolean;
   receivePaused?: boolean;
+  outboundRateLimitConfigured?: boolean;
   outboundRateLimitConfig?: RateLimitConfig;
 };
 
@@ -58,15 +62,21 @@ export function expectedStateForAction(
       return { receivePaused: false };
     case "drain":
       return {
+        outboundRateLimitConfigured: true,
         outboundRateLimitConfig: { capacity: 0n, refillPerSecond: 0n },
       };
+    case "clear-rate-limit":
+      return { outboundRateLimitConfigured: false };
     case "set-rate-limit":
       if (rateLimit === undefined) {
         throw new Error(
           "RATE_LIMIT_CAPACITY and RATE_LIMIT_REFILL_PER_SECOND are required",
         );
       }
-      return { outboundRateLimitConfig: rateLimit };
+      return {
+        outboundRateLimitConfigured: true,
+        outboundRateLimitConfig: rateLimit,
+      };
   }
 }
 
@@ -111,6 +121,14 @@ export function validateOFTPathwayState(
         `rate-limit refillPerSecond is ${state.outboundRateLimitConfig.refillPerSecond}, expected ${expected.outboundRateLimitConfig.refillPerSecond}`,
       );
     }
+  }
+  if (
+    expected.outboundRateLimitConfigured !== undefined &&
+    state.outboundRateLimitConfigured !== expected.outboundRateLimitConfigured
+  ) {
+    errors.push(
+      `outboundRateLimitConfigured is ${state.outboundRateLimitConfigured}, expected ${expected.outboundRateLimitConfigured}`,
+    );
   }
   return errors;
 }
@@ -184,6 +202,7 @@ function parseAction(): OFTPathwayAction {
     case "pause-receive":
     case "unpause-receive":
     case "drain":
+    case "clear-rate-limit":
     case "set-rate-limit":
       return action;
     default:
@@ -191,7 +210,7 @@ function parseAction(): OFTPathwayAction {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (isMainModule(import.meta.url)) {
   const testOFTArtifact = loadArtifact(
     "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
   );
@@ -208,8 +227,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const expected = expectedStateForAction(action, rateLimit);
 
   if (action === "inspect") {
+    const publicClient = createPublicClientFromEnv();
+    await assertConfiguredChain(publicClient);
     const state = await readOFTPathwayState({
-      publicClient: createPublicClientFromEnv(),
+      publicClient,
       testOFT,
       remoteEid,
       testOFTAbi: testOFTArtifact.abi,
@@ -217,6 +238,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(jsonStringify({ ok: true, action, state }));
   } else {
     const { account, publicClient, walletClient } = createClients();
+    await assertConfiguredChain(publicClient);
     let hash;
     if (action === "pause-send" || action === "unpause-send") {
       hash = await walletClient.writeContract({
@@ -225,7 +247,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         functionName: "pauseSend",
         args: [remoteEid, action === "pause-send"],
         account,
-        chain: null,
+        chain: walletClient.chain,
       });
     } else if (action === "pause-receive" || action === "unpause-receive") {
       hash = await walletClient.writeContract({
@@ -234,7 +256,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         functionName: "pauseReceive",
         args: [remoteEid, action === "pause-receive"],
         account,
-        chain: null,
+        chain: walletClient.chain,
+      });
+    } else if (action === "clear-rate-limit") {
+      hash = await walletClient.writeContract({
+        address: testOFT,
+        abi: testOFTArtifact.abi,
+        functionName: "clearOutboundRateLimit",
+        args: [remoteEid],
+        account,
+        chain: walletClient.chain,
       });
     } else {
       const config =
@@ -248,7 +279,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         functionName: "setOutboundRateLimit",
         args: [remoteEid, config],
         account,
-        chain: null,
+        chain: walletClient.chain,
       });
     }
     await waitForTx(publicClient, `TestOFT.${action}`, hash);

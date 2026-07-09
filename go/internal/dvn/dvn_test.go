@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -86,6 +87,12 @@ func TestProcessConfirmationsOnceLogsInsufficientConfirmationsWithoutStatusChang
 	}
 	if store.waitingGUID != (common.Hash{}) {
 		t.Fatalf("waiting guid = %s, want zero", store.waitingGUID)
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.DVNWaitingConfirmations) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.DVNWaitingConfirmations)
 	}
 	assertLogContains(t, logs.String(),
 		`level=DEBUG`,
@@ -700,6 +707,8 @@ type fakeStore struct {
 	pausedChainEID        uint32
 	pausedPathwayGUID     common.Hash
 	quorumResult          []byte
+	deferredGUID          common.Hash
+	deferredStatus        string
 }
 
 func (s *fakeStore) ListDVNWork(_ context.Context, status string, _ int) ([]db.DVNWorkItem, error) {
@@ -758,6 +767,12 @@ func (s *fakeStore) MarkDVNReorgDetected(_ context.Context, guid common.Hash, _,
 	s.reorgGUID = guid
 	s.reorgReason = reason
 	s.quorumResult = bytes.Clone(quorumResult)
+	return nil
+}
+
+func (s *fakeStore) DeferDVNJob(_ context.Context, guid common.Hash, expectedStatus string, _ time.Duration) error {
+	s.deferredGUID = guid
+	s.deferredStatus = expectedStatus
 	return nil
 }
 

@@ -1,6 +1,7 @@
 import { buildCanarySendParam } from "./oft-canary.js";
 import { enrichKnownContractError } from "./contract-error.js";
 import {
+  assertConfiguredChain,
   createClients,
   envAddress,
   envBigInt,
@@ -28,6 +29,7 @@ const knownSendErrorsABI = [
 
 export async function sendOFTFromEnv(label: string): Promise<void> {
   const { account, publicClient, walletClient } = createClients();
+  await assertConfiguredChain(publicClient);
   const testOFT = envAddress("TEST_OFT");
   const recipient = envAddress("RECIPIENT");
   const dstEid = envUint32("DST_EID");
@@ -75,7 +77,7 @@ export async function sendOFTFromEnv(label: string): Promise<void> {
         args: [sendParam, fee, refundAddress],
         value: fee.nativeFee,
         account,
-        chain: null,
+        chain: walletClient.chain,
       }),
     ),
   );

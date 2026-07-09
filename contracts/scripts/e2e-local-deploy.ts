@@ -506,7 +506,7 @@ async function deployContract(
     bytecode: artifact.bytecode,
     args: [...artifact.args],
     account: clients.account,
-    chain: null,
+    chain: clients.walletClient.chain,
   });
   const address = await waitForContract(clients.publicClient, hash);
   console.log(`${label}: ${address}`);
@@ -527,7 +527,7 @@ async function writeTx(
     functionName,
     args: [...args],
     account: clients.account,
-    chain: null,
+    chain: clients.walletClient.chain,
   });
   const receipt = await clients.publicClient.waitForTransactionReceipt({
     hash,
@@ -546,7 +546,7 @@ async function fundAddress(
   const clients = clientsFor(chain);
   const hash = await clients.walletClient.sendTransaction({
     account: clients.account,
-    chain: null,
+    chain: clients.walletClient.chain,
     to: recipient,
     value,
   });

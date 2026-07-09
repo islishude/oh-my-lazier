@@ -210,7 +210,7 @@ async function runDirection(
     functionName: "send",
     args: [sendParam, { nativeFee, lzTokenFee: 0n }, deployer.address],
     account: deployer,
-    chain: null,
+    chain: sourceClients.walletClient.chain,
     value: nativeFee,
   });
   logStep("OFT send submitted", { direction, tx: hash });
@@ -351,7 +351,7 @@ async function runMultiSendIndexerScenario(
     functionName: "multiSend",
     args: [sendParams, false, deployer.address],
     account: deployer,
-    chain: null,
+    chain: sourceClients.walletClient.chain,
     value: quote.totalFee.nativeFee,
   });
   logStep("TestOFT multiSend submitted", { direction, tx: hash });
@@ -503,7 +503,7 @@ async function sendSecondaryVerification(
       BigInt(deployment.parameters.confirmations),
     ],
     account: deployer,
-    chain: null,
+    chain: clients.walletClient.chain,
   });
   logStep("secondary OpenDVN verification submitted", {
     chain: destination.name,
@@ -969,7 +969,7 @@ async function withdrawSourceWorkerFee(
     functionName: "withdrawFee",
     args: [source.sendUln, withdrawalRecipient, claim.amount],
     account: deployer,
-    chain: null,
+    chain: clients.walletClient.chain,
   });
   logStep("source worker fee withdrawal submitted", {
     chain: source.name,

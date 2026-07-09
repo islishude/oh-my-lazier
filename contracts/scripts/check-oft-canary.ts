@@ -5,6 +5,7 @@ import {
   assertCanarySourceReceipt,
 } from "./oft-canary-status.js";
 import {
+  assertConfiguredChain,
   createPublicClientFromEnv,
   envAddress,
   jsonStringify,
@@ -26,6 +27,7 @@ const testOFTArtifact = loadArtifact(
 );
 
 const publicClient = createPublicClientFromEnv();
+await assertConfiguredChain(publicClient);
 const endpoint = envAddress("ENDPOINT");
 const sourceTxHash = optionalParam("SOURCE_TX_HASH");
 const destinationTxHash = optionalParam("DESTINATION_TX_HASH");

@@ -312,6 +312,34 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_priceFeedRejectsFutureSnapshotTimestamp() public {
+        WorkerTypes.PriceSnapshot memory invalid = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp + 1),
+            staleAfter: 30 minutes
+        });
+        expectRevert(
+            address(priceFeed),
+            abi.encodeCall(priceFeed.setPriceSnapshot, (singleUpdate(DST_EID, invalid))),
+            WorkerErrors.InvalidPriceSnapshot.selector
+        );
+    }
+
+    function test_priceFeedRejectsExcessiveStaleWindow() public {
+        WorkerTypes.PriceSnapshot memory invalid = WorkerTypes.PriceSnapshot({
+            dstGasPriceInSrcToken: 10 gwei,
+            dstDataFeePerByteInSrcToken: 0,
+            updatedAt: uint64(block.timestamp),
+            staleAfter: priceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER() + 1
+        });
+        expectRevert(
+            address(priceFeed),
+            abi.encodeCall(priceFeed.setPriceSnapshot, (singleUpdate(DST_EID, invalid))),
+            WorkerErrors.InvalidPriceSnapshot.selector
+        );
+    }
+
     function test_sharedPriceFeedUpdateChangesExecutorAndDVNQuotes() public {
         WorkerTypes.PriceSnapshot memory snapshot = WorkerTypes.PriceSnapshot({
             dstGasPriceInSrcToken: 20 gwei,
@@ -693,7 +721,7 @@ contract OpenWorkersTest {
         );
     }
 
-    function test_dvnRejectsMessageSize() public {
+    function test_dvnAssignmentDoesNotTreatPacketHeaderAsMessageSize() public {
         bytes memory packetHeader = new bytes(1025);
         ILayerZeroDVN.AssignJobParam memory param = ILayerZeroDVN.AssignJobParam({
             dstEid: DST_EID,
@@ -703,9 +731,9 @@ contract OpenWorkersTest {
             sender: OAPP
         });
 
-        expectRevert(
-            address(sendLib), abi.encodeCall(sendLib.assignDVN, (dvn, param, "")), WorkerErrors.MessageTooLarge.selector
-        );
+        uint256 quotedFee = sendLib.dvnFee(dvn, DST_EID, 12, OAPP, "");
+        uint256 assignedFee = sendLib.assignDVN(dvn, param, "");
+        require(assignedFee == quotedFee, "assigned fee must match quote");
     }
 
     function test_dvnAssignUsesSendLibInternalAccountingWithoutNativeValue() public {
@@ -903,6 +931,19 @@ contract OpenWorkersTest {
         );
     }
 
+    function test_oftClearRateLimitRestoresUnrestrictedDebit() public {
+        WorkerTypes.RateLimitConfig memory limit = WorkerTypes.RateLimitConfig({capacity: 0, refillPerSecond: 0});
+        oft.setOutboundRateLimit(DST_EID, limit);
+        oft.clearOutboundRateLimit(DST_EID);
+
+        uint256 beforeBalance = oft.balanceOf(address(this));
+        (uint256 sent, uint256 received) = oft.exposedDebit(address(this), 1 ether, 1 ether, DST_EID);
+        require(sent == 1 ether, "unexpected sent amount");
+        require(received == 1 ether, "unexpected received amount");
+        require(oft.balanceOf(address(this)) == beforeBalance - 1 ether, "debit did not burn");
+        require(!oft.outboundRateLimitConfigured(DST_EID), "rate limit still configured");
+    }
+
     function test_oftRateLimitAllowsDebitWithinCapacity() public {
         WorkerTypes.RateLimitConfig memory limit = WorkerTypes.RateLimitConfig({capacity: 10 ether, refillPerSecond: 0});
         oft.setOutboundRateLimit(DST_EID, limit);
@@ -930,6 +971,19 @@ contract OpenWorkersTest {
         require(sent == amount, "refilled debit failed");
         (uint256 tokens,) = oft.outboundRateLimitState(DST_EID);
         require(tokens == expectedRefill - amount, "unexpected post-refill tokens");
+    }
+
+    function test_oftRateLimitRefillSaturatesWithoutOverflow() public {
+        WorkerTypes.RateLimitConfig memory limit =
+            WorkerTypes.RateLimitConfig({capacity: 10 ether, refillPerSecond: type(uint256).max});
+        oft.setOutboundRateLimit(DST_EID, limit);
+        uint64 updatedAt = block.timestamp > 1 ? uint64(block.timestamp - 1) : 0;
+        oft.forceRateLimitState(DST_EID, 0, updatedAt);
+
+        (uint256 sent,) = oft.exposedDebit(address(this), 1 ether, 1 ether, DST_EID);
+        require(sent == 1 ether, "overflow-safe refill debit failed");
+        (uint256 tokens,) = oft.outboundRateLimitState(DST_EID);
+        require(tokens == 9 ether, "refill did not saturate at capacity");
     }
 
     receive() external payable {}

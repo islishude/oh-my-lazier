@@ -1,4 +1,5 @@
 import {
+  assertConfiguredChain,
   createClients,
   envAddress,
   envBigInt,
@@ -25,6 +26,7 @@ const openPriceFeedArtifact = loadArtifact(
 );
 
 const { account, publicClient, walletClient } = createClients();
+await assertConfiguredChain(publicClient);
 
 const testOFT = optionalAddress("TEST_OFT");
 const openExecutor = envAddress("OPEN_EXECUTOR");
@@ -78,7 +80,7 @@ if (rateLimitCapacity !== undefined || rateLimitRefillPerSecond !== undefined) {
         },
       ],
       account,
-      chain: null,
+      chain: walletClient.chain,
     }),
   );
 }
@@ -92,7 +94,7 @@ await waitForTx(
     functionName: "setPriceSnapshot",
     args: [[{ dstEid: remoteEid, snapshot: sharedPriceSnapshot }]],
     account,
-    chain: null,
+    chain: walletClient.chain,
   }),
 );
 
@@ -115,7 +117,7 @@ for (const [label, address, abi] of [
         functionName: "setPriceFeed",
         args: [priceFeed],
         account,
-        chain: null,
+        chain: walletClient.chain,
       }),
     );
   }
@@ -129,7 +131,7 @@ for (const [label, address, abi] of [
       functionName: "setAllowedSendLib",
       args: [sendLib, true],
       account,
-      chain: null,
+      chain: walletClient.chain,
     }),
   );
 
@@ -142,7 +144,7 @@ for (const [label, address, abi] of [
       functionName: "setPathwayConfig",
       args: [remoteEid, srcOApp, pathwayConfig],
       account,
-      chain: null,
+      chain: walletClient.chain,
     }),
   );
 
@@ -155,7 +157,7 @@ for (const [label, address, abi] of [
       functionName: "setFeeModel",
       args: [remoteEid, label === "OpenExecutor" ? executorFeeModel : dvnFeeModel],
       account,
-      chain: null,
+      chain: walletClient.chain,
     }),
   );
 }
