@@ -76,6 +76,57 @@ func TestMigrateAndSyncConfig(t *testing.T) {
 	}
 }
 
+func TestSourcePacketSkipRoundTrip(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+	skip := SourcePacketSkip{
+		Role:           "executor",
+		SrcEID:         40161,
+		DstEID:         40449,
+		Nonce:          77,
+		Sender:         common.HexToAddress("0x7777777777777777777777777777777777777777"),
+		Receiver:       common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		GUID:           common.HexToHash("0x7777777777777777777777777777777777777777777777777777777777777777"),
+		SrcTxHash:      common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		SrcBlockNumber: 123,
+		SrcLogIndex:    4,
+		Reason:         "unexpected_worker",
+		Worker:         common.HexToAddress("0x2323232323232323232323232323232323232323"),
+	}
+	if err := store.RecordSourcePacketSkip(ctx, skip); err != nil {
+		t.Fatalf("RecordSourcePacketSkip() error = %v", err)
+	}
+	got, err := store.GetSourcePacketSkip(ctx, skip.Role, skip.SrcEID, skip.DstEID, skip.Sender, skip.Receiver, skip.Nonce)
+	if err != nil {
+		t.Fatalf("GetSourcePacketSkip() error = %v", err)
+	}
+	if got != skip {
+		t.Fatalf("source packet skip = %+v, want %+v", got, skip)
+	}
+}
+
 func TestPausePathwayForPacketAndChain(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
@@ -704,6 +755,17 @@ func TestPrepareNextFailedTxRetryStopsAtAttemptCapAndStatsExposeRetryState(t *te
 	if err != nil {
 		t.Fatalf("EnqueueTx(parent) error = %v", err)
 	}
+	neutralizedID, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: retryStatsChainEID,
+		Purpose:  "neutralized",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x05},
+		Value:    big.NewInt(0),
+		SignerID: signerID,
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx(neutralized) error = %v", err)
+	}
 	childID, err := store.EnqueueTx(ctx, TxRequest{
 		ChainEID: retryStatsChainEID,
 		Purpose:  "child",
@@ -733,8 +795,15 @@ func TestPrepareNextFailedTxRetryStopsAtAttemptCapAndStatsExposeRetryState(t *te
 		UPDATE tx_outbox
 		SET status = $1, failure_kind = $2, next_retry_at = NULL, attempts = 1
 		WHERE id = $3
-	`, TxStatusFailed, TxFailureReceiptFailed, parentID); err != nil {
+		`, TxStatusFailed, TxFailureReceiptFailed, parentID); err != nil {
 		t.Fatalf("mark superseded parent: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+			UPDATE tx_outbox
+			SET status = $1, failure_kind = NULL, next_retry_at = NULL, attempts = 1
+			WHERE id = $2
+		`, TxStatusFailed, neutralizedID); err != nil {
+		t.Fatalf("mark neutralized failed row: %v", err)
 	}
 	if _, err := store.pool.Exec(ctx, "UPDATE tx_outbox SET retry_of_id = $1 WHERE id = $2", parentID, childID); err != nil {
 		t.Fatalf("mark superseded child: %v", err)
@@ -759,8 +828,8 @@ func TestPrepareNextFailedTxRetryStopsAtAttemptCapAndStatsExposeRetryState(t *te
 	if counts[TxOutboxRetryStateRetrying] != 1 {
 		t.Fatalf("retrying count = %d, want 1; counts=%v", counts[TxOutboxRetryStateRetrying], counts)
 	}
-	if counts[TxOutboxRetryStateSuperseded] != 1 {
-		t.Fatalf("superseded count = %d, want 1; counts=%v", counts[TxOutboxRetryStateSuperseded], counts)
+	if counts[TxOutboxRetryStateSuperseded] != 2 {
+		t.Fatalf("superseded count = %d, want 2; counts=%v", counts[TxOutboxRetryStateSuperseded], counts)
 	}
 }
 
@@ -2016,6 +2085,9 @@ func syncDrainPathway(ctx context.Context, t *testing.T, store *Store, packet Pa
 
 func cleanPathwayRows(ctx context.Context, t *testing.T, store *Store, srcEID, dstEID uint32) {
 	t.Helper()
+	if _, err := store.pool.Exec(ctx, "DELETE FROM source_packet_skips WHERE src_eid = $1 AND dst_eid = $2", srcEID, dstEID); err != nil {
+		t.Fatalf("delete pathway source_packet_skips: %v", err)
+	}
 	if _, err := store.pool.Exec(ctx, `
 		DELETE FROM tx_outbox
 		WHERE guid IN (

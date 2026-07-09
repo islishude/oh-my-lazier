@@ -160,6 +160,9 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 	if len(store.packets) != 0 || len(store.jobs) != 0 {
 		t.Fatalf("stored packets/jobs = %d/%d, want 0/0", len(store.packets), len(store.jobs))
 	}
+	if len(store.sourceSkips) != 1 {
+		t.Fatalf("source skips = %d, want 1", len(store.sourceSkips))
+	}
 	assertLogContains(t, logs.String(),
 		`level=DEBUG`,
 		`msg="skipped executor source assignment"`,
@@ -211,7 +214,7 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	)
 }
 
-func TestIndexerProcessOnceDefersDestinationCursorForMissingSourcePacket(t *testing.T) {
+func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
@@ -245,6 +248,43 @@ func TestIndexerProcessOnceDefersDestinationCursorForMissingSourcePacket(t *test
 	}
 	if result.DestinationLogs != 1 {
 		t.Fatalf("second DestinationLogs = %d, want 1", result.DestinationLogs)
+	}
+	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	}
+}
+
+func TestIndexerProcessOnceAdvancesDestinationCursorForSkippedSourcePacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := newFakeIndexerStore()
+	store.sourceSkips[sourceSkipLookupKey(sourceRoleExecutor, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64())] = db.SourcePacketSkip{
+		Role:     sourceRoleExecutor,
+		SrcEID:   packet.SrcEID,
+		DstEID:   packet.DstEID,
+		Nonce:    packet.Nonce.Uint64(),
+		Sender:   packet.Sender,
+		Receiver: packet.Receiver,
+		GUID:     packet.GUID,
+		Reason:   "unexpected_worker",
+	}
+	client := &fakeLogClient{
+		head:            200,
+		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorDestination: true})
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 0 {
+		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
 	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
 		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
@@ -1161,16 +1201,18 @@ type fakeIndexerStore struct {
 	jobs            map[common.Hash]db.ExecutorJobRecord
 	dvnJobs         map[common.Hash]db.DVNJobRecord
 	cursors         map[string]uint64
+	sourceSkips     map[string]db.SourcePacketSkip
 	committedGUID   common.Hash
 	dvnVerifiedGUID common.Hash
 }
 
 func newFakeIndexerStore() *fakeIndexerStore {
 	return &fakeIndexerStore{
-		packets: make(map[common.Hash]db.PacketRecord),
-		jobs:    make(map[common.Hash]db.ExecutorJobRecord),
-		dvnJobs: make(map[common.Hash]db.DVNJobRecord),
-		cursors: make(map[string]uint64),
+		packets:     make(map[common.Hash]db.PacketRecord),
+		jobs:        make(map[common.Hash]db.ExecutorJobRecord),
+		dvnJobs:     make(map[common.Hash]db.DVNJobRecord),
+		cursors:     make(map[string]uint64),
+		sourceSkips: make(map[string]db.SourcePacketSkip),
 	}
 }
 
@@ -1187,6 +1229,11 @@ func (s *fakeIndexerStore) UpdateIndexerCursor(_ context.Context, chainEID uint3
 	if s.cursors[key] < lastBlock {
 		s.cursors[key] = lastBlock
 	}
+	return nil
+}
+
+func (s *fakeIndexerStore) RecordSourcePacketSkip(_ context.Context, skip db.SourcePacketSkip) error {
+	s.sourceSkips[sourceSkipLookupKey(skip.Role, skip.SrcEID, skip.DstEID, skip.Sender, skip.Receiver, skip.Nonce)] = skip
 	return nil
 }
 
@@ -1245,6 +1292,14 @@ func (s *fakeIndexerStore) GetDVNJob(_ context.Context, guid common.Hash) (db.DV
 		return db.DVNJobRecord{}, pgx.ErrNoRows
 	}
 	return job, nil
+}
+
+func (s *fakeIndexerStore) GetSourcePacketSkip(_ context.Context, role string, srcEID, dstEID uint32, sender, receiver common.Address, nonce uint64) (db.SourcePacketSkip, error) {
+	skip, ok := s.sourceSkips[sourceSkipLookupKey(role, srcEID, dstEID, sender, receiver, nonce)]
+	if !ok {
+		return db.SourcePacketSkip{}, pgx.ErrNoRows
+	}
+	return skip, nil
 }
 
 func (s *fakeIndexerStore) MarkExecutorCommittedObserved(_ context.Context, guid, _ common.Hash, _ string) error {

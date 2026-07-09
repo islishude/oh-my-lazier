@@ -84,7 +84,7 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	item := work[0]
 	pathway, err := w.registry.Pathway(item.Packet.SrcEID, item.Packet.DstEID, item.Packet.Sender, item.Packet.Receiver)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, string(packets.ExecutorVerifiable), "pathway_lookup_error", err)
 	}
 	if !pathway.Enabled {
 		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, string(packets.ExecutorVerifiable), loopInterval); err != nil {
@@ -95,11 +95,11 @@ func (w *Worker) ProcessCommitterOnce(ctx context.Context) (bool, error) {
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, string(packets.ExecutorVerifiable), "destination_chain_lookup_error", err)
 	}
 	state, err := CheckCommitState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, string(packets.ExecutorVerifiable), "commit_readiness_error", err)
 	}
 	switch state {
 	case CommitCommitted:
@@ -136,7 +136,7 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 	item := work[0]
 	pathway, err := w.registry.Pathway(item.Packet.SrcEID, item.Packet.DstEID, item.Packet.Sender, item.Packet.Receiver)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "pathway_lookup_error", err)
 	}
 	if !pathway.Enabled {
 		if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
@@ -147,11 +147,11 @@ func (w *Worker) processCommitReadinessStatus(ctx context.Context, status string
 	}
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "destination_chain_lookup_error", err)
 	}
 	state, err := CheckCommitState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, pathway.ReceiveLib, item.Packet)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "commit_readiness_error", err)
 	}
 	switch state {
 	case CommitCommitted:
@@ -201,11 +201,11 @@ func (w *Worker) processExecutableReadiness(ctx context.Context) (bool, error) {
 	item := work[0]
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, string(packets.ExecutorCommitted), "destination_chain_lookup_error", err)
 	}
 	state, err := CheckDeliveryState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, string(packets.ExecutorCommitted), "delivery_readiness_error", err)
 	}
 	switch state {
 	case DeliveryDelivered:
@@ -237,11 +237,11 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	item := work[0]
 	dstChain, err := w.registry.Get(item.Packet.DstEID)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "destination_chain_lookup_error", err)
 	}
 	state, err := CheckDeliveryState(ctx, w.caller(item.Packet.DstEID), dstChain.EndpointAddress, item.Packet)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "delivery_readiness_error", err)
 	}
 	switch state {
 	case DeliveryDelivered:
@@ -313,6 +313,17 @@ func (w *Worker) runLoop(ctx context.Context, process func(context.Context) (boo
 		case <-timer.C:
 		}
 	}
+}
+
+func (w *Worker) deferExecutorWorkError(ctx context.Context, item db.ExecutorWorkItem, status, reason string, cause error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := w.store.DeferExecutorJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+		return false, err
+	}
+	w.logger.Warn("deferred executor job after processing error", "reason", reason, "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", cause.Error())
+	return true, nil
 }
 
 func (w *Worker) caller(eid uint32) ContractCaller {

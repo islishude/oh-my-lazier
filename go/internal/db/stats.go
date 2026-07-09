@@ -240,6 +240,7 @@ func (s *Store) txOutboxStats(ctx context.Context) ([]TxOutboxStat, error) {
 					FROM tx_outbox child
 					WHERE child.retry_of_id = tx.id
 				) THEN $2
+				WHEN tx.failure_kind IS NULL THEN $2
 				WHEN tx.failure_kind IS NOT NULL AND tx.attempts < $3 AND tx.next_retry_at IS NOT NULL THEN $4
 				ELSE $5
 			END AS retry_state,

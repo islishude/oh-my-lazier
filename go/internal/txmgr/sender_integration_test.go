@@ -1795,6 +1795,9 @@ func TestProcessFailedRetryIgnoresStaleLzReceiveFailureAfterWorkflowAdvanced(t *
 	if failedTx.NextRetryAt != nil {
 		t.Fatalf("next retry at = %v, want nil", failedTx.NextRetryAt)
 	}
+	if failedTx.FailureKind != "" {
+		t.Fatalf("failure kind = %q, want cleared", failedTx.FailureKind)
+	}
 	advanced, err := store.GetPacket(t.Context(), packet.GUID)
 	if err != nil {
 		t.Fatalf("GetPacket(advanced) error = %v", err)

@@ -483,6 +483,52 @@ func TestProcessReadyToVerifyOnceActiveRejectsReceiveUlnConfigDrift(t *testing.T
 	}
 }
 
+func TestProcessReadyToVerifyOnceActiveDefersReconcileError(t *testing.T) {
+	packet := testDVNPacket()
+	report := []byte(`{"status":"ready"}`)
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReadyToVerify),
+				QuorumResult:          report,
+			},
+		}},
+	}
+	worker := NewWithClientsSettingsAndCallers(
+		store,
+		testRegistry(t, packet, config.DVNModeActive),
+		map[uint32]Settings{
+			packet.DstEID: {
+				SignerID: "0x8888888888888888888888888888888888888888",
+			},
+		},
+		nil,
+		nil,
+		map[uint32]ContractCaller{packet.DstEID: failingDVNCaller{}},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.DVNReadyToVerify) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.DVNReadyToVerify)
+	}
+	if store.verifyRequest.Purpose != "" {
+		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
+	}
+}
+
 func TestProcessReadyToVerifyOnceActiveMarksVerifiedWhenAlreadyCompleteOnChain(t *testing.T) {
 	packet := testDVNPacket()
 	report := []byte(`{"status":"ready"}`)
@@ -673,6 +719,46 @@ func TestProcessQuorumOnceMarksReorgWhenReceiptDisappears(t *testing.T) {
 	}
 	if len(store.quorumResult) == 0 {
 		t.Fatal("quorum result is empty")
+	}
+}
+
+func TestProcessQuorumOnceDefersReceiptReaderError(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{
+		work: []db.DVNWorkItem{{
+			Packet: packet,
+			Job: db.DVNJobRecord{
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNQuorumChecking),
+			},
+		}},
+	}
+	worker := NewWithClients(
+		store,
+		map[uint32]HeadReader{packet.SrcEID: fakeHead{head: packet.SrcBlockNumber + 12}},
+		map[uint32]ReceiptReader{packet.SrcEID: fakeReceiptErrorReader{err: fmt.Errorf("receipt rpc unavailable")}},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessQuorumOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessQuorumOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.DVNQuorumChecking) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.DVNQuorumChecking)
+	}
+	if store.conflictGUID != (common.Hash{}) {
+		t.Fatalf("conflict guid = %s, want zero", store.conflictGUID)
+	}
+	if store.reorgGUID != (common.Hash{}) {
+		t.Fatalf("reorg guid = %s, want zero", store.reorgGUID)
 	}
 }
 
@@ -912,6 +998,20 @@ type fakeReceiptNotFoundReader struct{}
 
 func (r fakeReceiptNotFoundReader) TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error) {
 	return nil, ethereum.NotFound
+}
+
+type fakeReceiptErrorReader struct {
+	err error
+}
+
+func (r fakeReceiptErrorReader) TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error) {
+	return nil, r.err
+}
+
+type failingDVNCaller struct{}
+
+func (failingDVNCaller) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	return nil, fmt.Errorf("eth_call unavailable")
 }
 
 type fakeDVNReconcileCaller struct {

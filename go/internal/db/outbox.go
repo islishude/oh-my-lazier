@@ -44,7 +44,7 @@ const (
 
 	// TxOutboxRetryStateRetrying means a failed row is still eligible for automatic retry.
 	TxOutboxRetryStateRetrying = "retrying"
-	// TxOutboxRetryStateSuperseded means a failed row already has a fresh retry child.
+	// TxOutboxRetryStateSuperseded means a failed row already has a fresh retry child or its workflow advanced past the failure.
 	TxOutboxRetryStateSuperseded = "superseded"
 	// TxOutboxRetryStateExhausted means a failed row requires manual intervention.
 	TxOutboxRetryStateExhausted = "exhausted"
@@ -1074,7 +1074,7 @@ func prepareReceiptRetryWorkflow(ctx context.Context, tx pgx.Tx, failedTxID int6
 	case string(packets.ExecutorLzReceiveTxEnqueued), string(packets.ExecutorDelivered):
 		if _, err := tx.Exec(ctx, `
 			UPDATE tx_outbox
-			SET next_retry_at = NULL, updated_at = now()
+			SET failure_kind = NULL, next_retry_at = NULL, updated_at = now()
 			WHERE id = $1 AND status = $2
 		`, failedTxID, TxStatusFailed); err != nil {
 			return false, err

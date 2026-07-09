@@ -198,6 +198,38 @@ func TestProcessCommitterOnceMarksCommittedWhenEndpointAlreadyHasPayload(t *test
 	}
 }
 
+func TestProcessCommitterOnceDefersPathwayLookupError(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorVerifiable)
+	packet.Sender = common.HexToAddress("0x1212121212121212121212121212121212121212")
+	store := &fakeStore{
+		work: []db.ExecutorWorkItem{{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorVerifiable)},
+		}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeCommitReadyCaller{}},
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessCommitterOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessCommitterOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.ExecutorVerifiable) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.ExecutorVerifiable)
+	}
+}
+
 func TestIsCommitVerifiableRejectsEmptyPayloadHash(t *testing.T) {
 	packet := testPacketRecord()
 	packet.PayloadHash = common.Hash{}
@@ -398,6 +430,40 @@ func TestProcessDelivererOnceMarksDeliveredWhenEndpointPayloadCleared(t *testing
 	}
 	if store.nextStatus != string(packets.ExecutorDelivered) {
 		t.Fatalf("next status = %q, want %q", store.nextStatus, packets.ExecutorDelivered)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
+	}
+}
+
+func TestProcessDelivererOnceDefersReadinessError(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorExecutable)
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorExecutable)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: failingCaller{}},
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessDelivererOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessDelivererOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID {
+		t.Fatalf("deferred guid = %s, want %s", store.deferredGUID, packet.GUID)
+	}
+	if store.deferredStatus != string(packets.ExecutorExecutable) {
+		t.Fatalf("deferred status = %q, want %q", store.deferredStatus, packets.ExecutorExecutable)
 	}
 	if store.request.Purpose != "" {
 		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)

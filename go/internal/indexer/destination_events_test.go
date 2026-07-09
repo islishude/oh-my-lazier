@@ -171,7 +171,7 @@ func TestApplyExecutorDestinationLogsSkipsPacketsWithoutExecutorJob(t *testing.T
 	}
 }
 
-func TestApplyExecutorDestinationLogsDefersConfiguredMissingSourceState(t *testing.T) {
+func TestApplyExecutorDestinationLogsDefersConfiguredMissingSourceStateWithoutSourceSkip(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{}
 
@@ -183,6 +183,37 @@ func TestApplyExecutorDestinationLogsDefersConfiguredMissingSourceState(t *testi
 	}
 	if !result.pending {
 		t.Fatal("pending = false, want true")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsConfiguredMissingSourceStateWithSourceSkip(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		sourceSkips: map[string]db.SourcePacketSkip{
+			sourceSkipLookupKey(sourceRoleExecutor, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): {
+				Role:     sourceRoleExecutor,
+				SrcEID:   packet.SrcEID,
+				DstEID:   packet.DstEID,
+				Nonce:    packet.Nonce.Uint64(),
+				Sender:   packet.Sender,
+				Receiver: packet.Receiver,
+				GUID:     packet.GUID,
+				Reason:   "unexpected_worker",
+			},
+		},
+	}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, common.Address{}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
 	}
 	if result.applied != 0 {
 		t.Fatalf("applied = %d, want 0", result.applied)
@@ -506,6 +537,70 @@ func TestApplyDVNDestinationLogsMarksVerified(t *testing.T) {
 	}
 }
 
+func TestApplyDVNDestinationLogsMarksManualReviewVerified(t *testing.T) {
+	tests := []string{
+		string(packets.DVNQuorumConflict),
+		string(packets.DVNManualReview),
+	}
+	for _, status := range tests {
+		t.Run(status, func(t *testing.T) {
+			packet := testDestinationPacketRecord()
+			log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))
+			store := &fakeDestinationStore{
+				byVerification: map[string]db.PacketRecord{
+					verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,
+				},
+				dvnJobs: map[common.Hash]db.DVNJobRecord{
+					packet.GUID: {
+						GUID:                  packet.GUID,
+						ConfirmationsRequired: 12,
+						Status:                status,
+					},
+				},
+			}
+
+			applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{log})
+			if err != nil {
+				t.Fatalf("ApplyDVNDestinationLogs() error = %v", err)
+			}
+			if applied != 1 {
+				t.Fatalf("applied = %d, want 1", applied)
+			}
+			if store.dvnVerifiedGUID != packet.GUID {
+				t.Fatalf("dvn verified guid = %s, want %s", store.dvnVerifiedGUID, packet.GUID)
+			}
+		})
+	}
+}
+
+func TestApplyDVNDestinationLogsSkipsReorgDetected(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))
+	store := &fakeDestinationStore{
+		byVerification: map[string]db.PacketRecord{
+			verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,
+		},
+		dvnJobs: map[common.Hash]db.DVNJobRecord{
+			packet.GUID: {
+				GUID:                  packet.GUID,
+				ConfirmationsRequired: 12,
+				Status:                string(packets.DVNReorgDetected),
+			},
+		},
+	}
+
+	applied, err := ApplyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{log})
+	if err != nil {
+		t.Fatalf("ApplyDVNDestinationLogs() error = %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+	if store.dvnVerifiedGUID != (common.Hash{}) {
+		t.Fatalf("dvn verified guid = %s, want zero", store.dvnVerifiedGUID)
+	}
+}
+
 func TestApplyDVNDestinationLogsSkipsOtherDVN(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{
@@ -569,6 +664,7 @@ type fakeDestinationStore struct {
 	byGUID            map[common.Hash]db.PacketRecord
 	byDestination     map[string]db.PacketRecord
 	byVerification    map[string]db.PacketRecord
+	sourceSkips       map[string]db.SourcePacketSkip
 	executorJobs      map[common.Hash]db.ExecutorJobRecord
 	dvnJobs           map[common.Hash]db.DVNJobRecord
 	dvnVerifiedGUID   common.Hash
@@ -616,6 +712,14 @@ func (s *fakeDestinationStore) GetDVNJob(_ context.Context, guid common.Hash) (d
 	return job, nil
 }
 
+func (s *fakeDestinationStore) GetSourcePacketSkip(_ context.Context, role string, srcEID, dstEID uint32, sender, receiver common.Address, nonce uint64) (db.SourcePacketSkip, error) {
+	skip, ok := s.sourceSkips[sourceSkipLookupKey(role, srcEID, dstEID, sender, receiver, nonce)]
+	if !ok {
+		return db.SourcePacketSkip{}, pgx.ErrNoRows
+	}
+	return skip, nil
+}
+
 func (s *fakeDestinationStore) MarkDVNVerifiedObserved(_ context.Context, guid, txHash common.Hash, _ string) error {
 	s.dvnVerifiedGUID = guid
 	s.dvnVerifiedTxHash = txHash
@@ -632,6 +736,10 @@ func destinationLookupKey(dstEID, srcEID uint32, sender, receiver common.Address
 
 func verificationLookupKey(dstEID uint32, packetHeader []byte, payloadHash common.Hash) string {
 	return fmt.Sprintf("%d:%x:%s", dstEID, packetHeader, payloadHash)
+}
+
+func sourceSkipLookupKey(role string, srcEID, dstEID uint32, sender, receiver common.Address, nonce uint64) string {
+	return fmt.Sprintf("%s:%d:%d:%s:%s:%d", role, srcEID, dstEID, sender, receiver, nonce)
 }
 
 func (s *fakeReceiptStore) MarkExecutorCommittedObserved(_ context.Context, guid, txHash common.Hash, expectedStatus string) error {

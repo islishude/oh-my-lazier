@@ -38,6 +38,11 @@ type DVNDestinationStore interface {
 	MarkDVNVerifiedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error
 }
 
+// SourcePacketSkipStore loads source-chain skip tombstones used to disambiguate missing local source state.
+type SourcePacketSkipStore interface {
+	GetSourcePacketSkip(ctx context.Context, role string, srcEID, dstEID uint32, sender, receiver common.Address, nonce uint64) (db.SourcePacketSkip, error)
+}
+
 // DestinationStore persists all destination-chain event outcomes.
 type DestinationStore interface {
 	ExecutorDestinationStore
@@ -78,15 +83,25 @@ func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 				return result, matchErr
 			}
 			if matches && pathway.Enabled {
-				result.pending = true
-				if observer.executorSkipped != nil {
-					observer.executorSkipped("pending_source_packet", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+				skipped, skipErr := executorSourcePacketWasSkipped(ctx, store, dstEID, expectedExecutor, log)
+				if skipErr != nil {
+					return result, skipErr
 				}
-				continue
+				if !skipped {
+					result.pending = true
+					if observer.executorSkipped != nil {
+						observer.executorSkipped("pending_source_packet", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+					}
+					continue
+				}
 			}
 			if observer.executorSkipped != nil {
 				reason := "unknown_packet"
-				if len(pathways) > 0 {
+				if matches && pathway.Enabled {
+					reason = "skipped_source_packet"
+				} else if matches {
+					reason = "pathway_disabled"
+				} else if len(pathways) > 0 {
 					reason = "unknown_pathway"
 				}
 				observer.executorSkipped(reason, db.PacketRecord{}, db.ExecutorJobRecord{}, log)
@@ -196,6 +211,16 @@ func applyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		if errors.Is(err, pgx.ErrNoRows) {
 			pathway, matches := pathwayForPayloadVerified(pathways, dstEID, event)
 			if matches && pathway.Enabled && event.DVN == pathway.DestinationWorkers.OpenDVN {
+				skipped, skipErr := dvnSourcePacketWasSkipped(ctx, store, dstEID, event)
+				if skipErr != nil {
+					return result, skipErr
+				}
+				if skipped {
+					if observer.dvnSkipped != nil {
+						observer.dvnSkipped("skipped_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
+					}
+					continue
+				}
 				result.pending = true
 				if observer.dvnSkipped != nil {
 					observer.dvnSkipped("pending_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
@@ -251,7 +276,10 @@ func applyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 			continue
 		}
 		if !dvnCanApplyPayloadVerified(job.Status) {
-			return result, fmt.Errorf("dvn PayloadVerified cannot apply from status %s", job.Status)
+			if observer.dvnSkipped != nil {
+				observer.dvnSkipped("status_not_applicable", packet, job, log)
+			}
+			continue
 		}
 		if err := store.MarkDVNVerifiedObserved(ctx, packet.GUID, log.TxHash, job.Status); err != nil {
 			return result, err
@@ -262,6 +290,48 @@ func applyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 		result.applied++
 	}
 	return result, nil
+}
+
+type destinationPacketIdentity struct {
+	SrcEID   uint32
+	DstEID   uint32
+	Sender   common.Address
+	Receiver common.Address
+	Nonce    uint64
+}
+
+func executorSourcePacketWasSkipped(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, expectedExecutor common.Address, log gethtypes.Log) (bool, error) {
+	identity, ok, err := executorDestinationLogIdentity(dstEID, expectedExecutor, log)
+	if err != nil || !ok {
+		return false, err
+	}
+	return sourcePacketWasSkipped(ctx, store, sourceRoleExecutor, identity)
+}
+
+func dvnSourcePacketWasSkipped(ctx context.Context, store DVNDestinationStore, dstEID uint32, event lzabi.PayloadVerified) (bool, error) {
+	header, err := lz.DecodePacketV1Header(event.Header)
+	if err != nil {
+		return false, nil
+	}
+	return sourcePacketWasSkipped(ctx, store, sourceRoleDVN, destinationPacketIdentity{
+		SrcEID:   header.SrcEID,
+		DstEID:   dstEID,
+		Sender:   header.Sender,
+		Receiver: header.Receiver,
+		Nonce:    header.Nonce,
+	})
+}
+
+func sourcePacketWasSkipped(ctx context.Context, store any, role string, identity destinationPacketIdentity) (bool, error) {
+	skipStore, ok := store.(SourcePacketSkipStore)
+	if !ok {
+		return false, nil
+	}
+	_, err := skipStore.GetSourcePacketSkip(ctx, role, identity.SrcEID, identity.DstEID, identity.Sender, identity.Receiver, identity.Nonce)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func pathwayForPacket(pathways []chain.Pathway, packet db.PacketRecord) (chain.Pathway, bool) {
@@ -288,38 +358,50 @@ func pathwayForDestinationIdentity(pathways []chain.Pathway, dstEID, srcEID uint
 	return chain.Pathway{}, false
 }
 
-func executorDestinationLogPathway(pathways []chain.Pathway, dstEID uint32, expectedExecutor common.Address, log gethtypes.Log) (chain.Pathway, bool, error) {
-	if len(pathways) == 0 || len(log.Topics) == 0 {
-		return chain.Pathway{}, false, nil
+func executorDestinationLogIdentity(dstEID uint32, expectedExecutor common.Address, log gethtypes.Log) (destinationPacketIdentity, bool, error) {
+	if len(log.Topics) == 0 {
+		return destinationPacketIdentity{}, false, nil
 	}
 	switch log.Topics[0] {
 	case lzabi.PacketVerifiedTopic():
 		event, err := lzabi.DecodePacketVerified(log)
 		if err != nil {
-			return chain.Pathway{}, false, err
+			return destinationPacketIdentity{}, false, err
 		}
-		pathway, ok := pathwayForDestinationIdentity(pathways, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver)
-		return pathway, ok, nil
+		return destinationPacketIdentity{SrcEID: event.Origin.SrcEID, DstEID: dstEID, Sender: originSenderAddress(event.Origin), Receiver: event.Receiver, Nonce: event.Origin.Nonce}, true, nil
 	case lzabi.PacketDeliveredTopic():
 		event, err := lzabi.DecodePacketDelivered(log)
 		if err != nil {
-			return chain.Pathway{}, false, err
+			return destinationPacketIdentity{}, false, err
 		}
-		pathway, ok := pathwayForDestinationIdentity(pathways, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver)
-		return pathway, ok, nil
+		return destinationPacketIdentity{SrcEID: event.Origin.SrcEID, DstEID: dstEID, Sender: originSenderAddress(event.Origin), Receiver: event.Receiver, Nonce: event.Origin.Nonce}, true, nil
 	case lzabi.LzReceiveAlertTopic():
 		event, err := lzabi.DecodeLzReceiveAlert(log)
 		if err != nil {
-			return chain.Pathway{}, false, err
+			return destinationPacketIdentity{}, false, err
 		}
 		if expectedExecutor != (common.Address{}) && event.Executor != expectedExecutor {
-			return chain.Pathway{}, false, nil
+			return destinationPacketIdentity{}, false, nil
 		}
-		pathway, ok := pathwayForDestinationIdentity(pathways, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver)
-		return pathway, ok, nil
+		return destinationPacketIdentity{SrcEID: event.Origin.SrcEID, DstEID: dstEID, Sender: originSenderAddress(event.Origin), Receiver: event.Receiver, Nonce: event.Origin.Nonce}, true, nil
 	default:
+		return destinationPacketIdentity{}, false, nil
+	}
+}
+
+func executorDestinationLogPathway(pathways []chain.Pathway, dstEID uint32, expectedExecutor common.Address, log gethtypes.Log) (chain.Pathway, bool, error) {
+	if len(pathways) == 0 {
 		return chain.Pathway{}, false, nil
 	}
+	identity, ok, err := executorDestinationLogIdentity(dstEID, expectedExecutor, log)
+	if err != nil {
+		return chain.Pathway{}, false, err
+	}
+	if !ok {
+		return chain.Pathway{}, false, nil
+	}
+	pathway, ok := pathwayForDestinationIdentity(pathways, identity.DstEID, identity.SrcEID, identity.Sender, identity.Receiver)
+	return pathway, ok, nil
 }
 
 func executorDestinationLogExecutorAllowed(log gethtypes.Log, expectedExecutor common.Address) bool {
@@ -454,9 +536,7 @@ func executorCanApplyLzReceiveAlert(status string) bool {
 func dvnCanApplyPayloadVerified(status string) bool {
 	switch status {
 	case string(packets.DVNVerified),
-		string(packets.DVNQuorumConflict),
-		string(packets.DVNReorgDetected),
-		string(packets.DVNManualReview):
+		string(packets.DVNReorgDetected):
 		return false
 	default:
 		return status != ""

@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS dvn_jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS source_packet_skips (
+  role TEXT NOT NULL,
+  src_eid INTEGER NOT NULL REFERENCES chains(eid),
+  dst_eid INTEGER NOT NULL REFERENCES chains(eid),
+  nonce NUMERIC NOT NULL,
+  sender BYTEA NOT NULL,
+  receiver BYTEA NOT NULL,
+  guid BYTEA NOT NULL,
+  src_tx_hash BYTEA NOT NULL,
+  src_block_number BIGINT NOT NULL,
+  src_log_index INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  worker BYTEA,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY(role, src_eid, dst_eid, sender, receiver, nonce)
+);
+
 CREATE TABLE IF NOT EXISTS tx_outbox (
   id BIGSERIAL PRIMARY KEY,
   chain_eid INTEGER NOT NULL REFERENCES chains(eid),

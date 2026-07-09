@@ -96,6 +96,7 @@ type Store interface {
 	DestinationStore
 	GetIndexerCursor(ctx context.Context, chainEID uint32, stream string) (uint64, error)
 	UpdateIndexerCursor(ctx context.Context, chainEID uint32, stream string, lastBlock uint64) error
+	RecordSourcePacketSkip(ctx context.Context, skip db.SourcePacketSkip) error
 	UpsertPacket(ctx context.Context, packet db.PacketRecord) error
 	UpsertExecutorJob(ctx context.Context, job db.ExecutorJobRecord) error
 	UpsertDVNJob(ctx context.Context, job db.DVNJobRecord) error
@@ -495,10 +496,16 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 			continue
 		}
 		if !pathway.Enabled {
+			if err := i.recordSourcePacketSkip(ctx, sourceRoleExecutor, record.Packet, "pathway_disabled", record.Executor); err != nil {
+				return processed, err
+			}
 			i.logger.Debug("skipped executor source assignment", "reason", "pathway_disabled", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash)
 			continue
 		}
 		if record.Executor != pathway.SourceWorkers.OpenExecutor {
+			if err := i.recordSourcePacketSkip(ctx, sourceRoleExecutor, record.Packet, "unexpected_worker", record.Executor); err != nil {
+				return processed, err
+			}
 			i.logger.Debug("skipped executor source assignment", "reason", "unexpected_worker", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "worker", record.Executor, "expected_worker", pathway.SourceWorkers.OpenExecutor)
 			continue
 		}
@@ -534,10 +541,16 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 			continue
 		}
 		if !pathway.Enabled {
+			if err := i.recordSourcePacketSkip(ctx, sourceRoleDVN, record.Packet, "pathway_disabled", record.DVN); err != nil {
+				return processed, err
+			}
 			i.logger.Debug("skipped dvn source assignment", "reason", "pathway_disabled", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash)
 			continue
 		}
 		if record.DVN != pathway.SourceWorkers.OpenDVN {
+			if err := i.recordSourcePacketSkip(ctx, sourceRoleDVN, record.Packet, "unexpected_worker", record.DVN); err != nil {
+				return processed, err
+			}
 			i.logger.Debug("skipped dvn source assignment", "reason", "unexpected_worker", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "worker", record.DVN, "expected_worker", pathway.SourceWorkers.OpenDVN)
 			continue
 		}
@@ -554,6 +567,26 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 		processed++
 	}
 	return processed, nil
+}
+
+func (i *Indexer) recordSourcePacketSkip(ctx context.Context, role string, packet db.PacketRecord, reason string, worker common.Address) error {
+	if packet.Nonce == nil || !packet.Nonce.IsUint64() {
+		return fmt.Errorf("packet %s nonce is invalid for source skip tombstone", packet.GUID)
+	}
+	return i.store.RecordSourcePacketSkip(ctx, db.SourcePacketSkip{
+		Role:           role,
+		SrcEID:         packet.SrcEID,
+		DstEID:         packet.DstEID,
+		Nonce:          packet.Nonce.Uint64(),
+		Sender:         packet.Sender,
+		Receiver:       packet.Receiver,
+		GUID:           packet.GUID,
+		SrcTxHash:      packet.SrcTxHash,
+		SrcBlockNumber: packet.SrcBlockNumber,
+		SrcLogIndex:    packet.SrcLogIndex,
+		Reason:         reason,
+		Worker:         worker,
+	})
 }
 
 func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (destinationApplyResult, error) {

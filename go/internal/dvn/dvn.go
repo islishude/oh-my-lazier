@@ -29,6 +29,8 @@ import (
 
 const loopInterval = 5 * time.Second
 
+var errDestinationVerificationConfigMismatch = errors.New("destination verification config mismatch")
+
 const (
 	// TxPurposeVerify identifies OpenDVN.submitVerification outbox requests.
 	TxPurposeVerify = "dvn_verify"
@@ -190,11 +192,14 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 		if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
-			return false, err
+			if isDestinationVerificationConfigMismatch(err) {
+				return false, err
+			}
+			return w.deferDVNWorkError(ctx, item, status, "destination_config_check_error", err)
 		}
 		headReader := w.head(item.Packet.SrcEID)
 		if headReader == nil {
-			return false, fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID)
+			return w.deferDVNWorkError(ctx, item, status, "missing_source_head_reader", fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID))
 		}
 		headResult, err := headReader.CheckHead(ctx)
 		if err != nil {
@@ -205,10 +210,10 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 				w.logger.Warn("dvn head quorum conflict paused chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", err.Error())
 				return true, nil
 			}
-			return false, err
+			return w.deferDVNWorkError(ctx, item, status, "source_head_error", err)
 		}
 		if headResult.Number == nil {
-			return false, fmt.Errorf("source head result for eid %d is missing number", item.Packet.SrcEID)
+			return w.deferDVNWorkError(ctx, item, status, "missing_source_head_number", fmt.Errorf("source head result for eid %d is missing number", item.Packet.SrcEID))
 		}
 		head := headResult.Number.Uint64()
 		if !hasRequiredConfirmations(item.Packet.SrcBlockNumber, item.Job.ConfirmationsRequired, head) {
@@ -246,7 +251,7 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 	item := work[0]
 	receiptReader := w.receipt(item.Packet.SrcEID)
 	if receiptReader == nil {
-		return false, fmt.Errorf("missing source receipt reader for eid %d", item.Packet.SrcEID)
+		return w.deferDVNWorkError(ctx, item, string(packets.DVNQuorumChecking), "missing_source_receipt_reader", fmt.Errorf("missing source receipt reader for eid %d", item.Packet.SrcEID))
 	}
 	receipt, err := receiptReader.TransactionReceipt(ctx, item.Packet.SrcTxHash)
 	if err != nil {
@@ -256,13 +261,13 @@ func (w *Worker) ProcessQuorumOnce(ctx context.Context) (bool, error) {
 		if errors.Is(err, ethereum.NotFound) {
 			return true, w.markReorgDetected(ctx, item.Packet, err)
 		}
-		return false, err
+		return w.deferDVNWorkError(ctx, item, string(packets.DVNQuorumChecking), "source_receipt_error", err)
 	}
 	endpoint := common.Address{}
 	if w.registry != nil {
 		srcChain, err := w.registry.Get(item.Packet.SrcEID)
 		if err != nil {
-			return false, err
+			return w.deferDVNWorkError(ctx, item, string(packets.DVNQuorumChecking), "source_chain_lookup_error", err)
 		}
 		endpoint = srcChain.EndpointAddress
 	}
@@ -299,7 +304,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 	}
 	pathway, err := w.registry.Pathway(item.Packet.SrcEID, item.Packet.DstEID, item.Packet.Sender, item.Packet.Receiver)
 	if err != nil {
-		return false, err
+		return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "pathway_lookup_error", err)
 	}
 	switch pathway.DVNMode {
 	case config.DVNModeShadow:
@@ -310,7 +315,10 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 	case config.DVNModeActive:
 		complete, err := w.verificationAlreadyComplete(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired)
 		if err != nil {
-			return false, err
+			if isDestinationVerificationConfigMismatch(err) {
+				return false, err
+			}
+			return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
 		}
 		if complete {
 			if err := w.store.MarkDVNVerifiedFromChain(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
@@ -397,13 +405,16 @@ func validateDestinationVerificationConfig(ctx context.Context, caller ContractC
 		return err
 	}
 	if receiveLib != pathway.ReceiveLib {
-		return fmt.Errorf("destination receive library %s does not match configured %s", receiveLib, pathway.ReceiveLib)
+		return fmt.Errorf("%w: destination receive library %s does not match configured %s", errDestinationVerificationConfigMismatch, receiveLib, pathway.ReceiveLib)
 	}
 	config, err := callReceiveUlnConfig(ctx, caller, pathway.ReceiveLib, packet.Receiver, packet.SrcEID)
 	if err != nil {
 		return err
 	}
-	return validateReceiveUlnConfig(config, confirmations, pathway.DestinationWorkers.OpenDVN)
+	if err := validateReceiveUlnConfig(config, confirmations, pathway.DestinationWorkers.OpenDVN); err != nil {
+		return fmt.Errorf("%w: %w", errDestinationVerificationConfigMismatch, err)
+	}
+	return nil
 }
 
 func callInboundPayloadHash(ctx context.Context, caller ContractCaller, endpoint common.Address, packet db.PacketRecord) (common.Hash, error) {
@@ -612,6 +623,24 @@ func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord,
 	}
 	w.logger.Warn("dvn quorum conflict paused pathway", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "from_status", string(packets.DVNQuorumChecking), "to_status", string(packets.DVNQuorumConflict), "error", err.Error())
 	return nil
+}
+
+func (w *Worker) deferDVNWorkError(ctx context.Context, item db.DVNWorkItem, status, reason string, cause error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if workerloop.IsFatal(cause) {
+		return false, cause
+	}
+	if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+		return false, err
+	}
+	w.logger.Warn("deferred dvn job after processing error", "reason", reason, "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", cause.Error())
+	return true, nil
+}
+
+func isDestinationVerificationConfigMismatch(err error) bool {
+	return errors.Is(err, errDestinationVerificationConfigMismatch)
 }
 
 func (w *Worker) markReorgDetected(ctx context.Context, packet db.PacketRecord, err error) error {
