@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
@@ -14,6 +15,7 @@ import (
 // DVNJobRecord records an OpenDVN assignment for a known packet.
 type DVNJobRecord struct {
 	GUID                  common.Hash
+	AssignedFee           *big.Int
 	ConfirmationsRequired uint64
 	Status                string
 	QuorumResult          []byte
@@ -27,18 +29,26 @@ func (s *Store) UpsertDVNJob(ctx context.Context, job DVNJobRecord) error {
 	if job.ConfirmationsRequired == 0 {
 		return errors.New("dvn confirmations required is required")
 	}
+	if job.AssignedFee != nil && job.AssignedFee.Sign() < 0 {
+		return errors.New("dvn assigned fee must be non-negative")
+	}
 	if job.Status == "" {
 		return errors.New("dvn job status is required")
 	}
+	var fee any
+	if job.AssignedFee != nil {
+		fee = job.AssignedFee.String()
+	}
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO dvn_jobs (guid, assigned, confirmations_required, status)
-		VALUES ($1, true, $2, $3)
+		INSERT INTO dvn_jobs (guid, assigned, assigned_fee, confirmations_required, status)
+		VALUES ($1, true, $2, $3, $4)
 		ON CONFLICT (guid) DO UPDATE SET
 			assigned = true,
+			assigned_fee = EXCLUDED.assigned_fee,
 			confirmations_required = EXCLUDED.confirmations_required,
 			status = EXCLUDED.status,
 			updated_at = now()
-	`, job.GUID.Bytes(), job.ConfirmationsRequired, job.Status)
+	`, job.GUID.Bytes(), fee, job.ConfirmationsRequired, job.Status)
 	return err
 }
 
@@ -49,22 +59,28 @@ func (s *Store) GetDVNJob(ctx context.Context, guid common.Hash) (DVNJobRecord, 
 	}
 	var row struct {
 		guid                  []byte
+		assignedFee           *string
 		confirmationsRequired uint64
 		status                string
 	}
 	err := s.pool.QueryRow(ctx, `
-		SELECT guid, confirmations_required, status
+		SELECT guid, assigned_fee::text, confirmations_required, status
 		FROM dvn_jobs
 		WHERE guid = $1
-	`, guid.Bytes()).Scan(&row.guid, &row.confirmationsRequired, &row.status)
+	`, guid.Bytes()).Scan(&row.guid, &row.assignedFee, &row.confirmationsRequired, &row.status)
 	if err != nil {
 		return DVNJobRecord{}, err
 	}
 	if len(row.guid) != common.HashLength {
 		return DVNJobRecord{}, fmt.Errorf("dvn job guid has length %d", len(row.guid))
 	}
+	assignedFee, err := bigutil.ParseOptionalDecimal("dvn assigned fee", row.assignedFee)
+	if err != nil {
+		return DVNJobRecord{}, fmt.Errorf("dvn assigned fee %q is invalid", *row.assignedFee)
+	}
 	return DVNJobRecord{
 		GUID:                  common.BytesToHash(row.guid),
+		AssignedFee:           assignedFee,
 		ConfirmationsRequired: row.confirmationsRequired,
 		Status:                row.status,
 	}, nil
@@ -83,7 +99,7 @@ func (s *Store) ListDVNWork(ctx context.Context, status string, limit int) ([]DV
 			p.guid, p.src_eid, p.dst_eid, p.nonce::text, p.sender, p.receiver,
 			p.send_lib, p.src_tx_hash, p.src_block_number, p.src_log_index,
 			p.encoded_packet, p.packet_header, p.message, p.payload_hash,
-			p.options, p.status, dj.confirmations_required, dj.status,
+			p.options, p.status, dj.assigned_fee::text, dj.confirmations_required, dj.status,
 			COALESCE(dj.quorum_result::text, '')
 		FROM dvn_jobs dj
 		JOIN packets p ON p.guid = dj.guid
@@ -116,6 +132,7 @@ func (s *Store) ListDVNWork(ctx context.Context, status string, limit int) ([]DV
 			&row.PayloadHash,
 			&row.Options,
 			&row.PacketStatus,
+			&row.AssignedFee,
 			&row.ConfirmationsRequired,
 			&row.JobStatus,
 			&row.QuorumResult,
@@ -352,6 +369,7 @@ type dvnWorkRow struct {
 	PayloadHash           []byte
 	Options               []byte
 	PacketStatus          string
+	AssignedFee           *string
 	ConfirmationsRequired uint64
 	JobStatus             string
 	QuorumResult          string
@@ -382,10 +400,15 @@ func (r dvnWorkRow) toDVNWorkItem() (DVNWorkItem, error) {
 	if r.ConfirmationsRequired == 0 {
 		return DVNWorkItem{}, fmt.Errorf("dvn work confirmations required is zero")
 	}
+	assignedFee, err := bigutil.ParseOptionalDecimal("assigned_fee", r.AssignedFee)
+	if err != nil {
+		return DVNWorkItem{}, err
+	}
 	return DVNWorkItem{
 		Packet: packet,
 		Job: DVNJobRecord{
 			GUID:                  packet.GUID,
+			AssignedFee:           assignedFee,
 			ConfirmationsRequired: r.ConfirmationsRequired,
 			Status:                r.JobStatus,
 			QuorumResult:          []byte(r.QuorumResult),

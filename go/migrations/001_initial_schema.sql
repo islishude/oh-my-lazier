@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS executor_jobs (
 CREATE TABLE IF NOT EXISTS dvn_jobs (
   guid BYTEA PRIMARY KEY REFERENCES packets(guid),
   assigned BOOLEAN NOT NULL DEFAULT false,
+  assigned_fee NUMERIC,
   confirmations_required BIGINT NOT NULL,
   status TEXT NOT NULL,
   verify_tx_hash BYTEA,
@@ -97,6 +98,15 @@ CREATE TABLE IF NOT EXISTS tx_outbox (
   signer_id TEXT NOT NULL,
   status TEXT NOT NULL,
   tx_hash BYTEA,
+  receipt_tx_hash BYTEA,
+  receipt_status INTEGER,
+  receipt_block_number BIGINT,
+  receipt_gas_used NUMERIC,
+  receipt_effective_gas_price NUMERIC,
+  receipt_gas_cost_dst_wei NUMERIC,
+  receipt_gas_cost_src_wei NUMERIC,
+  receipt_observed_at TIMESTAMPTZ,
+  receipt_cost_priced_at TIMESTAMPTZ,
   attempts INTEGER NOT NULL DEFAULT 0,
   failure_kind TEXT,
   next_retry_at TIMESTAMPTZ,
@@ -128,6 +138,10 @@ CREATE INDEX IF NOT EXISTS idx_packets_source_position ON packets(src_eid, src_b
 CREATE INDEX IF NOT EXISTS idx_executor_jobs_status_retry ON executor_jobs(status, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_dvn_jobs_status_retry ON dvn_jobs(status, next_retry_at);
 CREATE INDEX IF NOT EXISTS idx_tx_outbox_status_chain ON tx_outbox(status, chain_eid, id);
+CREATE INDEX IF NOT EXISTS idx_tx_outbox_unpriced_receipt
+  ON tx_outbox(chain_eid, purpose, updated_at, id)
+  WHERE receipt_gas_cost_dst_wei IS NOT NULL
+    AND receipt_gas_cost_src_wei IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tx_outbox_failed_retry
   ON tx_outbox(status, chain_eid, signer_id, next_retry_at, id)
   WHERE status = 'failed';

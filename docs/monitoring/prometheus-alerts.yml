@@ -82,6 +82,24 @@ groups:
           summary: Transaction outbox has exhausted failed rows
           runbook: docs/runbooks/monitoring.md
 
+      - alert: LazWorkerFeeNegativeMargin
+        expr: laz_worker_fee_negative_margin_jobs > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: Worker job actual gas cost exceeds assignment revenue
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazWorkerFeeReconciliationPending
+        expr: laz_worker_fee_unpriced_receipts > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: Worker receipt gas costs are waiting for source-token pricing
+          runbook: docs/runbooks/monitoring.md
+
       - alert: LazSignerLowNativeBalance
         expr: laz_signer_native_balance_wei < laz_signer_min_native_balance_wei
         for: 5m

@@ -88,24 +88,33 @@ type ClaimedTx struct {
 
 // OutboxTx is a transaction request after it has been persisted.
 type OutboxTx struct {
-	ID                   int64
-	ChainEID             uint32
-	Purpose              string
-	GUID                 []byte
-	To                   common.Address
-	Calldata             []byte
-	Value                *big.Int
-	GasLimit             uint64
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
-	Nonce                uint64
-	TxHash               common.Hash
-	SignerID             string
-	Status               string
-	Attempts             uint32
-	FailureKind          string
-	NextRetryAt          *time.Time
-	RetryOfID            *int64
+	ID                       int64
+	ChainEID                 uint32
+	Purpose                  string
+	GUID                     []byte
+	To                       common.Address
+	Calldata                 []byte
+	Value                    *big.Int
+	GasLimit                 uint64
+	MaxFeePerGas             *big.Int
+	MaxPriorityFeePerGas     *big.Int
+	Nonce                    uint64
+	TxHash                   common.Hash
+	ReceiptTxHash            common.Hash
+	ReceiptStatus            *uint64
+	ReceiptBlockNumber       *uint64
+	ReceiptGasUsed           *uint64
+	ReceiptEffectiveGasPrice *big.Int
+	ReceiptGasCostDstWei     *big.Int
+	ReceiptGasCostSrcWei     *big.Int
+	ReceiptObservedAt        *time.Time
+	ReceiptCostPricedAt      *time.Time
+	SignerID                 string
+	Status                   string
+	Attempts                 uint32
+	FailureKind              string
+	NextRetryAt              *time.Time
+	RetryOfID                *int64
 }
 
 // QueuedOutboxTx is a queued transaction request before the tx manager decides whether to sign it.
@@ -175,7 +184,11 @@ func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID stri
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
 			nonce, tx_hash, signer_id, status, attempts,
-			failure_kind, next_retry_at, retry_of_id
+			failure_kind, next_retry_at, retry_of_id,
+			receipt_tx_hash, receipt_status::text, receipt_block_number::text,
+			receipt_gas_used::text, receipt_effective_gas_price::text,
+			receipt_gas_cost_dst_wei::text, receipt_gas_cost_src_wei::text,
+			receipt_observed_at, receipt_cost_priced_at
 		FROM tx_outbox
 		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3
 		ORDER BY id
@@ -199,6 +212,15 @@ func (s *Store) PeekQueuedTx(ctx context.Context, chainEID uint32, signerID stri
 		&row.FailureKind,
 		&row.NextRetryAt,
 		&row.RetryOfID,
+		&row.ReceiptTxHash,
+		&row.ReceiptStatus,
+		&row.ReceiptBlockNumber,
+		&row.ReceiptGasUsed,
+		&row.ReceiptEffectiveGasPrice,
+		&row.ReceiptGasCostDstWei,
+		&row.ReceiptGasCostSrcWei,
+		&row.ReceiptObservedAt,
+		&row.ReceiptCostPricedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QueuedOutboxTx{}, pgx.ErrNoRows
@@ -348,7 +370,11 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
 			nonce, tx_hash, signer_id, status, attempts,
-			failure_kind, next_retry_at, retry_of_id
+			failure_kind, next_retry_at, retry_of_id,
+			receipt_tx_hash, receipt_status::text, receipt_block_number::text,
+			receipt_gas_used::text, receipt_effective_gas_price::text,
+			receipt_gas_cost_dst_wei::text, receipt_gas_cost_src_wei::text,
+			receipt_observed_at, receipt_cost_priced_at
 		FROM tx_outbox
 		WHERE id = $1
 	`, id).Scan(
@@ -370,6 +396,15 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 		&row.FailureKind,
 		&row.NextRetryAt,
 		&row.RetryOfID,
+		&row.ReceiptTxHash,
+		&row.ReceiptStatus,
+		&row.ReceiptBlockNumber,
+		&row.ReceiptGasUsed,
+		&row.ReceiptEffectiveGasPrice,
+		&row.ReceiptGasCostDstWei,
+		&row.ReceiptGasCostSrcWei,
+		&row.ReceiptObservedAt,
+		&row.ReceiptCostPricedAt,
 	)
 	if err != nil {
 		return OutboxTx{}, err
@@ -393,7 +428,11 @@ func (s *Store) ListBroadcastTx(ctx context.Context, chainEID uint32, signerID s
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
 			nonce, tx_hash, signer_id, status, attempts,
-			failure_kind, next_retry_at, retry_of_id
+			failure_kind, next_retry_at, retry_of_id,
+			receipt_tx_hash, receipt_status::text, receipt_block_number::text,
+			receipt_gas_used::text, receipt_effective_gas_price::text,
+			receipt_gas_cost_dst_wei::text, receipt_gas_cost_src_wei::text,
+			receipt_observed_at, receipt_cost_priced_at
 		FROM tx_outbox
 		WHERE chain_eid = $1 AND signer_id = $2 AND status = $3 AND tx_hash IS NOT NULL
 		ORDER BY updated_at, id
@@ -426,6 +465,15 @@ func (s *Store) ListBroadcastTx(ctx context.Context, chainEID uint32, signerID s
 			&row.FailureKind,
 			&row.NextRetryAt,
 			&row.RetryOfID,
+			&row.ReceiptTxHash,
+			&row.ReceiptStatus,
+			&row.ReceiptBlockNumber,
+			&row.ReceiptGasUsed,
+			&row.ReceiptEffectiveGasPrice,
+			&row.ReceiptGasCostDstWei,
+			&row.ReceiptGasCostSrcWei,
+			&row.ReceiptObservedAt,
+			&row.ReceiptCostPricedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -601,7 +649,11 @@ func (s *Store) PrepareNextStaleBroadcastReplacement(ctx context.Context, chainE
 			id, chain_eid, purpose, guid, to_address, calldata, value::text,
 			gas_limit::text, max_fee_per_gas::text, max_priority_fee_per_gas::text,
 			nonce, tx_hash, signer_id, status, attempts,
-			failure_kind, next_retry_at, retry_of_id
+			failure_kind, next_retry_at, retry_of_id,
+			receipt_tx_hash, receipt_status::text, receipt_block_number::text,
+			receipt_gas_used::text, receipt_effective_gas_price::text,
+			receipt_gas_cost_dst_wei::text, receipt_gas_cost_src_wei::text,
+			receipt_observed_at, receipt_cost_priced_at
 		FROM tx_outbox
 		WHERE chain_eid = $1
 			AND signer_id = $2
@@ -633,6 +685,15 @@ func (s *Store) PrepareNextStaleBroadcastReplacement(ctx context.Context, chainE
 		&row.FailureKind,
 		&row.NextRetryAt,
 		&row.RetryOfID,
+		&row.ReceiptTxHash,
+		&row.ReceiptStatus,
+		&row.ReceiptBlockNumber,
+		&row.ReceiptGasUsed,
+		&row.ReceiptEffectiveGasPrice,
+		&row.ReceiptGasCostDstWei,
+		&row.ReceiptGasCostSrcWei,
+		&row.ReceiptObservedAt,
+		&row.ReceiptCostPricedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OutboxTx{}, ErrNoStaleBroadcastReplacement
@@ -1080,24 +1141,33 @@ func (s *Store) updateTxStatus(ctx context.Context, id int64, status string, txH
 }
 
 type outboxTxRow struct {
-	ID                   int64
-	ChainEID             uint32
-	Purpose              string
-	GUID                 *[]byte
-	ToAddress            []byte
-	Calldata             []byte
-	Value                string
-	GasLimit             *string
-	MaxFeePerGas         *string
-	MaxPriorityFeePerGas *string
-	Nonce                *int64
-	TxHash               *[]byte
-	SignerID             string
-	Status               string
-	Attempts             uint32
-	FailureKind          *string
-	NextRetryAt          *time.Time
-	RetryOfID            *int64
+	ID                       int64
+	ChainEID                 uint32
+	Purpose                  string
+	GUID                     *[]byte
+	ToAddress                []byte
+	Calldata                 []byte
+	Value                    string
+	GasLimit                 *string
+	MaxFeePerGas             *string
+	MaxPriorityFeePerGas     *string
+	Nonce                    *int64
+	TxHash                   *[]byte
+	SignerID                 string
+	Status                   string
+	Attempts                 uint32
+	FailureKind              *string
+	NextRetryAt              *time.Time
+	RetryOfID                *int64
+	ReceiptTxHash            *[]byte
+	ReceiptStatus            *string
+	ReceiptBlockNumber       *string
+	ReceiptGasUsed           *string
+	ReceiptEffectiveGasPrice *string
+	ReceiptGasCostDstWei     *string
+	ReceiptGasCostSrcWei     *string
+	ReceiptObservedAt        *time.Time
+	ReceiptCostPricedAt      *time.Time
 }
 
 func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
@@ -1109,25 +1179,62 @@ func (r outboxTxRow) toOutboxTx() (OutboxTx, error) {
 	if queued.Nonce != nil {
 		nonce = *queued.Nonce
 	}
+	receiptTxHash, err := parseOptionalHash("receipt_tx_hash", r.ReceiptTxHash)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptStatus, err := parseOptionalUint64("receipt_status", r.ReceiptStatus)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptBlockNumber, err := parseOptionalUint64("receipt_block_number", r.ReceiptBlockNumber)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptGasUsed, err := parseOptionalUint64("receipt_gas_used", r.ReceiptGasUsed)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptEffectiveGasPrice, err := bigutil.ParseOptionalDecimal("receipt_effective_gas_price", r.ReceiptEffectiveGasPrice)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptGasCostDstWei, err := bigutil.ParseOptionalDecimal("receipt_gas_cost_dst_wei", r.ReceiptGasCostDstWei)
+	if err != nil {
+		return OutboxTx{}, err
+	}
+	receiptGasCostSrcWei, err := bigutil.ParseOptionalDecimal("receipt_gas_cost_src_wei", r.ReceiptGasCostSrcWei)
+	if err != nil {
+		return OutboxTx{}, err
+	}
 	return OutboxTx{
-		ID:                   queued.ID,
-		ChainEID:             queued.ChainEID,
-		Purpose:              queued.Purpose,
-		GUID:                 queued.GUID,
-		To:                   queued.To,
-		Calldata:             queued.Calldata,
-		Value:                queued.Value,
-		GasLimit:             queued.GasLimit,
-		MaxFeePerGas:         queued.MaxFeePerGas,
-		MaxPriorityFeePerGas: queued.MaxPriorityFeePerGas,
-		Nonce:                nonce,
-		TxHash:               queued.TxHash,
-		SignerID:             queued.SignerID,
-		Status:               queued.Status,
-		Attempts:             queued.Attempts,
-		FailureKind:          queued.FailureKind,
-		NextRetryAt:          cloneOptionalTime(queued.NextRetryAt),
-		RetryOfID:            cloneOptionalInt64(queued.RetryOfID),
+		ID:                       queued.ID,
+		ChainEID:                 queued.ChainEID,
+		Purpose:                  queued.Purpose,
+		GUID:                     queued.GUID,
+		To:                       queued.To,
+		Calldata:                 queued.Calldata,
+		Value:                    queued.Value,
+		GasLimit:                 queued.GasLimit,
+		MaxFeePerGas:             queued.MaxFeePerGas,
+		MaxPriorityFeePerGas:     queued.MaxPriorityFeePerGas,
+		Nonce:                    nonce,
+		TxHash:                   queued.TxHash,
+		ReceiptTxHash:            receiptTxHash,
+		ReceiptStatus:            receiptStatus,
+		ReceiptBlockNumber:       receiptBlockNumber,
+		ReceiptGasUsed:           receiptGasUsed,
+		ReceiptEffectiveGasPrice: receiptEffectiveGasPrice,
+		ReceiptGasCostDstWei:     receiptGasCostDstWei,
+		ReceiptGasCostSrcWei:     receiptGasCostSrcWei,
+		ReceiptObservedAt:        cloneOptionalTime(r.ReceiptObservedAt),
+		ReceiptCostPricedAt:      cloneOptionalTime(r.ReceiptCostPricedAt),
+		SignerID:                 queued.SignerID,
+		Status:                   queued.Status,
+		Attempts:                 queued.Attempts,
+		FailureKind:              queued.FailureKind,
+		NextRetryAt:              cloneOptionalTime(queued.NextRetryAt),
+		RetryOfID:                cloneOptionalInt64(queued.RetryOfID),
 	}, nil
 }
 
@@ -1197,6 +1304,27 @@ func parseUint64(field string, value *string) (uint64, error) {
 		return 0, fmt.Errorf("%s is not a valid uint64: %w", field, err)
 	}
 	return parsed, nil
+}
+
+func parseOptionalUint64(field string, value *string) (*uint64, error) {
+	if value == nil {
+		return nil, nil
+	}
+	parsed, err := strconv.ParseUint(*value, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not a valid uint64: %w", field, err)
+	}
+	return &parsed, nil
+}
+
+func parseOptionalHash(field string, value *[]byte) (common.Hash, error) {
+	if value == nil {
+		return common.Hash{}, nil
+	}
+	if len(*value) != common.HashLength {
+		return common.Hash{}, fmt.Errorf("%s has length %d", field, len(*value))
+	}
+	return common.BytesToHash(*value), nil
 }
 
 func cloneOptionalBytes(value *[]byte) []byte {

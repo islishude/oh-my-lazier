@@ -756,16 +756,12 @@ func TestUpsertExecutorJobPersistsAssignment(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	registry, err := chain.NewRegistry(testChains(), testPathways())
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
-	}
-	if err := store.SyncConfig(ctx, registry); err != nil {
-		t.Fatalf("SyncConfig() error = %v", err)
-	}
-
 	packet := testPacketRecord()
-	cleanPacketRows(ctx, t, store, packet.GUID)
+	packet.GUID = common.HexToHash("0xfeedaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	packet.SrcEID = 50101
+	packet.DstEID = 50102
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
 	}
@@ -878,25 +874,30 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatalf("Migrate() error = %v", err)
 	}
-	registry, err := chain.NewRegistry(testChains(), testPathways())
-	if err != nil {
-		t.Fatalf("NewRegistry() error = %v", err)
-	}
-	if err := store.SyncConfig(ctx, registry); err != nil {
-		t.Fatalf("SyncConfig() error = %v", err)
-	}
 
 	packet := testPacketRecord()
-	cleanPacketRows(ctx, t, store, packet.GUID)
+	packet.GUID = common.HexToHash("0xfeedbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	packet.SrcEID = 50111
+	packet.DstEID = 50112
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
 	}
 	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
 		GUID:                  packet.GUID,
+		AssignedFee:           big.NewInt(43),
 		ConfirmationsRequired: 12,
 		Status:                string(packets.DVNAssigned),
 	}); err != nil {
 		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	var assignedFee string
+	if err := store.pool.QueryRow(ctx, "SELECT assigned_fee::text FROM dvn_jobs WHERE guid = $1", packet.GUID.Bytes()).Scan(&assignedFee); err != nil {
+		t.Fatalf("select dvn assigned fee: %v", err)
+	}
+	if assignedFee != "43" {
+		t.Fatalf("assigned_fee = %q, want 43", assignedFee)
 	}
 	work, err := store.ListDVNWork(ctx, string(packets.DVNAssigned), 10)
 	if err != nil {
@@ -910,6 +911,9 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	}
 	if work[0].Job.ConfirmationsRequired != 12 {
 		t.Fatalf("confirmations = %d, want 12", work[0].Job.ConfirmationsRequired)
+	}
+	if work[0].Job.AssignedFee == nil || work[0].Job.AssignedFee.Cmp(big.NewInt(43)) != 0 {
+		t.Fatalf("assigned fee = %v, want 43", work[0].Job.AssignedFee)
 	}
 	if err := store.MarkDVNWaitingConfirmations(ctx, packet.GUID, string(packets.DVNAssigned)); err != nil {
 		t.Fatalf("MarkDVNWaitingConfirmations() error = %v", err)
@@ -951,6 +955,121 @@ func TestUpsertDVNJobPersistsAssignment(t *testing.T) {
 	}
 	if quorumResult == "" {
 		t.Fatal("quorum_result is empty")
+	}
+}
+
+func TestReceiptFeeAccountingStats(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.GUID = common.HexToHash("0xfeedcccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	packet.SrcEID = 50121
+	packet.DstEID = 50122
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(100),
+		Status:      string(packets.ExecutorAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	id, err := store.EnqueueTx(ctx, TxRequest{
+		ChainEID: packet.DstEID,
+		Purpose:  "executor_lz_receive",
+		GUID:     packet.GUID.Bytes(),
+		To:       packet.Receiver,
+		Calldata: []byte{0x01},
+		Value:    big.NewInt(0),
+		SignerID: "0x9999999999999999999999999999999999999999",
+	})
+	if err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+	receiptHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	if err := store.RecordTxReceipt(ctx, id, TxReceiptFacts{
+		TxHash:            receiptHash,
+		Status:            1,
+		BlockNumber:       1234,
+		GasUsed:           21,
+		EffectiveGasPrice: big.NewInt(5),
+		GasCostDstWei:     big.NewInt(105),
+	}); err != nil {
+		t.Fatalf("RecordTxReceipt() error = %v", err)
+	}
+	if err := store.MarkTxConfirmed(ctx, id, receiptHash); err != nil {
+		t.Fatalf("MarkTxConfirmed() error = %v", err)
+	}
+
+	tx, err := store.GetOutboxTx(ctx, id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	if tx.ReceiptGasCostDstWei == nil || tx.ReceiptGasCostDstWei.Cmp(big.NewInt(105)) != 0 {
+		t.Fatalf("receipt dst gas cost = %v, want 105", tx.ReceiptGasCostDstWei)
+	}
+	unpriced, err := store.ListUnpricedWorkerReceiptCosts(ctx, 10)
+	if err != nil {
+		t.Fatalf("ListUnpricedWorkerReceiptCosts() error = %v", err)
+	}
+	var unpricedCost *UnpricedWorkerReceiptCost
+	for i := range unpriced {
+		if unpriced[i].ID == id {
+			unpricedCost = &unpriced[i]
+			break
+		}
+	}
+	if unpricedCost == nil || unpricedCost.GasCostDstWei.Cmp(big.NewInt(105)) != 0 {
+		t.Fatalf("unpriced = %+v, want tx %d cost 105", unpriced, id)
+	}
+	if err := store.MarkTxReceiptCostPriced(ctx, id, big.NewInt(120)); err != nil {
+		t.Fatalf("MarkTxReceiptCostPriced() error = %v", err)
+	}
+
+	snapshot, err := store.Stats(ctx)
+	if err != nil {
+		t.Fatalf("Stats() error = %v", err)
+	}
+	var gasStat *TxReceiptGasCostStat
+	for i := range snapshot.TxReceiptGasCosts {
+		if snapshot.TxReceiptGasCosts[i].ChainEID == packet.DstEID && snapshot.TxReceiptGasCosts[i].Purpose == "executor_lz_receive" {
+			gasStat = &snapshot.TxReceiptGasCosts[i]
+			break
+		}
+	}
+	if gasStat == nil || gasStat.GasCostDstWei != "105" {
+		t.Fatalf("tx receipt gas stats = %+v, want 105", snapshot.TxReceiptGasCosts)
+	}
+	var feeStat *WorkerFeeStat
+	for i := range snapshot.WorkerFees {
+		if snapshot.WorkerFees[i].Role == "executor" && snapshot.WorkerFees[i].SrcEID == packet.SrcEID && snapshot.WorkerFees[i].DstEID == packet.DstEID {
+			feeStat = &snapshot.WorkerFees[i]
+			break
+		}
+	}
+	if feeStat == nil {
+		t.Fatalf("worker fee stats = %+v, want executor pathway", snapshot.WorkerFees)
+	}
+	if feeStat.RevenueSrcWei != "100" || feeStat.ActualGasCostSrcWei != "120" || feeStat.GrossMarginSrcWei != "-20" || feeStat.NegativeMarginJobs != 1 || feeStat.UnpricedReceipts != 0 {
+		t.Fatalf("worker fee stat = %+v, want revenue 100 cost 120 margin -20", *feeStat)
 	}
 }
 

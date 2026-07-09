@@ -172,6 +172,13 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		if err != nil {
 			return 0, err
 		}
+		facts, err := txReceiptFacts(receipt)
+		if err != nil {
+			return 0, err
+		}
+		if err := m.store.RecordTxReceipt(ctx, outboxTx.ID, facts); err != nil {
+			return 0, err
+		}
 		if receipt.Status == types.ReceiptStatusSuccessful {
 			if err := m.applyWorkflowReceipt(ctx, outboxTx, true); err != nil {
 				return 0, err
@@ -179,7 +186,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 			if err := m.store.MarkTxConfirmed(ctx, outboxTx.ID, outboxTx.TxHash); err != nil {
 				return 0, err
 			}
-			m.logger.Info("confirmed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status)
+			m.logger.Info("confirmed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price", facts.EffectiveGasPrice, "gas_cost_dst_wei", facts.GasCostDstWei)
 			return outboxTx.ID, nil
 		}
 		if err := m.applyWorkflowReceipt(ctx, outboxTx, false); err != nil {
@@ -188,7 +195,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		if err := m.store.MarkTxFailed(ctx, outboxTx.ID, fmt.Errorf("transaction receipt status %d", receipt.Status), db.TxFailureReceiptFailed); err != nil {
 			return 0, err
 		}
-		m.logger.Warn("failed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status, "failure_kind", db.TxFailureReceiptFailed)
+		m.logger.Warn("failed tx receipt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", target.Signer.Address(), "purpose", outboxTx.Purpose, "tx_hash", outboxTx.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price", facts.EffectiveGasPrice, "gas_cost_dst_wei", facts.GasCostDstWei, "failure_kind", db.TxFailureReceiptFailed)
 		return outboxTx.ID, nil
 	}
 	return 0, ErrNoReceiptUpdate
@@ -296,6 +303,30 @@ func (m *Manager) applyWorkflowReceipt(ctx context.Context, outboxTx db.OutboxTx
 		}
 	}
 	return nil
+}
+
+func txReceiptFacts(receipt *types.Receipt) (db.TxReceiptFacts, error) {
+	if receipt == nil {
+		return db.TxReceiptFacts{}, errors.New("tx receipt is required")
+	}
+	if receipt.TxHash == (common.Hash{}) {
+		return db.TxReceiptFacts{}, errors.New("receipt tx hash is required")
+	}
+	if receipt.BlockNumber == nil || receipt.BlockNumber.Sign() < 0 || !receipt.BlockNumber.IsUint64() {
+		return db.TxReceiptFacts{}, errors.New("receipt block number must be a non-negative uint64")
+	}
+	if receipt.EffectiveGasPrice == nil || receipt.EffectiveGasPrice.Sign() < 0 {
+		return db.TxReceiptFacts{}, errors.New("receipt effective gas price must be non-negative")
+	}
+	gasCostDstWei := new(big.Int).Mul(new(big.Int).SetUint64(receipt.GasUsed), receipt.EffectiveGasPrice)
+	return db.TxReceiptFacts{
+		TxHash:            receipt.TxHash,
+		Status:            receipt.Status,
+		BlockNumber:       receipt.BlockNumber.Uint64(),
+		GasUsed:           receipt.GasUsed,
+		EffectiveGasPrice: bigutil.Clone(receipt.EffectiveGasPrice),
+		GasCostDstWei:     gasCostDstWei,
+	}, nil
 }
 
 func (m *Manager) markExecutorReceipt(ctx context.Context, guid common.Hash, mark func() error, alreadyApplied ...packets.ExecutorState) error {

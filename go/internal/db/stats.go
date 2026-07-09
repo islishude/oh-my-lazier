@@ -7,13 +7,15 @@ import (
 
 // StatsSnapshot is a point-in-time summary used by the HTTP metrics endpoint.
 type StatsSnapshot struct {
-	Chains         []ChainStat
-	Pathways       []PathwayStat
-	Packets        []PacketStat
-	ExecutorJobs   []StatusStat
-	DVNJobs        []StatusStat
-	TxOutbox       []TxOutboxStat
-	IndexerCursors []IndexerCursorStat
+	Chains            []ChainStat
+	Pathways          []PathwayStat
+	Packets           []PacketStat
+	ExecutorJobs      []StatusStat
+	DVNJobs           []StatusStat
+	TxOutbox          []TxOutboxStat
+	TxReceiptGasCosts []TxReceiptGasCostStat
+	WorkerFees        []WorkerFeeStat
+	IndexerCursors    []IndexerCursorStat
 }
 
 // ChainStat summarizes one configured chain.
@@ -54,6 +56,25 @@ type TxOutboxStat struct {
 	Count      uint64
 }
 
+// TxReceiptGasCostStat sums mined receipt gas costs by destination chain and outbox purpose.
+type TxReceiptGasCostStat struct {
+	ChainEID      uint32
+	Purpose       string
+	GasCostDstWei string
+}
+
+// WorkerFeeStat summarizes worker revenue and actual gas cost by role and pathway.
+type WorkerFeeStat struct {
+	Role                string
+	SrcEID              uint32
+	DstEID              uint32
+	RevenueSrcWei       string
+	ActualGasCostSrcWei string
+	GrossMarginSrcWei   string
+	NegativeMarginJobs  uint64
+	UnpricedReceipts    uint64
+}
+
 // IndexerCursorStat exposes durable indexer cursor progress.
 type IndexerCursorStat struct {
 	ChainEID  uint32
@@ -87,18 +108,28 @@ func (s *Store) Stats(ctx context.Context) (StatsSnapshot, error) {
 	if err != nil {
 		return StatsSnapshot{}, err
 	}
+	txReceiptGasCosts, err := s.txReceiptGasCostStats(ctx)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
+	workerFees, err := s.workerFeeStats(ctx)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
 	indexerCursors, err := s.indexerCursorStats(ctx)
 	if err != nil {
 		return StatsSnapshot{}, err
 	}
 	return StatsSnapshot{
-		Chains:         chains,
-		Pathways:       pathways,
-		Packets:        packets,
-		ExecutorJobs:   executorJobs,
-		DVNJobs:        dvnJobs,
-		TxOutbox:       txOutbox,
-		IndexerCursors: indexerCursors,
+		Chains:            chains,
+		Pathways:          pathways,
+		Packets:           packets,
+		ExecutorJobs:      executorJobs,
+		DVNJobs:           dvnJobs,
+		TxOutbox:          txOutbox,
+		TxReceiptGasCosts: txReceiptGasCosts,
+		WorkerFees:        workerFees,
+		IndexerCursors:    indexerCursors,
 	}, nil
 }
 

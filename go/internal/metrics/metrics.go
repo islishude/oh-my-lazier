@@ -333,6 +333,36 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.TxOutbox {
 		fmt.Fprintf(output, "laz_tx_outbox_total{chain_eid=%q,status=%s,retry_state=%s} %d\n", uint32Label(stat.ChainEID), label(stat.Status), label(stat.RetryState), stat.Count)
 	}
+	output.WriteString("# HELP laz_tx_receipt_gas_cost_dst_wei Mined transaction receipt gas cost in destination-chain native wei by chain and outbox purpose.\n")
+	output.WriteString("# TYPE laz_tx_receipt_gas_cost_dst_wei gauge\n")
+	for _, stat := range snapshot.TxReceiptGasCosts {
+		fmt.Fprintf(output, "laz_tx_receipt_gas_cost_dst_wei{chain_eid=%q,purpose=%s} %s\n", uint32Label(stat.ChainEID), label(stat.Purpose), stat.GasCostDstWei)
+	}
+	output.WriteString("# HELP laz_worker_fee_revenue_src_wei Worker assignment revenue in source-chain native wei by role and pathway.\n")
+	output.WriteString("# TYPE laz_worker_fee_revenue_src_wei gauge\n")
+	for _, stat := range snapshot.WorkerFees {
+		fmt.Fprintf(output, "laz_worker_fee_revenue_src_wei{role=%s,src_eid=%q,dst_eid=%q} %s\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.RevenueSrcWei)
+	}
+	output.WriteString("# HELP laz_worker_fee_actual_gas_cost_src_wei Actual mined worker transaction gas cost converted to source-chain native wei by role and pathway.\n")
+	output.WriteString("# TYPE laz_worker_fee_actual_gas_cost_src_wei gauge\n")
+	for _, stat := range snapshot.WorkerFees {
+		fmt.Fprintf(output, "laz_worker_fee_actual_gas_cost_src_wei{role=%s,src_eid=%q,dst_eid=%q} %s\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.ActualGasCostSrcWei)
+	}
+	output.WriteString("# HELP laz_worker_fee_gross_margin_src_wei Worker assignment revenue minus actual mined gas cost in source-chain native wei by role and pathway.\n")
+	output.WriteString("# TYPE laz_worker_fee_gross_margin_src_wei gauge\n")
+	for _, stat := range snapshot.WorkerFees {
+		fmt.Fprintf(output, "laz_worker_fee_gross_margin_src_wei{role=%s,src_eid=%q,dst_eid=%q} %s\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.GrossMarginSrcWei)
+	}
+	output.WriteString("# HELP laz_worker_fee_negative_margin_jobs Worker jobs whose priced mined gas cost exceeds assignment revenue.\n")
+	output.WriteString("# TYPE laz_worker_fee_negative_margin_jobs gauge\n")
+	for _, stat := range snapshot.WorkerFees {
+		fmt.Fprintf(output, "laz_worker_fee_negative_margin_jobs{role=%s,src_eid=%q,dst_eid=%q} %d\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.NegativeMarginJobs)
+	}
+	output.WriteString("# HELP laz_worker_fee_unpriced_receipts Mined worker transaction receipts whose destination gas cost is not yet priced in source-chain native wei.\n")
+	output.WriteString("# TYPE laz_worker_fee_unpriced_receipts gauge\n")
+	for _, stat := range snapshot.WorkerFees {
+		fmt.Fprintf(output, "laz_worker_fee_unpriced_receipts{role=%s,src_eid=%q,dst_eid=%q} %d\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.UnpricedReceipts)
+	}
 	output.WriteString("# HELP laz_indexer_cursor_last_block Last indexed block by chain and stream.\n")
 	output.WriteString("# TYPE laz_indexer_cursor_last_block gauge\n")
 	for _, stat := range snapshot.IndexerCursors {

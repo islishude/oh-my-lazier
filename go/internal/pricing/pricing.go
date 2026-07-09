@@ -175,6 +175,12 @@ type ChainSources struct {
 	NativeAssetID     string
 }
 
+// PriceSelectionPolicy controls primary/sanity price-source selection.
+type PriceSelectionPolicy struct {
+	MaxDeviationBps     uint64
+	AllowSanityFallback bool
+}
+
 // EnqueueOnce computes current price snapshots and enqueues shared price-feed update batches.
 func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	if b == nil || !b.settings.Enabled {
@@ -327,52 +333,11 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 	return id, nil
 }
 
-func (b *Bot) chainPrice(ctx context.Context, eid uint32) (*big.Rat, error) {
-	sources, ok := b.sources[eid]
-	if !ok {
-		return nil, fmt.Errorf("pricing sources for chain %d are not configured", eid)
-	}
-	var primary SourcePrice
-	if sources.Primary != nil {
-		price, err := sources.Primary.PriceUSD(ctx)
-		if err == nil {
-			primary = price
-		}
-	}
-	sanityPrices := make([]SourcePrice, 0, len(sources.Sanity))
-	for _, reader := range sources.Sanity {
-		if reader == nil {
-			continue
-		}
-		price, err := reader.PriceUSD(ctx)
-		if err == nil {
-			sanityPrices = append(sanityPrices, price)
-		}
-	}
-	return SelectPriceWithSanity(primary, sanityPrices, b.settings.MaxDeviation, b.settings.AllowSanityFallback)
-}
-
 func (b *Bot) pathwayPrices(ctx context.Context, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
-	srcSources, ok := b.sources[srcEID]
-	if !ok {
-		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", srcEID)
-	}
-	dstSources, ok := b.sources[dstEID]
-	if !ok {
-		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", dstEID)
-	}
-	if srcSources.NativeAssetID != "" && srcSources.NativeAssetID == dstSources.NativeAssetID {
-		return big.NewRat(1, 1), big.NewRat(1, 1), nil
-	}
-	srcPrice, err := b.chainPrice(ctx, srcEID)
-	if err != nil {
-		return nil, nil, err
-	}
-	dstPrice, err := b.chainPrice(ctx, dstEID)
-	if err != nil {
-		return nil, nil, err
-	}
-	return srcPrice, dstPrice, nil
+	return PathwayNativePrices(ctx, b.sources, srcEID, dstEID, PriceSelectionPolicy{
+		MaxDeviationBps:     b.settings.MaxDeviation,
+		AllowSanityFallback: b.settings.AllowSanityFallback,
+	})
 }
 
 func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {
@@ -569,6 +534,73 @@ func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxD
 		}
 	}
 	return nil, errors.New("no healthy price source")
+}
+
+// ChainNativePrice reads one chain's selected USD/native price with the configured source-selection policy.
+func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid uint32, policy PriceSelectionPolicy) (*big.Rat, error) {
+	chainSources, ok := sources[eid]
+	if !ok {
+		return nil, fmt.Errorf("pricing sources for chain %d are not configured", eid)
+	}
+	var primary SourcePrice
+	if chainSources.Primary != nil {
+		price, err := chainSources.Primary.PriceUSD(ctx)
+		if err == nil {
+			primary = price
+		}
+	}
+	sanityPrices := make([]SourcePrice, 0, len(chainSources.Sanity))
+	for _, reader := range chainSources.Sanity {
+		if reader == nil {
+			continue
+		}
+		price, err := reader.PriceUSD(ctx)
+		if err == nil {
+			sanityPrices = append(sanityPrices, price)
+		}
+	}
+	return SelectPriceWithSanity(primary, sanityPrices, policy.MaxDeviationBps, policy.AllowSanityFallback)
+}
+
+// PathwayNativePrices returns source and destination USD/native prices, using 1:1 for shared native assets.
+func PathwayNativePrices(ctx context.Context, sources map[uint32]ChainSources, srcEID, dstEID uint32, policy PriceSelectionPolicy) (*big.Rat, *big.Rat, error) {
+	srcSources, ok := sources[srcEID]
+	if !ok {
+		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", srcEID)
+	}
+	dstSources, ok := sources[dstEID]
+	if !ok {
+		return nil, nil, fmt.Errorf("pricing sources for chain %d are not configured", dstEID)
+	}
+	if srcSources.NativeAssetID != "" && srcSources.NativeAssetID == dstSources.NativeAssetID {
+		return big.NewRat(1, 1), big.NewRat(1, 1), nil
+	}
+	srcPrice, err := ChainNativePrice(ctx, sources, srcEID, policy)
+	if err != nil {
+		return nil, nil, err
+	}
+	dstPrice, err := ChainNativePrice(ctx, sources, dstEID, policy)
+	if err != nil {
+		return nil, nil, err
+	}
+	return srcPrice, dstPrice, nil
+}
+
+// ConvertDstWeiToSrcWei converts destination-chain native wei into source-chain native wei.
+func ConvertDstWeiToSrcWei(dstWei *big.Int, srcNativeUSD, dstNativeUSD *big.Rat) (*big.Int, error) {
+	if dstWei == nil || dstWei.Sign() < 0 {
+		return nil, errors.New("destination wei must be non-negative")
+	}
+	if srcNativeUSD == nil || srcNativeUSD.Sign() <= 0 {
+		return nil, errors.New("source native USD price must be positive")
+	}
+	if dstNativeUSD == nil || dstNativeUSD.Sign() <= 0 {
+		return nil, errors.New("destination native USD price must be positive")
+	}
+	cost := new(big.Rat).SetInt(dstWei)
+	cost.Mul(cost, dstNativeUSD)
+	cost.Quo(cost, srcNativeUSD)
+	return bigutil.CeilRat(cost), nil
 }
 
 // GasIncreaseBps returns max((current-previous)/previous, 0) in basis points.

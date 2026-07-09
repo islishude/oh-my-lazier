@@ -21,6 +21,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/dvn"
 	"github.com/islishude/oh-my-lazier/go/internal/executor"
+	"github.com/islishude/oh-my-lazier/go/internal/feeaccounting"
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
 	"github.com/islishude/oh-my-lazier/go/internal/metrics"
 	"github.com/islishude/oh-my-lazier/go/internal/pricing"
@@ -157,8 +158,22 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 	var priceBot *pricing.Bot
+	var feeReconciler *feeaccounting.Reconciler
 	if a.cfg.Pricing.Enabled {
-		priceBot, err = a.priceBot(store, registry)
+		priceSources, err := a.pricingSources(registry)
+		if err != nil {
+			return err
+		}
+		priceBot, err = a.priceBotWithSources(store, registry, priceSources)
+		if err != nil {
+			return err
+		}
+		feeReconciler, err = feeaccounting.New(store, priceSources, feeaccounting.Settings{
+			PriceSelection: pricing.PriceSelectionPolicy{
+				MaxDeviationBps:     a.cfg.Pricing.MaxDeviationBps,
+				AllowSanityFallback: a.cfg.Pricing.AllowSanityFallback,
+			},
+		}, a.logger)
 		if err != nil {
 			return err
 		}
@@ -205,6 +220,7 @@ func (a *App) Run(ctx context.Context) error {
 		start("dvn", dvnWorker.Run)
 	}
 	if a.cfg.Pricing.Enabled {
+		start("fee_accounting", feeReconciler.Run)
 		start("pricing", priceBot.Run)
 	}
 
@@ -313,6 +329,17 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 	if !a.cfg.Pricing.Enabled {
 		return pricing.New(a.logger), nil
 	}
+	sources, err := a.pricingSources(registry)
+	if err != nil {
+		return nil, err
+	}
+	return a.priceBotWithSources(store, registry, sources)
+}
+
+func (a *App) priceBotWithSources(store *db.Store, registry *chain.Registry, sources map[uint32]pricing.ChainSources) (*pricing.Bot, error) {
+	if !a.cfg.Pricing.Enabled {
+		return pricing.New(a.logger), nil
+	}
 	settings := pricing.Settings{
 		Enabled:             true,
 		SignerID:            a.cfg.Pricing.Signer.Hex(),
@@ -322,6 +349,10 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 		GasSpikeBps:         a.cfg.Pricing.GasSpikeBps,
 		AllowSanityFallback: a.cfg.Pricing.AllowSanityFallback,
 	}
+	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
+}
+
+func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.ChainSources, error) {
 	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
 	var coinMarketCapClient *pricing.CoinMarketCapClient
 	if pricingUsesSource(a.cfg.Pricing.Chains, "coinmarketcap") {
@@ -407,7 +438,7 @@ func (a *App) priceBot(store *db.Store, registry *chain.Registry) (*pricing.Bot,
 			NativeAssetID:     cfg.NativeAssetID,
 		}
 	}
-	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
+	return sources, nil
 }
 
 func pricingUsesSource(chains []config.PricingChainConfig, source string) bool {

@@ -106,6 +106,21 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 		TxOutbox: []db.TxOutboxStat{
 			{ChainEID: 40449, Status: "failed", RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
+		TxReceiptGasCosts: []db.TxReceiptGasCostStat{
+			{ChainEID: 40449, Purpose: "executor_lz_receive", GasCostDstWei: "42000000000000"},
+		},
+		WorkerFees: []db.WorkerFeeStat{
+			{
+				Role:                "executor",
+				SrcEID:              40161,
+				DstEID:              40449,
+				RevenueSrcWei:       "100",
+				ActualGasCostSrcWei: "120",
+				GrossMarginSrcWei:   "-20",
+				NegativeMarginJobs:  1,
+				UnpricedReceipts:    2,
+			},
+		},
 		IndexerCursors: []db.IndexerCursorStat{
 			{ChainEID: 40161, Stream: "source", LastBlock: 123456},
 		},
@@ -127,6 +142,12 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 		`laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} 1`,
 		`laz_dvn_jobs_total{status="QUORUM_CONFLICT"} 1`,
 		`laz_tx_outbox_total{chain_eid="40449",status="failed",retry_state="exhausted"} 3`,
+		`laz_tx_receipt_gas_cost_dst_wei{chain_eid="40449",purpose="executor_lz_receive"} 42000000000000`,
+		`laz_worker_fee_revenue_src_wei{role="executor",src_eid="40161",dst_eid="40449"} 100`,
+		`laz_worker_fee_actual_gas_cost_src_wei{role="executor",src_eid="40161",dst_eid="40449"} 120`,
+		`laz_worker_fee_gross_margin_src_wei{role="executor",src_eid="40161",dst_eid="40449"} -20`,
+		`laz_worker_fee_negative_margin_jobs{role="executor",src_eid="40161",dst_eid="40449"} 1`,
+		`laz_worker_fee_unpriced_receipts{role="executor",src_eid="40161",dst_eid="40449"} 2`,
 		`laz_indexer_cursor_last_block{chain_eid="40161",stream="source"} 123456`,
 	} {
 		if !strings.Contains(body, want) {

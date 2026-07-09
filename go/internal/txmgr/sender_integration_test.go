@@ -792,7 +792,7 @@ func TestProcessOnceReceiptWinsOverStaleBroadcastReplacement(t *testing.T) {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
 	forceBroadcastStale(t, id)
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	processed, err := manager.processOnce(t.Context())
 	if err != nil {
@@ -870,7 +870,7 @@ func TestStaleBroadcastReplacementDefersWhenBumpExceedsCap(t *testing.T) {
 	}
 
 	client.receipts = map[common.Hash]*types.Receipt{
-		original.TxHash: {TxHash: original.TxHash, Status: types.ReceiptStatusSuccessful},
+		original.TxHash: testReceipt(original.TxHash, types.ReceiptStatusSuccessful),
 	}
 	if _, err := manager.ProcessReceipts(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, lowCapPolicy), 1); err != nil {
 		t.Fatalf("ProcessReceipts(original) error = %v", err)
@@ -1227,7 +1227,7 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	if outboxTx.Nonce >= client.pendingNonce {
 		client.pendingNonce = outboxTx.Nonce + 1
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	processedID, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: 40161,
@@ -1247,6 +1247,27 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	}
 	if confirmed.Status != db.TxStatusConfirmed {
 		t.Fatalf("status = %q, want %q", confirmed.Status, db.TxStatusConfirmed)
+	}
+	if confirmed.ReceiptTxHash != outboxTx.TxHash {
+		t.Fatalf("receipt tx hash = %s, want %s", confirmed.ReceiptTxHash, outboxTx.TxHash)
+	}
+	if confirmed.ReceiptStatus == nil || *confirmed.ReceiptStatus != types.ReceiptStatusSuccessful {
+		t.Fatalf("receipt status = %v, want successful", confirmed.ReceiptStatus)
+	}
+	if confirmed.ReceiptBlockNumber == nil || *confirmed.ReceiptBlockNumber != 1_234_567 {
+		t.Fatalf("receipt block number = %v, want 1234567", confirmed.ReceiptBlockNumber)
+	}
+	if confirmed.ReceiptGasUsed == nil || *confirmed.ReceiptGasUsed != 21_000 {
+		t.Fatalf("receipt gas used = %v, want 21000", confirmed.ReceiptGasUsed)
+	}
+	if confirmed.ReceiptEffectiveGasPrice == nil || confirmed.ReceiptEffectiveGasPrice.Cmp(big.NewInt(2_000_000_000)) != 0 {
+		t.Fatalf("receipt effective gas price = %v, want 2000000000", confirmed.ReceiptEffectiveGasPrice)
+	}
+	if confirmed.ReceiptGasCostDstWei == nil || confirmed.ReceiptGasCostDstWei.Cmp(big.NewInt(42_000_000_000_000)) != 0 {
+		t.Fatalf("receipt destination gas cost = %v, want 42000000000000", confirmed.ReceiptGasCostDstWei)
+	}
+	if confirmed.ReceiptObservedAt == nil {
+		t.Fatal("receipt observed at = nil, want timestamp")
 	}
 	assertLogContains(t, logs.String(),
 		`msg="confirmed tx receipt"`,
@@ -1305,7 +1326,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 	if outboxTx.Nonce >= client.pendingNonce {
 		client.pendingNonce = outboxTx.Nonce + 1
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
@@ -1371,7 +1392,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
@@ -1451,7 +1472,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
 		ChainID:  big.NewInt(560048),
@@ -1501,7 +1522,7 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	if retryTx.Nonce != 57 {
 		t.Fatalf("fresh retry nonce = %d, want next local nonce 57", retryTx.Nonce)
 	}
-	client.receipts[retryTx.TxHash] = &types.Receipt{TxHash: retryTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[retryTx.TxHash] = testReceipt(retryTx.TxHash, types.ReceiptStatusSuccessful)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
 		ChainID:  big.NewInt(560048),
@@ -1565,7 +1586,7 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
@@ -1623,7 +1644,7 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOutboxTx() error = %v", err)
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusFailed}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: packet.DstEID,
@@ -1760,7 +1781,7 @@ func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, clien
 	if outboxTx.Nonce >= client.pendingNonce {
 		client.pendingNonce = outboxTx.Nonce + 1
 	}
-	client.receipts[outboxTx.TxHash] = &types.Receipt{TxHash: outboxTx.TxHash, Status: types.ReceiptStatusSuccessful}
+	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
 		ChainEID: chainEID,
 		ChainID:  chainID,
@@ -1768,6 +1789,16 @@ func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, clien
 		Client:   client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
+	}
+}
+
+func testReceipt(txHash common.Hash, status uint64) *types.Receipt {
+	return &types.Receipt{
+		TxHash:            txHash,
+		Status:            status,
+		BlockNumber:       big.NewInt(1_234_567),
+		GasUsed:           21_000,
+		EffectiveGasPrice: big.NewInt(2_000_000_000),
 	}
 }
 

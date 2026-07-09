@@ -155,6 +155,7 @@ func dvnRecordFromMatchedLogs(packet db.PacketRecord, assignment dvnAssignmentEv
 		Packet: packet,
 		DVNJob: db.DVNJobRecord{
 			GUID:                  packet.GUID,
+			AssignedFee:           new(big.Int).Set(assignment.Event.Fee),
 			ConfirmationsRequired: assignment.Event.Confirmations,
 			Status:                string(packets.DVNAssigned),
 		},

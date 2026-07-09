@@ -33,6 +33,9 @@ func TestDVNSourceTxRecordsFromLogs(t *testing.T) {
 	if record.DVNJob.GUID != record.Packet.GUID {
 		t.Fatalf("dvn job guid = %s, want packet guid %s", record.DVNJob.GUID, record.Packet.GUID)
 	}
+	if record.DVNJob.AssignedFee == nil || record.DVNJob.AssignedFee.Cmp(big.NewInt(42)) != 0 {
+		t.Fatalf("assigned fee = %v, want 42", record.DVNJob.AssignedFee)
+	}
 	if record.DVNJob.ConfirmationsRequired != 12 {
 		t.Fatalf("confirmations = %d, want 12", record.DVNJob.ConfirmationsRequired)
 	}

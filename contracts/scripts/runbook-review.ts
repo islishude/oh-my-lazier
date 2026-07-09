@@ -47,6 +47,8 @@ const requiredDocs: RequiredDoc[] = [
       "LazExecutorReceiveFailed",
       "LazWorkerManualReview",
       "LazTxOutboxFailed",
+      "LazWorkerFeeNegativeMargin",
+      "LazWorkerFeeReconciliationPending",
       "LazSignerLowNativeBalance",
       "LazIndexerPollFailing",
       "LazIndexerCursorStalled",
@@ -55,6 +57,8 @@ const requiredDocs: RequiredDoc[] = [
       "laz_indexer_poll_success",
       "laz_indexer_cursor_last_block",
       "laz_signer_native_balance_wei",
+      "laz_worker_fee_negative_margin_jobs",
+      "laz_worker_fee_unpriced_receipts",
       "go run ./go/cmd/readinesscheck -config <worker.yaml> -format json",
     ],
   },
@@ -173,6 +177,14 @@ const requiredAlertRules: RequiredAlertRule[] = [
       'laz_tx_outbox_total{status="failed",retry_state="exhausted"} > 0',
       "severity: ticket",
     ],
+  },
+  {
+    alert: "LazWorkerFeeNegativeMargin",
+    anchors: ["laz_worker_fee_negative_margin_jobs > 0", "severity: page"],
+  },
+  {
+    alert: "LazWorkerFeeReconciliationPending",
+    anchors: ["laz_worker_fee_unpriced_receipts > 0", "severity: ticket"],
   },
   {
     alert: "LazSignerLowNativeBalance",
