@@ -171,13 +171,13 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 
 func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	packet := testDestinationPacketRecord()
-	packet.Status = string(packets.ExecutorCommitTxEnqueued)
+	packet.Status = string(packets.ExecutorAssigned)
 	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.packets[packet.GUID] = packet
 	store.jobs[packet.GUID] = db.ExecutorJobRecord{
 		GUID:   packet.GUID,
-		Status: string(packets.ExecutorCommitTxEnqueued),
+		Status: string(packets.ExecutorAssigned),
 	}
 	client := &fakeLogClient{
 		head:            200,
@@ -209,6 +209,74 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 		`dst_eid=40449`,
 		`to_status=COMMITTED`,
 	)
+}
+
+func TestIndexerProcessOnceDefersDestinationCursorForMissingSourcePacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:            200,
+		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorDestination: true})
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 0 {
+		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
+	}
+	if _, ok := store.cursors[cursorKey(packet.DstEID, executorDestStream)]; ok {
+		t.Fatalf("destination cursor advanced to %d, want missing", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	}
+
+	store.packets[packet.GUID] = packet
+	store.jobs[packet.GUID] = db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorAssigned)}
+	result, err = indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("second ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 1 {
+		t.Fatalf("second DestinationLogs = %d, want 1", result.DestinationLogs)
+	}
+	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	}
+}
+
+func TestIndexerProcessOnceAdvancesDestinationCursorForExternalMissingPacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.Sender = common.HexToAddress("0x1212121212121212121212121212121212121212")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head:            200,
+		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorDestination: true})
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.DestinationLogs != 0 {
+		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
+	}
+	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	}
 }
 
 func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
@@ -1179,20 +1247,32 @@ func (s *fakeIndexerStore) GetDVNJob(_ context.Context, guid common.Hash) (db.DV
 	return job, nil
 }
 
-func (s *fakeIndexerStore) MarkExecutorCommitted(_ context.Context, guid, _ common.Hash) error {
+func (s *fakeIndexerStore) MarkExecutorCommittedObserved(_ context.Context, guid, _ common.Hash, _ string) error {
 	s.committedGUID = guid
+	if job, ok := s.jobs[guid]; ok {
+		job.Status = string(packets.ExecutorCommitted)
+		s.jobs[guid] = job
+	}
 	return nil
 }
 
-func (s *fakeIndexerStore) MarkExecutorDelivered(context.Context, common.Hash, common.Hash) error {
+func (s *fakeIndexerStore) MarkExecutorDeliveredObserved(_ context.Context, guid, _ common.Hash, _ string) error {
+	if job, ok := s.jobs[guid]; ok {
+		job.Status = string(packets.ExecutorDelivered)
+		s.jobs[guid] = job
+	}
 	return nil
 }
 
-func (s *fakeIndexerStore) MarkExecutorReceiveFailed(context.Context, common.Hash, common.Hash, string) error {
+func (s *fakeIndexerStore) MarkExecutorReceiveFailedObserved(_ context.Context, guid, _ common.Hash, _, _ string) error {
+	if job, ok := s.jobs[guid]; ok {
+		job.Status = string(packets.ExecutorLzReceiveFailed)
+		s.jobs[guid] = job
+	}
 	return nil
 }
 
-func (s *fakeIndexerStore) MarkDVNVerified(_ context.Context, guid, _ common.Hash) error {
+func (s *fakeIndexerStore) MarkDVNVerifiedObserved(_ context.Context, guid, _ common.Hash, _ string) error {
 	s.dvnVerifiedGUID = guid
 	if job, ok := s.dvnJobs[guid]; ok {
 		job.Status = string(packets.DVNVerified)

@@ -27,9 +27,11 @@ import {
   type SourceWorkerFeeClaim,
 } from "./e2e-fee-withdrawal.js";
 import {
+  destinationReplayEvidence,
   multiSendIndexerEvidence,
   packetsFromSourceReceipt,
   requirePacketCount,
+  type DestinationReplayObservation,
   type PacketDetails,
 } from "./e2e-local-indexer-evidence.js";
 import {
@@ -117,6 +119,10 @@ const deploymentPath = path.join(tmpDir, "deployments.json");
 const multiSendIndexerEvidencePath = path.join(
   tmpDir,
   "multi-oft-send-indexer.json",
+);
+const destinationReplayEvidencePath = path.join(
+  tmpDir,
+  "destination-replay.json",
 );
 const deployment: LocalE2EDeployment = validateLocalE2EDeployment(
   JSON.parse(await readFile(deploymentPath, "utf8")),
@@ -414,6 +420,7 @@ async function runMultiSendIndexerScenario(
     await submitSecondaryVerification(destinationClients, destination, packet);
   }
   let minBalance = balanceBefore;
+  const replayObservations: DestinationReplayObservation[] = [];
   for (let index = 0; index < packets.length; index++) {
     const amountLD = amountsLD[index];
     const packet = packets[index];
@@ -429,7 +436,27 @@ async function runMultiSendIndexerScenario(
       packet,
       minBalance,
     );
+    replayObservations.push(
+      await destinationReplayObservation(
+        destinationClients.publicClient,
+        source,
+        destination,
+        packet,
+      ),
+    );
   }
+  const replayEvidence = destinationReplayEvidence({
+    srcEid: source.eid,
+    dstEid: destination.eid,
+    packets,
+    observations: replayObservations,
+  });
+  await writeFile(destinationReplayEvidencePath, `${jsonStringify(replayEvidence)}\n`);
+  logStep("destination replay evidence written", {
+    path: destinationReplayEvidencePath,
+    tx: replayEvidence.sourceTxHash,
+    packets: replayEvidence.expectedPackets.length,
+  });
   logStep("multi-send indexer scenario completed", {
     direction,
     min_balance: minBalance,
@@ -858,6 +885,45 @@ async function waitForDelivery(
   );
 }
 
+async function destinationReplayObservation(
+  publicClient: PublicClient,
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<DestinationReplayObservation> {
+  const commitReceipt = await matchingPacketVerifiedReceipt(
+    publicClient,
+    source,
+    destination,
+    packet,
+  );
+  const deliveryReceipt = await matchingPacketDeliveredReceipt(
+    publicClient,
+    source,
+    destination,
+    packet,
+  );
+  const verifyReceipt = await matchingPayloadVerifiedReceipt(
+    publicClient,
+    destination,
+    packet,
+    destination.primaryOpenDVN,
+  );
+  logStep("destination replay observation captured", {
+    direction: directionLabel(source, destination),
+    guid: packet.guid,
+    commit_tx: commitReceipt.transactionHash,
+    receive_tx: deliveryReceipt.transactionHash,
+    verify_tx: verifyReceipt.transactionHash,
+  });
+  return {
+    guid: packet.guid,
+    commitTxHash: commitReceipt.transactionHash,
+    receiveTxHash: deliveryReceipt.transactionHash,
+    verifyTxHash: verifyReceipt.transactionHash,
+  };
+}
+
 async function withdrawSourceWorkerFees(
   clients: Clients,
   source: ChainDeployment,
@@ -1123,6 +1189,64 @@ async function assertPrimaryDVNVerifier(
   );
 }
 
+async function matchingPacketVerifiedReceipt(
+  publicClient: PublicClient,
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<TransactionReceipt> {
+  const logs = await matchingPacketVerifiedLogs(
+    publicClient,
+    source,
+    destination,
+    packet,
+  );
+  const txHash = logs[0]?.transactionHash;
+  if (txHash === undefined || txHash === null) {
+    throw new Error(
+      `${destination.name} PacketVerified log is missing transaction hash`,
+    );
+  }
+  return publicClient.getTransactionReceipt({ hash: txHash });
+}
+
+async function matchingPacketVerifiedLogs(
+  publicClient: PublicClient,
+  source: ChainDeployment,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+): Promise<Log[]> {
+  const logs = await publicClient.getLogs({
+    address: destination.endpoint,
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+  return logs.filter((log) => {
+    if (log.topics[0] !== eventTopic(endpointArtifact, "PacketVerified")) {
+      return false;
+    }
+    const decoded = decodeEventLog({
+      abi: endpointArtifact.abi,
+      eventName: "PacketVerified",
+      data: log.data,
+      topics: mutableTopics(log.topics),
+    });
+    const args = decoded.args as unknown as {
+      origin: { srcEid: number; sender: Hex; nonce: bigint };
+      receiver: Address;
+      payloadHash: Hex;
+    };
+    return (
+      args.origin.srcEid === source.eid &&
+      args.origin.nonce === packet.nonce &&
+      args.origin.sender.toLowerCase() ===
+        addressToBytes32(source.oft).toLowerCase() &&
+      isAddressEqual(args.receiver, destination.oft) &&
+      args.payloadHash.toLowerCase() === packet.payloadHash.toLowerCase()
+    );
+  });
+}
+
 async function matchingPacketDeliveredReceipt(
   publicClient: PublicClient,
   source: ChainDeployment,
@@ -1175,6 +1299,61 @@ async function matchingPacketDeliveredLogs(
       args.origin.sender.toLowerCase() ===
         addressToBytes32(source.oft).toLowerCase() &&
       isAddressEqual(args.receiver, destination.oft)
+    );
+  });
+}
+
+async function matchingPayloadVerifiedReceipt(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+  dvn: Address,
+): Promise<TransactionReceipt> {
+  const logs = await matchingPayloadVerifiedLogs(
+    publicClient,
+    destination,
+    packet,
+    dvn,
+  );
+  const txHash = logs[0]?.transactionHash;
+  if (txHash === undefined || txHash === null) {
+    throw new Error(
+      `${destination.name} PayloadVerified log is missing transaction hash`,
+    );
+  }
+  return publicClient.getTransactionReceipt({ hash: txHash });
+}
+
+async function matchingPayloadVerifiedLogs(
+  publicClient: PublicClient,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+  dvn: Address,
+): Promise<Log[]> {
+  const logs = await publicClient.getLogs({
+    address: destination.receiveUln,
+    fromBlock: 0n,
+    toBlock: "latest",
+  });
+  return logs.filter((log) => {
+    if (log.topics[0] !== eventTopic(receiveUlnArtifact, "PayloadVerified")) {
+      return false;
+    }
+    const decoded = decodeEventLog({
+      abi: receiveUlnArtifact.abi,
+      eventName: "PayloadVerified",
+      data: log.data,
+      topics: mutableTopics(log.topics),
+    });
+    const args = decoded.args as unknown as {
+      dvn: Address;
+      header: Hex;
+      proofHash: Hex;
+    };
+    return (
+      isAddressEqual(args.dvn, dvn) &&
+      args.header.toLowerCase() === packet.packetHeader.toLowerCase() &&
+      args.proofHash.toLowerCase() === packet.payloadHash.toLowerCase()
     );
   });
 }

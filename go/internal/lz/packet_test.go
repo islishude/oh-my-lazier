@@ -45,6 +45,29 @@ func TestDecodePacketV1(t *testing.T) {
 	}
 }
 
+func TestDecodePacketV1Header(t *testing.T) {
+	encoded := testEncodedPacket()
+	header, err := DecodePacketV1Header(encoded[:packetV1HeaderLength])
+	if err != nil {
+		t.Fatalf("DecodePacketV1Header() error = %v", err)
+	}
+	if header.Nonce != 7 {
+		t.Fatalf("Nonce = %d, want 7", header.Nonce)
+	}
+	if header.SrcEID != 40161 || header.DstEID != 40449 {
+		t.Fatalf("pathway = %d -> %d", header.SrcEID, header.DstEID)
+	}
+	if header.Sender != common.HexToAddress("0x7777777777777777777777777777777777777777") {
+		t.Fatalf("Sender = %s", header.Sender)
+	}
+	if header.Receiver != common.HexToAddress("0x8888888888888888888888888888888888888888") {
+		t.Fatalf("Receiver = %s", header.Receiver)
+	}
+	if string(header.Header) != string(encoded[:packetV1HeaderLength]) {
+		t.Fatal("Header bytes were not preserved")
+	}
+}
+
 func TestDecodePacketV1RejectsUnsupportedVersion(t *testing.T) {
 	encoded := testEncodedPacket()
 	encoded[0] = 2

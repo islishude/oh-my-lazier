@@ -284,6 +284,19 @@ func (s *Store) MarkDVNVerifiedFromChain(ctx context.Context, guid common.Hash, 
 	})
 }
 
+// MarkDVNVerifiedObserved records a destination PayloadVerified event observed by the indexer.
+func (s *Store) MarkDVNVerifiedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("dvn verify tx hash is required")
+	}
+	return s.updateDVNStatus(ctx, dvnStatusUpdate{
+		GUID:              guid,
+		ExpectedStatus:    expectedStatus,
+		NextStatus:        string(packets.DVNVerified),
+		VerifyTxHashBytes: txHash.Bytes(),
+	})
+}
+
 // MarkDVNQuorumConflict records a quorum verification conflict requiring operator review.
 func (s *Store) MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error {
 	if reason == "" {

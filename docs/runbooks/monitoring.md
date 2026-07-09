@@ -40,7 +40,7 @@ Active worker status paths:
 - DVN active verification: `ASSIGNED -> WAITING_CONFIRMATIONS -> QUORUM_CHECKING -> READY_TO_VERIFY -> VERIFY_TX_ENQUEUED -> VERIFIED`.
 - Executor delivery: `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`.
 - Shadow DVN verification stops at `WOULD_VERIFY`; it must not enqueue `dvn_verify` transactions.
-- Destination-chain reconciliation can skip transaction enqueue and move a DVN job directly from `READY_TO_VERIFY` to `VERIFIED`, an executor job from `VERIFIABLE` to `COMMITTED`, or an executor job from `COMMITTED`/`EXECUTABLE`/`LZ_RECEIVE_FAILED` to `DELIVERED` when the matching on-chain completion state is already observable.
+- Destination-chain reconciliation can skip transaction enqueue and move jobs forward when matching on-chain completion is already observable. During database rebuild or historical replay, `PacketVerified`, `PacketDelivered`, `LzReceiveAlert`, and `PayloadVerified` events can fill the corresponding executor or DVN status and tx hash even when the local outbox row no longer exists.
 - `QUORUM_CONFLICT`, `REORG_DETECTED`, `MANUAL_REVIEW`, persistent `LZ_RECEIVE_FAILED`, and `tx_outbox.status="failed"` with `retry_state="exhausted"` are operator-action states, not healthy terminal states.
 
 Before any migration approval, run the DB-backed readiness gate and attach the JSON output:

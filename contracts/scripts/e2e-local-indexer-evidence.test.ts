@@ -12,9 +12,11 @@ import {
   type TransactionReceipt,
 } from "viem";
 import {
+  destinationReplayEvidence,
   multiSendIndexerEvidence,
   packetsFromSourceReceipt,
   requirePacketCount,
+  type DestinationReplayObservation,
 } from "./e2e-local-indexer-evidence.js";
 
 const endpointAbi = loadAbi(
@@ -92,6 +94,128 @@ test("multiSendIndexerEvidence requires one source transaction", () => {
       },
     ],
   });
+});
+
+test("destinationReplayEvidence maps packet observations by guid", () => {
+  const receipt = receiptWithLogs([
+    packetSentLog({
+      guid:
+        "0x1111111111111111111111111111111111111111111111111111111111111111" as Hex,
+      nonce: 11n,
+      logIndex: 1,
+    }),
+    packetSentLog({
+      guid:
+        "0x2222222222222222222222222222222222222222222222222222222222222222" as Hex,
+      nonce: 12n,
+      logIndex: 2,
+    }),
+  ]);
+  const packets = packetsFromSourceReceipt({ receipt, endpoint, endpointAbi });
+  const observations: DestinationReplayObservation[] = [
+    {
+      guid: packets[1]!.guid,
+      commitTxHash:
+        "0x3333333333333333333333333333333333333333333333333333333333333333",
+      receiveTxHash:
+        "0x4444444444444444444444444444444444444444444444444444444444444444",
+      verifyTxHash:
+        "0x5555555555555555555555555555555555555555555555555555555555555555",
+    },
+    {
+      guid: packets[0]!.guid,
+      commitTxHash:
+        "0x6666666666666666666666666666666666666666666666666666666666666666",
+      receiveTxHash:
+        "0x7777777777777777777777777777777777777777777777777777777777777777",
+      verifyTxHash:
+        "0x8888888888888888888888888888888888888888888888888888888888888888",
+    },
+  ];
+
+  assert.deepEqual(
+    destinationReplayEvidence({
+      srcEid: 90101,
+      dstEid: 90102,
+      packets,
+      observations,
+    }),
+    {
+      srcEid: 90101,
+      dstEid: 90102,
+      sourceTxHash: txHash,
+      expectedPackets: [
+        {
+          guid: packets[0]!.guid,
+          nonce: 11n,
+          srcLogIndex: 1,
+          packetHeader: packets[0]!.packetHeader,
+          payloadHash: packets[0]!.payloadHash,
+          commitTxHash:
+            "0x6666666666666666666666666666666666666666666666666666666666666666",
+          receiveTxHash:
+            "0x7777777777777777777777777777777777777777777777777777777777777777",
+          verifyTxHash:
+            "0x8888888888888888888888888888888888888888888888888888888888888888",
+        },
+        {
+          guid: packets[1]!.guid,
+          nonce: 12n,
+          srcLogIndex: 2,
+          packetHeader: packets[1]!.packetHeader,
+          payloadHash: packets[1]!.payloadHash,
+          commitTxHash:
+            "0x3333333333333333333333333333333333333333333333333333333333333333",
+          receiveTxHash:
+            "0x4444444444444444444444444444444444444444444444444444444444444444",
+          verifyTxHash:
+            "0x5555555555555555555555555555555555555555555555555555555555555555",
+        },
+      ],
+    },
+  );
+});
+
+test("destinationReplayEvidence validates tx hashes and missing observations", () => {
+  const receipt = receiptWithLogs([
+    packetSentLog({
+      guid:
+        "0x9999999999999999999999999999999999999999999999999999999999999999" as Hex,
+      nonce: 13n,
+      logIndex: 3,
+    }),
+  ]);
+  const packets = packetsFromSourceReceipt({ receipt, endpoint, endpointAbi });
+
+  assert.throws(
+    () =>
+      destinationReplayEvidence({
+        srcEid: 90101,
+        dstEid: 90102,
+        packets,
+        observations: [
+          {
+            guid: packets[0]!.guid,
+            commitTxHash: "0x1234" as Hex,
+            receiveTxHash:
+              "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            verifyTxHash:
+              "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          },
+        ],
+      }),
+    /commitTxHash must be a 32-byte hex value/,
+  );
+  assert.throws(
+    () =>
+      destinationReplayEvidence({
+        srcEid: 90101,
+        dstEid: 90102,
+        packets,
+        observations: [],
+      }),
+    /missing destination replay observation/,
+  );
 });
 
 function loadAbi(relativePath: string): Abi {

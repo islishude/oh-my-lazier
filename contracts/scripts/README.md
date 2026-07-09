@@ -34,7 +34,12 @@ source worker's recorded SendUln302 fee through the worker
 OFT sends in one source transaction, writes
 `tmp/e2e/multi-oft-send-indexer.json`, and runs `go/cmd/e2eindexcheck` through
 the `make` target to prove the indexer persisted both packet, executor-job, and
-DVN-job rows for that single source transaction. On one canary direction,
+DVN-job rows for that single source transaction. After that online indexer
+check, the target stops the worker, clears the local E2E Postgres schema, and
+runs `go/cmd/e2ereplaycheck` with `tmp/e2e/destination-replay.json` to prove
+destination-chain historical `PacketVerified`, `PacketDelivered`, and
+`PayloadVerified` events can rebuild delivered executor and verified DVN state
+without any local outbox rows. On one canary direction,
 the runner disables destination Anvil automine with `evm_setAutomine`, observes
 a pending worker `commitVerification` transaction, waits for txmgr to replace it
 with a same-nonce bumped-fee transaction, and then mines the replacement before
@@ -72,7 +77,10 @@ balance increased. The same run also checks txmgr replacement of one pending
 `tx_manager.stale_broadcast_replacement_after_seconds: 2` setting, plus each
 source chain's executor, primary OpenDVN, and secondary OpenDVN fee ledger,
 withdrawal events, recipient balance increase, SendUln302 balance decrease, and
-zeroed fee ledger.
+zeroed fee ledger. The replay artifact also records the observed destination
+commit, receive, and primary-DVN verification transaction hashes for the
+multi-send packets so the database rebuild check can assert the persisted hashes
+match chain history.
 
 When registry access is unavailable, set `ANVIL_IMAGE` to a compatible local
 Foundry image. If `oh-my-lazier-worker:e2e` already exists, set

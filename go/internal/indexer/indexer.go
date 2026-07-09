@@ -272,14 +272,18 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			if err != nil {
 				return ProcessResult{}, err
 			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorDestStream, to); err != nil {
-				return ProcessResult{}, err
-			}
 			result.DestinationFromBlock = from
 			result.DestinationToBlock = to
 			destinationWindowSet = true
-			result.DestinationLogs += destination
-			result.addStreamProgress(executorDestStream, from, to, 0, 0, destination)
+			result.DestinationLogs += destination.applied
+			if destination.pending {
+				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", executorDestStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
+			} else {
+				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorDestStream, to); err != nil {
+					return ProcessResult{}, err
+				}
+				result.addStreamProgress(executorDestStream, from, to, 0, 0, destination.applied)
+			}
 		}
 	}
 	if i.streams.DVNDestination {
@@ -294,15 +298,19 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			if err != nil {
 				return ProcessResult{}, err
 			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnDestStream, to); err != nil {
-				return ProcessResult{}, err
-			}
 			if !destinationWindowSet {
 				result.DestinationFromBlock = from
 				result.DestinationToBlock = to
 			}
-			result.DestinationLogs += destination
-			result.addStreamProgress(dvnDestStream, from, to, 0, 0, destination)
+			result.DestinationLogs += destination.applied
+			if destination.pending {
+				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", dvnDestStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
+			} else {
+				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnDestStream, to); err != nil {
+					return ProcessResult{}, err
+				}
+				result.addStreamProgress(dvnDestStream, from, to, 0, 0, destination.applied)
+			}
 		}
 	}
 	return result, nil
@@ -548,8 +556,8 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 	return processed, nil
 }
 
-func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (int, error) {
-	applied := 0
+func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (destinationApplyResult, error) {
+	result := destinationApplyResult{}
 	for chunkFrom := from; chunkFrom <= to; {
 		chunkTo := i.chunkToBlock(chunkFrom, to)
 		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
@@ -559,20 +567,22 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64,
 			Topics:    [][]common.Hash{i.destinationTopics(role)},
 		})
 		if err != nil {
-			return applied, err
+			return result, err
 		}
 		switch role {
 		case sourceRoleExecutor:
 			executorApplied, err := i.applyExecutorDestinationLogs(ctx, logs)
-			applied += executorApplied
+			result.applied += executorApplied.applied
+			result.pending = result.pending || executorApplied.pending
 			if err != nil {
-				return applied, err
+				return result, err
 			}
 		case sourceRoleDVN:
 			dvnApplied, err := i.applyDVNDestinationLogs(ctx, logs)
-			applied += dvnApplied
+			result.applied += dvnApplied.applied
+			result.pending = result.pending || dvnApplied.pending
 			if err != nil {
-				return applied, err
+				return result, err
 			}
 		}
 		if chunkTo == to {
@@ -580,11 +590,11 @@ func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64,
 		}
 		chunkFrom = chunkTo + 1
 	}
-	return applied, nil
+	return result, nil
 }
 
-func (i *Indexer) applyExecutorDestinationLogs(ctx context.Context, logs []gethtypes.Log) (int, error) {
-	return applyExecutorDestinationLogs(ctx, i.store, i.destinationEID, logs, destinationLogObserver{
+func (i *Indexer) applyExecutorDestinationLogs(ctx context.Context, logs []gethtypes.Log) (destinationApplyResult, error) {
+	return applyExecutorDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs, destinationLogObserver{
 		executorApplied: func(packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log) {
 			topic := logTopic(log)
 			i.logger.Info(
@@ -613,7 +623,7 @@ func (i *Indexer) applyExecutorDestinationLogs(ctx context.Context, logs []getht
 	})
 }
 
-func (i *Indexer) applyDVNDestinationLogs(ctx context.Context, logs []gethtypes.Log) (int, error) {
+func (i *Indexer) applyDVNDestinationLogs(ctx context.Context, logs []gethtypes.Log) (destinationApplyResult, error) {
 	return applyDVNDestinationLogs(ctx, i.store, i.destinationEID, i.destinationPathways, logs, destinationLogObserver{
 		dvnApplied: func(packet db.PacketRecord, job db.DVNJobRecord, log gethtypes.Log) {
 			i.logger.Info(

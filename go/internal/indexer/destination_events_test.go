@@ -16,24 +16,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestApplyExecutorDestinationLogMarksCommitted(t *testing.T) {
-	packet := testDestinationPacketRecord()
-	packet.Status = "COMMIT_TX_ENQUEUED"
-	store := &fakeReceiptStore{}
-	log := testPacketVerifiedLog(t, packet)
+func TestApplyExecutorDestinationLogMarksCommittedFromReplayStatuses(t *testing.T) {
+	for _, status := range []packets.ExecutorState{
+		packets.ExecutorAssigned,
+		packets.ExecutorWaitingDVNVerification,
+		packets.ExecutorVerifiable,
+		packets.ExecutorCommitTxEnqueued,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			packet := testDestinationPacketRecord()
+			store := &fakeReceiptStore{}
+			log := testPacketVerifiedLog(t, packet)
+			job := db.ExecutorJobRecord{GUID: packet.GUID, Status: string(status)}
 
-	applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, log)
-	if err != nil {
-		t.Fatalf("ApplyExecutorDestinationLog() error = %v", err)
-	}
-	if !applied {
-		t.Fatal("applied = false, want true")
-	}
-	if store.committedGUID != packet.GUID {
-		t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
-	}
-	if store.committedTxHash != log.TxHash {
-		t.Fatalf("committed tx = %s, want %s", store.committedTxHash, log.TxHash)
+			applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, job, log)
+			if err != nil {
+				t.Fatalf("ApplyExecutorDestinationLog() error = %v", err)
+			}
+			if !applied {
+				t.Fatal("applied = false, want true")
+			}
+			if store.committedGUID != packet.GUID {
+				t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
+			}
+			if store.committedTxHash != log.TxHash {
+				t.Fatalf("committed tx = %s, want %s", store.committedTxHash, log.TxHash)
+			}
+			if store.expectedStatus != string(status) {
+				t.Fatalf("expected status = %q, want %q", store.expectedStatus, status)
+			}
+		})
 	}
 }
 
@@ -42,8 +54,9 @@ func TestApplyExecutorDestinationLogMarksDelivered(t *testing.T) {
 	packet.Status = "LZ_RECEIVE_TX_ENQUEUED"
 	store := &fakeReceiptStore{}
 	log := testPacketDeliveredLog(t, packet)
+	job := db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorAssigned)}
 
-	applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, log)
+	applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, job, log)
 	if err != nil {
 		t.Fatalf("ApplyExecutorDestinationLog() error = %v", err)
 	}
@@ -63,8 +76,9 @@ func TestApplyExecutorDestinationLogMarksReceiveFailed(t *testing.T) {
 	packet.Status = "LZ_RECEIVE_TX_ENQUEUED"
 	store := &fakeReceiptStore{}
 	log := testLzReceiveAlertLog(t, packet, []byte{0xde, 0xad})
+	job := db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorCommitted)}
 
-	applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, log)
+	applied, err := ApplyExecutorDestinationLog(context.Background(), store, packet, job, log)
 	if err != nil {
 		t.Fatalf("ApplyExecutorDestinationLog() error = %v", err)
 	}
@@ -86,8 +100,9 @@ func TestApplyExecutorDestinationLogRejectsMismatchedPacket(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	log := testPacketVerifiedLog(t, packet)
 	packet.PayloadHash = common.HexToHash("0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+	job := db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorCommitTxEnqueued)}
 
-	applied, err := ApplyExecutorDestinationLog(context.Background(), &fakeReceiptStore{}, packet, log)
+	applied, err := ApplyExecutorDestinationLog(context.Background(), &fakeReceiptStore{}, packet, job, log)
 	if err == nil {
 		t.Fatal("ApplyExecutorDestinationLog() error = nil, want mismatch")
 	}
@@ -156,6 +171,109 @@ func TestApplyExecutorDestinationLogsSkipsPacketsWithoutExecutorJob(t *testing.T
 	}
 }
 
+func TestApplyExecutorDestinationLogsDefersConfiguredMissingSourceState(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if !result.pending {
+		t.Fatal("pending = false, want true")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyExecutorDestinationLogsDefersConfiguredMissingExecutorJob(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+	}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if !result.pending {
+		t.Fatal("pending = false, want true")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsExternalMissingPackets(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.Sender = common.HexToAddress("0x1212121212121212121212121212121212121212")
+	store := &fakeDestinationStore{}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsDisabledMissingSourceState(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	pathway := testIndexerPathway()
+	pathway.Enabled = false
+	store := &fakeDestinationStore{}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyExecutorDestinationLogsSkipsDisabledMissingExecutorJob(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	pathway := testIndexerPathway()
+	pathway.Enabled = false
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+	}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
 func TestApplyExecutorDestinationLogsSkipsAlreadyAppliedEvents(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{
@@ -188,6 +306,34 @@ func TestApplyExecutorDestinationLogsSkipsAlreadyAppliedEvents(t *testing.T) {
 	}
 }
 
+func TestApplyExecutorDestinationLogsDoesNotLetAlertOverrideDelivered(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byGUID: map[common.Hash]db.PacketRecord{
+			packet.GUID: packet,
+		},
+		executorJobs: map[common.Hash]db.ExecutorJobRecord{
+			packet.GUID: {
+				GUID:   packet.GUID,
+				Status: string(packets.ExecutorDelivered),
+			},
+		},
+	}
+
+	applied, err := ApplyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []gethtypes.Log{
+		testLzReceiveAlertLog(t, packet, []byte{0xde, 0xad}),
+	})
+	if err != nil {
+		t.Fatalf("ApplyExecutorDestinationLogs() error = %v", err)
+	}
+	if applied != 0 {
+		t.Fatalf("applied = %d, want 0", applied)
+	}
+	if store.failedGUID != (common.Hash{}) {
+		t.Fatalf("failed guid = %s, want zero", store.failedGUID)
+	}
+}
+
 func TestApplyExecutorDestinationLogsSkipsUnknownPackets(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{}
@@ -200,6 +346,67 @@ func TestApplyExecutorDestinationLogsSkipsUnknownPackets(t *testing.T) {
 	}
 	if applied != 0 {
 		t.Fatalf("applied = %d, want 0", applied)
+	}
+}
+
+func TestApplyDVNDestinationLogsDefersConfiguredMissingSourcePacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.PacketHeader = testEncodedPacket()[:81]
+	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))
+	store := &fakeDestinationStore{}
+
+	result, err := applyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, []gethtypes.Log{log}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyDVNDestinationLogs() error = %v", err)
+	}
+	if !result.pending {
+		t.Fatal("pending = false, want true")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyDVNDestinationLogsSkipsDisabledMissingSourcePacket(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.PacketHeader = testEncodedPacket()[:81]
+	log := testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))
+	pathway := testIndexerPathway()
+	pathway.Enabled = false
+	store := &fakeDestinationStore{}
+
+	result, err := applyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{log}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyDVNDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
+func TestApplyDVNDestinationLogsSkipsDisabledMissingDVNJob(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	pathway := testIndexerPathway()
+	pathway.Enabled = false
+	log := testPayloadVerifiedLog(t, packet, pathway.DestinationWorkers.OpenDVN)
+	store := &fakeDestinationStore{
+		byVerification: map[string]db.PacketRecord{
+			verificationLookupKey(packet.DstEID, packet.PacketHeader, packet.PayloadHash): packet,
+		},
+	}
+
+	result, err := applyDVNDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{pathway}, []gethtypes.Log{log}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyDVNDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
 	}
 }
 
@@ -268,6 +475,7 @@ type fakeReceiptStore struct {
 	failedGUID      common.Hash
 	failedTxHash    common.Hash
 	failedReason    string
+	expectedStatus  string
 }
 
 func testDestinationPacketRecord() db.PacketRecord {
@@ -343,9 +551,13 @@ func (s *fakeDestinationStore) GetDVNJob(_ context.Context, guid common.Hash) (d
 	return job, nil
 }
 
-func (s *fakeDestinationStore) MarkDVNVerified(_ context.Context, guid, txHash common.Hash) error {
+func (s *fakeDestinationStore) MarkDVNVerifiedObserved(_ context.Context, guid, txHash common.Hash, _ string) error {
 	s.dvnVerifiedGUID = guid
 	s.dvnVerifiedTxHash = txHash
+	if job, ok := s.dvnJobs[guid]; ok {
+		job.Status = string(packets.DVNVerified)
+		s.dvnJobs[guid] = job
+	}
 	return nil
 }
 
@@ -357,22 +569,58 @@ func verificationLookupKey(dstEID uint32, packetHeader []byte, payloadHash commo
 	return fmt.Sprintf("%d:%x:%s", dstEID, packetHeader, payloadHash)
 }
 
-func (s *fakeReceiptStore) MarkExecutorCommitted(_ context.Context, guid, txHash common.Hash) error {
+func (s *fakeReceiptStore) MarkExecutorCommittedObserved(_ context.Context, guid, txHash common.Hash, expectedStatus string) error {
 	s.committedGUID = guid
 	s.committedTxHash = txHash
+	s.expectedStatus = expectedStatus
 	return nil
 }
 
-func (s *fakeReceiptStore) MarkExecutorDelivered(_ context.Context, guid, txHash common.Hash) error {
+func (s *fakeReceiptStore) MarkExecutorDeliveredObserved(_ context.Context, guid, txHash common.Hash, expectedStatus string) error {
 	s.deliveredGUID = guid
 	s.deliveredTxHash = txHash
+	s.expectedStatus = expectedStatus
 	return nil
 }
 
-func (s *fakeReceiptStore) MarkExecutorReceiveFailed(_ context.Context, guid, txHash common.Hash, reason string) error {
+func (s *fakeReceiptStore) MarkExecutorReceiveFailedObserved(_ context.Context, guid, txHash common.Hash, expectedStatus, reason string) error {
 	s.failedGUID = guid
 	s.failedTxHash = txHash
 	s.failedReason = reason
+	s.expectedStatus = expectedStatus
+	return nil
+}
+
+func (s *fakeDestinationStore) MarkExecutorCommittedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error {
+	if err := s.fakeReceiptStore.MarkExecutorCommittedObserved(ctx, guid, txHash, expectedStatus); err != nil {
+		return err
+	}
+	if job, ok := s.executorJobs[guid]; ok {
+		job.Status = string(packets.ExecutorCommitted)
+		s.executorJobs[guid] = job
+	}
+	return nil
+}
+
+func (s *fakeDestinationStore) MarkExecutorDeliveredObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error {
+	if err := s.fakeReceiptStore.MarkExecutorDeliveredObserved(ctx, guid, txHash, expectedStatus); err != nil {
+		return err
+	}
+	if job, ok := s.executorJobs[guid]; ok {
+		job.Status = string(packets.ExecutorDelivered)
+		s.executorJobs[guid] = job
+	}
+	return nil
+}
+
+func (s *fakeDestinationStore) MarkExecutorReceiveFailedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus, reason string) error {
+	if err := s.fakeReceiptStore.MarkExecutorReceiveFailedObserved(ctx, guid, txHash, expectedStatus, reason); err != nil {
+		return err
+	}
+	if job, ok := s.executorJobs[guid]; ok {
+		job.Status = string(packets.ExecutorLzReceiveFailed)
+		s.executorJobs[guid] = job
+	}
 	return nil
 }
 

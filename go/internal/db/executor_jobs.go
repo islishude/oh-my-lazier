@@ -270,6 +270,19 @@ func (s *Store) MarkExecutorCommittedFromChain(ctx context.Context, guid common.
 	})
 }
 
+// MarkExecutorCommittedObserved records a destination PacketVerified event observed by the indexer.
+func (s *Store) MarkExecutorCommittedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("executor commit tx hash is required")
+	}
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:              guid,
+		ExpectedStatus:    expectedStatus,
+		NextStatus:        string(packets.ExecutorCommitted),
+		CommitTxHashBytes: txHash.Bytes(),
+	})
+}
+
 // MarkExecutorExecutable records that endpoint state allows lzReceive delivery.
 func (s *Store) MarkExecutorExecutable(ctx context.Context, guid common.Hash) error {
 	return s.updateExecutorStatus(ctx, executorStatusUpdate{
@@ -301,6 +314,19 @@ func (s *Store) MarkExecutorDeliveredFromChain(ctx context.Context, guid common.
 	})
 }
 
+// MarkExecutorDeliveredObserved records a destination PacketDelivered event observed by the indexer.
+func (s *Store) MarkExecutorDeliveredObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("executor receive tx hash is required")
+	}
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:               guid,
+		ExpectedStatus:     expectedStatus,
+		NextStatus:         string(packets.ExecutorDelivered),
+		ReceiveTxHashBytes: txHash.Bytes(),
+	})
+}
+
 // MarkExecutorReceiveFailed records an LzReceiveAlert or failed lzReceive receipt.
 func (s *Store) MarkExecutorReceiveFailed(ctx context.Context, guid, txHash common.Hash, reason string) error {
 	if txHash == (common.Hash{}) {
@@ -309,6 +335,20 @@ func (s *Store) MarkExecutorReceiveFailed(ctx context.Context, guid, txHash comm
 	return s.updateExecutorStatus(ctx, executorStatusUpdate{
 		GUID:               guid,
 		ExpectedStatus:     string(packets.ExecutorLzReceiveTxEnqueued),
+		NextStatus:         string(packets.ExecutorLzReceiveFailed),
+		ReceiveTxHashBytes: txHash.Bytes(),
+		LastError:          reason,
+	})
+}
+
+// MarkExecutorReceiveFailedObserved records a destination LzReceiveAlert event observed by the indexer.
+func (s *Store) MarkExecutorReceiveFailedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus, reason string) error {
+	if txHash == (common.Hash{}) {
+		return errors.New("executor receive tx hash is required")
+	}
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:               guid,
+		ExpectedStatus:     expectedStatus,
 		NextStatus:         string(packets.ExecutorLzReceiveFailed),
 		ReceiveTxHashBytes: txHash.Bytes(),
 		LastError:          reason,

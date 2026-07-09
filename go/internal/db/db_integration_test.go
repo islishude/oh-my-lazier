@@ -1423,6 +1423,155 @@ func TestExecutorReceiptTransitionsPersistTxHashes(t *testing.T) {
 	}
 }
 
+func TestObservedDestinationTransitionsPersistTxHashesFromReplayStatuses(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+
+	commitHash := common.HexToHash("0x1111111111111111111111111111111111111111111111111111111111111111")
+	if err := store.MarkExecutorCommittedObserved(ctx, packet.GUID, commitHash, string(packets.ExecutorAssigned)); err != nil {
+		t.Fatalf("MarkExecutorCommittedObserved() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorCommitted))
+
+	receiveHash := common.HexToHash("0x2222222222222222222222222222222222222222222222222222222222222222")
+	if err := store.MarkExecutorDeliveredObserved(ctx, packet.GUID, receiveHash, string(packets.ExecutorCommitted)); err != nil {
+		t.Fatalf("MarkExecutorDeliveredObserved() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorDelivered))
+
+	verifyHash := common.HexToHash("0x3333333333333333333333333333333333333333333333333333333333333333")
+	if err := store.MarkDVNVerifiedObserved(ctx, packet.GUID, verifyHash, string(packets.DVNAssigned)); err != nil {
+		t.Fatalf("MarkDVNVerifiedObserved() error = %v", err)
+	}
+
+	var packetStatus, executorStatus, dvnStatus string
+	var commitBytes, receiveBytes, verifyBytes []byte
+	if err := store.pool.QueryRow(ctx, `
+		SELECT p.status, ej.status, dj.status, ej.commit_tx_hash, ej.receive_tx_hash, dj.verify_tx_hash
+		FROM packets p
+		JOIN executor_jobs ej ON ej.guid = p.guid
+		JOIN dvn_jobs dj ON dj.guid = p.guid
+		WHERE p.guid = $1
+	`, packet.GUID.Bytes()).Scan(&packetStatus, &executorStatus, &dvnStatus, &commitBytes, &receiveBytes, &verifyBytes); err != nil {
+		t.Fatalf("select observed rows: %v", err)
+	}
+	if packetStatus != string(packets.ExecutorDelivered) || executorStatus != string(packets.ExecutorDelivered) {
+		t.Fatalf("executor statuses = %q/%q, want %q", packetStatus, executorStatus, packets.ExecutorDelivered)
+	}
+	if dvnStatus != string(packets.DVNVerified) {
+		t.Fatalf("dvn status = %q, want %q", dvnStatus, packets.DVNVerified)
+	}
+	if common.BytesToHash(commitBytes) != commitHash {
+		t.Fatalf("commit tx hash = %s, want %s", common.BytesToHash(commitBytes), commitHash)
+	}
+	if common.BytesToHash(receiveBytes) != receiveHash {
+		t.Fatalf("receive tx hash = %s, want %s", common.BytesToHash(receiveBytes), receiveHash)
+	}
+	if common.BytesToHash(verifyBytes) != verifyHash {
+		t.Fatalf("verify tx hash = %s, want %s", common.BytesToHash(verifyBytes), verifyHash)
+	}
+}
+
+func TestStrictReceiptTransitionsRejectReplayStatuses(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+	registry, err := chain.NewRegistry(testChains(), testPathways())
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := store.SyncConfig(ctx, registry); err != nil {
+		t.Fatalf("SyncConfig() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorAssigned)
+	cleanPacketRows(ctx, t, store, packet.GUID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{
+		GUID:        packet.GUID,
+		AssignedFee: big.NewInt(42),
+		Status:      string(packets.ExecutorAssigned),
+	}); err != nil {
+		t.Fatalf("UpsertExecutorJob() error = %v", err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNReadyToVerify),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+
+	txHash := common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	if err := store.MarkExecutorCommitted(ctx, packet.GUID, txHash); err == nil {
+		t.Fatal("MarkExecutorCommitted() error = nil, want wrong-state error")
+	}
+	if err := store.MarkExecutorDelivered(ctx, packet.GUID, txHash); err == nil {
+		t.Fatal("MarkExecutorDelivered() error = nil, want wrong-state error")
+	}
+	if err := store.MarkDVNVerified(ctx, packet.GUID, txHash); err == nil {
+		t.Fatal("MarkDVNVerified() error = nil, want wrong-state error")
+	}
+}
+
 func TestCheckDrainStatusReportsPendingWork(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
