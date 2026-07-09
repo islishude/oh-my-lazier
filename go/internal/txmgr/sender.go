@@ -172,6 +172,9 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		if err != nil {
 			return 0, err
 		}
+		if receipt.TxHash != outboxTx.TxHash {
+			return 0, fmt.Errorf("receipt tx hash %s does not match outbox tx hash %s", receipt.TxHash, outboxTx.TxHash)
+		}
 		facts, err := txReceiptFacts(receipt)
 		if err != nil {
 			return 0, err

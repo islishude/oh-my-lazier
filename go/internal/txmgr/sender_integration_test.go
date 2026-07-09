@@ -1277,6 +1277,57 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	)
 }
 
+func TestProcessReceiptsRejectsMismatchedReceiptTxHash(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{
+		pendingNonce: 34,
+		receipts:     make(map[common.Hash]*types.Receipt),
+	}
+	manager := New(store, discardLogger())
+
+	if _, err := store.EnqueueTx(t.Context(), db.TxRequest{
+		ChainEID: 40161,
+		Purpose:  "lz-receive",
+		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		Calldata: []byte{0x04, 0x05},
+		Value:    big.NewInt(0),
+		SignerID: signer.Address().Hex(),
+	}); err != nil {
+		t.Fatalf("EnqueueTx() error = %v", err)
+	}
+
+	id, err := manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+	if err != nil {
+		t.Fatalf("ProcessNext() error = %v", err)
+	}
+	outboxTx, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() error = %v", err)
+	}
+	wrongHash := common.HexToHash("0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+	client.receipts[outboxTx.TxHash] = testReceipt(wrongHash, types.ReceiptStatusSuccessful)
+
+	if _, err := manager.ProcessReceipts(t.Context(), Target{
+		ChainEID: 40161,
+		ChainID:  big.NewInt(11155111),
+		Signer:   signer,
+		Client:   client,
+	}, 1); err == nil || !strings.Contains(err.Error(), "receipt tx hash") {
+		t.Fatalf("ProcessReceipts() error = %v, want receipt hash mismatch", err)
+	}
+	got, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatalf("GetOutboxTx() after mismatch error = %v", err)
+	}
+	if got.Status != db.TxStatusBroadcast {
+		t.Fatalf("status = %q, want %q", got.Status, db.TxStatusBroadcast)
+	}
+	if got.ReceiptTxHash != (common.Hash{}) {
+		t.Fatalf("receipt tx hash = %s, want zero hash", got.ReceiptTxHash)
+	}
+}
+
 func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 	store := openTestStore(t)
 	signer := newTestKeystoreSigner(t)

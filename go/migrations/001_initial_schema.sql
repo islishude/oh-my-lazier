@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS tx_outbox (
   signer_id TEXT NOT NULL,
   status TEXT NOT NULL,
   tx_hash BYTEA,
+  -- Mirrors tx_hash for mined rows so receipt facts stay self-contained audit evidence.
   receipt_tx_hash BYTEA,
   receipt_status INTEGER,
   receipt_block_number BIGINT,
