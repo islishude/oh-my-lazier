@@ -136,7 +136,7 @@ func TestProcessConfirmationsOnceMarksQuorumChecking(t *testing.T) {
 	)
 }
 
-func TestProcessConfirmationsOnceActiveChecksDestinationConfigBeforeHead(t *testing.T) {
+func TestProcessConfirmationsOnceActivePausesPathwayOnDestinationConfigDrift(t *testing.T) {
 	packet := testDVNPacket()
 	store := &fakeStore{
 		work: []db.DVNWorkItem{{
@@ -163,14 +163,20 @@ func TestProcessConfirmationsOnceActiveChecksDestinationConfigBeforeHead(t *test
 	)
 
 	processed, err := worker.ProcessConfirmationsOnce(context.Background())
-	if err == nil {
-		t.Fatal("ProcessConfirmationsOnce() error = nil, want destination config mismatch")
+	if err != nil {
+		t.Fatalf("ProcessConfirmationsOnce() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "receive uln confirmations") {
-		t.Fatalf("ProcessConfirmationsOnce() error = %v, want receive uln confirmations mismatch", err)
+	if !processed {
+		t.Fatal("processed = false, want true")
 	}
-	if processed {
-		t.Fatal("processed = true, want false")
+	if store.manualReviewGUID != packet.GUID {
+		t.Fatalf("manual review guid = %s, want %s", store.manualReviewGUID, packet.GUID)
+	}
+	if !strings.Contains(store.manualReviewReason, "receive uln confirmations") {
+		t.Fatalf("manual review reason = %q, want receive uln confirmations mismatch", store.manualReviewReason)
+	}
+	if store.pausedPathwayGUID != packet.GUID {
+		t.Fatalf("paused pathway guid = %s, want %s", store.pausedPathwayGUID, packet.GUID)
 	}
 }
 
@@ -391,7 +397,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTx(t *testing.T) {
 	)
 }
 
-func TestProcessReadyToVerifyOnceActiveRejectsReceiveLibraryDrift(t *testing.T) {
+func TestProcessReadyToVerifyOnceActivePausesPathwayOnReceiveLibraryDrift(t *testing.T) {
 	packet := testDVNPacket()
 	report := []byte(`{"status":"ready"}`)
 	store := &fakeStore{
@@ -422,21 +428,27 @@ func TestProcessReadyToVerifyOnceActiveRejectsReceiveLibraryDrift(t *testing.T) 
 	)
 
 	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
-	if err == nil {
-		t.Fatal("ProcessReadyToVerifyOnce() error = nil, want receive library mismatch")
+	if err != nil {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "destination receive library") {
-		t.Fatalf("ProcessReadyToVerifyOnce() error = %v, want receive library mismatch", err)
+	if !processed {
+		t.Fatal("processed = false, want true")
 	}
-	if processed {
-		t.Fatal("processed = true, want false")
+	if store.manualReviewGUID != packet.GUID {
+		t.Fatalf("manual review guid = %s, want %s", store.manualReviewGUID, packet.GUID)
+	}
+	if !strings.Contains(store.manualReviewReason, "destination receive library") {
+		t.Fatalf("manual review reason = %q, want receive library mismatch", store.manualReviewReason)
+	}
+	if store.pausedPathwayGUID != packet.GUID {
+		t.Fatalf("paused pathway guid = %s, want %s", store.pausedPathwayGUID, packet.GUID)
 	}
 	if store.verifyRequest.Purpose != "" {
 		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
 	}
 }
 
-func TestProcessReadyToVerifyOnceActiveRejectsReceiveUlnConfigDrift(t *testing.T) {
+func TestProcessReadyToVerifyOnceActivePausesPathwayOnReceiveUlnConfigDrift(t *testing.T) {
 	packet := testDVNPacket()
 	report := []byte(`{"status":"ready"}`)
 	store := &fakeStore{
@@ -469,14 +481,20 @@ func TestProcessReadyToVerifyOnceActiveRejectsReceiveUlnConfigDrift(t *testing.T
 	)
 
 	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
-	if err == nil {
-		t.Fatal("ProcessReadyToVerifyOnce() error = nil, want receive uln config mismatch")
+	if err != nil {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "receive uln confirmations") {
-		t.Fatalf("ProcessReadyToVerifyOnce() error = %v, want receive uln confirmations mismatch", err)
+	if !processed {
+		t.Fatal("processed = false, want true")
 	}
-	if processed {
-		t.Fatal("processed = true, want false")
+	if store.manualReviewGUID != packet.GUID {
+		t.Fatalf("manual review guid = %s, want %s", store.manualReviewGUID, packet.GUID)
+	}
+	if !strings.Contains(store.manualReviewReason, "receive uln confirmations") {
+		t.Fatalf("manual review reason = %q, want receive uln confirmations mismatch", store.manualReviewReason)
+	}
+	if store.pausedPathwayGUID != packet.GUID {
+		t.Fatalf("paused pathway guid = %s, want %s", store.pausedPathwayGUID, packet.GUID)
 	}
 	if store.verifyRequest.Purpose != "" {
 		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
@@ -790,6 +808,8 @@ type fakeStore struct {
 	conflictReason        string
 	reorgGUID             common.Hash
 	reorgReason           string
+	manualReviewGUID      common.Hash
+	manualReviewReason    string
 	pausedChainEID        uint32
 	pausedPathwayGUID     common.Hash
 	quorumResult          []byte
@@ -853,6 +873,14 @@ func (s *fakeStore) MarkDVNReorgDetected(_ context.Context, guid common.Hash, _,
 	s.reorgGUID = guid
 	s.reorgReason = reason
 	s.quorumResult = bytes.Clone(quorumResult)
+	return nil
+}
+
+func (s *fakeStore) MarkDVNManualReviewAndPausePathway(_ context.Context, guid common.Hash, _ string, reason string, quorumResult []byte) error {
+	s.manualReviewGUID = guid
+	s.manualReviewReason = reason
+	s.quorumResult = bytes.Clone(quorumResult)
+	s.pausedPathwayGUID = guid
 	return nil
 }
 

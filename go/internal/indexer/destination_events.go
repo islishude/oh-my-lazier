@@ -514,7 +514,8 @@ func executorCanApplyPacketVerified(status string) bool {
 	case string(packets.ExecutorAssigned),
 		string(packets.ExecutorWaitingDVNVerification),
 		string(packets.ExecutorVerifiable),
-		string(packets.ExecutorCommitTxEnqueued):
+		string(packets.ExecutorCommitTxEnqueued),
+		string(packets.ExecutorManualReview):
 		return true
 	default:
 		return false

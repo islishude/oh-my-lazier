@@ -41,7 +41,7 @@ Active worker status paths:
 - Executor delivery: `ASSIGNED -> WAITING_DVN_VERIFICATION -> VERIFIABLE -> COMMIT_TX_ENQUEUED -> COMMITTED -> EXECUTABLE -> LZ_RECEIVE_TX_ENQUEUED -> DELIVERED`.
 - Shadow DVN verification stops at `WOULD_VERIFY`; it must not enqueue `dvn_verify` transactions.
 - Destination-chain reconciliation can skip transaction enqueue and move jobs forward when matching on-chain completion is already observable. During database rebuild or historical replay, `PacketVerified`, `PacketDelivered`, `LzReceiveAlert`, and `PayloadVerified` events can fill the corresponding executor or DVN status and tx hash even when the local outbox row no longer exists.
-- Destination cursors keep enabled-pathway events pending while the local source packet is absent. They advance past missing source packets only when the source indexer already recorded a skipped-assignment tombstone, such as a disabled pathway or unexpected source worker.
+- Destination cursors keep enabled-pathway events pending while the local source packet is absent. They advance past missing source packets only when the source indexer recorded a skipped-assignment tombstone, such as a disabled pathway or unexpected source worker. The executor source indexer derives external assignments from `ExecutorFeePaid` plus `PacketSent`, and the durable `executor_source_skips` cursor replays configured source history so packets observed before this detector was enabled also receive tombstones.
 - `QUORUM_CONFLICT`, `REORG_DETECTED`, `MANUAL_REVIEW`, persistent `LZ_RECEIVE_FAILED`, and `tx_outbox.status="failed"` with `retry_state="exhausted"` are operator-action states, not healthy terminal states.
 
 Before any migration approval, run the DB-backed readiness gate and attach the JSON output:
@@ -81,3 +81,4 @@ Operational assumptions:
 - If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.
+- A deterministic active-DVN destination config mismatch moves the affected job to `MANUAL_REVIEW` and pauses that pathway atomically. Other pathways continue processing; clear the drift and review the recorded `last_error` before unpausing.

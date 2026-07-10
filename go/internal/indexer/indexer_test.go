@@ -172,6 +172,79 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 	)
 }
 
+func TestIndexerProcessOnceBackfillsExternalExecutorWithoutAssignmentLog(t *testing.T) {
+	configuredExecutor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	externalExecutor := common.HexToAddress("0x2323232323232323232323232323232323232323")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	packet, err := PacketRecordFromSentLog(testPacketSentLog(t, txHash, sendLib, 2))
+	if err != nil {
+		t.Fatalf("PacketRecordFromSentLog() error = %v", err)
+	}
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(packet.SrcEID, executorSourceStream)] = 188
+	client := &fakeLogClient{
+		head: 200,
+		sourceLogs: []gethtypes.Log{
+			testExecutorFeePaidLog(t, txHash, sendLib, externalExecutor, big.NewInt(42), 1),
+			testPacketSentLog(t, txHash, sendLib, 2),
+		},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.SrcEID, "ethereum-sepolia", configuredExecutor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorSource: true})
+
+	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	skip, ok := store.sourceSkips[sourceSkipLookupKey(sourceRoleExecutor, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64())]
+	if !ok {
+		t.Fatal("external executor source skip was not recorded")
+	}
+	if skip.Worker != externalExecutor || skip.Reason != "unexpected_worker" {
+		t.Fatalf("source skip worker/reason = %s/%q, want %s/unexpected_worker", skip.Worker, skip.Reason, externalExecutor)
+	}
+	if got := store.cursors[cursorKey(packet.SrcEID, executorSkipStream)]; got != 188 {
+		t.Fatalf("executor skip cursor = %d, want 188", got)
+	}
+	if queriesHaveAddress(client.queries, externalExecutor) {
+		t.Fatalf("source query unexpectedly included external executor %s", externalExecutor)
+	}
+}
+
+func TestIndexerProcessOnceRejectsMissingConfiguredExecutorAssignmentLog(t *testing.T) {
+	configuredExecutor := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
+	txHash := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head: 200,
+		sourceLogs: []gethtypes.Log{
+			testExecutorFeePaidLog(t, txHash, sendLib, configuredExecutor, big.NewInt(42), 1),
+			testPacketSentLog(t, txHash, sendLib, 2),
+		},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", configuredExecutor),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorSource: true})
+
+	_, err := indexer.ProcessOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "assignment log is missing") {
+		t.Fatalf("ProcessOnce() error = %v, want missing configured executor assignment", err)
+	}
+	if _, ok := store.cursors[cursorKey(40161, executorSourceStream)]; ok {
+		t.Fatal("executor source cursor advanced after missing configured assignment")
+	}
+}
+
 func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	packet.Status = string(packets.ExecutorAssigned)

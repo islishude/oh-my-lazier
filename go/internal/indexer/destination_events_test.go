@@ -337,6 +337,30 @@ func TestApplyExecutorDestinationLogsSkipsAlreadyAppliedEvents(t *testing.T) {
 	}
 }
 
+func TestApplyExecutorDestinationLogsMarksManualReviewCommitted(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	log := testPacketVerifiedLog(t, packet)
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+		executorJobs: map[common.Hash]db.ExecutorJobRecord{
+			packet.GUID: {GUID: packet.GUID, Status: string(packets.ExecutorManualReview)},
+		},
+	}
+
+	applied, err := ApplyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []gethtypes.Log{log})
+	if err != nil {
+		t.Fatalf("ApplyExecutorDestinationLogs() error = %v", err)
+	}
+	if applied != 1 {
+		t.Fatalf("applied = %d, want 1", applied)
+	}
+	if store.committedGUID != packet.GUID {
+		t.Fatalf("committed guid = %s, want %s", store.committedGUID, packet.GUID)
+	}
+}
+
 func TestApplyExecutorDestinationLogsDoesNotLetAlertOverrideDelivered(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	store := &fakeDestinationStore{

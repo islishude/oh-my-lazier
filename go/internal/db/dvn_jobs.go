@@ -338,6 +338,62 @@ func (s *Store) MarkDVNReorgDetected(ctx context.Context, guid common.Hash, expe
 	return s.updateDVNStatus(ctx, dvnStatusUpdate{GUID: guid, ExpectedStatus: expectedStatus, NextStatus: string(packets.DVNReorgDetected), LastError: reason, QuorumResult: quorumResult})
 }
 
+// MarkDVNManualReviewAndPausePathway atomically stops a job and its pathway after deterministic destination config drift.
+func (s *Store) MarkDVNManualReviewAndPausePathway(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error {
+	if guid == (common.Hash{}) {
+		return errors.New("dvn job guid is required")
+	}
+	if expectedStatus == "" {
+		return errors.New("dvn expected status is required")
+	}
+	if reason == "" {
+		return errors.New("dvn manual review reason is required")
+	}
+	quorumResultArg := any(nil)
+	if len(quorumResult) != 0 {
+		quorumResultArg = string(quorumResult)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE dvn_jobs
+		SET
+			status = $1,
+			last_error = $4,
+			quorum_result = COALESCE($5::jsonb, quorum_result),
+			next_retry_at = NULL,
+			updated_at = now()
+		WHERE guid = $2 AND status = $3
+	`, string(packets.DVNManualReview), guid.Bytes(), expectedStatus, reason, quorumResultArg)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("dvn job %s is not in status %s", guid, expectedStatus)
+	}
+	tag, err = tx.Exec(ctx, `
+		UPDATE pathways AS pathway
+		SET paused = true
+		FROM packets AS packet
+		WHERE
+			packet.guid = $1
+			AND pathway.src_eid = packet.src_eid
+			AND pathway.dst_eid = packet.dst_eid
+			AND pathway.src_oapp = packet.sender
+			AND pathway.dst_oapp = packet.receiver
+	`, guid.Bytes())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("pathway for packet %s was not found", guid)
+	}
+	return tx.Commit(ctx)
+}
+
 type dvnStatusUpdate struct {
 	GUID              common.Hash
 	ExpectedStatus    string

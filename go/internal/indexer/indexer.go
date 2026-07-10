@@ -42,6 +42,7 @@ const (
 	DVNDestinationStream = "dvn_destination"
 
 	executorSourceStream = ExecutorSourceStream
+	executorSkipStream   = "executor_source_skips"
 	executorDestStream   = ExecutorDestinationStream
 	dvnSourceStream      = DVNSourceStream
 	dvnDestStream        = DVNDestinationStream
@@ -115,21 +116,22 @@ type MetricsRecorder interface {
 
 // Indexer watches one chain for LayerZero and worker contract events.
 type Indexer struct {
-	chain               chain.Chain
-	sourcePathways      []chain.Pathway
-	destinationPathways []chain.Pathway
-	destinationEID      uint32
-	store               Store
-	client              LogClient
-	pollInterval        time.Duration
-	backfillRange       uint64
-	queryBlockRange     uint64
-	progressLogInterval time.Duration
-	lastProgressLogs    map[string]time.Time
-	logger              *slog.Logger
-	metrics             MetricsRecorder
-	streams             StreamSet
-	now                 func() time.Time
+	chain                chain.Chain
+	sourcePathways       []chain.Pathway
+	destinationPathways  []chain.Pathway
+	destinationEID       uint32
+	store                Store
+	client               LogClient
+	pollInterval         time.Duration
+	backfillRange        uint64
+	queryBlockRange      uint64
+	progressLogInterval  time.Duration
+	lastProgressLogs     map[string]time.Time
+	logger               *slog.Logger
+	metrics              MetricsRecorder
+	streams              StreamSet
+	now                  func() time.Time
+	executorSkipCaughtUp bool
 }
 
 // New creates an indexer for one configured chain.
@@ -235,6 +237,20 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			result.SourceTransactions += source
 			result.DVNTransactions += dvn
 			result.addStreamProgress(executorSourceStream, from, to, source, dvn, 0)
+		}
+		if sourceWindowSet && result.SourceFromBlock == i.chain.StartBlockNumber {
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, result.SourceToBlock); err != nil {
+				return ProcessResult{}, err
+			}
+			i.executorSkipCaughtUp = true
+		} else if i.executorSkipCaughtUp {
+			if sourceWindowSet {
+				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, result.SourceToBlock); err != nil {
+					return ProcessResult{}, err
+				}
+			}
+		} else if err := i.processExecutorSourceSkipBackfill(ctx); err != nil {
+			return ProcessResult{}, err
 		}
 	}
 	if i.streams.DVNSource {
@@ -422,8 +438,9 @@ func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log, r
 func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role string) (int, int, error) {
 	executorProcessed := 0
 	dvnProcessed := 0
-	// PacketSent and fee logs are decoder context; assignment logs anchor job processing.
-	if role == sourceRoleExecutor && tx.hasExecutorAssignment {
+	// Executor fee and packet logs also identify assignments made to workers whose
+	// contract logs are outside this indexer's configured address filter.
+	if role == sourceRoleExecutor {
 		processed, err := i.processExecutorSourceTx(ctx, tx.logs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
@@ -441,10 +458,9 @@ func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role
 }
 
 type sourceTxLogs struct {
-	txHash                common.Hash
-	logs                  []gethtypes.Log
-	hasExecutorAssignment bool
-	hasDVNAssignment      bool
+	txHash           common.Hash
+	logs             []gethtypes.Log
+	hasDVNAssignment bool
 }
 
 func (l *sourceTxLogs) append(log gethtypes.Log) {
@@ -455,17 +471,13 @@ func (l *sourceTxLogs) append(log gethtypes.Log) {
 	if len(log.Topics) == 0 {
 		return
 	}
-	switch log.Topics[0] {
-	case lzabi.ExecutorJobAssignedTopic():
-		l.hasExecutorAssignment = true
-	case lzabi.DVNJobAssignedTopic():
+	if log.Topics[0] == lzabi.DVNJobAssignedTopic() {
 		l.hasDVNAssignment = true
 	}
 }
 
 func (l *sourceTxLogs) reset() {
 	l.logs = l.logs[:0]
-	l.hasExecutorAssignment = false
 	l.hasDVNAssignment = false
 }
 
@@ -481,7 +493,7 @@ func (i *Indexer) chunkToBlock(from, limit uint64) uint64 {
 }
 
 func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {
-	records, err := ExecutorSourceTxRecordsFromLogs(txLogs)
+	records, gaps, err := decodeExecutorSourceTxLogs(txLogs)
 	if err != nil {
 		return 0, err
 	}
@@ -522,7 +534,129 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 		i.logger.Info("indexed executor source assignment", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "block_number", record.Packet.SrcBlockNumber, "log_index", record.Packet.SrcLogIndex, "status", record.ExecutorJob.Status)
 		processed++
 	}
+	if err := i.recordExecutorSourceGaps(ctx, gaps); err != nil {
+		return processed, err
+	}
 	return processed, nil
+}
+
+func (i *Indexer) recordExecutorSourceGaps(ctx context.Context, gaps []executorSourcePacketGap) error {
+	for _, gap := range gaps {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pathway, ok := i.sourcePathway(gap.Packet)
+		if !ok {
+			i.logger.Debug("skipped executor source packet", "reason", "unknown_pathway", "guid", gap.Packet.GUID, "src_eid", gap.Packet.SrcEID, "dst_eid", gap.Packet.DstEID, "tx_hash", gap.Packet.SrcTxHash)
+			continue
+		}
+		if pathway.Enabled && gap.Executor == pathway.SourceWorkers.OpenExecutor {
+			return fmt.Errorf("packet %s paid configured executor %s but its assignment log is missing", gap.Packet.GUID, gap.Executor)
+		}
+		reason := "unexpected_worker"
+		if !pathway.Enabled {
+			reason = "pathway_disabled"
+		}
+		if err := i.recordSourcePacketSkip(ctx, sourceRoleExecutor, gap.Packet, reason, gap.Executor); err != nil {
+			return err
+		}
+		i.logger.Debug("skipped executor source packet", "reason", reason, "guid", gap.Packet.GUID, "src_eid", gap.Packet.SrcEID, "dst_eid", gap.Packet.DstEID, "tx_hash", gap.Packet.SrcTxHash, "worker", gap.Executor, "expected_worker", pathway.SourceWorkers.OpenExecutor)
+	}
+	return nil
+}
+
+func (i *Indexer) processExecutorSourceSkipBackfill(ctx context.Context) error {
+	sourceCursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, executorSourceStream)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if sourceCursor < i.chain.StartBlockNumber {
+		i.executorSkipCaughtUp = true
+		return nil
+	}
+	skipCursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, executorSkipStream)
+	from := i.chain.StartBlockNumber
+	if err == nil {
+		if skipCursor >= sourceCursor {
+			i.executorSkipCaughtUp = true
+			return nil
+		}
+		from = skipCursor + 1
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	to := sourceCursor
+	if i.backfillRange > 0 && to-from+1 > i.backfillRange {
+		to = from + i.backfillRange - 1
+	}
+	if err := i.processExecutorSourceSkipWindow(ctx, from, to); err != nil {
+		return err
+	}
+	if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, to); err != nil {
+		return err
+	}
+	if to >= sourceCursor {
+		i.executorSkipCaughtUp = true
+		i.logger.Info("executor source skip backfill caught up", "chain", i.chain.Name, "eid", i.chain.EID, "stream", executorSkipStream, "to_block", to)
+	}
+	return nil
+}
+
+func (i *Indexer) processExecutorSourceSkipWindow(ctx context.Context, from, to uint64) error {
+	for chunkFrom := from; chunkFrom <= to; {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		chunkTo := i.chunkToBlock(chunkFrom, to)
+		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
+			FromBlock: blockNumber(chunkFrom),
+			ToBlock:   blockNumber(chunkTo),
+			Addresses: i.sourceAddresses(sourceRoleExecutor),
+			Topics:    [][]common.Hash{i.sourceTopics(sourceRoleExecutor)},
+		})
+		if err != nil {
+			return err
+		}
+		if err := i.processExecutorSourceSkipLogs(ctx, logs); err != nil {
+			return err
+		}
+		if chunkTo == to {
+			break
+		}
+		chunkFrom = chunkTo + 1
+	}
+	return nil
+}
+
+func (i *Indexer) processExecutorSourceSkipLogs(ctx context.Context, logs []gethtypes.Log) error {
+	var current sourceTxLogs
+	for _, log := range logs {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(current.logs) > 0 && current.txHash != log.TxHash {
+			if err := i.recordExecutorSourceSkipTx(ctx, current.logs); err != nil {
+				return err
+			}
+			current.reset()
+		}
+		current.append(log)
+	}
+	if len(current.logs) == 0 {
+		return nil
+	}
+	return i.recordExecutorSourceSkipTx(ctx, current.logs)
+}
+
+func (i *Indexer) recordExecutorSourceSkipTx(ctx context.Context, logs []gethtypes.Log) error {
+	_, gaps, err := decodeExecutorSourceTxLogs(logs)
+	if err != nil {
+		return err
+	}
+	return i.recordExecutorSourceGaps(ctx, gaps)
 }
 
 func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {

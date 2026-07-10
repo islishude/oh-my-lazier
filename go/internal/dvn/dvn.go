@@ -54,6 +54,7 @@ type Store interface {
 	MarkDVNVerifiedFromChain(ctx context.Context, guid common.Hash, expectedStatus string, quorumResult []byte) error
 	MarkDVNQuorumConflict(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
 	MarkDVNReorgDetected(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
+	MarkDVNManualReviewAndPausePathway(ctx context.Context, guid common.Hash, expectedStatus, reason string, quorumResult []byte) error
 	DeferDVNJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error
 	PauseChain(ctx context.Context, eid uint32) error
 	PausePathwayForPacket(ctx context.Context, guid common.Hash) error
@@ -193,7 +194,7 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 		}
 		if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
 			if isDestinationVerificationConfigMismatch(err) {
-				return false, err
+				return w.markDestinationConfigMismatch(ctx, item, status, err)
 			}
 			return w.deferDVNWorkError(ctx, item, status, "destination_config_check_error", err)
 		}
@@ -316,7 +317,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		complete, err := w.verificationAlreadyComplete(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired)
 		if err != nil {
 			if isDestinationVerificationConfigMismatch(err) {
-				return false, err
+				return w.markDestinationConfigMismatch(ctx, item, string(packets.DVNReadyToVerify), err)
 			}
 			return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
 		}
@@ -623,6 +624,14 @@ func (w *Worker) markQuorumConflict(ctx context.Context, packet db.PacketRecord,
 	}
 	w.logger.Warn("dvn quorum conflict paused pathway", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "from_status", string(packets.DVNQuorumChecking), "to_status", string(packets.DVNQuorumConflict), "error", err.Error())
 	return nil
+}
+
+func (w *Worker) markDestinationConfigMismatch(ctx context.Context, item db.DVNWorkItem, expectedStatus string, cause error) (bool, error) {
+	if err := w.store.MarkDVNManualReviewAndPausePathway(ctx, item.Packet.GUID, expectedStatus, cause.Error(), item.Job.QuorumResult); err != nil {
+		return false, err
+	}
+	w.logger.Warn("dvn destination config mismatch paused pathway", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", expectedStatus, "to_status", string(packets.DVNManualReview), "error", cause.Error())
+	return true, nil
 }
 
 func (w *Worker) deferDVNWorkError(ctx context.Context, item db.DVNWorkItem, status, reason string, cause error) (bool, error) {

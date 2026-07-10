@@ -194,6 +194,66 @@ func TestPausePathwayForPacketAndChain(t *testing.T) {
 	}
 }
 
+func TestMarkDVNManualReviewAndPausePathwayIsAtomic(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.GUID = common.HexToHash("0xfeedcccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
+	packet.SrcEID = 50211
+	packet.DstEID = 50212
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
+	if err := store.UpsertPacket(ctx, packet); err != nil {
+		t.Fatalf("UpsertPacket() error = %v", err)
+	}
+	report := []byte(`{"status":"ready"}`)
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{
+		GUID:                  packet.GUID,
+		AssignedFee:           big.NewInt(43),
+		ConfirmationsRequired: 12,
+		Status:                string(packets.DVNReadyToVerify),
+	}); err != nil {
+		t.Fatalf("UpsertDVNJob() error = %v", err)
+	}
+	const reason = "destination receive library drift"
+	if err := store.MarkDVNManualReviewAndPausePathway(ctx, packet.GUID, string(packets.DVNReadyToVerify), reason, report); err != nil {
+		t.Fatalf("MarkDVNManualReviewAndPausePathway() error = %v", err)
+	}
+
+	var status, lastError, quorumResult string
+	var paused bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT dj.status, dj.last_error, dj.quorum_result::text, pathway.paused
+		FROM dvn_jobs AS dj
+		JOIN packets AS packet ON packet.guid = dj.guid
+		JOIN pathways AS pathway ON
+			pathway.src_eid = packet.src_eid
+			AND pathway.dst_eid = packet.dst_eid
+			AND pathway.src_oapp = packet.sender
+			AND pathway.dst_oapp = packet.receiver
+		WHERE dj.guid = $1
+	`, packet.GUID.Bytes()).Scan(&status, &lastError, &quorumResult, &paused); err != nil {
+		t.Fatalf("select manual review state: %v", err)
+	}
+	if status != string(packets.DVNManualReview) || lastError != reason || quorumResult == "" || !paused {
+		t.Fatalf("manual review state = status %q, error %q, report %q, paused %t", status, lastError, quorumResult, paused)
+	}
+}
+
 func TestClaimNextNonceAvoidsCollisions(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
