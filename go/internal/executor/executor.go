@@ -260,7 +260,7 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	}
 	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {
-		return false, err
+		return w.deferExecutorWorkError(ctx, item, status, "lz_receive_build_error", err)
 	}
 	id, err := w.store.EnqueueExecutorTx(ctx, item.Packet.GUID, status, string(packets.ExecutorLzReceiveTxEnqueued), request)
 	if err != nil {

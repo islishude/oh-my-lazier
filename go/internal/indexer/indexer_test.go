@@ -66,17 +66,17 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	if len(client.queries) != 4 {
 		t.Fatalf("queries = %d, want four role-specific queries", len(client.queries))
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
-	if store.cursors[cursorKey(40161, dvnSourceStream)] != 188 {
-		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, dvnSourceStream)])
+	if store.cursors[cursorKey(40161, DVNSourceStream)] != 188 {
+		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, DVNSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, dvnDestStream)] != 188 {
-		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, dvnDestStream)])
+	if store.cursors[cursorKey(40161, DVNDestinationStream)] != 188 {
+		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, DVNDestinationStream)])
 	}
 	assertLogContains(t, logs.String(),
 		`msg="indexed executor source assignment"`,
@@ -172,7 +172,7 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 	)
 }
 
-func TestIndexerProcessOnceBackfillsExternalExecutorWithoutAssignmentLog(t *testing.T) {
+func TestIndexerProcessOnceRecordsExternalExecutorWithoutAssignmentLog(t *testing.T) {
 	configuredExecutor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	externalExecutor := common.HexToAddress("0x2323232323232323232323232323232323232323")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
@@ -182,7 +182,6 @@ func TestIndexerProcessOnceBackfillsExternalExecutorWithoutAssignmentLog(t *test
 		t.Fatalf("PacketRecordFromSentLog() error = %v", err)
 	}
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(packet.SrcEID, executorSourceStream)] = 188
 	client := &fakeLogClient{
 		head: 200,
 		sourceLogs: []gethtypes.Log{
@@ -208,11 +207,158 @@ func TestIndexerProcessOnceBackfillsExternalExecutorWithoutAssignmentLog(t *test
 	if skip.Worker != externalExecutor || skip.Reason != "unexpected_worker" {
 		t.Fatalf("source skip worker/reason = %s/%q, want %s/unexpected_worker", skip.Worker, skip.Reason, externalExecutor)
 	}
-	if got := store.cursors[cursorKey(packet.SrcEID, executorSkipStream)]; got != 188 {
-		t.Fatalf("executor skip cursor = %d, want 188", got)
-	}
 	if queriesHaveAddress(client.queries, externalExecutor) {
 		t.Fatalf("source query unexpectedly included external executor %s", externalExecutor)
+	}
+}
+
+func TestIndexerProcessOnceIgnoresUnrelatedInvalidPacketRoute(t *testing.T) {
+	pathway := testIndexerPathway()
+	tests := []struct {
+		name    string
+		streams StreamSet
+		stream  string
+		feeLog  func(*testing.T, common.Hash) gethtypes.Log
+	}{
+		{
+			name:    "executor source",
+			streams: StreamSet{ExecutorSource: true},
+			stream:  ExecutorSourceStream,
+			feeLog: func(t *testing.T, txHash common.Hash) gethtypes.Log {
+				return testExecutorFeePaidLog(t, txHash, pathway.SendLib, pathway.SourceWorkers.OpenExecutor, big.NewInt(1), 0)
+			},
+		},
+		{
+			name:    "dvn source",
+			streams: StreamSet{DVNSource: true},
+			stream:  DVNSourceStream,
+			feeLog: func(t *testing.T, txHash common.Hash) gethtypes.Log {
+				return testDVNFeePaidLog(t, txHash, pathway.SendLib, pathway.SourceWorkers.OpenDVN, big.NewInt(1), 0)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			txHash := common.HexToHash("0xabababababababababababababababababababababababababababababababab")
+			encoded := testEncodedPacketWithNonceAndGUID(9, common.HexToHash("0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"))
+			copy(encoded[13:45], addressToBytes32(common.HexToAddress("0x1212121212121212121212121212121212121212")))
+			clear(encoded[49:81])
+			store := newFakeIndexerStore()
+			client := &fakeLogClient{
+				head: 200,
+				sourceLogs: []gethtypes.Log{
+					test.feeLog(t, txHash),
+					testPacketSentLogWithPacket(t, txHash, pathway.SendLib, encoded, 1),
+				},
+			}
+			indexer := NewWithClient(
+				testIndexerChain(pathway.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
+				[]chain.Pathway{pathway},
+				store,
+				client,
+				discardLogger(),
+			).WithStreams(test.streams)
+
+			if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+				t.Fatalf("ProcessOnce() error = %v", err)
+			}
+			if len(store.packets) != 0 || len(store.jobs) != 0 || len(store.dvnJobs) != 0 || len(store.sourceSkips) != 0 {
+				t.Fatalf("stored packets/executor jobs/dvn jobs/skips = %d/%d/%d/%d, want 0/0/0/0", len(store.packets), len(store.jobs), len(store.dvnJobs), len(store.sourceSkips))
+			}
+			if got := store.cursors[cursorKey(pathway.SrcEID, test.stream)]; got != 188 {
+				t.Fatalf("%s cursor = %d, want 188", test.stream, got)
+			}
+		})
+	}
+}
+
+func TestIndexerProcessOnceRecordsSendLibraryMismatchForBothRoles(t *testing.T) {
+	pathway := testIndexerPathway()
+	oldSendLib := common.HexToAddress("0x9898989898989898989898989898989898989898")
+	txHash := common.HexToHash("0xacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac")
+	packet, err := PacketRecordFromSentLog(testPacketSentLog(t, txHash, oldSendLib, 0))
+	if err != nil {
+		t.Fatalf("PacketRecordFromSentLog() error = %v", err)
+	}
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 200, sourceLogs: []gethtypes.Log{testPacketSentLog(t, txHash, oldSendLib, 0)}}
+	indexer := NewWithClient(
+		testIndexerChain(packet.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
+		[]chain.Pathway{pathway},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorSource: true, DVNSource: true})
+
+	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	for _, role := range []string{sourceRoleExecutor, sourceRoleDVN} {
+		skip, ok := store.sourceSkips[sourceSkipLookupKey(role, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64())]
+		if !ok || skip.Reason != "unexpected_send_library" {
+			t.Fatalf("%s source skip = %+v, present %t, want unexpected_send_library", role, skip, ok)
+		}
+	}
+}
+
+func TestIndexerProcessOnceRecordsExternalDVNWithoutAssignmentLog(t *testing.T) {
+	pathway := testIndexerPathway()
+	externalDVN := common.HexToAddress("0x3434343434343434343434343434343434343434")
+	txHash := common.HexToHash("0xadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadad")
+	packet, err := PacketRecordFromSentLog(testPacketSentLog(t, txHash, pathway.SendLib, 1))
+	if err != nil {
+		t.Fatalf("PacketRecordFromSentLog() error = %v", err)
+	}
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head: 200,
+		sourceLogs: []gethtypes.Log{
+			testDVNFeePaidLog(t, txHash, pathway.SendLib, externalDVN, big.NewInt(42), 0),
+			testPacketSentLog(t, txHash, pathway.SendLib, 1),
+		},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(packet.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
+		[]chain.Pathway{pathway},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{DVNSource: true})
+
+	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	skip, ok := store.sourceSkips[sourceSkipLookupKey(sourceRoleDVN, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64())]
+	if !ok || skip.Worker != externalDVN || skip.Reason != "unexpected_worker" {
+		t.Fatalf("dvn source skip = %+v, present %t, want external unexpected worker", skip, ok)
+	}
+}
+
+func TestIndexerProcessOnceRejectsMissingConfiguredDVNAssignmentLog(t *testing.T) {
+	pathway := testIndexerPathway()
+	txHash := common.HexToHash("0xaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeaeae")
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{
+		head: 200,
+		sourceLogs: []gethtypes.Log{
+			testDVNFeePaidLog(t, txHash, pathway.SendLib, pathway.SourceWorkers.OpenDVN, big.NewInt(42), 0),
+			testPacketSentLog(t, txHash, pathway.SendLib, 1),
+		},
+	}
+	indexer := NewWithClient(
+		testIndexerChain(pathway.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
+		[]chain.Pathway{pathway},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{DVNSource: true})
+
+	_, err := indexer.ProcessOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "assignment log is missing") {
+		t.Fatalf("ProcessOnce() error = %v, want missing configured dvn assignment", err)
+	}
+	if _, ok := store.cursors[cursorKey(pathway.SrcEID, DVNSourceStream)]; ok {
+		t.Fatal("dvn source cursor advanced after missing configured assignment")
 	}
 }
 
@@ -240,7 +386,7 @@ func TestIndexerProcessOnceRejectsMissingConfiguredExecutorAssignmentLog(t *test
 	if err == nil || !strings.Contains(err.Error(), "assignment log is missing") {
 		t.Fatalf("ProcessOnce() error = %v, want missing configured executor assignment", err)
 	}
-	if _, ok := store.cursors[cursorKey(40161, executorSourceStream)]; ok {
+	if _, ok := store.cursors[cursorKey(40161, ExecutorSourceStream)]; ok {
 		t.Fatal("executor source cursor advanced after missing configured assignment")
 	}
 }
@@ -309,8 +455,8 @@ func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *te
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
-	if _, ok := store.cursors[cursorKey(packet.DstEID, executorDestStream)]; ok {
-		t.Fatalf("destination cursor advanced to %d, want missing", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	if _, ok := store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)]; ok {
+		t.Fatalf("destination cursor advanced to %d, want missing", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 
 	store.packets[packet.GUID] = packet
@@ -322,8 +468,8 @@ func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *te
 	if result.DestinationLogs != 1 {
 		t.Fatalf("second DestinationLogs = %d, want 1", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -359,8 +505,8 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForSkippedSourcePacket(t *te
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -387,8 +533,8 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForExternalMissingPacket(t *
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, executorDestStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, executorDestStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -528,8 +674,8 @@ func TestIndexerProcessOnceWaitsForConfirmations(t *testing.T) {
 
 func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(40161, executorSourceStream)] = 40
-	store.cursors[cursorKey(40161, executorDestStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
 	client := &fakeLogClient{head: 65}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
@@ -550,11 +696,11 @@ func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 	if result.DestinationFromBlock != 41 || result.DestinationToBlock != 50 {
 		t.Fatalf("destination window = %d..%d, want 41..50", result.DestinationFromBlock, result.DestinationToBlock)
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 50 {
-		t.Fatalf("source cursor = %d, want 50", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 50 {
+		t.Fatalf("source cursor = %d, want 50", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, executorDestStream)] != 50 {
-		t.Fatalf("destination cursor = %d, want 50", store.cursors[cursorKey(40161, executorDestStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 50 {
+		t.Fatalf("destination cursor = %d, want 50", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 }
 
@@ -588,8 +734,8 @@ func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("source query ranges = %v, want %v", got, want)
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 25 {
-		t.Fatalf("source cursor = %d, want 25", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 25 {
+		t.Fatalf("source cursor = %d, want 25", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 
@@ -623,8 +769,8 @@ func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.
 	if !slices.Equal(got, want) {
 		t.Fatalf("destination query ranges = %v, want %v", got, want)
 	}
-	if store.cursors[cursorKey(40449, executorDestStream)] != 25 {
-		t.Fatalf("destination cursor = %d, want 25", store.cursors[cursorKey(40449, executorDestStream)])
+	if store.cursors[cursorKey(40449, ExecutorDestinationStream)] != 25 {
+		t.Fatalf("destination cursor = %d, want 25", store.cursors[cursorKey(40449, ExecutorDestinationStream)])
 	}
 }
 
@@ -727,11 +873,11 @@ func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.
 	if result.DestinationFromBlock != 150 || result.DestinationToBlock != 188 {
 		t.Fatalf("destination window = %d..%d, want 150..188", result.DestinationFromBlock, result.DestinationToBlock)
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 }
 
@@ -761,16 +907,16 @@ func TestIndexerProcessOnceExecutorOnlyStreamsDoNotWriteDVNJobs(t *testing.T) {
 	if len(store.dvnJobs) != 0 {
 		t.Fatalf("dvn jobs = %d, want 0", len(store.dvnJobs))
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("executor source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("executor source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, executorDestStream)] != 188 {
-		t.Fatalf("executor destination cursor = %d, want 188", store.cursors[cursorKey(40161, executorDestStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
+		t.Fatalf("executor destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
-	if _, ok := store.cursors[cursorKey(40161, dvnSourceStream)]; ok {
+	if _, ok := store.cursors[cursorKey(40161, DVNSourceStream)]; ok {
 		t.Fatal("dvn source cursor advanced in executor-only mode")
 	}
-	if _, ok := store.cursors[cursorKey(40161, dvnDestStream)]; ok {
+	if _, ok := store.cursors[cursorKey(40161, DVNDestinationStream)]; ok {
 		t.Fatal("dvn destination cursor advanced in executor-only mode")
 	}
 }
@@ -801,16 +947,16 @@ func TestIndexerProcessOnceDVNOnlyStreamsDoNotWriteExecutorJobs(t *testing.T) {
 	if len(store.jobs) != 0 {
 		t.Fatalf("executor jobs = %d, want 0", len(store.jobs))
 	}
-	if store.cursors[cursorKey(40161, dvnSourceStream)] != 188 {
-		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, dvnSourceStream)])
+	if store.cursors[cursorKey(40161, DVNSourceStream)] != 188 {
+		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, DVNSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, dvnDestStream)] != 188 {
-		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, dvnDestStream)])
+	if store.cursors[cursorKey(40161, DVNDestinationStream)] != 188 {
+		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, DVNDestinationStream)])
 	}
-	if _, ok := store.cursors[cursorKey(40161, executorSourceStream)]; ok {
+	if _, ok := store.cursors[cursorKey(40161, ExecutorSourceStream)]; ok {
 		t.Fatal("executor source cursor advanced in dvn-only mode")
 	}
-	if _, ok := store.cursors[cursorKey(40161, executorDestStream)]; ok {
+	if _, ok := store.cursors[cursorKey(40161, ExecutorDestinationStream)]; ok {
 		t.Fatal("executor destination cursor advanced in dvn-only mode")
 	}
 }
@@ -865,7 +1011,7 @@ func TestIndexerProcessOnceFailureDoesNotAdvanceCursor(t *testing.T) {
 func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
@@ -904,10 +1050,10 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(40161, executorSourceStream)] = 40
-	store.cursors[cursorKey(40161, dvnSourceStream)] = 40
-	store.cursors[cursorKey(40161, executorDestStream)] = 40
-	store.cursors[cursorKey(40161, dvnDestStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
+	store.cursors[cursorKey(40161, DVNSourceStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
+	store.cursors[cursorKey(40161, DVNDestinationStream)] = 40
 	client := &fakeLogClient{head: 65}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
@@ -942,7 +1088,7 @@ func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
 func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelDebug)
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
@@ -981,7 +1127,7 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelDebug)
 	store := newFakeIndexerStore()
-	store.cursors[cursorKey(40161, executorSourceStream)] = 40
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
@@ -1080,8 +1226,8 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	if got := blockCalls.Load(); got < 2 {
 		t.Fatalf("BlockNumber calls = %d, want at least 2", got)
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 
@@ -1126,8 +1272,8 @@ func TestIndexerRunRetriesAfterPollError(t *testing.T) {
 	if got := blockCalls.Load(); got < 3 {
 		t.Fatalf("BlockNumber calls = %d, want at least 3", got)
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want retry to advance to 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want retry to advance to 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 
@@ -1170,8 +1316,8 @@ func TestIndexerRunContinuesPollingAfterImmatureHead(t *testing.T) {
 	if len(client.queries) == 0 {
 		t.Fatal("queries = 0, want polling to resume after the configured confirmations are available")
 	}
-	if store.cursors[cursorKey(40161, executorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, executorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
+		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 

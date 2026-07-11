@@ -40,12 +40,6 @@ const (
 	DVNSourceStream = "dvn_source"
 	// DVNDestinationStream tracks destination-chain OpenDVN verification outcomes.
 	DVNDestinationStream = "dvn_destination"
-
-	executorSourceStream = ExecutorSourceStream
-	executorSkipStream   = "executor_source_skips"
-	executorDestStream   = ExecutorDestinationStream
-	dvnSourceStream      = DVNSourceStream
-	dvnDestStream        = DVNDestinationStream
 )
 
 const (
@@ -116,22 +110,21 @@ type MetricsRecorder interface {
 
 // Indexer watches one chain for LayerZero and worker contract events.
 type Indexer struct {
-	chain                chain.Chain
-	sourcePathways       []chain.Pathway
-	destinationPathways  []chain.Pathway
-	destinationEID       uint32
-	store                Store
-	client               LogClient
-	pollInterval         time.Duration
-	backfillRange        uint64
-	queryBlockRange      uint64
-	progressLogInterval  time.Duration
-	lastProgressLogs     map[string]time.Time
-	logger               *slog.Logger
-	metrics              MetricsRecorder
-	streams              StreamSet
-	now                  func() time.Time
-	executorSkipCaughtUp bool
+	chain               chain.Chain
+	sourcePathways      []chain.Pathway
+	destinationPathways []chain.Pathway
+	destinationEID      uint32
+	store               Store
+	client              LogClient
+	pollInterval        time.Duration
+	backfillRange       uint64
+	queryBlockRange     uint64
+	progressLogInterval time.Duration
+	lastProgressLogs    map[string]time.Time
+	logger              *slog.Logger
+	metrics             MetricsRecorder
+	streams             StreamSet
+	now                 func() time.Time
 }
 
 // New creates an indexer for one configured chain.
@@ -217,18 +210,18 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	sourceWindowSet := false
 	destinationWindowSet := false
 	if i.streams.ExecutorSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, executorSourceStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorSourceStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(executorSourceStream, skipReason, confirmedTo)
+			i.logCursorSkip(ExecutorSourceStream, skipReason, confirmedTo)
 		} else {
 			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleExecutor)
 			if err != nil {
 				return ProcessResult{}, err
 			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSourceStream, to); err != nil {
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, ExecutorSourceStream, to); err != nil {
 				return ProcessResult{}, err
 			}
 			result.SourceFromBlock = from
@@ -236,36 +229,22 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			sourceWindowSet = true
 			result.SourceTransactions += source
 			result.DVNTransactions += dvn
-			result.addStreamProgress(executorSourceStream, from, to, source, dvn, 0)
-		}
-		if sourceWindowSet && result.SourceFromBlock == i.chain.StartBlockNumber {
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, result.SourceToBlock); err != nil {
-				return ProcessResult{}, err
-			}
-			i.executorSkipCaughtUp = true
-		} else if i.executorSkipCaughtUp {
-			if sourceWindowSet {
-				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, result.SourceToBlock); err != nil {
-					return ProcessResult{}, err
-				}
-			}
-		} else if err := i.processExecutorSourceSkipBackfill(ctx); err != nil {
-			return ProcessResult{}, err
+			result.addStreamProgress(ExecutorSourceStream, from, to, source, dvn, 0)
 		}
 	}
 	if i.streams.DVNSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, dvnSourceStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNSourceStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(dvnSourceStream, skipReason, confirmedTo)
+			i.logCursorSkip(DVNSourceStream, skipReason, confirmedTo)
 		} else {
 			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleDVN)
 			if err != nil {
 				return ProcessResult{}, err
 			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnSourceStream, to); err != nil {
+			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, DVNSourceStream, to); err != nil {
 				return ProcessResult{}, err
 			}
 			if !sourceWindowSet {
@@ -274,16 +253,16 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			}
 			result.SourceTransactions += source
 			result.DVNTransactions += dvn
-			result.addStreamProgress(dvnSourceStream, from, to, source, dvn, 0)
+			result.addStreamProgress(DVNSourceStream, from, to, source, dvn, 0)
 		}
 	}
 	if i.streams.ExecutorDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, executorDestStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorDestinationStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(executorDestStream, skipReason, confirmedTo)
+			i.logCursorSkip(ExecutorDestinationStream, skipReason, confirmedTo)
 		} else {
 			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleExecutor)
 			if err != nil {
@@ -294,22 +273,22 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			destinationWindowSet = true
 			result.DestinationLogs += destination.applied
 			if destination.pending {
-				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", executorDestStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
+				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", ExecutorDestinationStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
 			} else {
-				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorDestStream, to); err != nil {
+				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, ExecutorDestinationStream, to); err != nil {
 					return ProcessResult{}, err
 				}
-				result.addStreamProgress(executorDestStream, from, to, 0, 0, destination.applied)
+				result.addStreamProgress(ExecutorDestinationStream, from, to, 0, 0, destination.applied)
 			}
 		}
 	}
 	if i.streams.DVNDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, dvnDestStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNDestinationStream, confirmedTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(dvnDestStream, skipReason, confirmedTo)
+			i.logCursorSkip(DVNDestinationStream, skipReason, confirmedTo)
 		} else {
 			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleDVN)
 			if err != nil {
@@ -321,12 +300,12 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 			}
 			result.DestinationLogs += destination.applied
 			if destination.pending {
-				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", dvnDestStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
+				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", DVNDestinationStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
 			} else {
-				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, dvnDestStream, to); err != nil {
+				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, DVNDestinationStream, to); err != nil {
 					return ProcessResult{}, err
 				}
-				result.addStreamProgress(dvnDestStream, from, to, 0, 0, destination.applied)
+				result.addStreamProgress(DVNDestinationStream, from, to, 0, 0, destination.applied)
 			}
 		}
 	}
@@ -438,17 +417,21 @@ func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log, r
 func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role string) (int, int, error) {
 	executorProcessed := 0
 	dvnProcessed := 0
+	relevantLogs, err := i.sourceTxLogsForPathways(ctx, tx.logs, role)
+	if err != nil || len(relevantLogs) == 0 {
+		return 0, 0, err
+	}
 	// Executor fee and packet logs also identify assignments made to workers whose
 	// contract logs are outside this indexer's configured address filter.
 	if role == sourceRoleExecutor {
-		processed, err := i.processExecutorSourceTx(ctx, tx.logs)
+		processed, err := i.processExecutorSourceTx(ctx, relevantLogs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
 		executorProcessed += processed
 	}
-	if role == sourceRoleDVN && tx.hasDVNAssignment {
-		processed, err := i.processDVNSourceTx(ctx, tx.logs)
+	if role == sourceRoleDVN {
+		processed, err := i.processDVNSourceTx(ctx, relevantLogs)
 		if err != nil {
 			return executorProcessed, dvnProcessed, err
 		}
@@ -458,9 +441,8 @@ func (i *Indexer) processSourceTxLogs(ctx context.Context, tx sourceTxLogs, role
 }
 
 type sourceTxLogs struct {
-	txHash           common.Hash
-	logs             []gethtypes.Log
-	hasDVNAssignment bool
+	txHash common.Hash
+	logs   []gethtypes.Log
 }
 
 func (l *sourceTxLogs) append(log gethtypes.Log) {
@@ -468,17 +450,66 @@ func (l *sourceTxLogs) append(log gethtypes.Log) {
 		l.txHash = log.TxHash
 	}
 	l.logs = append(l.logs, log)
-	if len(log.Topics) == 0 {
-		return
-	}
-	if log.Topics[0] == lzabi.DVNJobAssignedTopic() {
-		l.hasDVNAssignment = true
-	}
 }
 
 func (l *sourceTxLogs) reset() {
 	l.logs = l.logs[:0]
-	l.hasDVNAssignment = false
+}
+
+func (i *Indexer) sourceTxLogsForPathways(ctx context.Context, logs []gethtypes.Log, role string) ([]gethtypes.Log, error) {
+	ordered, err := orderedSourceTxLogs(logs)
+	if err != nil {
+		return nil, err
+	}
+	relevant := make([]gethtypes.Log, 0, len(ordered))
+	segment := make([]gethtypes.Log, 0)
+	for _, log := range ordered {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		segment = append(segment, log)
+		if !logHasTopic(log, lzabi.PacketSentTopic()) {
+			continue
+		}
+		if log.Address != i.chain.EndpointAddress {
+			segment = segment[:0]
+			continue
+		}
+		route, event, err := packetRouteFromSentLog(log)
+		if err != nil {
+			return nil, err
+		}
+		pathway, ok := i.sourcePathwayIdentity(route.SrcEID, route.DstEID, route.Sender, route.Receiver)
+		if !ok {
+			segment = segment[:0]
+			continue
+		}
+		if event.SendLibrary != pathway.SendLib {
+			packet, err := PacketRecordFromSentLog(log)
+			if err != nil {
+				return nil, err
+			}
+			if err := i.recordSourcePacketSkip(ctx, role, packet, "unexpected_send_library", common.Address{}); err != nil {
+				return nil, err
+			}
+			i.logger.Debug("skipped source packet", "role", role, "reason", "unexpected_send_library", "guid", packet.GUID, "src_eid", packet.SrcEID, "dst_eid", packet.DstEID, "tx_hash", packet.SrcTxHash, "send_library", event.SendLibrary, "expected_send_library", pathway.SendLib)
+			segment = segment[:0]
+			continue
+		}
+		relevant = append(relevant, segment...)
+		segment = segment[:0]
+	}
+	assignmentTopic := lzabi.ExecutorJobAssignedTopic()
+	if role == sourceRoleDVN {
+		assignmentTopic = lzabi.DVNJobAssignedTopic()
+	}
+	for _, log := range segment {
+		if logHasTopic(log, assignmentTopic) {
+			relevant = append(relevant, segment...)
+			break
+		}
+	}
+	return relevant, nil
 }
 
 func (i *Indexer) chunkToBlock(from, limit uint64) uint64 {
@@ -521,9 +552,6 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 			i.logger.Debug("skipped executor source assignment", "reason", "unexpected_worker", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "worker", record.Executor, "expected_worker", pathway.SourceWorkers.OpenExecutor)
 			continue
 		}
-		if record.Packet.SendLib != pathway.SendLib {
-			return processed, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", record.Packet.GUID, record.Packet.SendLib, pathway.SendLib)
-		}
 		record.Packet.Status = record.ExecutorJob.Status
 		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
 			return processed, err
@@ -565,102 +593,8 @@ func (i *Indexer) recordExecutorSourceGaps(ctx context.Context, gaps []executorS
 	return nil
 }
 
-func (i *Indexer) processExecutorSourceSkipBackfill(ctx context.Context) error {
-	sourceCursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, executorSourceStream)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if sourceCursor < i.chain.StartBlockNumber {
-		i.executorSkipCaughtUp = true
-		return nil
-	}
-	skipCursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, executorSkipStream)
-	from := i.chain.StartBlockNumber
-	if err == nil {
-		if skipCursor >= sourceCursor {
-			i.executorSkipCaughtUp = true
-			return nil
-		}
-		from = skipCursor + 1
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return err
-	}
-	to := sourceCursor
-	if i.backfillRange > 0 && to-from+1 > i.backfillRange {
-		to = from + i.backfillRange - 1
-	}
-	if err := i.processExecutorSourceSkipWindow(ctx, from, to); err != nil {
-		return err
-	}
-	if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, executorSkipStream, to); err != nil {
-		return err
-	}
-	if to >= sourceCursor {
-		i.executorSkipCaughtUp = true
-		i.logger.Info("executor source skip backfill caught up", "chain", i.chain.Name, "eid", i.chain.EID, "stream", executorSkipStream, "to_block", to)
-	}
-	return nil
-}
-
-func (i *Indexer) processExecutorSourceSkipWindow(ctx context.Context, from, to uint64) error {
-	for chunkFrom := from; chunkFrom <= to; {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		chunkTo := i.chunkToBlock(chunkFrom, to)
-		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: blockNumber(chunkFrom),
-			ToBlock:   blockNumber(chunkTo),
-			Addresses: i.sourceAddresses(sourceRoleExecutor),
-			Topics:    [][]common.Hash{i.sourceTopics(sourceRoleExecutor)},
-		})
-		if err != nil {
-			return err
-		}
-		if err := i.processExecutorSourceSkipLogs(ctx, logs); err != nil {
-			return err
-		}
-		if chunkTo == to {
-			break
-		}
-		chunkFrom = chunkTo + 1
-	}
-	return nil
-}
-
-func (i *Indexer) processExecutorSourceSkipLogs(ctx context.Context, logs []gethtypes.Log) error {
-	var current sourceTxLogs
-	for _, log := range logs {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(current.logs) > 0 && current.txHash != log.TxHash {
-			if err := i.recordExecutorSourceSkipTx(ctx, current.logs); err != nil {
-				return err
-			}
-			current.reset()
-		}
-		current.append(log)
-	}
-	if len(current.logs) == 0 {
-		return nil
-	}
-	return i.recordExecutorSourceSkipTx(ctx, current.logs)
-}
-
-func (i *Indexer) recordExecutorSourceSkipTx(ctx context.Context, logs []gethtypes.Log) error {
-	_, gaps, err := decodeExecutorSourceTxLogs(logs)
-	if err != nil {
-		return err
-	}
-	return i.recordExecutorSourceGaps(ctx, gaps)
-}
-
 func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log) (int, error) {
-	records, err := DVNSourceTxRecordsFromLogsForEndpoint(txLogs, i.chain.EndpointAddress)
+	records, gaps, err := decodeDVNSourceTxLogsForEndpoint(txLogs, i.chain.EndpointAddress)
 	if err != nil {
 		return 0, err
 	}
@@ -688,9 +622,6 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 			i.logger.Debug("skipped dvn source assignment", "reason", "unexpected_worker", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "worker", record.DVN, "expected_worker", pathway.SourceWorkers.OpenDVN)
 			continue
 		}
-		if record.Packet.SendLib != pathway.SendLib {
-			return processed, fmt.Errorf("packet %s send lib %s does not match configured send lib %s", record.Packet.GUID, record.Packet.SendLib, pathway.SendLib)
-		}
 		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
 			return processed, err
 		}
@@ -700,7 +631,54 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 		i.logger.Info("indexed dvn source assignment", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "block_number", record.Packet.SrcBlockNumber, "log_index", record.Packet.SrcLogIndex, "status", record.DVNJob.Status)
 		processed++
 	}
+	if err := i.recordDVNSourceGaps(ctx, gaps); err != nil {
+		return processed, err
+	}
 	return processed, nil
+}
+
+func (i *Indexer) recordDVNSourceGaps(ctx context.Context, gaps []dvnSourcePacketGap) error {
+	for _, gap := range gaps {
+		pathway, ok := i.sourcePathway(gap.Packet)
+		if !ok {
+			continue
+		}
+		if !pathway.Enabled {
+			if err := i.recordSourcePacketSkip(ctx, sourceRoleDVN, gap.Packet, "pathway_disabled", common.Address{}); err != nil {
+				return err
+			}
+			continue
+		}
+		worker, includesExpected, err := dvnGapWorker(*gap.Fee, pathway.SourceWorkers.OpenDVN)
+		if err != nil {
+			return fmt.Errorf("packet %s: %w", gap.Packet.GUID, err)
+		}
+		if includesExpected {
+			return fmt.Errorf("packet %s paid configured dvn %s but its assignment log is missing", gap.Packet.GUID, pathway.SourceWorkers.OpenDVN)
+		}
+		if err := i.recordSourcePacketSkip(ctx, sourceRoleDVN, gap.Packet, "unexpected_worker", worker); err != nil {
+			return err
+		}
+		i.logger.Debug("skipped dvn source packet", "reason", "unexpected_worker", "guid", gap.Packet.GUID, "src_eid", gap.Packet.SrcEID, "dst_eid", gap.Packet.DstEID, "tx_hash", gap.Packet.SrcTxHash, "worker", worker, "expected_worker", pathway.SourceWorkers.OpenDVN)
+	}
+	return nil
+}
+
+func dvnGapWorker(fee lzabi.DVNFeePaid, expected common.Address) (common.Address, bool, error) {
+	dvns := append(append([]common.Address{}, fee.RequiredDVNs...), fee.OptionalDVNs...)
+	if len(dvns) != len(fee.Fees) {
+		return common.Address{}, false, fmt.Errorf("dvn fee worker count %d does not match fee count %d", len(dvns), len(fee.Fees))
+	}
+	worker := common.Address{}
+	for _, dvn := range dvns {
+		if worker == (common.Address{}) {
+			worker = dvn
+		}
+		if dvn == expected {
+			return worker, true, nil
+		}
+	}
+	return worker, false, nil
 }
 
 func (i *Indexer) recordSourcePacketSkip(ctx context.Context, role string, packet db.PacketRecord, reason string, worker common.Address) error {
@@ -1088,8 +1066,12 @@ func (i *Indexer) destinationTopics(role string) []common.Hash {
 }
 
 func (i *Indexer) sourcePathway(packet db.PacketRecord) (chain.Pathway, bool) {
+	return i.sourcePathwayIdentity(packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver)
+}
+
+func (i *Indexer) sourcePathwayIdentity(srcEID, dstEID uint32, sender, receiver common.Address) (chain.Pathway, bool) {
 	for _, pathway := range i.sourcePathways {
-		if pathway.DstEID == packet.DstEID && pathway.SrcOApp == packet.Sender && pathway.DstOApp == packet.Receiver {
+		if pathway.SrcEID == srcEID && pathway.DstEID == dstEID && pathway.SrcOApp == sender && pathway.DstOApp == receiver {
 			return pathway, true
 		}
 	}

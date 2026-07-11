@@ -20,6 +20,11 @@ type DVNSourceTxRecords struct {
 	DVN    common.Address
 }
 
+type dvnSourcePacketGap struct {
+	Packet db.PacketRecord
+	Fee    *lzabi.DVNFeePaid
+}
+
 // DVNSourceTxRecordsFromLogs decodes and cross-checks source-chain DVN logs from one transaction.
 func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]DVNSourceTxRecords, error) {
 	return DVNSourceTxRecordsFromLogsForEndpoint(logs, common.Address{})
@@ -27,12 +32,18 @@ func DVNSourceTxRecordsFromLogs(logs []gethtypes.Log) ([]DVNSourceTxRecords, err
 
 // DVNSourceTxRecordsFromLogsForEndpoint decodes source-chain DVN logs and requires PacketSent from endpoint when set.
 func DVNSourceTxRecordsFromLogsForEndpoint(logs []gethtypes.Log, endpoint common.Address) ([]DVNSourceTxRecords, error) {
+	records, _, err := decodeDVNSourceTxLogsForEndpoint(logs, endpoint)
+	return records, err
+}
+
+func decodeDVNSourceTxLogsForEndpoint(logs []gethtypes.Log, endpoint common.Address) ([]DVNSourceTxRecords, []dvnSourcePacketGap, error) {
 	ordered, err := orderedSourceTxLogs(logs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	records := make([]DVNSourceTxRecords, 0)
+	gaps := make([]dvnSourcePacketGap, 0)
 	feeEvents := make([]dvnFeeEvent, 0)
 	assignments := make([]dvnAssignmentEvent, 0)
 	for _, log := range ordered {
@@ -40,46 +51,49 @@ func DVNSourceTxRecordsFromLogsForEndpoint(logs []gethtypes.Log, endpoint common
 		case logHasTopic(log, lzabi.DVNJobAssignedTopic()):
 			event, err := lzabi.DecodeDVNJobAssigned(log)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			assignments = append(assignments, dvnAssignmentEvent{Log: log, Event: event})
 		case logHasTopic(log, lzabi.DVNFeePaidTopic()):
 			event, err := lzabi.DecodeDVNFeePaid(log)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			feeEvents = append(feeEvents, dvnFeeEvent{Log: log, Event: event})
 		case logHasTopic(log, lzabi.PacketSentTopic()):
 			if endpoint != (common.Address{}) && log.Address != endpoint {
-				return nil, fmt.Errorf("source tx PacketSent address %s does not match endpoint %s", log.Address, endpoint)
+				return nil, nil, fmt.Errorf("source tx PacketSent address %s does not match endpoint %s", log.Address, endpoint)
 			}
 			packet, err := PacketRecordFromSentLog(log)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			feeIndex := latestUnmatchedDVNFee(feeEvents, packet.SendLib)
 			if feeIndex < 0 {
 				if hasUnmatchedDVNAssignmentForPacket(assignments, packet) {
-					return nil, errors.New("source tx PacketSent missing matching DVNFeePaid log")
+					return nil, nil, errors.New("source tx PacketSent missing matching DVNFeePaid log")
 				}
 				continue
 			}
 			assignmentIndex, err := matchingDVNAssignment(assignments, packet, feeEvents[feeIndex].Event)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			feeEvents[feeIndex].Matched = true
 			if assignmentIndex >= 0 {
 				assignments[assignmentIndex].Matched = true
 				record := dvnRecordFromMatchedLogs(packet, assignments[assignmentIndex])
 				records = append(records, record)
+			} else {
+				fee := feeEvents[feeIndex].Event
+				gaps = append(gaps, dvnSourcePacketGap{Packet: packet, Fee: &fee})
 			}
 		}
 	}
 	if hasUnmatchedDVNAssignment(assignments) {
-		return nil, errors.New("source tx contains DVNJobAssigned without following PacketSent")
+		return nil, nil, errors.New("source tx contains DVNJobAssigned without following PacketSent")
 	}
-	return records, nil
+	return records, gaps, nil
 }
 
 type dvnFeeEvent struct {

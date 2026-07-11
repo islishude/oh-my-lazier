@@ -357,6 +357,38 @@ func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
 	}
 }
 
+func TestProcessDelivererOnceDefersInvalidLzReceiveOptions(t *testing.T) {
+	packet := testPacketRecord()
+	packet.Status = string(packets.ExecutorExecutable)
+	packet.Options[5] = 2
+	store := &fakeStore{
+		workByStatus: map[string][]db.ExecutorWorkItem{string(packets.ExecutorExecutable): {{
+			Packet: packet,
+			Job:    db.ExecutorJobRecord{GUID: packet.GUID, Status: string(packets.ExecutorExecutable)},
+		}}},
+	}
+	worker := NewWithCallers(
+		store,
+		testRegistry(t),
+		map[uint32]ContractCaller{packet.DstEID: fakeExecutableCaller{payloadHash: packet.PayloadHash, inboundNonce: 7}},
+		slog.Default(),
+	)
+
+	processed, err := worker.ProcessDelivererOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessDelivererOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if store.deferredGUID != packet.GUID || store.deferredStatus != string(packets.ExecutorExecutable) {
+		t.Fatalf("deferred job = %s/%q, want %s/%q", store.deferredGUID, store.deferredStatus, packet.GUID, packets.ExecutorExecutable)
+	}
+	if store.request.Purpose != "" {
+		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
+	}
+}
+
 func TestProcessDelivererOnceSkipsWhenEndpointNotExecutable(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)

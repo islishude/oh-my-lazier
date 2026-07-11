@@ -26,6 +26,7 @@ type ExecutorReceiptStore interface {
 // ExecutorDestinationStore loads known packets and persists destination-chain executor outcomes.
 type ExecutorDestinationStore interface {
 	ExecutorReceiptStore
+	SourcePacketSkipStore
 	GetExecutorJob(ctx context.Context, guid common.Hash) (db.ExecutorJobRecord, error)
 	GetPacket(ctx context.Context, guid common.Hash) (db.PacketRecord, error)
 	GetPacketByDestination(ctx context.Context, dstEID, srcEID uint32, sender, receiver common.Address, nonce uint64) (db.PacketRecord, error)
@@ -33,6 +34,7 @@ type ExecutorDestinationStore interface {
 
 // DVNDestinationStore loads known packets and persists destination-chain DVN verification outcomes.
 type DVNDestinationStore interface {
+	SourcePacketSkipStore
 	GetDVNJob(ctx context.Context, guid common.Hash) (db.DVNJobRecord, error)
 	GetPacketByVerification(ctx context.Context, dstEID uint32, packetHeader []byte, payloadHash common.Hash) (db.PacketRecord, error)
 	MarkDVNVerifiedObserved(ctx context.Context, guid, txHash common.Hash, expectedStatus string) error
@@ -322,12 +324,8 @@ func dvnSourcePacketWasSkipped(ctx context.Context, store DVNDestinationStore, d
 	})
 }
 
-func sourcePacketWasSkipped(ctx context.Context, store any, role string, identity destinationPacketIdentity) (bool, error) {
-	skipStore, ok := store.(SourcePacketSkipStore)
-	if !ok {
-		return false, nil
-	}
-	_, err := skipStore.GetSourcePacketSkip(ctx, role, identity.SrcEID, identity.DstEID, identity.Sender, identity.Receiver, identity.Nonce)
+func sourcePacketWasSkipped(ctx context.Context, store SourcePacketSkipStore, role string, identity destinationPacketIdentity) (bool, error) {
+	_, err := store.GetSourcePacketSkip(ctx, role, identity.SrcEID, identity.DstEID, identity.Sender, identity.Receiver, identity.Nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
