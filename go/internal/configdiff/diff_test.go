@@ -56,6 +56,117 @@ func TestRenderTextIncludesChangedPath(t *testing.T) {
 	}
 }
 
+func TestDiffIncludesTxManagerAndSignerBackendChanges(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	signerID := config.MustEVMAddress("0x9999999999999999999999999999999999999999")
+	before.TxManager.StaleBroadcastReplacementAfterSeconds = 900
+	after.TxManager.StaleBroadcastReplacementAfterSeconds = 60
+	before.Signers = []config.SignerConfig{
+		{
+			ID:   signerID,
+			Type: "keystore",
+			Keystore: config.KeystoreSignerConfig{
+				Path:        "/run/secrets/worker.json",
+				PasswordEnv: "KEYSTORE_PASSWORD",
+			},
+		},
+	}
+	after.Signers = []config.SignerConfig{
+		{
+			ID:   signerID,
+			Type: "kms",
+			KMS: config.KMSSignerConfig{
+				KeyID:   "approved-key",
+				Region:  "us-east-1",
+				Address: signerID,
+			},
+		},
+	}
+
+	changes := Diff(before, after)
+	paths := make([]string, 0, len(changes))
+	for _, change := range changes {
+		paths = append(paths, change.Path)
+	}
+	want := []string{
+		"tx_manager",
+		"signers[0x9999999999999999999999999999999999999999]",
+	}
+	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("paths = %#v, want %#v", paths, want)
+	}
+}
+
+func TestDiffIgnoresSignerReordering(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	first := config.SignerConfig{
+		ID:   config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
+		Type: "keystore",
+		Keystore: config.KeystoreSignerConfig{
+			Path:        "/run/secrets/first.json",
+			PasswordEnv: "FIRST_PASSWORD",
+		},
+	}
+	second := config.SignerConfig{
+		ID:   config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+		Type: "keystore",
+		Keystore: config.KeystoreSignerConfig{
+			Path:        "/run/secrets/second.json",
+			PasswordEnv: "SECOND_PASSWORD",
+		},
+	}
+	before.Signers = []config.SignerConfig{first, second}
+	after.Signers = []config.SignerConfig{second, first}
+
+	if changes := Diff(before, after); len(changes) != 0 {
+		t.Fatalf("Diff() changes = %+v, want signer reordering ignored", changes)
+	}
+}
+
+func TestDiffIncludesSignerAdditionsAndRemovals(t *testing.T) {
+	signer := config.SignerConfig{
+		ID:   config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		Type: "keystore",
+		Keystore: config.KeystoreSignerConfig{
+			Path:        "/run/secrets/worker.json",
+			PasswordEnv: "KEYSTORE_PASSWORD",
+		},
+	}
+	tests := []struct {
+		name       string
+		before     []config.SignerConfig
+		after      []config.SignerConfig
+		wantBefore bool
+		wantAfter  bool
+	}{
+		{name: "addition", after: []config.SignerConfig{signer}, wantAfter: true},
+		{name: "removal", before: []config.SignerConfig{signer}, wantBefore: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := validConfig()
+			after := validConfig()
+			before.Signers = test.before
+			after.Signers = test.after
+
+			changes := Diff(before, after)
+			if len(changes) != 1 {
+				t.Fatalf("Diff() changes = %+v, want one signer change", changes)
+			}
+			change := changes[0]
+			if change.Path != "signers[0x9999999999999999999999999999999999999999]" {
+				t.Fatalf("change path = %q, want signer semantic path", change.Path)
+			}
+			if (change.Before != nil) != test.wantBefore || (change.After != nil) != test.wantAfter {
+				t.Fatalf("change = %+v, want before=%t after=%t", change, test.wantBefore, test.wantAfter)
+			}
+		})
+	}
+}
+
 func TestDiffRedactsDatabaseAndRPCURLCredentials(t *testing.T) {
 	before := validConfig()
 	after := validConfig()
@@ -120,6 +231,97 @@ func TestDiffFullyRedactsOpaqueDatabaseURLs(t *testing.T) {
 	}
 	if !strings.Contains(output, `"path":"database_url"`) || strings.Count(output, "[REDACTED]") < 2 {
 		t.Fatalf("config diff omitted opaque database redaction:\n%s", output)
+	}
+}
+
+func TestDiffRedactsPricingAndSignerEndpointURLsWithoutHidingChanges(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	before.Pricing.BinanceBaseURL = "https://before-user:before-password@before-binance.example/v1/before-path?api_key=before-query#before-fragment"
+	after.Pricing.BinanceBaseURL = "https://after-user:after-password@after-binance.example/v2/after-path?api_key=after-query#after-fragment"
+	before.Pricing.CoinMarketCapBaseURL = "before-token://before-coinmarketcap.example/before-secret"
+	after.Pricing.CoinMarketCapBaseURL = "after-token:after-opaque-secret"
+	before.Pricing.CoinGeckoBaseURL = "https://before-coingecko.example/before-token"
+	after.Pricing.CoinGeckoBaseURL = "https://after-coingecko.example/after-token"
+	signerID := config.MustEVMAddress("0x9999999999999999999999999999999999999999")
+	before.Signers = []config.SignerConfig{
+		{
+			ID:   signerID,
+			Type: "kms",
+			KMS: config.KMSSignerConfig{
+				KeyID:    "approved-key",
+				Region:   "us-east-1",
+				Address:  signerID,
+				Endpoint: "https://before-kms-user:before-kms-password@before-kms.example/before-kms-path?token=before-kms-query",
+			},
+		},
+	}
+	after.Signers = []config.SignerConfig{
+		{
+			ID:   signerID,
+			Type: "kms",
+			KMS: config.KMSSignerConfig{
+				KeyID:    "approved-key",
+				Region:   "us-east-1",
+				Address:  signerID,
+				Endpoint: "https://after-kms-user:after-kms-password@after-kms.example/after-kms-path?token=after-kms-query",
+			},
+		},
+	}
+
+	changes := Diff(before, after)
+	encoded, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	output := string(encoded) + RenderText(changes)
+	for _, secret := range []string{
+		"before-user", "before-password", "before-binance", "before-path", "before-query", "before-fragment",
+		"after-user", "after-password", "after-binance", "after-path", "after-query", "after-fragment",
+		"before-token", "before-coinmarketcap", "before-secret", "after-token", "after-opaque-secret",
+		"before-coingecko", "before-token", "after-coingecko", "after-token",
+		"before-kms-user", "before-kms-password", "before-kms", "before-kms-path", "before-kms-query",
+		"after-kms-user", "after-kms-password", "after-kms", "after-kms-path", "after-kms-query",
+	} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("config diff leaked %q:\n%s", secret, output)
+		}
+	}
+	for _, path := range []string{
+		`"path":"pricing"`,
+		`"path":"signers[0x9999999999999999999999999999999999999999]"`,
+	} {
+		if !strings.Contains(output, path) {
+			t.Fatalf("config diff omitted redacted change %s:\n%s", path, output)
+		}
+	}
+	if !strings.Contains(output, "https://[REDACTED]") || !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("config diff missing endpoint redaction markers:\n%s", output)
+	}
+}
+
+func TestEndpointURLRedactionUsesContextSpecificSchemeAllowLists(t *testing.T) {
+	tests := []struct {
+		name   string
+		redact func(string) string
+		raw    string
+		want   string
+	}{
+		{name: "http endpoint", redact: redactHTTPURL, raw: "https://user:password@secret.example/private", want: "https://[REDACTED]"},
+		{name: "http rejects websocket", redact: redactHTTPURL, raw: "wss://secret.example/private", want: "[REDACTED]"},
+		{name: "http rejects unknown scheme", redact: redactHTTPURL, raw: "secret-token://example.com", want: "[REDACTED]"},
+		{name: "http rejects opaque URL", redact: redactHTTPURL, raw: "https:secret-token", want: "[REDACTED]"},
+		{name: "http rejects missing host", redact: redactHTTPURL, raw: "https:///secret-token", want: "[REDACTED]"},
+		{name: "rpc websocket endpoint", redact: redactRPCURL, raw: "wss://user:password@secret.example/private", want: "wss://[REDACTED]"},
+		{name: "empty endpoint", redact: redactHTTPURL, raw: "", want: ""},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.redact(test.raw); got != test.want {
+				t.Fatalf("redact(%q) = %q, want %q", test.raw, got, test.want)
+			}
+		})
 	}
 }
 

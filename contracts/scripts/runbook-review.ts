@@ -67,6 +67,8 @@ const requiredDocs: RequiredDoc[] = [
     anchors: [
       "go run ./go/cmd/configdiff",
       "-fail-on-diff",
+      "Pricing market-data BaseURLs and signer KMS endpoints",
+      "Confirm `tx_manager.stale_broadcast_replacement_after_seconds` changes are intentional.",
       "Confirm signer changes are expected and do not point to unapproved keys.",
       "For DVN migration, confirm each proposed pathway still uses `pathways[].dvn.mode: shadow` until the explicit active-mode change is approved.",
     ],

@@ -59,18 +59,18 @@ func (c *BinanceClient) PriceUSD(ctx context.Context, symbol string) (SourcePric
 	}
 	endpoint, err := url.Parse(c.baseURL + "/api/v3/ticker/price")
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("binance", "build", err)
 	}
 	query := endpoint.Query()
 	query.Set("symbol", strings.ToUpper(symbol))
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("binance", "build", err)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("binance", "execute", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {

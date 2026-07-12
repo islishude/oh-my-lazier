@@ -83,7 +83,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, symbol string) (Sour
 	}
 	endpoint, err := url.Parse(c.baseURL + "/v2/cryptocurrency/quotes/latest")
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coinmarketcap", "build", err)
 	}
 	query := endpoint.Query()
 	query.Set("symbol", strings.ToUpper(symbol))
@@ -91,14 +91,14 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, symbol string) (Sour
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coinmarketcap", "build", err)
 	}
 	if c.apiKey != "" {
 		request.Header.Set("X-CMC_PRO_API_KEY", c.apiKey)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coinmarketcap", "execute", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
@@ -162,7 +162,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	endpoint, err := url.Parse(c.baseURL + "/api/v3/simple/price")
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coingecko", "build", err)
 	}
 	query := endpoint.Query()
 	query.Set("ids", coinID)
@@ -170,11 +170,11 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coingecko", "build", err)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return SourcePrice{}, err
+		return SourcePrice{}, wrapPriceSourceRequestError("coingecko", "execute", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {

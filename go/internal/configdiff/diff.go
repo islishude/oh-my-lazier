@@ -24,11 +24,20 @@ func Diff(before, after config.Config) []Change {
 	compareRedactedURL(&changes, "database_url", before.DatabaseURL, after.DatabaseURL, redactDatabaseURL)
 	compare(&changes, "metrics", before.Metrics, after.Metrics)
 	compare(&changes, "services", services(before), services(after))
-	compare(&changes, "pricing", pricingGlobal(before.Pricing), pricingGlobal(after.Pricing))
+	compare(&changes, "tx_manager", before.TxManager, after.TxManager)
+	compareProjected(&changes, "pricing", pricingGlobal(before.Pricing), pricingGlobal(after.Pricing), redactPricingGlobal)
 	diffMaps(&changes, "pricing.chains", pricingChains(before.Pricing.Chains), pricingChains(after.Pricing.Chains))
+	diffMapsProjected(&changes, "signers", signers(before.Signers), signers(after.Signers), redactSigner)
 	diffMapsProjected(&changes, "chains", chains(before.Chains), chains(after.Chains), redactChain)
 	diffMaps(&changes, "pathways", pathways(before.Pathways), pathways(after.Pathways))
 	return changes
+}
+
+func compareProjected[T any](changes *[]Change, path string, before, after T, project func(T) T) {
+	if reflect.DeepEqual(before, after) {
+		return
+	}
+	*changes = append(*changes, Change{Path: path, Before: project(before), After: project(after)})
 }
 
 func diffMapsProjected[T any](changes *[]Change, prefix string, before, after map[string]T, project func(T) T) {
@@ -123,6 +132,19 @@ func chains(items []config.ChainConfig) map[string]config.ChainConfig {
 	return result
 }
 
+func signers(items []config.SignerConfig) map[string]config.SignerConfig {
+	result := make(map[string]config.SignerConfig, len(items))
+	for _, item := range items {
+		result[item.ID.Hex()] = item
+	}
+	return result
+}
+
+func redactSigner(item config.SignerConfig) config.SignerConfig {
+	item.KMS.Endpoint = redactHTTPURL(item.KMS.Endpoint)
+	return item
+}
+
 func redactChain(item config.ChainConfig) config.ChainConfig {
 	item.RPCURLs = append([]string(nil), item.RPCURLs...)
 	for index, rpcURL := range item.RPCURLs {
@@ -157,11 +179,28 @@ func safePostgresSSLMode(value string) bool {
 }
 
 func redactRPCURL(raw string) string {
+	return redactEndpointURL(raw, "http", "https", "ws", "wss")
+}
+
+func redactHTTPURL(raw string) string {
+	return redactEndpointURL(raw, "http", "https")
+}
+
+func redactEndpointURL(raw string, allowedSchemes ...string) string {
+	if raw == "" {
+		return ""
+	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme == "" {
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.Opaque != "" {
 		return "[REDACTED]"
 	}
-	return parsed.Scheme + "://[REDACTED]"
+	scheme := strings.ToLower(parsed.Scheme)
+	for _, allowed := range allowedSchemes {
+		if scheme == allowed {
+			return scheme + "://[REDACTED]"
+		}
+	}
+	return "[REDACTED]"
 }
 
 func pathways(items []config.PathwayConfig) map[string]config.PathwayConfig {
@@ -227,6 +266,13 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		CoinMarketCapAPIKeyEnv:  pricing.CoinMarketCapAPIKeyEnv,
 		CoinGeckoBaseURL:        pricing.CoinGeckoBaseURL,
 	}
+}
+
+func redactPricingGlobal(pricing pricingConfigGlobal) pricingConfigGlobal {
+	pricing.BinanceBaseURL = redactHTTPURL(pricing.BinanceBaseURL)
+	pricing.CoinMarketCapBaseURL = redactHTTPURL(pricing.CoinMarketCapBaseURL)
+	pricing.CoinGeckoBaseURL = redactHTTPURL(pricing.CoinGeckoBaseURL)
+	return pricing
 }
 
 func jsonValue(value any) string {

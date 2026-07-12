@@ -3,9 +3,13 @@ package pricing
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
@@ -100,6 +104,81 @@ func TestCoinGeckoClientPriceUSD(t *testing.T) {
 	}
 }
 
+func TestMarketDataClientTransportErrorsRedactConfiguredBaseURL(t *testing.T) {
+	secretBaseURL := "https://pricing-user:pricing-password@pricing-secret.example/private-api-key"
+	transportCause := errors.New("transport cause")
+	httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("transport failed for %s: %w", request.URL.String(), transportCause)
+	})}
+	tests := []struct {
+		name   string
+		source string
+		price  func() error
+	}{
+		{
+			name:   "binance",
+			source: "binance",
+			price: func() error {
+				_, err := NewBinanceClient(secretBaseURL, httpClient).PriceUSD(context.Background(), "ETHUSDT")
+				return err
+			},
+		},
+		{
+			name:   "coinmarketcap",
+			source: "coinmarketcap",
+			price: func() error {
+				client, err := NewCoinMarketCapClient(secretBaseURL, "", httpClient)
+				if err != nil {
+					return err
+				}
+				_, err = client.PriceUSD(context.Background(), "ETH")
+				return err
+			},
+		},
+		{
+			name:   "coingecko",
+			source: "coingecko",
+			price: func() error {
+				_, err := NewCoinGeckoClient(secretBaseURL, httpClient).PriceUSD(context.Background(), "ethereum")
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.price()
+			if err == nil {
+				t.Fatal("PriceUSD() error = nil, want transport error")
+			}
+			if !errors.Is(err, transportCause) {
+				t.Fatalf("errors.Is(%v, transportCause) = false", err)
+			}
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			logger.Error("pricing request failed", "error", err)
+			output := err.Error() + logs.String()
+			for _, secret := range []string{
+				secretBaseURL,
+				"pricing-user",
+				"pricing-password",
+				"pricing-secret.example",
+				"private-api-key",
+				"transport failed",
+			} {
+				if strings.Contains(output, secret) {
+					t.Fatalf("pricing error leaked %q: %s", secret, output)
+				}
+			}
+			for _, want := range []string{test.source, "price request execute failed"} {
+				if !strings.Contains(output, want) {
+					t.Fatalf("pricing error = %q, want %q", output, want)
+				}
+			}
+		})
+	}
+}
+
 func TestUniswapV3ClientPriceUSD(t *testing.T) {
 	amountOut := new(big.Int).Mul(big.NewInt(2000), big.NewInt(1_000_000))
 	method := uniswapV3QuoterABI.Methods["quoteExactInputSingle"]
@@ -161,6 +240,12 @@ type fakeCaller struct {
 	to       *common.Address
 	data     []byte
 	response []byte
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func (c *fakeCaller) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
