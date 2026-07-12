@@ -101,6 +101,28 @@ func TestDiffRedactsDatabaseAndRPCURLCredentials(t *testing.T) {
 	}
 }
 
+func TestDiffFullyRedactsOpaqueDatabaseURLs(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	before.DatabaseURL = "postgres:before-secret-token"
+	after.DatabaseURL = "postgres:after-secret-token"
+
+	changes := Diff(before, after)
+	encoded, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	output := string(encoded) + RenderText(changes)
+	for _, secret := range []string{"before-secret-token", "after-secret-token"} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("config diff leaked opaque database value %q:\n%s", secret, output)
+		}
+	}
+	if !strings.Contains(output, `"path":"database_url"`) || strings.Count(output, "[REDACTED]") < 2 {
+		t.Fatalf("config diff omitted opaque database redaction:\n%s", output)
+	}
+}
+
 func validConfig() config.Config {
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",

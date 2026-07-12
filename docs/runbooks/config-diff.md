@@ -9,7 +9,8 @@ values. A credential-only change still appears at `database_url` or the
 corresponding `chains[eid]` path, but its before/after values use redaction
 markers so archived review artifacts do not retain passwords or RPC API keys.
 The database URL retains a validated `sslmode` value so TLS policy changes remain
-visible during review; all other database query values are omitted.
+visible during review; all other database query values are omitted. Malformed or
+opaque database URLs are represented only as `[REDACTED]`.
 
 Text review:
 

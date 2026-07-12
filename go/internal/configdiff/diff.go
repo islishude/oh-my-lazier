@@ -133,7 +133,7 @@ func redactChain(item config.ChainConfig) config.ChainConfig {
 
 func redactDatabaseURL(raw string) string {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme == "" {
+	if err != nil || parsed.Scheme == "" || parsed.Opaque != "" {
 		return "[REDACTED]"
 	}
 	redactedQuery := url.Values{}

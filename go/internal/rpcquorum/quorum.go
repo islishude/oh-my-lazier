@@ -43,18 +43,54 @@ const (
 	ProviderConflict ProviderStatus = "conflict"
 )
 
-// Provider describes one configured RPC endpoint and its current health status.
+// Provider describes one redacted RPC provider identity and its current health status.
 type Provider struct {
-	URL    string
+	ID     string
 	Status ProviderStatus
+}
+
+type configuredProvider struct {
+	url    string
+	status ProviderStatus
 	client *ethclient.Client
+}
+
+type providerOperationError struct {
+	providerID string
+	operation  string
+	cause      error
+}
+
+func (e *providerOperationError) Error() string {
+	if e == nil {
+		return "rpc provider operation failed"
+	}
+	return fmt.Sprintf("%s %s failed", e.providerID, e.operation)
+}
+
+func (e *providerOperationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func providerID(index int) string {
+	return fmt.Sprintf("provider[%d]", index)
+}
+
+func wrapProviderOperationError(index int, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &providerOperationError{providerID: providerID(index), operation: operation, cause: err}
 }
 
 // Client coordinates multiple RPC providers for one chain.
 type Client struct {
 	chainName string
 	mu        sync.Mutex
-	providers []Provider
+	providers []configuredProvider
 }
 
 // HeadResult is the canonical head selected by quorum checks.
@@ -144,9 +180,9 @@ func IsChainIDMismatch(err error) bool {
 
 // New constructs a quorum client from configured RPC URLs.
 func New(chainName string, urls []string) *Client {
-	providers := make([]Provider, 0, len(urls))
+	providers := make([]configuredProvider, 0, len(urls))
 	for _, url := range urls {
-		providers = append(providers, Provider{URL: url, Status: ProviderHealthy})
+		providers = append(providers, configuredProvider{url: url, status: ProviderHealthy})
 	}
 	return &Client{chainName: chainName, providers: providers}
 }
@@ -156,9 +192,8 @@ func (c *Client) Providers() []Provider {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	out := make([]Provider, len(c.providers))
-	copy(out, c.providers)
-	for i := range out {
-		out[i].client = nil
+	for index, provider := range c.providers {
+		out[index] = Provider{ID: providerID(index), Status: provider.status}
 	}
 	return out
 }
@@ -182,17 +217,17 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	}
 	heads := make([]providerHead, 0, len(c.providers))
 	var transientErrs []error
-	for index, provider := range c.snapshotProviders() {
+	for index := range c.snapshotProviders() {
 		header, err := c.headerByNumberFromProvider(ctx, index, nil)
 		if err != nil {
-			transientErrs = append(transientErrs, fmt.Errorf("%s: %w", provider.URL, err))
+			transientErrs = append(transientErrs, err)
 			continue
 		}
 		if header == nil || header.Number == nil {
-			transientErrs = append(transientErrs, fmt.Errorf("%s: latest header is missing number", provider.URL))
+			transientErrs = append(transientErrs, fmt.Errorf("%s latest header is missing number", providerID(index)))
 			continue
 		}
-		heads = append(heads, providerHead{URL: provider.URL, Number: header.Number, Hash: header.Hash()})
+		heads = append(heads, providerHead{Index: index, Number: header.Number, Hash: header.Hash()})
 	}
 	result, err := selectCanonicalHead(c.chainName, heads)
 	if err != nil {
@@ -216,7 +251,8 @@ func (c *Client) CallContract(ctx context.Context, call ethereum.CallMsg, blockN
 	if err != nil {
 		return nil, err
 	}
-	return client.CallContract(ctx, call, blockNumber)
+	result, err := client.CallContract(ctx, call, blockNumber)
+	return result, wrapProviderOperationError(index, "eth_call", err)
 }
 
 // BlockNumber returns the latest block number from the first currently healthy provider.
@@ -229,7 +265,8 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return client.BlockNumber(ctx)
+	result, err := client.BlockNumber(ctx)
+	return result, wrapProviderOperationError(index, "eth_blockNumber", err)
 }
 
 // ChainID returns the first healthy provider's native EVM chain ID.
@@ -238,11 +275,7 @@ func (c *Client) ChainID(ctx context.Context) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := c.providerClient(ctx, index)
-	if err != nil {
-		return nil, err
-	}
-	return client.ChainID(ctx)
+	return c.chainIDFromProvider(ctx, index)
 }
 
 // BalanceAt returns the first healthy provider's native token balance for an account.
@@ -255,7 +288,8 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, blockNum
 	if err != nil {
 		return nil, err
 	}
-	return client.BalanceAt(ctx, account, blockNumber)
+	result, err := client.BalanceAt(ctx, account, blockNumber)
+	return result, wrapProviderOperationError(index, "eth_getBalance", err)
 }
 
 // ValidateChainID verifies every configured provider reports the expected EVM chain ID.
@@ -270,13 +304,12 @@ func (c *Client) ValidateChainID(ctx context.Context, expected *big.Int) error {
 	ids := make([]providerChainID, 0, len(providers))
 	var providerErrs []error
 	for index := range providers {
-		providerLabel := fmt.Sprintf("provider[%d]", index)
 		chainID, err := c.chainIDFromProvider(ctx, index)
 		if err != nil {
-			providerErrs = append(providerErrs, fmt.Errorf("%s chain_id request failed", providerLabel))
+			providerErrs = append(providerErrs, err)
 			continue
 		}
-		ids = append(ids, providerChainID{URL: providerLabel, ChainID: chainID})
+		ids = append(ids, providerChainID{ProviderID: providerID(index), ChainID: chainID})
 	}
 	if len(providerErrs) > 0 {
 		return errors.Join(providerErrs...)
@@ -294,7 +327,8 @@ func (c *Client) CodeAt(ctx context.Context, account common.Address, blockNumber
 	if err != nil {
 		return nil, err
 	}
-	return client.CodeAt(ctx, account, blockNumber)
+	result, err := client.CodeAt(ctx, account, blockNumber)
+	return result, wrapProviderOperationError(index, "eth_getCode", err)
 }
 
 // EstimateGas returns the first healthy provider's gas limit estimate.
@@ -307,7 +341,8 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 	if err != nil {
 		return 0, err
 	}
-	return client.EstimateGas(ctx, call)
+	result, err := client.EstimateGas(ctx, call)
+	return result, wrapProviderOperationError(index, "eth_estimateGas", err)
 }
 
 // FilterLogs returns logs from the first currently healthy provider for a bounded query.
@@ -320,7 +355,8 @@ func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]
 	if err != nil {
 		return nil, err
 	}
-	return client.FilterLogs(ctx, query)
+	result, err := client.FilterLogs(ctx, query)
+	return result, wrapProviderOperationError(index, "eth_getLogs", err)
 }
 
 // SuggestGasPrice returns the first healthy provider's legacy gas price estimate.
@@ -333,7 +369,8 @@ func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.SuggestGasPrice(ctx)
+	result, err := client.SuggestGasPrice(ctx)
+	return result, wrapProviderOperationError(index, "eth_gasPrice", err)
 }
 
 // SuggestGasTipCap returns the first healthy provider's EIP-1559 priority-fee estimate.
@@ -346,7 +383,8 @@ func (c *Client) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	return client.SuggestGasTipCap(ctx)
+	result, err := client.SuggestGasTipCap(ctx)
+	return result, wrapProviderOperationError(index, "eth_maxPriorityFeePerGas", err)
 }
 
 // HeaderByNumber returns a block header from the first currently healthy provider.
@@ -368,7 +406,8 @@ func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (ui
 	if err != nil {
 		return 0, err
 	}
-	return client.PendingNonceAt(ctx, account)
+	result, err := client.PendingNonceAt(ctx, account)
+	return result, wrapProviderOperationError(index, "eth_getTransactionCount", err)
 }
 
 // SendTransaction broadcasts a signed transaction through the first healthy provider.
@@ -381,40 +420,42 @@ func (c *Client) SendTransaction(ctx context.Context, tx *gethtypes.Transaction)
 	if err != nil {
 		return err
 	}
-	return client.SendTransaction(ctx, tx)
+	return wrapProviderOperationError(index, "eth_sendRawTransaction", client.SendTransaction(ctx, tx))
 }
 
 // TransactionReceipt returns a receipt only when healthy providers agree on the receipt.
 func (c *Client) TransactionReceipt(ctx context.Context, txHash common.Hash) (*gethtypes.Receipt, error) {
 	var canonical *gethtypes.Receipt
 	var canonicalFingerprint string
+	canonicalProviderIndex := -1
 	var transientErrs []error
 	var notFoundProviders []string
 	for index, provider := range c.snapshotProviders() {
-		if provider.Status != ProviderHealthy {
+		if provider.status != ProviderHealthy {
 			continue
 		}
 		receipt, err := c.transactionReceiptFromProvider(ctx, index, txHash)
 		if err != nil {
 			if errors.Is(err, ethereum.NotFound) {
-				notFoundProviders = append(notFoundProviders, provider.URL)
+				notFoundProviders = append(notFoundProviders, providerID(index))
 				continue
 			}
-			transientErrs = append(transientErrs, fmt.Errorf("%s: %w", provider.URL, err))
+			transientErrs = append(transientErrs, err)
 			continue
 		}
 		fingerprint := receiptFingerprint(receipt)
 		if canonical == nil {
 			canonical = receipt
 			canonicalFingerprint = fingerprint
+			canonicalProviderIndex = index
 			continue
 		}
 		if fingerprint != canonicalFingerprint {
 			return nil, &ReceiptConflictError{
 				TxHash: txHash,
 				Details: []string{
-					fmt.Sprintf("provider %s returned %s", provider.URL, fingerprint),
-					fmt.Sprintf("canonical %s", canonicalFingerprint),
+					fmt.Sprintf("%s returned %s", providerID(index), fingerprint),
+					fmt.Sprintf("%s returned %s", providerID(canonicalProviderIndex), canonicalFingerprint),
 				},
 			}
 		}
@@ -442,7 +483,8 @@ func (c *Client) transactionReceiptFromProvider(ctx context.Context, index int, 
 	if err != nil {
 		return nil, err
 	}
-	return client.TransactionReceipt(ctx, txHash)
+	receipt, err := client.TransactionReceipt(ctx, txHash)
+	return receipt, wrapProviderOperationError(index, "eth_getTransactionReceipt", err)
 }
 
 func (c *Client) chainIDFromProvider(ctx context.Context, index int) (*big.Int, error) {
@@ -450,7 +492,8 @@ func (c *Client) chainIDFromProvider(ctx context.Context, index int) (*big.Int, 
 	if err != nil {
 		return nil, err
 	}
-	return client.ChainID(ctx)
+	chainID, err := client.ChainID(ctx)
+	return chainID, wrapProviderOperationError(index, "eth_chainId", err)
 }
 
 func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, number *big.Int) (*gethtypes.Header, error) {
@@ -458,24 +501,25 @@ func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, numb
 	if err != nil {
 		return nil, err
 	}
-	return client.HeaderByNumber(ctx, number)
+	header, err := client.HeaderByNumber(ctx, number)
+	return header, wrapProviderOperationError(index, "eth_getBlockByNumber", err)
 }
 
 func (c *Client) firstHealthyProvider() (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for index, provider := range c.providers {
-		if provider.Status == ProviderHealthy {
+		if provider.status == ProviderHealthy {
 			return index, nil
 		}
 	}
 	return 0, errors.New("no healthy rpc providers configured")
 }
 
-func (c *Client) snapshotProviders() []Provider {
+func (c *Client) snapshotProviders() []configuredProvider {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]Provider, len(c.providers))
+	out := make([]configuredProvider, len(c.providers))
 	copy(out, c.providers)
 	return out
 }
@@ -491,12 +535,12 @@ func (c *Client) providerClient(ctx context.Context, index int) (*ethclient.Clie
 		c.mu.Unlock()
 		return client, nil
 	}
-	url := c.providers[index].URL
+	url := c.providers[index].url
 	c.mu.Unlock()
 
 	client, err := ethclient.DialContext(ctx, url)
 	if err != nil {
-		return nil, err
+		return nil, wrapProviderOperationError(index, "connect", err)
 	}
 
 	c.mu.Lock()
@@ -513,15 +557,14 @@ func (c *Client) updateHeadProviderStatuses(heads []providerHead, canonical Head
 	if c == nil {
 		return
 	}
-	statusByURL := classifyHeadProviderStatuses(heads, canonical)
+	statusByIndex := classifyHeadProviderStatuses(heads, canonical)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for index, provider := range c.providers {
-		status, ok := statusByURL[provider.URL]
-		if !ok {
+	for index, status := range statusByIndex {
+		if index < 0 || index >= len(c.providers) {
 			continue
 		}
-		c.providers[index].Status = status
+		c.providers[index].status = status
 	}
 }
 
@@ -567,14 +610,14 @@ func receiptFingerprint(receipt *gethtypes.Receipt) string {
 }
 
 type providerHead struct {
-	URL    string
+	Index  int
 	Number *big.Int
 	Hash   common.Hash
 }
 
 type providerChainID struct {
-	URL     string
-	ChainID *big.Int
+	ProviderID string
+	ChainID    *big.Int
 }
 
 func validateProviderChainIDs(chainName string, expected *big.Int, ids []providerChainID) error {
@@ -588,9 +631,9 @@ func validateProviderChainIDs(chainName string, expected *big.Int, ids []provide
 	for _, item := range ids {
 		switch {
 		case item.ChainID == nil:
-			details = append(details, fmt.Sprintf("provider %s returned <nil>", item.URL))
+			details = append(details, fmt.Sprintf("%s returned <nil>", item.ProviderID))
 		case item.ChainID.Cmp(expected) != 0:
-			details = append(details, fmt.Sprintf("provider %s returned %s", item.URL, item.ChainID))
+			details = append(details, fmt.Sprintf("%s returned %s", item.ProviderID, item.ChainID))
 		}
 	}
 	if len(details) > 0 {
@@ -610,7 +653,7 @@ func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, er
 	var canonical providerHead
 	for _, head := range heads {
 		if head.Number == nil {
-			return HeadResult{}, fmt.Errorf("provider %s returned head without number", head.URL)
+			return HeadResult{}, fmt.Errorf("%s returned head without number", providerID(head.Index))
 		}
 		if canonical.Number == nil || head.Number.Cmp(canonical.Number) > 0 {
 			canonical = head
@@ -621,8 +664,8 @@ func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, er
 				ChainName: chainName,
 				Number:    new(big.Int).Set(head.Number),
 				Details: []string{
-					fmt.Sprintf("provider %s returned %s", head.URL, head.Hash),
-					fmt.Sprintf("provider %s returned %s", canonical.URL, canonical.Hash),
+					fmt.Sprintf("%s returned %s", providerID(head.Index), head.Hash),
+					fmt.Sprintf("%s returned %s", providerID(canonical.Index), canonical.Hash),
 				},
 			}
 		}
@@ -633,8 +676,8 @@ func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, er
 				ChainName: chainName,
 				Number:    new(big.Int).Set(head.Number),
 				Details: []string{
-					fmt.Sprintf("provider %s returned %s", head.URL, head.Hash),
-					fmt.Sprintf("provider %s returned %s", canonical.URL, canonical.Hash),
+					fmt.Sprintf("%s returned %s", providerID(head.Index), head.Hash),
+					fmt.Sprintf("%s returned %s", providerID(canonical.Index), canonical.Hash),
 				},
 			}
 		}
@@ -642,8 +685,8 @@ func selectCanonicalHead(chainName string, heads []providerHead) (HeadResult, er
 	return HeadResult{Number: new(big.Int).Set(canonical.Number), Hash: canonical.Hash.Hex()}, nil
 }
 
-func classifyHeadProviderStatuses(heads []providerHead, canonical HeadResult) map[string]ProviderStatus {
-	statuses := make(map[string]ProviderStatus, len(heads))
+func classifyHeadProviderStatuses(heads []providerHead, canonical HeadResult) map[int]ProviderStatus {
+	statuses := make(map[int]ProviderStatus, len(heads))
 	if len(heads) == 0 {
 		return statuses
 	}
@@ -654,13 +697,13 @@ func classifyHeadProviderStatuses(heads []providerHead, canonical HeadResult) ma
 			}
 			switch {
 			case head.Number.Cmp(canonical.Number) < 0:
-				statuses[head.URL] = ProviderLagging
+				statuses[head.Index] = ProviderLagging
 			case head.Number.Cmp(canonical.Number) == 0 && head.Hash.Hex() == canonical.Hash:
-				statuses[head.URL] = ProviderHealthy
+				statuses[head.Index] = ProviderHealthy
 			case head.Number.Cmp(canonical.Number) == 0:
-				statuses[head.URL] = ProviderConflict
+				statuses[head.Index] = ProviderConflict
 			default:
-				statuses[head.URL] = ProviderHealthy
+				statuses[head.Index] = ProviderHealthy
 			}
 		}
 		return statuses
@@ -685,14 +728,14 @@ func classifyHeadProviderStatuses(heads []providerHead, canonical HeadResult) ma
 			continue
 		}
 		if head.Number.Cmp(maxNumber) < 0 {
-			statuses[head.URL] = ProviderLagging
+			statuses[head.Index] = ProviderLagging
 			continue
 		}
 		if len(hashesAtMax) > 1 {
-			statuses[head.URL] = ProviderConflict
+			statuses[head.Index] = ProviderConflict
 			continue
 		}
-		statuses[head.URL] = ProviderHealthy
+		statuses[head.Index] = ProviderHealthy
 	}
 	return statuses
 }

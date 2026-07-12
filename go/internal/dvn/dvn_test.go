@@ -695,6 +695,19 @@ func TestProcessQuorumOnceMarksConflictOnRPCDisagreement(t *testing.T) {
 	if !strings.Contains(store.conflictReason, "rpc receipt quorum conflict") {
 		t.Fatalf("conflict reason = %q, want rpc receipt quorum conflict", store.conflictReason)
 	}
+	if !strings.Contains(store.conflictReason, "provider[0]") || !strings.Contains(store.conflictReason, "provider[1]") {
+		t.Fatalf("conflict reason = %q, want redacted provider identities", store.conflictReason)
+	}
+	var persisted map[string]string
+	if err := json.Unmarshal(store.quorumResult, &persisted); err != nil {
+		t.Fatalf("Unmarshal(quorum result) error = %v", err)
+	}
+	if persisted["error"] != store.conflictReason {
+		t.Fatalf("persisted error = %q, want %q", persisted["error"], store.conflictReason)
+	}
+	if strings.Contains(store.conflictReason, "://") || strings.Contains(string(store.quorumResult), "://") {
+		t.Fatalf("persisted conflict contains raw provider URL: reason=%q result=%s", store.conflictReason, store.quorumResult)
+	}
 	if store.pausedPathwayGUID != packet.GUID {
 		t.Fatalf("paused pathway guid = %s, want %s", store.pausedPathwayGUID, packet.GUID)
 	}
@@ -1018,7 +1031,7 @@ type fakeReceiptConflictReader struct {
 func (r fakeReceiptConflictReader) TransactionReceipt(context.Context, common.Hash) (*gethtypes.Receipt, error) {
 	return nil, &rpcquorum.ReceiptConflictError{
 		TxHash:  r.txHash,
-		Details: []string{"provider a disagrees with provider b"},
+		Details: []string{"provider[0] returned receipt-a", "provider[1] returned receipt-b"},
 	}
 }
 

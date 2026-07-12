@@ -469,6 +469,17 @@ func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing
 	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
 }
 
+func TestIsEstimateGasRevertChecksRedactedErrorCause(t *testing.T) {
+	cause := fakeRPCError{message: "execution reverted: denied", code: -32000}
+	err := redactedProviderError{cause: cause}
+	if err.Error() != "provider[0] eth_estimateGas failed" {
+		t.Fatalf("error = %q, want redacted provider error", err)
+	}
+	if !isEstimateGasRevert(err) {
+		t.Fatal("isEstimateGasRevert() = false, want wrapped revert classification")
+	}
+}
+
 func TestProcessNextLegacyGasPriceFailuresLeaveOutboxQueued(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -2465,6 +2476,31 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 type fakeRPCDataError struct {
 	message string
 	data    any
+}
+
+type fakeRPCError struct {
+	message string
+	code    int
+}
+
+func (e fakeRPCError) Error() string {
+	return e.message
+}
+
+func (e fakeRPCError) ErrorCode() int {
+	return e.code
+}
+
+type redactedProviderError struct {
+	cause error
+}
+
+func (e redactedProviderError) Error() string {
+	return "provider[0] eth_estimateGas failed"
+}
+
+func (e redactedProviderError) Unwrap() error {
+	return e.cause
 }
 
 func (e fakeRPCDataError) Error() string {

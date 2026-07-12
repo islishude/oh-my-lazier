@@ -577,7 +577,16 @@ func isEstimateGasRevert(err error) bool {
 	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == 3 {
 		return true
 	}
-	return containsRevertText(err.Error())
+	return errorChainContainsRevertText(err)
+}
+
+func errorChainContainsRevertText(err error) bool {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if containsRevertText(current.Error()) {
+			return true
+		}
+	}
+	return false
 }
 
 func isRevertErrorData(data any) bool {
