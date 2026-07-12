@@ -231,7 +231,6 @@ type pricingConfigGlobal struct {
 	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
 	MaxPriorityFeePerGasWei string `json:"max_priority_fee_per_gas_wei"`
 	MinNativeBalanceWei     string `json:"min_native_balance_wei"`
-	BinanceBaseURL          string `json:"binance_base_url"`
 	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
 	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
 	CoinGeckoBaseURL        string `json:"coingecko_base_url"`
@@ -261,7 +260,6 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		MaxFeePerGasWei:         pricing.MaxFeePerGasWei,
 		MaxPriorityFeePerGasWei: pricing.MaxPriorityFeePerGasWei,
 		MinNativeBalanceWei:     pricing.MinNativeBalanceWei,
-		BinanceBaseURL:          pricing.BinanceBaseURL,
 		CoinMarketCapBaseURL:    pricing.CoinMarketCapBaseURL,
 		CoinMarketCapAPIKeyEnv:  pricing.CoinMarketCapAPIKeyEnv,
 		CoinGeckoBaseURL:        pricing.CoinGeckoBaseURL,
@@ -269,7 +267,6 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 }
 
 func redactPricingGlobal(pricing pricingConfigGlobal) pricingConfigGlobal {
-	pricing.BinanceBaseURL = redactHTTPURL(pricing.BinanceBaseURL)
 	pricing.CoinMarketCapBaseURL = redactHTTPURL(pricing.CoinMarketCapBaseURL)
 	pricing.CoinGeckoBaseURL = redactHTTPURL(pricing.CoinGeckoBaseURL)
 	return pricing

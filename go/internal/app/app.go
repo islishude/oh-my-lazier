@@ -353,7 +353,6 @@ func (a *App) priceBotWithSources(store *db.Store, registry *chain.Registry, sou
 }
 
 func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.ChainSources, error) {
-	binanceClient := pricing.NewBinanceClient(a.cfg.Pricing.BinanceBaseURL, http.DefaultClient)
 	var coinMarketCapClient *pricing.CoinMarketCapClient
 	if pricingUsesSource(a.cfg.Pricing.Chains, "coinmarketcap") {
 		var err error
@@ -370,14 +369,6 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 			return nil, err
 		}
 		readers := make(map[string]pricing.PriceReader)
-		usesBinance := pricingChainUsesSource(cfg, "binance")
-		if usesBinance {
-			reader, err := pricing.NewBinancePriceReader(binanceClient, cfg.BinanceSymbol)
-			if err != nil {
-				return nil, err
-			}
-			readers["binance"] = reader
-		}
 		if pricingChainUsesSource(cfg, "coinmarketcap") && coinMarketCapClient != nil {
 			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCapSymbol)
 			if err != nil {

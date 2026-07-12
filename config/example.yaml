@@ -39,10 +39,9 @@ pricing:
     # Uniswap V3 QuoterV2 route.
     # - eid: 40161
     #   native_asset_id: eth
-    #   primary_source: binance
+    #   primary_source: coingecko
     #   sanity_sources:
     #     - uniswap
-    #   binance_symbol: ETHUSDT
     #   coinmarketcap_symbol: ETH
     #   coingecko_id: ethereum
     #   uniswap:

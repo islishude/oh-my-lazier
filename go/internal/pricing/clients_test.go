@@ -16,31 +16,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-func TestBinanceClientPriceUSD(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/ticker/price" {
-			t.Fatalf("path = %s", r.URL.Path)
-		}
-		if r.URL.Query().Get("symbol") != "ETHUSDT" {
-			t.Fatalf("symbol = %s", r.URL.Query().Get("symbol"))
-		}
-		_, _ = w.Write([]byte("{\"symbol\":\"ETHUSDT\",\"price\":\"2000.125\"}"))
-	}))
-	defer server.Close()
-
-	client := NewBinanceClient(server.URL, server.Client())
-	price, err := client.PriceUSD(context.Background(), "ethusdt")
-	if err != nil {
-		t.Fatalf("PriceUSD() error = %v", err)
-	}
-	if price.Source != "binance" {
-		t.Fatalf("source = %q", price.Source)
-	}
-	if price.USD.Cmp(big.NewRat(16001, 8)) != 0 {
-		t.Fatalf("price = %s, want 2000.125", price.USD)
-	}
-}
-
 func TestCoinMarketCapClientPriceUSD(t *testing.T) {
 	t.Setenv("CMC_API_KEY", "test-key")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -115,14 +90,6 @@ func TestMarketDataClientTransportErrorsRedactConfiguredBaseURL(t *testing.T) {
 		source string
 		price  func() error
 	}{
-		{
-			name:   "binance",
-			source: "binance",
-			price: func() error {
-				_, err := NewBinanceClient(secretBaseURL, httpClient).PriceUSD(context.Background(), "ETHUSDT")
-				return err
-			},
-		},
 		{
 			name:   "coinmarketcap",
 			source: "coinmarketcap",

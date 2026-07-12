@@ -512,7 +512,7 @@ func TestValidateAcceptsCoinMarketCapPrimaryPricing(t *testing.T) {
 	cfg.Pricing.CoinMarketCapAPIKeyEnv = "COINMARKETCAP_API_KEY"
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "coingecko"}
 		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
 	}
 	if err := cfg.Validate(); err != nil {
@@ -525,7 +525,7 @@ func TestValidateRejectsCoinMarketCapPrimaryWithoutAPIKeyEnv(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "coingecko"}
 		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
 	}
 	if err := cfg.Validate(); err == nil {
@@ -548,7 +548,7 @@ func TestValidateAcceptsCoinGeckoPrimaryPricing(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coingecko"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "binance"}
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap"}
 		cfg.Pricing.Chains[i].CoinGeckoID = "ethereum"
 	}
 	if err := cfg.Validate(); err != nil {
@@ -797,9 +797,9 @@ func validPricingConfig() PricingConfig {
 				EID:               40161,
 				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
-				PrimarySource:     "binance",
+				PrimarySource:     "coingecko",
 				SanitySources:     []string{"uniswap"},
-				BinanceSymbol:     "ETHUSDT",
+				CoinGeckoID:       "ethereum",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:          MustEVMAddress("0x2222222222222222222222222222222222222222"),
@@ -813,9 +813,9 @@ func validPricingConfig() PricingConfig {
 				EID:               40449,
 				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
-				PrimarySource:     "binance",
+				PrimarySource:     "coingecko",
 				SanitySources:     []string{"uniswap"},
-				BinanceSymbol:     "ETHUSDT",
+				CoinGeckoID:       "ethereum",
 				Uniswap: UniswapPricingConfig{
 					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),
 					TokenIn:          MustEVMAddress("0x5555555555555555555555555555555555555555"),

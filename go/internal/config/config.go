@@ -151,8 +151,6 @@ type PricingConfig struct {
 	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
 	// MinNativeBalanceWei is the advisory minimum pricing signer gas balance for monitoring.
 	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
-	// BinanceBaseURL optionally overrides the Binance HTTP API endpoint.
-	BinanceBaseURL string `yaml:"binance_base_url"`
 	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTP API endpoint.
 	CoinMarketCapBaseURL string `yaml:"coinmarketcap_base_url"`
 	// CoinMarketCapAPIKeyEnv names the environment variable containing the CoinMarketCap API key.
@@ -187,8 +185,6 @@ type PricingChainConfig struct {
 	PrimarySource string `yaml:"primary_source"`
 	// SanitySources cross-check the primary source for cross-asset pathways and must include uniswap without duplicating the primary.
 	SanitySources []string `yaml:"sanity_sources"`
-	// BinanceSymbol is required when binance is selected as primary or sanity source.
-	BinanceSymbol string `yaml:"binance_symbol"`
 	// CoinMarketCapSymbol is required when coinmarketcap is selected as primary or sanity source.
 	CoinMarketCapSymbol string `yaml:"coinmarketcap_symbol"`
 	// CoinGeckoID is required when coingecko is selected as primary or sanity source.
@@ -744,7 +740,6 @@ func pricingMarketSourceRequirements(pathways []PathwayConfig, pricingChains map
 func pricingChainHasMarketSources(chain PricingChainConfig) bool {
 	return chain.PrimarySource != "" ||
 		len(chain.SanitySources) != 0 ||
-		chain.BinanceSymbol != "" ||
 		chain.CoinMarketCapSymbol != "" ||
 		chain.CoinGeckoID != "" ||
 		!chain.Uniswap.QuoterAddress.IsZero() ||
@@ -790,7 +785,7 @@ func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEn
 
 func validatePrimaryPricingSourceName(eid uint32, source string) error {
 	switch source {
-	case "binance", "coinmarketcap", "coingecko":
+	case "coinmarketcap", "coingecko":
 		return nil
 	case "":
 		return fmt.Errorf("pricing chain %d primary_source is required", eid)
@@ -801,7 +796,7 @@ func validatePrimaryPricingSourceName(eid uint32, source string) error {
 
 func validateSanityPricingSourceName(eid uint32, field, source string) error {
 	switch source {
-	case "binance", "coinmarketcap", "coingecko", "uniswap":
+	case "coinmarketcap", "coingecko", "uniswap":
 		return nil
 	case "":
 		return fmt.Errorf("pricing chain %d %s is required", eid, field)
@@ -812,10 +807,6 @@ func validateSanityPricingSourceName(eid uint32, field, source string) error {
 
 func validateConfiguredPricingSource(chain PricingChainConfig, source, coinMarketCapAPIKeyEnv string) error {
 	switch source {
-	case "binance":
-		if chain.BinanceSymbol == "" {
-			return fmt.Errorf("pricing chain %d binance_symbol is required", chain.EID)
-		}
 	case "coinmarketcap":
 		if coinMarketCapAPIKeyEnv == "" {
 			return fmt.Errorf("pricing chain %d coinmarketcap_api_key_env is required when coinmarketcap is used", chain.EID)

@@ -648,9 +648,9 @@ func testPricingConfig() config.PricingConfig {
 				EID:               40161,
 				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
-				PrimarySource:     "binance",
+				PrimarySource:     "coingecko",
 				SanitySources:     []string{"uniswap"},
-				BinanceSymbol:     "ETHUSDT",
+				CoinGeckoID:       "ethereum",
 				Uniswap: config.UniswapPricingConfig{
 					QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:          config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
@@ -664,9 +664,9 @@ func testPricingConfig() config.PricingConfig {
 				EID:               40449,
 				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
-				PrimarySource:     "binance",
+				PrimarySource:     "coingecko",
 				SanitySources:     []string{"uniswap"},
-				BinanceSymbol:     "ETHUSDT",
+				CoinGeckoID:       "ethereum",
 				Uniswap: config.UniswapPricingConfig{
 					QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 					TokenIn:          config.MustEVMAddress("0x5555555555555555555555555555555555555555"),

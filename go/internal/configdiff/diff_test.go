@@ -237,8 +237,6 @@ func TestDiffFullyRedactsOpaqueDatabaseURLs(t *testing.T) {
 func TestDiffRedactsPricingAndSignerEndpointURLsWithoutHidingChanges(t *testing.T) {
 	before := validConfig()
 	after := validConfig()
-	before.Pricing.BinanceBaseURL = "https://before-user:before-password@before-binance.example/v1/before-path?api_key=before-query#before-fragment"
-	after.Pricing.BinanceBaseURL = "https://after-user:after-password@after-binance.example/v2/after-path?api_key=after-query#after-fragment"
 	before.Pricing.CoinMarketCapBaseURL = "before-token://before-coinmarketcap.example/before-secret"
 	after.Pricing.CoinMarketCapBaseURL = "after-token:after-opaque-secret"
 	before.Pricing.CoinGeckoBaseURL = "https://before-coingecko.example/before-token"
@@ -276,8 +274,6 @@ func TestDiffRedactsPricingAndSignerEndpointURLsWithoutHidingChanges(t *testing.
 	}
 	output := string(encoded) + RenderText(changes)
 	for _, secret := range []string{
-		"before-user", "before-password", "before-binance", "before-path", "before-query", "before-fragment",
-		"after-user", "after-password", "after-binance", "after-path", "after-query", "after-fragment",
 		"before-token", "before-coinmarketcap", "before-secret", "after-token", "after-opaque-secret",
 		"before-coingecko", "before-token", "after-coingecko", "after-token",
 		"before-kms-user", "before-kms-password", "before-kms", "before-kms-path", "before-kms-query",
@@ -345,9 +341,9 @@ func validConfig() config.Config {
 					EID:               40161,
 					NativeAssetID:     "eth",
 					DataFeePerByteWei: "0",
-					PrimarySource:     "binance",
+					PrimarySource:     "coingecko",
 					SanitySources:     []string{"uniswap"},
-					BinanceSymbol:     "ETHUSDT",
+					CoinGeckoID:       "ethereum",
 					Uniswap: config.UniswapPricingConfig{
 						QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 						TokenIn:          config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
@@ -361,9 +357,9 @@ func validConfig() config.Config {
 					EID:               40449,
 					NativeAssetID:     "hoodi-eth",
 					DataFeePerByteWei: "0",
-					PrimarySource:     "binance",
+					PrimarySource:     "coingecko",
 					SanitySources:     []string{"uniswap"},
-					BinanceSymbol:     "ETHUSDT",
+					CoinGeckoID:       "ethereum",
 					Uniswap: config.UniswapPricingConfig{
 						QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 						TokenIn:          config.MustEVMAddress("0x5555555555555555555555555555555555555555"),

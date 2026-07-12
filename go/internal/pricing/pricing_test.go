@@ -9,7 +9,7 @@ import (
 
 func TestSelectPriceRejectsDeviationAboveThreshold(t *testing.T) {
 	_, err := SelectPrice(
-		SourcePrice{Source: "binance", USD: big.NewRat(2000, 1)},
+		SourcePrice{Source: "primary", USD: big.NewRat(2000, 1)},
 		SourcePrice{Source: "uniswap", USD: big.NewRat(2101, 1)},
 		500,
 		true,
@@ -21,7 +21,7 @@ func TestSelectPriceRejectsDeviationAboveThreshold(t *testing.T) {
 
 func TestSelectPriceFallsBackWhenPrimaryUnavailable(t *testing.T) {
 	price, err := SelectPrice(
-		SourcePrice{Source: "binance"},
+		SourcePrice{Source: "primary"},
 		SourcePrice{Source: "uniswap", USD: big.NewRat(2000, 1)},
 		500,
 		true,
@@ -36,7 +36,7 @@ func TestSelectPriceFallsBackWhenPrimaryUnavailable(t *testing.T) {
 
 func TestSelectPriceRejectsFallbackWhenDisabled(t *testing.T) {
 	_, err := SelectPrice(
-		SourcePrice{Source: "binance"},
+		SourcePrice{Source: "primary"},
 		SourcePrice{Source: "uniswap", USD: big.NewRat(2000, 1)},
 		500,
 		false,
