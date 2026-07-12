@@ -4,6 +4,13 @@ Use `go run ./go/cmd/configdiff` before testnet migration changes, DVN joins, ro
 
 The command loads both YAML files with validation and defaults, but without environment overrides. This prevents `DATABASE_URL` or deployment environment variables from hiding file-level drift during review.
 
+Both text and JSON output redact database credentials and complete RPC endpoint
+values. A credential-only change still appears at `database_url` or the
+corresponding `chains[eid]` path, but its before/after values use redaction
+markers so archived review artifacts do not retain passwords or RPC API keys.
+The database URL retains a validated `sslmode` value so TLS policy changes remain
+visible during review; all other database query values are omitted.
+
 Text review:
 
 ```bash

@@ -131,6 +131,22 @@ func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 		job, err := store.GetExecutorJob(ctx, packet.GUID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if pathway, matches := pathwayForPacket(pathways, packet); matches && pathway.Enabled {
+				skipped, skipErr := sourcePacketWasSkipped(ctx, store, sourceRoleExecutor, destinationPacketIdentity{
+					SrcEID:   packet.SrcEID,
+					DstEID:   packet.DstEID,
+					Sender:   packet.Sender,
+					Receiver: packet.Receiver,
+					Nonce:    packet.Nonce.Uint64(),
+				})
+				if skipErr != nil {
+					return result, skipErr
+				}
+				if skipped {
+					if observer.executorSkipped != nil {
+						observer.executorSkipped("skipped_source_packet", packet, db.ExecutorJobRecord{}, log)
+					}
+					continue
+				}
 				result.pending = true
 				if observer.executorSkipped != nil {
 					observer.executorSkipped("pending_executor_job", packet, db.ExecutorJobRecord{}, log)

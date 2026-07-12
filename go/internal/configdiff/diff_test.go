@@ -1,6 +1,7 @@
 package configdiff
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -52,6 +53,51 @@ func TestRenderTextIncludesChangedPath(t *testing.T) {
 	}
 	if !strings.Contains(output, `"Mode":"shadow"`) || !strings.Contains(output, `"Mode":"active"`) {
 		t.Fatalf("output missing before/after values:\n%s", output)
+	}
+}
+
+func TestDiffRedactsDatabaseAndRPCURLCredentials(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	before.DatabaseURL = "postgres://worker:before-password@db.internal:5432/worker?sslmode=disable&password=before-query-password&api_key=before-db-key"
+	after.DatabaseURL = "postgres://worker:after-password@db.internal:5432/worker?sslmode=require&password=after-query-password&api_key=after-db-key"
+	before.Chains[0].RPCURLs = []string{"https://before-user:before-password@before-secret.example/v2/before-path-key?api_key=before-query-key"}
+	after.Chains[0].RPCURLs = []string{"https://after-user:after-password@after-secret.example/v2/after-path-key?api_key=after-query-key"}
+
+	changes := Diff(before, after)
+	encoded, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	output := string(encoded) + RenderText(changes)
+	for _, secret := range []string{
+		"before-password",
+		"after-password",
+		"before-user",
+		"after-user",
+		"before-secret",
+		"after-secret",
+		"before-path-key",
+		"after-path-key",
+		"before-query-key",
+		"after-query-key",
+		"before-query-password",
+		"after-query-password",
+		"before-db-key",
+		"after-db-key",
+	} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("config diff leaked %q:\n%s", secret, output)
+		}
+	}
+	if !strings.Contains(output, `"path":"database_url"`) || !strings.Contains(output, `"path":"chains[40161]"`) {
+		t.Fatalf("config diff omitted redacted changes:\n%s", output)
+	}
+	if !strings.Contains(output, "[REDACTED]") {
+		t.Fatalf("config diff missing redaction marker:\n%s", output)
+	}
+	if !strings.Contains(output, "sslmode=disable") || !strings.Contains(output, "sslmode=require") {
+		t.Fatalf("config diff omitted security-relevant database parameters:\n%s", output)
 	}
 }
 

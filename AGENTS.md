@@ -13,7 +13,7 @@
 - `contracts/contracts`: Solidity contracts. Shared worker code lives under `common`, OFT code under `oft`, and `OpenExecutor`/`OpenDVN` under `workers`.
 - `contracts/test`: Solidity tests. Prefer table coverage in the existing test file over one-off near-duplicates.
 - `contracts/scripts`: TypeScript deploy, inspect, check, generation, and runbook/security validator scripts. Script behavior changes need script tests when practical.
-- `go/cmd`: CLI entrypoints only. Keep business logic in `go/internal`.
+- Keep each `go/cmd/<command>/main.go` limited to CLI parsing and wiring. Command-specific implementation packages may live below that command directory (for example, `go/cmd/e2ereplaycheck/e2ereplaycheck`); move reusable or worker business logic to `go/internal`.
 - `go/internal/config`, `configcheck`, `configdiff`, `chain`: config loading, validation, on-chain checks, and static chain metadata.
 - `go/internal/db`, `packets`, `dvn`, `executor`, `indexer`, `txmgr`, `readiness`: durable worker state machines and runtime flows. Store packet, DVN, executor, indexer, and tx manager state in Postgres.
 - `go/internal/lzabi/abis`, `go/internal/pricing/abis`, `go/internal/configcheck/abis`: committed embedded ABI inputs. Regenerate with the Makefile targets; do not hand-edit generated JSON.

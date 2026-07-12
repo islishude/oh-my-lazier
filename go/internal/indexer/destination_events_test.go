@@ -242,6 +242,40 @@ func TestApplyExecutorDestinationLogsDefersConfiguredMissingExecutorJob(t *testi
 	}
 }
 
+func TestApplyExecutorDestinationLogsSkipsMissingExecutorJobWithSourceSkip(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := &fakeDestinationStore{
+		byDestination: map[string]db.PacketRecord{
+			destinationLookupKey(packet.DstEID, packet.SrcEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): packet,
+		},
+		sourceSkips: map[string]db.SourcePacketSkip{
+			sourceSkipLookupKey(sourceRoleExecutor, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64()): {
+				Role:     sourceRoleExecutor,
+				SrcEID:   packet.SrcEID,
+				DstEID:   packet.DstEID,
+				Nonce:    packet.Nonce.Uint64(),
+				Sender:   packet.Sender,
+				Receiver: packet.Receiver,
+				GUID:     packet.GUID,
+				Reason:   "unexpected_worker",
+			},
+		},
+	}
+
+	result, err := applyExecutorDestinationLogs(context.Background(), store, packet.DstEID, []chain.Pathway{testIndexerPathway()}, common.Address{}, []gethtypes.Log{
+		testPacketVerifiedLog(t, packet),
+	}, destinationLogObserver{})
+	if err != nil {
+		t.Fatalf("applyExecutorDestinationLogs() error = %v", err)
+	}
+	if result.pending {
+		t.Fatal("pending = true, want false")
+	}
+	if result.applied != 0 {
+		t.Fatalf("applied = %d, want 0", result.applied)
+	}
+}
+
 func TestApplyExecutorDestinationLogsSkipsExternalMissingPackets(t *testing.T) {
 	packet := testDestinationPacketRecord()
 	packet.Sender = common.HexToAddress("0x1212121212121212121212121212121212121212")

@@ -316,6 +316,19 @@ func (s *Store) MarkExecutorExecutable(ctx context.Context, guid common.Hash) er
 	})
 }
 
+// MarkExecutorManualReview records a deterministic executor failure that requires operator action.
+func (s *Store) MarkExecutorManualReview(ctx context.Context, guid common.Hash, expectedStatus, reason string) error {
+	if reason == "" {
+		return errors.New("executor manual review reason is required")
+	}
+	return s.updateExecutorStatus(ctx, executorStatusUpdate{
+		GUID:           guid,
+		ExpectedStatus: expectedStatus,
+		NextStatus:     string(packets.ExecutorManualReview),
+		LastError:      reason,
+	})
+}
+
 // MarkExecutorDelivered records a successful lzReceive receipt or PacketDelivered event.
 func (s *Store) MarkExecutorDelivered(ctx context.Context, guid, txHash common.Hash) error {
 	if txHash == (common.Hash{}) {

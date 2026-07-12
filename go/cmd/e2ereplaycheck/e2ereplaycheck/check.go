@@ -184,6 +184,9 @@ func Check(ctx context.Context, cfg config.Config, evidence Evidence, timeout ti
 		return err
 	}
 	defer registry.Close()
+	if err := validateLocalE2ERPCChainIDs(ctx, registry); err != nil {
+		return err
+	}
 	pathways := registry.Pathways()
 	sourceChain, err := registry.Get(evidence.SrcEID)
 	if err != nil {
@@ -285,6 +288,15 @@ func ValidateLocalE2EConfig(cfg config.Config, evidence Evidence) error {
 		}
 	}
 	return fmt.Errorf("evidence pathway %d->%d is not configured", evidence.SrcEID, evidence.DstEID)
+}
+
+func validateLocalE2ERPCChainIDs(ctx context.Context, registry *chain.Registry) error {
+	for _, configuredChain := range registry.All() {
+		if err := configuredChain.RPC.ValidateChainID(ctx, configuredChain.ChainID); err != nil {
+			return fmt.Errorf("validate local e2e chain %d rpc chain_id: %w", configuredChain.EID, err)
+		}
+	}
+	return nil
 }
 
 // CompareFinalRows validates final replay state loaded from Postgres.

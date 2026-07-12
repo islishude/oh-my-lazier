@@ -1597,6 +1597,26 @@ func TestExecutorReadinessTransitionsUpdatePacketAndJob(t *testing.T) {
 		t.Fatalf("MarkExecutorVerifiable() error = %v", err)
 	}
 	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorVerifiable))
+	if err := store.MarkExecutorCommittedFromChain(ctx, packet.GUID, string(packets.ExecutorVerifiable)); err != nil {
+		t.Fatalf("MarkExecutorCommittedFromChain() error = %v", err)
+	}
+	if err := store.MarkExecutorExecutable(ctx, packet.GUID); err != nil {
+		t.Fatalf("MarkExecutorExecutable() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorExecutable))
+
+	const reason = "unsupported executor option type 2"
+	if err := store.MarkExecutorManualReview(ctx, packet.GUID, string(packets.ExecutorExecutable), reason); err != nil {
+		t.Fatalf("MarkExecutorManualReview() error = %v", err)
+	}
+	assertPacketAndExecutorStatus(ctx, t, store, packet.GUID, string(packets.ExecutorManualReview))
+	job, err := store.GetExecutorJob(ctx, packet.GUID)
+	if err != nil {
+		t.Fatalf("GetExecutorJob() error = %v", err)
+	}
+	if job.LastError != reason {
+		t.Fatalf("executor last error = %q, want %q", job.LastError, reason)
+	}
 }
 
 func TestExecutorReceiptTransitionsPersistTxHashes(t *testing.T) {

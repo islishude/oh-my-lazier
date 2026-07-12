@@ -1,7 +1,10 @@
 package rpcquorum
 
 import (
+	"context"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -58,6 +61,33 @@ func TestValidateProviderChainIDsRejectsUnexpectedProviderChainID(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), "provider provider-b returned 560048") {
 		t.Fatalf("error = %q, want provider detail", err)
+	}
+}
+
+func TestValidateChainIDRedactsProviderURLOnRequestFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	const user = "rpc-user"
+	const password = "rpc-password"
+	const apiKey = "rpc-api-key"
+	rawURL := strings.Replace(server.URL, "http://", "http://"+user+":"+password+"@", 1) + "?api_key=" + apiKey
+	client := New("testnet", []string{rawURL})
+	defer client.Close()
+
+	err := client.ValidateChainID(context.Background(), big.NewInt(1))
+	if err == nil {
+		t.Fatal("ValidateChainID() error = nil, want request failure")
+	}
+	if !strings.Contains(err.Error(), "provider[0] chain_id request failed") {
+		t.Fatalf("ValidateChainID() error = %q, want redacted provider failure", err)
+	}
+	for _, secret := range []string{user, password, apiKey, rawURL} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("ValidateChainID() leaked %q in error %q", secret, err)
+		}
 	}
 }
 

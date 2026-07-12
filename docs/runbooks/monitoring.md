@@ -82,3 +82,4 @@ Operational assumptions:
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.
 - A deterministic active-DVN destination config mismatch moves the affected job to `MANUAL_REVIEW` and pauses that pathway atomically. Other pathways continue processing; clear the drift and review the recorded `last_error` before unpausing.
+- A deterministic executor delivery build failure, including unsupported persisted executor options observed after a permissionless commit, moves the job and packet to `MANUAL_REVIEW` with `last_error` instead of retrying indefinitely.

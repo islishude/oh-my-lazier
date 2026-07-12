@@ -357,7 +357,7 @@ func TestProcessDelivererOnceRetriesFailedLzReceive(t *testing.T) {
 	}
 }
 
-func TestProcessDelivererOnceDefersInvalidLzReceiveOptions(t *testing.T) {
+func TestProcessDelivererOnceMarksInvalidLzReceiveOptionsForManualReview(t *testing.T) {
 	packet := testPacketRecord()
 	packet.Status = string(packets.ExecutorExecutable)
 	packet.Options[5] = 2
@@ -381,8 +381,11 @@ func TestProcessDelivererOnceDefersInvalidLzReceiveOptions(t *testing.T) {
 	if !processed {
 		t.Fatal("processed = false, want true")
 	}
-	if store.deferredGUID != packet.GUID || store.deferredStatus != string(packets.ExecutorExecutable) {
-		t.Fatalf("deferred job = %s/%q, want %s/%q", store.deferredGUID, store.deferredStatus, packet.GUID, packets.ExecutorExecutable)
+	if store.guid != packet.GUID || store.expectedStatus != string(packets.ExecutorExecutable) || store.nextStatus != string(packets.ExecutorManualReview) {
+		t.Fatalf("manual review transition = %s/%q/%q, want %s/%q/%q", store.guid, store.expectedStatus, store.nextStatus, packet.GUID, packets.ExecutorExecutable, packets.ExecutorManualReview)
+	}
+	if !strings.Contains(store.lastError, "unsupported native drop executor option") {
+		t.Fatalf("manual review error = %q, want unsupported native drop executor option", store.lastError)
 	}
 	if store.request.Purpose != "" {
 		t.Fatalf("unexpected enqueue purpose %q", store.request.Purpose)
@@ -525,6 +528,7 @@ type fakeStore struct {
 	expectedStatus string
 	nextStatus     string
 	request        db.TxRequest
+	lastError      string
 	deferredGUID   common.Hash
 	deferredStatus string
 }
@@ -567,6 +571,14 @@ func (s *fakeStore) MarkExecutorExecutable(_ context.Context, guid common.Hash) 
 	s.guid = guid
 	s.expectedStatus = string(packets.ExecutorCommitted)
 	s.nextStatus = string(packets.ExecutorExecutable)
+	return nil
+}
+
+func (s *fakeStore) MarkExecutorManualReview(_ context.Context, guid common.Hash, expectedStatus, reason string) error {
+	s.guid = guid
+	s.expectedStatus = expectedStatus
+	s.nextStatus = string(packets.ExecutorManualReview)
+	s.lastError = reason
 	return nil
 }
 

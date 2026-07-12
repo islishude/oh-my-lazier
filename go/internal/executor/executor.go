@@ -21,6 +21,7 @@ type Store interface {
 	MarkExecutorVerifiable(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkExecutorCommittedFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error
 	MarkExecutorExecutable(ctx context.Context, guid common.Hash) error
+	MarkExecutorManualReview(ctx context.Context, guid common.Hash, expectedStatus, reason string) error
 	MarkExecutorDeliveredFromChain(ctx context.Context, guid common.Hash, expectedStatus string) error
 	EnqueueExecutorTx(ctx context.Context, guid common.Hash, expectedStatus, nextStatus string, request db.TxRequest) (int64, error)
 	DeferExecutorJob(ctx context.Context, guid common.Hash, expectedStatus string, delay time.Duration) error
@@ -260,7 +261,7 @@ func (w *Worker) processDelivererStatus(ctx context.Context, status string) (boo
 	}
 	request, err := BuildLzReceiveTx(item.Packet, dstChain.EndpointAddress, dstChain.TxRoles.Executor.SignerID)
 	if err != nil {
-		return w.deferExecutorWorkError(ctx, item, status, "lz_receive_build_error", err)
+		return w.markExecutorManualReview(ctx, item, status, err)
 	}
 	id, err := w.store.EnqueueExecutorTx(ctx, item.Packet.GUID, status, string(packets.ExecutorLzReceiveTxEnqueued), request)
 	if err != nil {
@@ -323,6 +324,17 @@ func (w *Worker) deferExecutorWorkError(ctx context.Context, item db.ExecutorWor
 		return false, err
 	}
 	w.logger.Warn("deferred executor job after processing error", "reason", reason, "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", cause.Error())
+	return true, nil
+}
+
+func (w *Worker) markExecutorManualReview(ctx context.Context, item db.ExecutorWorkItem, status string, cause error) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := w.store.MarkExecutorManualReview(ctx, item.Packet.GUID, status, cause.Error()); err != nil {
+		return false, err
+	}
+	w.logger.Warn("executor job requires manual review after deterministic build error", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.ExecutorManualReview), "error", cause.Error())
 	return true, nil
 }
 

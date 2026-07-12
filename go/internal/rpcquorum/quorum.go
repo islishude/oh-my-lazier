@@ -269,13 +269,14 @@ func (c *Client) ValidateChainID(ctx context.Context, expected *big.Int) error {
 	}
 	ids := make([]providerChainID, 0, len(providers))
 	var providerErrs []error
-	for index, provider := range providers {
+	for index := range providers {
+		providerLabel := fmt.Sprintf("provider[%d]", index)
 		chainID, err := c.chainIDFromProvider(ctx, index)
 		if err != nil {
-			providerErrs = append(providerErrs, fmt.Errorf("%s: %w", provider.URL, err))
+			providerErrs = append(providerErrs, fmt.Errorf("%s chain_id request failed", providerLabel))
 			continue
 		}
-		ids = append(ids, providerChainID{URL: provider.URL, ChainID: chainID})
+		ids = append(ids, providerChainID{URL: providerLabel, ChainID: chainID})
 	}
 	if len(providerErrs) > 0 {
 		return errors.Join(providerErrs...)

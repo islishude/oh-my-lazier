@@ -1,9 +1,14 @@
 package e2ereplaycheck
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
 )
@@ -57,6 +62,56 @@ func TestValidateLocalE2EConfigGuardsDestructiveReplay(t *testing.T) {
 	disabledPathway.Pathways[0].Enabled = false
 	if err := ValidateLocalE2EConfig(disabledPathway, validEvidence()); err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("ValidateLocalE2EConfig() error = %v, want disabled pathway guard", err)
+	}
+}
+
+func TestValidateLocalE2ERPCChainIDsChecksEveryProvider(t *testing.T) {
+	chainA := newChainIDRPCServer(t, "0x7a69")
+	chainB := newChainIDRPCServer(t, "0x7a6a")
+	wrongChainB := newChainIDRPCServer(t, "0x1")
+
+	cfg := validLocalConfig()
+	cfg.Chains[0].RPCURLs = []string{chainA.URL}
+	cfg.Chains[1].RPCURLs = []string{chainB.URL}
+	registry, err := chain.NewRegistry(cfg.Chains, cfg.Pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	if err := validateLocalE2ERPCChainIDs(context.Background(), registry); err != nil {
+		registry.Close()
+		t.Fatalf("validateLocalE2ERPCChainIDs() error = %v", err)
+	}
+	registry.Close()
+
+	cfg.Chains[1].RPCURLs = []string{chainB.URL, wrongChainB.URL}
+	registry, err = chain.NewRegistry(cfg.Chains, cfg.Pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	defer registry.Close()
+	if err := validateLocalE2ERPCChainIDs(context.Background(), registry); err == nil || !strings.Contains(err.Error(), "rpc chain_id mismatch") {
+		t.Fatalf("validateLocalE2ERPCChainIDs() error = %v, want provider chain id mismatch", err)
+	}
+
+	const user = "rpc-user"
+	const password = "rpc-password"
+	const apiKey = "rpc-api-key"
+	credentialedWrongURL := strings.Replace(wrongChainB.URL, "http://", "http://"+user+":"+password+"@", 1) + "?api_key=" + apiKey
+	registry.Close()
+	cfg.Chains[1].RPCURLs = []string{chainB.URL, credentialedWrongURL}
+	registry, err = chain.NewRegistry(cfg.Chains, cfg.Pathways)
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	defer registry.Close()
+	err = validateLocalE2ERPCChainIDs(context.Background(), registry)
+	if err == nil {
+		t.Fatal("validateLocalE2ERPCChainIDs() error = nil, want provider chain id mismatch")
+	}
+	for _, secret := range []string{user, password, apiKey, credentialedWrongURL} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("validateLocalE2ERPCChainIDs() leaked %q in error %q", secret, err)
+		}
 	}
 }
 
@@ -140,4 +195,32 @@ func validLocalConfig() config.Config {
 
 func packetHeaderHex() string {
 	return "0x01" + strings.Repeat("00", packetV1HeaderLen-1)
+}
+
+func newChainIDRPCServer(t *testing.T, chainID string) *httptest.Server {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if request.Method != "eth_chainId" {
+			http.Error(w, "unexpected rpc method", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(struct {
+			JSONRPC string          `json:"jsonrpc"`
+			ID      json.RawMessage `json:"id"`
+			Result  string          `json:"result"`
+		}{JSONRPC: "2.0", ID: request.ID, Result: chainID}); err != nil {
+			t.Errorf("encode rpc response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server
 }

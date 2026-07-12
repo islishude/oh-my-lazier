@@ -39,7 +39,9 @@ check, the target stops the worker, clears the local E2E Postgres schema, and
 runs `go/cmd/e2ereplaycheck` with `tmp/e2e/destination-replay.json` to prove
 destination-chain historical `PacketVerified`, `PacketDelivered`, and
 `PayloadVerified` events can rebuild delivered executor and verified DVN state
-without any local outbox rows. On one canary direction,
+without any local outbox rows. Before clearing the schema, the replay check
+requires every configured loopback RPC to report its configured local chain ID.
+On one canary direction,
 the runner disables destination Anvil automine with `evm_setAutomine`, observes
 a pending worker `commitVerification` transaction, waits for txmgr to replace it
 with a same-nonce bumped-fee transaction, and then mines the replacement before
