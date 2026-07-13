@@ -99,7 +99,7 @@ Required state:
 - Destination ReceiveUln config includes each pathway's configured `destination_workers.open_dvn` plus the same approved independent external DVN only during the DVN join step.
 - Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
-- Source OpenPriceFeed `priceSnapshot(dstEid)` is fresh, the pricing signer is an authorized PriceFeed submitter, OpenExecutor/OpenDVN `priceFeed()` both point to the configured feed, and each worker's `feeModel(dstEid)` matches the approved price evidence.
+- Source OpenPriceFeed `priceSnapshot(dstEid)` is fresh, the pricing signer is an authorized PriceFeed submitter, OpenExecutor/OpenDVN `priceFeed()` both point to the configured feed, and each worker's `feeModel(dstEid)` matches the approved price evidence. Same-native pathways document the 1:1 route; cross-asset pathways document the selected primary, explicit freshness limit, optional sanity set, and deviation threshold. Chainlink and Uniswap are required only when explicitly referenced, and Uniswap may only be sanity.
 
 ## Rollback Approval
 

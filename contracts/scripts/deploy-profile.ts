@@ -74,6 +74,7 @@ export type ChainProfile = {
   network: string;
   name: string;
   nativeAssetId: string;
+  priceSources?: PriceSourcesProfile;
   eid: number;
   chainId: number;
   rpcUrlEnv: string;
@@ -92,6 +93,37 @@ export type ChainProfile = {
     dvn: TxRoleProfile;
   };
   layerZero: LayerZeroAddresses;
+};
+
+export type PriceSourceName = "coinmarketcap" | "coingecko" | "chainlink" | "uniswap";
+
+export type PriceSourcesProfile = {
+  primarySource: Exclude<PriceSourceName, "uniswap">;
+  sanitySources: PriceSourceName[];
+  coinMarketCap?: { id: number; maxAgeSeconds: number };
+  coinGecko?: { id: string; maxAgeSeconds: number };
+  chainlink?: {
+    feedAddress: Address;
+    expectedDescription: string;
+    maxAgeSeconds: number;
+  };
+  uniswap?: {
+    poolAddress: Address;
+    tokenIn: Address;
+    tokenOut: Address;
+    twapWindowSeconds: number;
+    maxBlockAgeSeconds: number;
+    minHarmonicMeanLiquidity: string;
+  };
+};
+
+export type PricingProfile = {
+  sourceRequestTimeoutSeconds: number;
+  maxDeviationBps: number;
+  coinMarketCapBaseURL?: string;
+  coinMarketCapAPIKeyEnv?: string;
+  coinGeckoBaseURL?: string;
+  coinGeckoAPIKeyEnv?: string;
 };
 
 const hardhatNetworks = new Map<string, { chainId: number; eid: number }>([
@@ -144,6 +176,7 @@ export type DeploymentProfile = {
     executor: boolean;
     dvn: boolean;
   };
+  pricing: PricingProfile;
   signers: SignerProfile[];
   token: {
     name: string;
@@ -265,11 +298,13 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
   );
   const signerIDs = new Set(signers.map((signer) => signer.id.toLowerCase()));
   const token = object(input.token ?? {}, "profile.token");
+  const pricing = normalizePricingProfile(input.pricing);
   const chains = arrayField(input, "chains", "profile.chains").map(
     (chain, index) =>
       normalizeChain(chain, `profile.chains[${index}]`, signerIDs, mode),
   );
   validateTwoChainPair(chains);
+  validateProfilePriceSources(chains, pricing);
   return {
     environment: stringField(input, "environment", "profile.environment"),
     mode,
@@ -304,6 +339,7 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
       ),
       dvn: optionalBoolean(services.dvn, true, "profile.services.dvn"),
     },
+    pricing,
     signers,
     token: {
       name: optionalString(
@@ -578,24 +614,90 @@ function renderPricingConfig(profile: DeploymentProfile): string {
   if (pricingFeePolicy === undefined) {
     throw new Error("profile.chains must include at least one chain");
   }
-  const pricingChains = profile.chains
-    .map(
-      (chain) => `    - eid: ${chain.eid}
-      native_asset_id: ${chain.nativeAssetId}
-      data_fee_per_byte_wei: "0"`,
-    )
-    .join("\n");
+  const pricingChains = profile.chains.map(renderPricingChain).join("\n");
   return `pricing:
   enabled: true
   signer: "${signer}"
   interval_seconds: 300
   stale_after_seconds: 1800
+  max_deviation_bps: ${profile.pricing.maxDeviationBps}
+  source_request_timeout_seconds: ${profile.pricing.sourceRequestTimeoutSeconds}
   gas_spike_bps: 1000
   max_fee_per_gas_wei: "${pricingFeePolicy.maxFeePerGasWei}"
   max_priority_fee_per_gas_wei: "${pricingFeePolicy.maxPriorityFeePerGasWei}"
   min_native_balance_wei: "${pricingFeePolicy.minNativeBalanceWei}"
-  chains:
+${renderOptionalPricingGlobal(profile.pricing)}  chains:
 ${pricingChains}`;
+}
+
+function renderOptionalPricingGlobal(pricing: PricingProfile): string {
+  const lines: string[] = [];
+  if (pricing.coinMarketCapBaseURL !== undefined) {
+    lines.push(`  coinmarketcap_base_url: ${yamlString(pricing.coinMarketCapBaseURL)}`);
+  }
+  if (pricing.coinMarketCapAPIKeyEnv !== undefined) {
+    lines.push(`  coinmarketcap_api_key_env: ${pricing.coinMarketCapAPIKeyEnv}`);
+  }
+  if (pricing.coinGeckoBaseURL !== undefined) {
+    lines.push(`  coingecko_base_url: ${yamlString(pricing.coinGeckoBaseURL)}`);
+  }
+  if (pricing.coinGeckoAPIKeyEnv !== undefined) {
+    lines.push(`  coingecko_api_key_env: ${pricing.coinGeckoAPIKeyEnv}`);
+  }
+  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+}
+
+function renderPricingChain(chain: ChainProfile): string {
+  const lines = [
+    `    - eid: ${chain.eid}`,
+    `      native_asset_id: ${chain.nativeAssetId}`,
+    `      data_fee_per_byte_wei: "0"`,
+  ];
+  const sources = chain.priceSources;
+  if (sources === undefined) {
+    return lines.join("\n");
+  }
+  lines.push(`      primary_source: ${sources.primarySource}`);
+  if (sources.sanitySources.length > 0) {
+    lines.push("      sanity_sources:");
+    for (const source of sources.sanitySources) {
+      lines.push(`        - ${source}`);
+    }
+  }
+  if (sources.coinMarketCap !== undefined) {
+    lines.push(
+      "      coinmarketcap:",
+      `        id: ${sources.coinMarketCap.id}`,
+      `        max_age_seconds: ${sources.coinMarketCap.maxAgeSeconds}`,
+    );
+  }
+  if (sources.coinGecko !== undefined) {
+    lines.push(
+      "      coingecko:",
+      `        id: ${sources.coinGecko.id}`,
+      `        max_age_seconds: ${sources.coinGecko.maxAgeSeconds}`,
+    );
+  }
+  if (sources.chainlink !== undefined) {
+    lines.push(
+      "      chainlink:",
+      `        feed_address: "${sources.chainlink.feedAddress}"`,
+      `        expected_description: ${yamlString(sources.chainlink.expectedDescription)}`,
+      `        max_age_seconds: ${sources.chainlink.maxAgeSeconds}`,
+    );
+  }
+  if (sources.uniswap !== undefined) {
+    lines.push(
+      "      uniswap:",
+      `        pool_address: "${sources.uniswap.poolAddress}"`,
+      `        token_in: "${sources.uniswap.tokenIn}"`,
+      `        token_out: "${sources.uniswap.tokenOut}"`,
+      `        twap_window_seconds: ${sources.uniswap.twapWindowSeconds}`,
+      `        max_block_age_seconds: ${sources.uniswap.maxBlockAgeSeconds}`,
+      `        min_harmonic_mean_liquidity: "${sources.uniswap.minHarmonicMeanLiquidity}"`,
+    );
+  }
+  return lines.join("\n");
 }
 
 function pricingSigner(profile: DeploymentProfile): Address {
@@ -1385,6 +1487,10 @@ function normalizeChain(
       input.nativeAssetId,
       `${pathLabel}.nativeAssetId`,
     ),
+    priceSources: normalizePriceSources(
+      input.priceSources,
+      `${pathLabel}.priceSources`,
+    ),
     eid,
     chainId: chainID,
     rpcUrlEnv: envVarNameField(input, "rpcUrlEnv", `${pathLabel}.rpcUrlEnv`),
@@ -1442,6 +1548,250 @@ function normalizeChain(
     txRoles: normalizeTxRoles(input.txRoles, `${pathLabel}.txRoles`, signerIDs),
     layerZero,
   };
+}
+
+function normalizePricingProfile(value: unknown): PricingProfile {
+  const input = object(value ?? {}, "profile.pricing");
+  return {
+    sourceRequestTimeoutSeconds:
+      optionalIntegerField(
+        input,
+        "sourceRequestTimeoutSeconds",
+        "profile.pricing.sourceRequestTimeoutSeconds",
+      ) ?? 10,
+    maxDeviationBps:
+      optionalIntegerField(
+        input,
+        "maxDeviationBps",
+        "profile.pricing.maxDeviationBps",
+      ) ?? 500,
+    coinMarketCapBaseURL: optionalStringValue(
+      input.coinMarketCapBaseURL,
+      "profile.pricing.coinMarketCapBaseURL",
+    ),
+    coinMarketCapAPIKeyEnv: optionalEnvVarName(
+      input.coinMarketCapAPIKeyEnv,
+      "profile.pricing.coinMarketCapAPIKeyEnv",
+    ),
+    coinGeckoBaseURL: optionalStringValue(
+      input.coinGeckoBaseURL,
+      "profile.pricing.coinGeckoBaseURL",
+    ),
+    coinGeckoAPIKeyEnv: optionalEnvVarName(
+      input.coinGeckoAPIKeyEnv,
+      "profile.pricing.coinGeckoAPIKeyEnv",
+    ),
+  };
+}
+
+function normalizePriceSources(
+  value: unknown,
+  label: string,
+): PriceSourcesProfile | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const input = object(value, label);
+  const primarySource = normalizePrimaryPriceSource(
+    input.primarySource,
+    `${label}.primarySource`,
+  );
+  const sanitySources = normalizeSanityPriceSources(
+    input.sanitySources,
+    `${label}.sanitySources`,
+  );
+  if (sanitySources.includes(primarySource)) {
+    throw new Error(`${label}.sanitySources must not contain primarySource`);
+  }
+  const result: PriceSourcesProfile = {
+    primarySource,
+    sanitySources,
+    coinMarketCap: normalizeOptionalCoinMarketCapSource(
+      input.coinMarketCap,
+      `${label}.coinMarketCap`,
+    ),
+    coinGecko: normalizeOptionalCoinGeckoSource(
+      input.coinGecko,
+      `${label}.coinGecko`,
+    ),
+    chainlink: normalizeOptionalChainlinkSource(
+      input.chainlink,
+      `${label}.chainlink`,
+    ),
+    uniswap: normalizeOptionalUniswapSource(
+      input.uniswap,
+      `${label}.uniswap`,
+    ),
+  };
+  const referenced = new Set<PriceSourceName>([
+    primarySource,
+    ...sanitySources,
+  ]);
+  for (const source of [
+    "coinmarketcap",
+    "coingecko",
+    "chainlink",
+    "uniswap",
+  ] as const) {
+    const configured = sourceProfile(result, source) !== undefined;
+    if (referenced.has(source) && !configured) {
+      throw new Error(`${label}.${source} is required when source is referenced`);
+    }
+    if (!referenced.has(source) && configured) {
+      throw new Error(`${label}.${source} is configured but not referenced`);
+    }
+  }
+  return result;
+}
+
+function normalizePrimaryPriceSource(
+  value: unknown,
+  label: string,
+): Exclude<PriceSourceName, "uniswap"> {
+  if (value === "coinmarketcap" || value === "coingecko" || value === "chainlink") {
+    return value;
+  }
+  throw new Error(`${label} must be coinmarketcap, coingecko, or chainlink`);
+}
+
+function normalizeSanityPriceSources(
+  value: unknown,
+  label: string,
+): PriceSourceName[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} must be an array`);
+  }
+  const result = value.map((source, index) => {
+    if (
+      source !== "coinmarketcap" &&
+      source !== "coingecko" &&
+      source !== "chainlink" &&
+      source !== "uniswap"
+    ) {
+      throw new Error(`${label}[${index}] has unsupported source`);
+    }
+    return source;
+  });
+  if (new Set(result).size !== result.length) {
+    throw new Error(`${label} must not contain duplicates`);
+  }
+  return result;
+}
+
+function normalizeOptionalCoinMarketCapSource(
+  value: unknown,
+  label: string,
+): PriceSourcesProfile["coinMarketCap"] {
+  if (value === undefined) return undefined;
+  const input = object(value, label);
+  return {
+    id: integerField(input, "id", `${label}.id`),
+    maxAgeSeconds: integerField(input, "maxAgeSeconds", `${label}.maxAgeSeconds`),
+  };
+}
+
+function normalizeOptionalCoinGeckoSource(
+  value: unknown,
+  label: string,
+): PriceSourcesProfile["coinGecko"] {
+  if (value === undefined) return undefined;
+  const input = object(value, label);
+  return {
+    id: stringField(input, "id", `${label}.id`),
+    maxAgeSeconds: integerField(input, "maxAgeSeconds", `${label}.maxAgeSeconds`),
+  };
+}
+
+function normalizeOptionalChainlinkSource(
+  value: unknown,
+  label: string,
+): PriceSourcesProfile["chainlink"] {
+  if (value === undefined) return undefined;
+  const input = object(value, label);
+  return {
+    feedAddress: addressField(input, "feedAddress", `${label}.feedAddress`),
+    expectedDescription: stringField(
+      input,
+      "expectedDescription",
+      `${label}.expectedDescription`,
+    ),
+    maxAgeSeconds: integerField(input, "maxAgeSeconds", `${label}.maxAgeSeconds`),
+  };
+}
+
+function normalizeOptionalUniswapSource(
+  value: unknown,
+  label: string,
+): PriceSourcesProfile["uniswap"] {
+  if (value === undefined) return undefined;
+  const input = object(value, label);
+  const tokenIn = addressField(input, "tokenIn", `${label}.tokenIn`);
+  const tokenOut = addressField(input, "tokenOut", `${label}.tokenOut`);
+  if (isAddressEqual(tokenIn, tokenOut)) {
+    throw new Error(`${label}.tokenIn and tokenOut must differ`);
+  }
+  return {
+    poolAddress: addressField(input, "poolAddress", `${label}.poolAddress`),
+    tokenIn,
+    tokenOut,
+    twapWindowSeconds: integerField(
+      input,
+      "twapWindowSeconds",
+      `${label}.twapWindowSeconds`,
+    ),
+    maxBlockAgeSeconds: integerField(
+      input,
+      "maxBlockAgeSeconds",
+      `${label}.maxBlockAgeSeconds`,
+    ),
+    minHarmonicMeanLiquidity: positiveDecimalField(
+      input,
+      "minHarmonicMeanLiquidity",
+      `${label}.minHarmonicMeanLiquidity`,
+    ),
+  };
+}
+
+function sourceProfile(
+  sources: PriceSourcesProfile,
+  source: PriceSourceName,
+) {
+  switch (source) {
+    case "coinmarketcap":
+      return sources.coinMarketCap;
+    case "coingecko":
+      return sources.coinGecko;
+    case "chainlink":
+      return sources.chainlink;
+    case "uniswap":
+      return sources.uniswap;
+  }
+}
+
+function validateProfilePriceSources(
+  chains: readonly ChainProfile[],
+  pricing: PricingProfile,
+) {
+  const crossAsset = chains[0].nativeAssetId !== chains[1].nativeAssetId;
+  for (const chain of chains) {
+    if (crossAsset && chain.priceSources === undefined) {
+      throw new Error(`${chain.key}.priceSources is required for cross-asset pricing`);
+    }
+    if (!crossAsset && chain.priceSources !== undefined) {
+      throw new Error(`${chain.key}.priceSources must be omitted for same-native pricing`);
+    }
+    if (
+      chain.priceSources?.coinMarketCap !== undefined &&
+      pricing.coinMarketCapAPIKeyEnv === undefined
+    ) {
+      throw new Error(
+        "profile.pricing.coinMarketCapAPIKeyEnv is required when CoinMarketCap is referenced",
+      );
+    }
+  }
 }
 
 function validateHardhatNetworkChain(
@@ -2418,6 +2768,18 @@ function decimalField(
   const value = stringField(input, field, label);
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new Error(`${label} must be a base-10 integer string`);
+  }
+  return value;
+}
+
+function positiveDecimalField(
+  input: Record<string, unknown>,
+  field: string,
+  label: string,
+): string {
+  const value = decimalField(input, field, label);
+  if (value === "0") {
+    throw new Error(`${label} must be positive`);
   }
   return value;
 }

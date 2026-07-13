@@ -24,11 +24,14 @@ const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
   ["@openzeppelin/contracts", "high"],
   ["@openzeppelin/contracts-upgradeable", "high"],
   ["lodash-es", "high"],
+  ["tmp", "high"],
+  ["@arbitrum/nitro-contracts", "moderate"],
+  ["@chainlink/contracts", "moderate"],
   ["@nomicfoundation/hardhat-toolbox-viem", "moderate"],
   ["@nomicfoundation/hardhat-ignition", "moderate"],
   ["@nomicfoundation/hardhat-ignition-viem", "moderate"],
   ["@nomicfoundation/ignition-core", "moderate"],
-  ["@uniswap/v3-periphery", "moderate"],
+  ["@offchainlabs/upgrade-executor", "moderate"],
 ]);
 
 function runAudit(): AuditReport {

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/big"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,8 +71,8 @@ func TestBotEnqueueOnceRejectsDeviationWithoutEnqueue(t *testing.T) {
 	store := &fakeStore{}
 	sources := testSources()
 	sources[40161] = ChainSources{
-		Primary:           fixedPrice{price: big.NewRat(2000, 1)},
-		Sanity:            []PriceReader{fixedPrice{price: big.NewRat(2300, 1)}},
+		Primary:           testConfiguredPrice("primary", big.NewRat(2000, 1)),
+		Sanity:            []ConfiguredPriceReader{testConfiguredPrice("sanity", big.NewRat(2300, 1))},
 		Gas:               fixedGas{price: big.NewInt(1_000_000_000)},
 		DataFeePerByteWei: big.NewInt(0),
 	}
@@ -94,15 +95,11 @@ func TestBotEnqueueOnceUsesSameNativeAssetConversionWithoutPriceReaders(t *testi
 	store := &fakeStore{}
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
 		40161: {
-			Primary:           failingPrice{},
-			Sanity:            []PriceReader{failingPrice{}},
 			Gas:               fixedGas{price: big.NewInt(1_000_000_000)},
 			DataFeePerByteWei: big.NewInt(0),
 			NativeAssetID:     "eth",
 		},
 		40449: {
-			Primary:           failingPrice{},
-			Sanity:            []PriceReader{failingPrice{}},
 			Gas:               fixedGas{price: big.NewInt(2_000_000_000)},
 			DataFeePerByteWei: big.NewInt(123),
 			NativeAssetID:     "eth",
@@ -134,8 +131,8 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
 	logger, logs := captureLogger(slog.LevelInfo)
 	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: sourceGas, DataFeePerByteWei: big.NewInt(0)},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)},
+		40161: {Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)), Gas: sourceGas, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: testConfiguredPrice("primary", big.NewRat(1000, 1)), Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)},
 	}, logger)
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -209,10 +206,15 @@ func TestBotEnqueueOnceBatchesSameSourcePriceFeedTargets(t *testing.T) {
 	secondTarget.DestinationWorkers.OpenDVN = config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc")
 	registry := testRegistryWithPathways(t, []config.PathwayConfig{pathways[0], secondTarget})
 	store := &fakeStore{}
-	sources := testSources()
+	sourcePrice := &countingPrice{source: "primary", price: big.NewRat(2000, 1), observedAt: time.Unix(1_700_000_000, 0)}
+	destinationPrice := &countingPrice{source: "primary", price: big.NewRat(1000, 1), observedAt: time.Unix(1_700_000_000, 0)}
+	alternatePrice := &countingPrice{source: "primary", price: big.NewRat(500, 1), observedAt: time.Unix(1_700_000_000, 0)}
+	sources := map[uint32]ChainSources{
+		40161: {Primary: ConfiguredPriceReader{Name: "primary", Reader: sourcePrice, MaxAge: time.Minute}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: ConfiguredPriceReader{Name: "primary", Reader: destinationPrice, MaxAge: time.Minute}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+	}
 	sources[40500] = ChainSources{
-		Primary:           fixedPrice{price: big.NewRat(500, 1)},
-		Sanity:            []PriceReader{fixedPrice{price: big.NewRat(500, 1)}},
+		Primary:           ConfiguredPriceReader{Name: "primary", Reader: alternatePrice, MaxAge: time.Minute},
 		Gas:               fixedGas{price: big.NewInt(3_000_000_000)},
 		DataFeePerByteWei: big.NewInt(0),
 	}
@@ -227,6 +229,11 @@ func TestBotEnqueueOnceBatchesSameSourcePriceFeedTargets(t *testing.T) {
 	}
 	if len(store.requests) != 1 {
 		t.Fatalf("enqueued requests = %d, want 1 batch", len(store.requests))
+	}
+	for name, reader := range map[string]*countingPrice{"source": sourcePrice, "destination": destinationPrice, "alternate": alternatePrice} {
+		if reads := reader.count.Load(); reads != 1 {
+			t.Fatalf("%s price reads = %d, want one per EID per cycle", name, reads)
+		}
 	}
 	assertRequestMatchesUpdates(t, store.requests, common.HexToAddress("0x4444444444444444444444444444444444444444"), []PriceSnapshotUpdate{
 		{
@@ -262,8 +269,8 @@ func TestBotEnqueueOnGasSpikeBatchesSameSourcePriceFeedTargets(t *testing.T) {
 	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
 	alternateGas := &mutableGas{price: big.NewInt(3_000_000_000)}
 	sources := testSources()
-	sources[40449] = ChainSources{Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)}
-	sources[40500] = ChainSources{Primary: fixedPrice{price: big.NewRat(500, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(500, 1)}}, Gas: alternateGas, DataFeePerByteWei: big.NewInt(0)}
+	sources[40449] = ChainSources{Primary: testConfiguredPrice("primary", big.NewRat(1000, 1)), Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)}
+	sources[40500] = ChainSources{Primary: testConfiguredPrice("primary", big.NewRat(500, 1)), Gas: alternateGas, DataFeePerByteWei: big.NewInt(0)}
 	bot, err := NewWithDependencies(store, registry, testSettings(), sources, discardLogger())
 	if err != nil {
 		t.Fatalf("NewWithDependencies() error = %v", err)
@@ -372,11 +379,25 @@ func (s *fakeStore) EnqueueTx(_ context.Context, request db.TxRequest) (int64, e
 }
 
 type fixedPrice struct {
-	price *big.Rat
+	source     string
+	price      *big.Rat
+	observedAt time.Time
+}
+
+type countingPrice struct {
+	count      atomic.Int32
+	source     string
+	price      *big.Rat
+	observedAt time.Time
+}
+
+func (p *countingPrice) PriceUSD(context.Context) (SourcePrice, error) {
+	p.count.Add(1)
+	return SourcePrice{Source: p.source, USD: p.price, ObservedAt: p.observedAt}, nil
 }
 
 func (p fixedPrice) PriceUSD(context.Context) (SourcePrice, error) {
-	return SourcePrice{Source: "fixed", USD: p.price}, nil
+	return SourcePrice{Source: p.source, USD: p.price, ObservedAt: p.observedAt}, nil
 }
 
 type failingPrice struct{}
@@ -403,13 +424,13 @@ func (g *mutableGas) SuggestGasPrice(context.Context) (*big.Int, error) {
 
 func testSettings() Settings {
 	return Settings{
-		Enabled:             true,
-		SignerID:            "0x9999999999999999999999999999999999999999",
-		Interval:            time.Minute,
-		StaleAfter:          30 * time.Minute,
-		MaxDeviation:        500,
-		GasSpikeBps:         1000,
-		AllowSanityFallback: true,
+		Enabled:              true,
+		SignerID:             "0x9999999999999999999999999999999999999999",
+		Interval:             time.Minute,
+		StaleAfter:           30 * time.Minute,
+		MaxDeviation:         500,
+		SourceRequestTimeout: time.Second,
+		GasSpikeBps:          1000,
 	}
 }
 
@@ -518,8 +539,16 @@ func testPathwayPricingConfig(executorBase string, executorOverhead uint64, exec
 
 func testSources() map[uint32]ChainSources {
 	return map[uint32]ChainSources{
-		40161: {Primary: fixedPrice{price: big.NewRat(2000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(2000, 1)}}, Gas: fixedGas{price: big.NewInt(1_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
-		40449: {Primary: fixedPrice{price: big.NewRat(1000, 1)}, Sanity: []PriceReader{fixedPrice{price: big.NewRat(1000, 1)}}, Gas: fixedGas{price: big.NewInt(2_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+		40161: {Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)), Gas: fixedGas{price: big.NewInt(1_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: testConfiguredPrice("primary", big.NewRat(1000, 1)), Gas: fixedGas{price: big.NewInt(2_000_000_000)}, DataFeePerByteWei: big.NewInt(0)},
+	}
+}
+
+func testConfiguredPrice(source string, price *big.Rat) ConfiguredPriceReader {
+	return ConfiguredPriceReader{
+		Name:   source,
+		Reader: fixedPrice{source: source, price: price, observedAt: time.Unix(1_700_000_000, 0)},
+		MaxAge: 100 * 365 * 24 * time.Hour,
 	}
 }
 

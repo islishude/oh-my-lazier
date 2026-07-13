@@ -342,16 +342,20 @@ pathway config that writes the initial snapshot and revokes the temporary
 authorization.
 
 The profile renderer enables the worker price bot in the generated
-`worker.yaml`. Chains default to `nativeAssetId: "eth"`, so the Sepolia/Hoodi
+`worker.yaml`. Global `pricing.sourceRequestTimeoutSeconds` and
+`pricing.maxDeviationBps` default to `10` and `500`; optional CoinMarketCap and
+CoinGecko BaseURLs and API-key environment-variable names also live under that
+profile block. Chains default to `nativeAssetId: "eth"`, so the Sepolia/Hoodi
 testnet profile writes same-native pricing chains that use destination RPC gas
-prices directly without requiring a Uniswap route on Hoodi. Set a different
-lowercase `nativeAssetId` on any chain whose native gas asset differs; those
-cross-asset pathways must provide market price sources and the required Uniswap
-sanity route in the worker config before starting the price bot. When Uniswap is
-used, `uniswap.quoter_address` must point at QuoterV2 on that chain, with an
-existing V3 pool route for the configured token pair and fee tier. Hoodi has no
-assumed public Uniswap deployment, so cross-asset Hoodi pricing requires an
-operator-managed Uniswap V3 and QuoterV2 deployment first.
+prices directly without requiring any market source. Set a different lowercase
+`nativeAssetId` on any chain whose native gas asset differs; every chain in a
+cross-asset profile must then declare `priceSources.primarySource` and the
+matching source configuration. CoinMarketCap, CoinGecko, and Chainlink may be
+primary sources. `sanitySources` may be omitted or empty, and Chainlink and
+Uniswap are optional. Uniswap may only be listed as a sanity source and reads an
+approved V3 pool TWAP through `observe()`; it is not a required Hoodi dependency
+and does not use QuoterV2. The renderer emits only referenced source blocks and
+rejects configured but unreferenced sources.
 
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`

@@ -160,6 +160,117 @@ test("normalizeProfile rejects uppercase native asset ids", () => {
   );
 });
 
+test("normalizeProfile requires source configuration for cross-asset pricing", () => {
+  const input = baseProfile();
+  (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /sepolia\.priceSources is required for cross-asset pricing/,
+  );
+});
+
+test("normalizeProfile accepts cross-asset pricing without Chainlink or Uniswap", () => {
+  const input = baseProfile();
+  (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+  for (const chain of input.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "coingecko",
+      coinGecko: { id: "ethereum", maxAgeSeconds: 180 },
+    };
+  }
+
+  const profile = normalizeProfile(input);
+
+  assert.equal(profile.chains[0].priceSources?.primarySource, "coingecko");
+  assert.deepEqual(profile.chains[0].priceSources?.sanitySources, []);
+  assert.equal(profile.chains[0].priceSources?.chainlink, undefined);
+  assert.equal(profile.chains[0].priceSources?.uniswap, undefined);
+});
+
+test("normalizeProfile accepts optional Chainlink primary and Uniswap sanity", () => {
+  const input = baseProfile();
+  (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+  for (const chain of input.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "chainlink",
+      sanitySources: ["uniswap"],
+      chainlink: {
+        feedAddress: "0x1111111111111111111111111111111111111111",
+        expectedDescription: "ETH / USD",
+        maxAgeSeconds: 3600,
+      },
+      uniswap: {
+        poolAddress: "0x2222222222222222222222222222222222222222",
+        tokenIn: "0x3333333333333333333333333333333333333333",
+        tokenOut: "0x4444444444444444444444444444444444444444",
+        twapWindowSeconds: 1800,
+        maxBlockAgeSeconds: 120,
+        minHarmonicMeanLiquidity: "1000000",
+      },
+    };
+  }
+
+  const profile = normalizeProfile(input);
+
+  assert.equal(profile.chains[0].priceSources?.primarySource, "chainlink");
+  assert.deepEqual(profile.chains[0].priceSources?.sanitySources, ["uniswap"]);
+});
+
+test("normalizeProfile accepts CoinMarketCap primary with environment key reference", () => {
+  const input = baseProfile();
+  (input as Record<string, unknown>).pricing = {
+    coinMarketCapAPIKeyEnv: "COINMARKETCAP_API_KEY",
+  };
+  (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+  for (const chain of input.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "coinmarketcap",
+      coinMarketCap: { id: 1027, maxAgeSeconds: 180 },
+    };
+  }
+
+  const profile = normalizeProfile(input);
+
+  assert.equal(profile.pricing.coinMarketCapAPIKeyEnv, "COINMARKETCAP_API_KEY");
+  assert.equal(profile.chains[0].priceSources?.coinMarketCap?.id, 1027);
+});
+
+test("normalizeProfile rejects missing and unreferenced price source blocks", () => {
+  const missing = baseProfile();
+  (missing.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+  for (const chain of missing.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "coingecko",
+      sanitySources: ["uniswap"],
+      coinGecko: { id: "ethereum", maxAgeSeconds: 180 },
+    };
+  }
+  assert.throws(
+    () => normalizeProfile(missing),
+    /uniswap is required when source is referenced/,
+  );
+
+  const unreferenced = baseProfile();
+  (unreferenced.chains[1] as Record<string, unknown>).nativeAssetId =
+    "hoodi-eth";
+  for (const chain of unreferenced.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "coingecko",
+      coinGecko: { id: "ethereum", maxAgeSeconds: 180 },
+      chainlink: {
+        feedAddress: "0x1111111111111111111111111111111111111111",
+        expectedDescription: "ETH / USD",
+        maxAgeSeconds: 3600,
+      },
+    };
+  }
+  assert.throws(
+    () => normalizeProfile(unreferenced),
+    /chainlink is configured but not referenced/,
+  );
+});
+
 test("normalizeProfile rejects legacy top-level canary token balance", () => {
   const input = {
     ...baseProfile(),
@@ -480,9 +591,35 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
     /signer: "0x2222222222222222222222222222222222222222"\n  interval_seconds: 300/,
   );
   assert.match(yaml, /native_asset_id: eth/);
+  assert.doesNotMatch(yaml, /primary_source:/);
+  assert.match(yaml, /source_request_timeout_seconds: 10/);
   assert.match(yaml, /min_native_balance_wei: "100000000000000000"/);
   assert.match(yaml, /start_block_number: 123456/);
   assert.match(yaml, /start_block_number: 654321/);
+});
+
+test("renderWorkerConfig emits only referenced optional price sources", () => {
+  const input = externalProfile();
+  (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+  for (const chain of input.chains) {
+    (chain as Record<string, unknown>).priceSources = {
+      primarySource: "coingecko",
+      coinGecko: { id: "ethereum", maxAgeSeconds: 180 },
+    };
+  }
+  const profile = normalizeProfile(input);
+  const yaml = renderWorkerConfig({
+    profile,
+    state: stateWithPriceFeeds(profile),
+    rpcUrls: { sepolia: "https://sepolia.invalid", hoodi: "https://hoodi.invalid" },
+    workerStartBlocks: { sepolia: 1, hoodi: 1 },
+  });
+
+  assert.match(yaml, /primary_source: coingecko/);
+  assert.match(yaml, /coingecko:\n        id: ethereum\n        max_age_seconds: 180/);
+  assert.doesNotMatch(yaml, /sanity_sources:/);
+  assert.doesNotMatch(yaml, /chainlink:/);
+  assert.doesNotMatch(yaml, /uniswap:/);
 });
 
 test("resolveWorkerStartBlocks queries latest height only for missing profile overrides", async () => {

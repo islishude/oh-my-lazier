@@ -479,6 +479,16 @@ func TestValidateAcceptsSameNativePricingWithoutMarketSources(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsSameNativePricingWithMarketSources(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = sameNativePricingConfig()
+	cfg.Pricing.Chains[0].PrimarySource = "coingecko"
+	cfg.Pricing.Chains[0].CoinGecko = CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want unused same-native market source error")
+	}
+}
+
 func TestValidateRejectsUppercasePricingNativeAssetID(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = sameNativePricingConfig()
@@ -512,8 +522,9 @@ func TestValidateAcceptsCoinMarketCapPrimaryPricing(t *testing.T) {
 	cfg.Pricing.CoinMarketCapAPIKeyEnv = "COINMARKETCAP_API_KEY"
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "coingecko"}
-		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
+		cfg.Pricing.Chains[i].SanitySources = nil
+		cfg.Pricing.Chains[i].CoinMarketCap = CoinMarketCapPricingConfig{ID: 1027, MaxAgeSeconds: 180}
+		cfg.Pricing.Chains[i].CoinGecko = CoinGeckoPricingConfig{}
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -525,8 +536,9 @@ func TestValidateRejectsCoinMarketCapPrimaryWithoutAPIKeyEnv(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coinmarketcap"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap", "coingecko"}
-		cfg.Pricing.Chains[i].CoinMarketCapSymbol = "ETH"
+		cfg.Pricing.Chains[i].SanitySources = nil
+		cfg.Pricing.Chains[i].CoinMarketCap = CoinMarketCapPricingConfig{ID: 1027, MaxAgeSeconds: 180}
+		cfg.Pricing.Chains[i].CoinGecko = CoinGeckoPricingConfig{}
 	}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing coinmarketcap api key env error")
@@ -536,8 +548,8 @@ func TestValidateRejectsCoinMarketCapPrimaryWithoutAPIKeyEnv(t *testing.T) {
 func TestValidateRejectsCoinMarketCapSanityWithoutAPIKeyEnv(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.Chains[0].CoinMarketCapSymbol = "ETH"
-	cfg.Pricing.Chains[0].SanitySources = []string{"uniswap", "coinmarketcap"}
+	cfg.Pricing.Chains[0].CoinMarketCap = CoinMarketCapPricingConfig{ID: 1027, MaxAgeSeconds: 180}
+	cfg.Pricing.Chains[0].SanitySources = []string{"coinmarketcap"}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing coinmarketcap api key env error")
 	}
@@ -548,8 +560,9 @@ func TestValidateAcceptsCoinGeckoPrimaryPricing(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	for i := range cfg.Pricing.Chains {
 		cfg.Pricing.Chains[i].PrimarySource = "coingecko"
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap"}
-		cfg.Pricing.Chains[i].CoinGeckoID = "ethereum"
+		cfg.Pricing.Chains[i].SanitySources = nil
+		cfg.Pricing.Chains[i].CoinGecko = CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180}
+		cfg.Pricing.Chains[i].Uniswap = UniswapPricingConfig{}
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
@@ -562,6 +575,71 @@ func TestValidateRejectsUniswapPrimaryPricing(t *testing.T) {
 	cfg.Pricing.Chains[0].PrimarySource = "uniswap"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want unsupported uniswap primary error")
+	}
+}
+
+func TestValidateAcceptsOptionalChainlinkSanityPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].SanitySources = []string{"chainlink"}
+		cfg.Pricing.Chains[i].Chainlink = ChainlinkPricingConfig{
+			FeedAddress:         MustEVMAddress("0x1111111111111111111111111111111111111111"),
+			ExpectedDescription: "ETH / USD",
+			MaxAgeSeconds:       3600,
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateAcceptsChainlinkPrimaryPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].PrimarySource = "chainlink"
+		cfg.Pricing.Chains[i].CoinGecko = CoinGeckoPricingConfig{}
+		cfg.Pricing.Chains[i].Chainlink = ChainlinkPricingConfig{
+			FeedAddress:         MustEVMAddress("0x1111111111111111111111111111111111111111"),
+			ExpectedDescription: "ETH / USD",
+			MaxAgeSeconds:       3600,
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateAcceptsOptionalUniswapSanityPricing(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap"}
+		cfg.Pricing.Chains[i].Uniswap = UniswapPricingConfig{
+			PoolAddress:              MustEVMAddress("0x1111111111111111111111111111111111111111"),
+			TokenIn:                  MustEVMAddress("0x2222222222222222222222222222222222222222"),
+			TokenOut:                 MustEVMAddress("0x3333333333333333333333333333333333333333"),
+			TWAPWindowSeconds:        1800,
+			MaxBlockAgeSeconds:       120,
+			MinHarmonicMeanLiquidity: "1000000",
+		}
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsConfiguredButUnreferencedPricingSource(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.Chains[0].Chainlink = ChainlinkPricingConfig{
+		FeedAddress:         MustEVMAddress("0x1111111111111111111111111111111111111111"),
+		ExpectedDescription: "ETH / USD",
+		MaxAgeSeconds:       3600,
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want unreferenced source error")
 	}
 }
 
@@ -664,6 +742,29 @@ pathways:
 	}
 	if workerConfig.DatabaseURL != "postgres://env:env@localhost:5432/env?sslmode=disable" {
 		t.Fatalf("Load() database_url = %q, want env override", workerConfig.DatabaseURL)
+	}
+}
+
+func TestLoadStaticRejectsRetiredPricingFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "sanity fallback", body: "pricing:\n  allow_sanity_fallback: true\n"},
+		{name: "coinmarketcap symbol", body: "pricing:\n  chains:\n    - eid: 1\n      coinmarketcap_symbol: ETH\n"},
+		{name: "flat coingecko id", body: "pricing:\n  chains:\n    - eid: 1\n      coingecko_id: ethereum\n"},
+		{name: "quoter", body: "pricing:\n  chains:\n    - eid: 1\n      uniswap:\n        quoter_address: 0x1111111111111111111111111111111111111111\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(test.body), 0o600); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			if _, err := LoadStatic(path); err == nil {
+				t.Fatal("LoadStatic() error = nil, want retired field error")
+			}
+		})
 	}
 }
 
@@ -782,48 +883,30 @@ func validDVNTxRoleConfig() DVNTxRoleConfig {
 
 func validPricingConfig() PricingConfig {
 	return PricingConfig{
-		Enabled:                 true,
-		Signer:                  MustEVMAddress("0x9999999999999999999999999999999999999999"),
-		IntervalSeconds:         300,
-		StaleAfterSeconds:       1800,
-		MaxDeviationBps:         500,
-		GasSpikeBps:             1000,
-		AllowSanityFallback:     true,
-		MaxFeePerGasWei:         "2000000000",
-		MaxPriorityFeePerGasWei: "1000000000",
-		MinNativeBalanceWei:     "100000000000000000",
+		Enabled:                     true,
+		Signer:                      MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		IntervalSeconds:             300,
+		StaleAfterSeconds:           1800,
+		MaxDeviationBps:             500,
+		SourceRequestTimeoutSeconds: 10,
+		GasSpikeBps:                 1000,
+		MaxFeePerGasWei:             "2000000000",
+		MaxPriorityFeePerGasWei:     "1000000000",
+		MinNativeBalanceWei:         "100000000000000000",
 		Chains: []PricingChainConfig{
 			{
 				EID:               40161,
 				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
-				SanitySources:     []string{"uniswap"},
-				CoinGeckoID:       "ethereum",
-				Uniswap: UniswapPricingConfig{
-					QuoterAddress:    MustEVMAddress("0x1111111111111111111111111111111111111111"),
-					TokenIn:          MustEVMAddress("0x2222222222222222222222222222222222222222"),
-					TokenOut:         MustEVMAddress("0x3333333333333333333333333333333333333333"),
-					Fee:              500,
-					AmountInWei:      "1000000000000000000",
-					TokenOutDecimals: 6,
-				},
+				CoinGecko:         CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180},
 			},
 			{
 				EID:               40449,
 				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
-				SanitySources:     []string{"uniswap"},
-				CoinGeckoID:       "ethereum",
-				Uniswap: UniswapPricingConfig{
-					QuoterAddress:    MustEVMAddress("0x4444444444444444444444444444444444444444"),
-					TokenIn:          MustEVMAddress("0x5555555555555555555555555555555555555555"),
-					TokenOut:         MustEVMAddress("0x6666666666666666666666666666666666666666"),
-					Fee:              500,
-					AmountInWei:      "1000000000000000000",
-					TokenOutDecimals: 6,
-				},
+				CoinGecko:         CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180},
 			},
 		},
 	}

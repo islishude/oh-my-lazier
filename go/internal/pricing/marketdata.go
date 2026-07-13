@@ -9,12 +9,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	defaultCoinMarketCapBaseURL = "https://pro-api.coinmarketcap.com"
 	defaultCoinGeckoBaseURL     = "https://api.coingecko.com"
+	defaultCoinGeckoProBaseURL  = "https://pro-api.coingecko.com"
 )
 
 // CoinMarketCapClient reads public USD prices from CoinMarketCap quotes.
@@ -24,15 +27,16 @@ type CoinMarketCapClient struct {
 	httpClient *http.Client
 }
 
-// CoinMarketCapPriceReader binds a CoinMarketCap symbol to a reusable client.
+// CoinMarketCapPriceReader binds a CoinMarketCap asset ID to a reusable client.
 type CoinMarketCapPriceReader struct {
 	client *CoinMarketCapClient
-	symbol string
+	id     uint64
 }
 
 // CoinGeckoClient reads public USD prices from CoinGecko simple price.
 type CoinGeckoClient struct {
 	baseURL    string
+	apiKey     string
 	httpClient *http.Client
 }
 
@@ -60,33 +64,33 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 	return &CoinMarketCapClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
 }
 
-// NewCoinMarketCapPriceReader creates a configured CoinMarketCap symbol reader.
-func NewCoinMarketCapPriceReader(client *CoinMarketCapClient, symbol string) (*CoinMarketCapPriceReader, error) {
+// NewCoinMarketCapPriceReader creates a configured CoinMarketCap asset-ID reader.
+func NewCoinMarketCapPriceReader(client *CoinMarketCapClient, id uint64) (*CoinMarketCapPriceReader, error) {
 	if client == nil {
 		return nil, errors.New("coinmarketcap client is required")
 	}
-	if symbol == "" {
-		return nil, errors.New("coinmarketcap symbol is required")
+	if id == 0 {
+		return nil, errors.New("coinmarketcap id is required")
 	}
-	return &CoinMarketCapPriceReader{client: client, symbol: symbol}, nil
+	return &CoinMarketCapPriceReader{client: client, id: id}, nil
 }
 
-// PriceUSD fetches the configured symbol's latest USD/native price.
+// PriceUSD fetches the configured asset ID's latest USD/native price.
 func (r *CoinMarketCapPriceReader) PriceUSD(ctx context.Context) (SourcePrice, error) {
-	return r.client.PriceUSD(ctx, r.symbol)
+	return r.client.PriceUSD(ctx, r.id)
 }
 
-// PriceUSD fetches the latest symbol price as USD/native.
-func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, symbol string) (SourcePrice, error) {
-	if symbol == "" {
-		return SourcePrice{}, errors.New("coinmarketcap symbol is required")
+// PriceUSD fetches the latest cryptocurrency-ID price as USD/native.
+func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePrice, error) {
+	if id == 0 {
+		return SourcePrice{}, errors.New("coinmarketcap id is required")
 	}
-	endpoint, err := url.Parse(c.baseURL + "/v2/cryptocurrency/quotes/latest")
+	endpoint, err := url.Parse(c.baseURL + "/v3/cryptocurrency/quotes/latest")
 	if err != nil {
 		return SourcePrice{}, wrapPriceSourceRequestError("coinmarketcap", "build", err)
 	}
 	query := endpoint.Query()
-	query.Set("symbol", strings.ToUpper(symbol))
+	query.Set("id", strconv.FormatUint(id, 10))
 	query.Set("convert", "USD")
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
@@ -105,9 +109,12 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, symbol string) (Sour
 		return SourcePrice{}, fmt.Errorf("coinmarketcap price request returned HTTP %d", response.StatusCode)
 	}
 	var payload struct {
-		Data map[string][]struct {
-			Quote map[string]struct {
-				Price json.Number `json:"price"`
+		Data []struct {
+			ID    uint64 `json:"id"`
+			Quote []struct {
+				Symbol      string      `json:"symbol"`
+				Price       json.Number `json:"price"`
+				LastUpdated string      `json:"last_updated"`
 			} `json:"quote"`
 		} `json:"data"`
 	}
@@ -116,27 +123,48 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, symbol string) (Sour
 	if err := decoder.Decode(&payload); err != nil {
 		return SourcePrice{}, err
 	}
-	entries := payload.Data[strings.ToUpper(symbol)]
-	if len(entries) == 0 {
-		return SourcePrice{}, fmt.Errorf("coinmarketcap returned no price for %s", symbol)
+	if len(payload.Data) != 1 || payload.Data[0].ID != id {
+		return SourcePrice{}, fmt.Errorf("coinmarketcap returned no unique price for id %d", id)
 	}
-	priceText := entries[0].Quote["USD"].Price.String()
+	var priceText, observedText string
+	for _, quote := range payload.Data[0].Quote {
+		if quote.Symbol == "USD" {
+			priceText = quote.Price.String()
+			observedText = quote.LastUpdated
+			break
+		}
+	}
 	price, ok := new(big.Rat).SetString(priceText)
 	if !ok || price.Sign() <= 0 {
 		return SourcePrice{}, fmt.Errorf("coinmarketcap returned invalid price %q", priceText)
 	}
-	return SourcePrice{Source: "coinmarketcap", USD: price}, nil
+	observedAt, err := time.Parse(time.RFC3339Nano, observedText)
+	if err != nil {
+		return SourcePrice{}, errors.New("coinmarketcap returned invalid last_updated")
+	}
+	return SourcePrice{Source: "coinmarketcap", USD: price, ObservedAt: observedAt}, nil
 }
 
 // NewCoinGeckoClient creates a CoinGecko simple-price client.
-func NewCoinGeckoClient(baseURL string, httpClient *http.Client) *CoinGeckoClient {
+func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*CoinGeckoClient, error) {
 	if baseURL == "" {
-		baseURL = defaultCoinGeckoBaseURL
+		if apiKeyEnv == "" {
+			baseURL = defaultCoinGeckoBaseURL
+		} else {
+			baseURL = defaultCoinGeckoProBaseURL
+		}
 	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &CoinGeckoClient{baseURL: strings.TrimRight(baseURL, "/"), httpClient: httpClient}
+	apiKey := ""
+	if apiKeyEnv != "" {
+		apiKey = os.Getenv(apiKeyEnv)
+		if apiKey == "" {
+			return nil, fmt.Errorf("coingecko api key env %s is empty", apiKeyEnv)
+		}
+	}
+	return &CoinGeckoClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
 }
 
 // NewCoinGeckoPriceReader creates a configured CoinGecko coin-id reader.
@@ -167,10 +195,14 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	query := endpoint.Query()
 	query.Set("ids", coinID)
 	query.Set("vs_currencies", "usd")
+	query.Set("include_last_updated_at", "true")
 	endpoint.RawQuery = query.Encode()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return SourcePrice{}, wrapPriceSourceRequestError("coingecko", "build", err)
+	}
+	if c.apiKey != "" {
+		request.Header.Set("x-cg-pro-api-key", c.apiKey)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
@@ -180,16 +212,26 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	if response.StatusCode != http.StatusOK {
 		return SourcePrice{}, fmt.Errorf("coingecko price request returned HTTP %d", response.StatusCode)
 	}
-	var payload map[string]map[string]json.Number
+	var payload map[string]struct {
+		USD           json.Number `json:"usd"`
+		LastUpdatedAt int64       `json:"last_updated_at"`
+	}
 	decoder := json.NewDecoder(response.Body)
 	decoder.UseNumber()
 	if err := decoder.Decode(&payload); err != nil {
 		return SourcePrice{}, err
 	}
-	priceText := payload[coinID]["usd"].String()
+	entry, ok := payload[coinID]
+	if !ok {
+		return SourcePrice{}, fmt.Errorf("coingecko returned no price for %s", coinID)
+	}
+	priceText := entry.USD.String()
 	price, ok := new(big.Rat).SetString(priceText)
 	if !ok || price.Sign() <= 0 {
 		return SourcePrice{}, fmt.Errorf("coingecko returned invalid price %q", priceText)
 	}
-	return SourcePrice{Source: "coingecko", USD: price}, nil
+	if entry.LastUpdatedAt <= 0 {
+		return SourcePrice{}, errors.New("coingecko returned invalid last_updated_at")
+	}
+	return SourcePrice{Source: "coingecko", USD: price, ObservedAt: time.Unix(entry.LastUpdatedAt, 0)}, nil
 }

@@ -221,19 +221,20 @@ func pricingChains(items []config.PricingChainConfig) map[string]config.PricingC
 }
 
 type pricingConfigGlobal struct {
-	Enabled                 bool   `json:"enabled"`
-	Signer                  string `json:"signer"`
-	IntervalSeconds         uint64 `json:"interval_seconds"`
-	StaleAfterSeconds       uint64 `json:"stale_after_seconds"`
-	MaxDeviationBps         uint64 `json:"max_deviation_bps"`
-	GasSpikeBps             uint64 `json:"gas_spike_bps"`
-	AllowSanityFallback     bool   `json:"allow_sanity_fallback"`
-	MaxFeePerGasWei         string `json:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei string `json:"max_priority_fee_per_gas_wei"`
-	MinNativeBalanceWei     string `json:"min_native_balance_wei"`
-	CoinMarketCapBaseURL    string `json:"coinmarketcap_base_url"`
-	CoinMarketCapAPIKeyEnv  string `json:"coinmarketcap_api_key_env"`
-	CoinGeckoBaseURL        string `json:"coingecko_base_url"`
+	Enabled                     bool   `json:"enabled"`
+	Signer                      string `json:"signer"`
+	IntervalSeconds             uint64 `json:"interval_seconds"`
+	StaleAfterSeconds           uint64 `json:"stale_after_seconds"`
+	MaxDeviationBps             uint64 `json:"max_deviation_bps"`
+	SourceRequestTimeoutSeconds uint64 `json:"source_request_timeout_seconds"`
+	GasSpikeBps                 uint64 `json:"gas_spike_bps"`
+	MaxFeePerGasWei             string `json:"max_fee_per_gas_wei"`
+	MaxPriorityFeePerGasWei     string `json:"max_priority_fee_per_gas_wei"`
+	MinNativeBalanceWei         string `json:"min_native_balance_wei"`
+	CoinMarketCapBaseURL        string `json:"coinmarketcap_base_url"`
+	CoinMarketCapAPIKeyEnv      string `json:"coinmarketcap_api_key_env"`
+	CoinGeckoBaseURL            string `json:"coingecko_base_url"`
+	CoinGeckoAPIKeyEnv          string `json:"coingecko_api_key_env"`
 }
 
 type servicesConfig struct {
@@ -250,19 +251,20 @@ func services(cfg config.Config) servicesConfig {
 
 func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 	return pricingConfigGlobal{
-		Enabled:                 pricing.Enabled,
-		Signer:                  pricing.Signer.Hex(),
-		IntervalSeconds:         pricing.IntervalSeconds,
-		StaleAfterSeconds:       pricing.StaleAfterSeconds,
-		MaxDeviationBps:         pricing.MaxDeviationBps,
-		GasSpikeBps:             pricing.GasSpikeBps,
-		AllowSanityFallback:     pricing.AllowSanityFallback,
-		MaxFeePerGasWei:         pricing.MaxFeePerGasWei,
-		MaxPriorityFeePerGasWei: pricing.MaxPriorityFeePerGasWei,
-		MinNativeBalanceWei:     pricing.MinNativeBalanceWei,
-		CoinMarketCapBaseURL:    pricing.CoinMarketCapBaseURL,
-		CoinMarketCapAPIKeyEnv:  pricing.CoinMarketCapAPIKeyEnv,
-		CoinGeckoBaseURL:        pricing.CoinGeckoBaseURL,
+		Enabled:                     pricing.Enabled,
+		Signer:                      pricing.Signer.Hex(),
+		IntervalSeconds:             pricing.IntervalSeconds,
+		StaleAfterSeconds:           pricing.StaleAfterSeconds,
+		MaxDeviationBps:             pricing.MaxDeviationBps,
+		SourceRequestTimeoutSeconds: pricing.SourceRequestTimeoutSeconds,
+		GasSpikeBps:                 pricing.GasSpikeBps,
+		MaxFeePerGasWei:             pricing.MaxFeePerGasWei,
+		MaxPriorityFeePerGasWei:     pricing.MaxPriorityFeePerGasWei,
+		MinNativeBalanceWei:         pricing.MinNativeBalanceWei,
+		CoinMarketCapBaseURL:        pricing.CoinMarketCapBaseURL,
+		CoinMarketCapAPIKeyEnv:      pricing.CoinMarketCapAPIKeyEnv,
+		CoinGeckoBaseURL:            pricing.CoinGeckoBaseURL,
+		CoinGeckoAPIKeyEnv:          pricing.CoinGeckoAPIKeyEnv,
 	}
 }
 

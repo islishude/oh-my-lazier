@@ -44,13 +44,59 @@ const outputs: AbiOutput[] = [
     ],
   },
   {
-    path: "go/internal/pricing/abis/uniswap_v3_quoter.json",
+    path: "go/internal/pricing/abis/chainlink_aggregator_v3.json",
     selections: [
       {
         artifact:
-          "node_modules/@uniswap/v3-periphery/artifacts/contracts/interfaces/IQuoterV2.sol/IQuoterV2.json",
+          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
         type: "function",
-        name: "quoteExactInputSingle",
+        name: "latestRoundData",
+      },
+      {
+        artifact:
+          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+        type: "function",
+        name: "decimals",
+      },
+      {
+        artifact:
+          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+        type: "function",
+        name: "description",
+      },
+    ],
+  },
+  {
+    path: "go/internal/pricing/abis/uniswap_v3_pool.json",
+    selections: [
+      {
+        artifact:
+          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+        type: "function",
+        name: "observe",
+      },
+      {
+        artifact:
+          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+        type: "function",
+        name: "token0",
+      },
+      {
+        artifact:
+          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+        type: "function",
+        name: "token1",
+      },
+    ],
+  },
+  {
+    path: "go/internal/pricing/abis/erc20_metadata.json",
+    selections: [
+      {
+        artifact:
+          "node_modules/@openzeppelin/contracts/build/contracts/IERC20Metadata.json",
+        type: "function",
+        name: "decimals",
       },
     ],
   },
@@ -112,7 +158,12 @@ async function readArtifact(
   }
 
   const raw = await readFile(absolutePath, "utf8");
-  const parsed = JSON.parse(raw) as Partial<Artifact>;
+  const parsed = JSON.parse(raw) as Partial<Artifact> | AbiEntry[];
+  if (Array.isArray(parsed)) {
+    const artifact = { abi: parsed };
+    artifactCache.set(absolutePath, artifact);
+    return artifact;
+  }
   if (!Array.isArray(parsed.abi)) {
     throw new Error(`${artifactPath}: missing ABI array`);
   }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math"
@@ -141,10 +142,10 @@ type PricingConfig struct {
 	StaleAfterSeconds uint64 `yaml:"stale_after_seconds"`
 	// MaxDeviationBps is the allowed primary-vs-sanity feed deviation; it defaults to 500.
 	MaxDeviationBps uint64 `yaml:"max_deviation_bps"`
+	// SourceRequestTimeoutSeconds bounds one concurrent market-source read; it defaults to 10.
+	SourceRequestTimeoutSeconds uint64 `yaml:"source_request_timeout_seconds"`
 	// GasSpikeBps triggers early updates when destination gas rises past the previous quoted price.
 	GasSpikeBps uint64 `yaml:"gas_spike_bps"`
-	// AllowSanityFallback lets the bot use a healthy sanity source only when the primary source is unhealthy.
-	AllowSanityFallback bool `yaml:"allow_sanity_fallback"`
 	// MaxFeePerGasWei caps txmgr send-time gas pricing for price snapshot update transactions.
 	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
 	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price snapshot update transactions.
@@ -157,6 +158,8 @@ type PricingConfig struct {
 	CoinMarketCapAPIKeyEnv string `yaml:"coinmarketcap_api_key_env"`
 	// CoinGeckoBaseURL optionally overrides the CoinGecko HTTP API endpoint.
 	CoinGeckoBaseURL string `yaml:"coingecko_base_url"`
+	// CoinGeckoAPIKeyEnv optionally names the environment variable containing a CoinGecko Pro API key.
+	CoinGeckoAPIKeyEnv string `yaml:"coingecko_api_key_env"`
 	// Chains configures native-asset price feeds for every chain when pricing is enabled.
 	Chains []PricingChainConfig `yaml:"chains"`
 }
@@ -181,32 +184,60 @@ type PricingChainConfig struct {
 	NativeAssetID string `yaml:"native_asset_id"`
 	// DataFeePerByteWei is the destination-native data fee per byte used for generic data-fee quotes.
 	DataFeePerByteWei string `yaml:"data_fee_per_byte_wei"`
-	// PrimarySource is the price source the bot quotes from for cross-asset pathways; supported values exclude uniswap.
+	// PrimarySource is the authoritative source the bot quotes from for cross-asset pathways.
 	PrimarySource string `yaml:"primary_source"`
-	// SanitySources cross-check the primary source for cross-asset pathways and must include uniswap without duplicating the primary.
+	// SanitySources optionally cross-check the primary source without ever replacing it.
 	SanitySources []string `yaml:"sanity_sources"`
-	// CoinMarketCapSymbol is required when coinmarketcap is selected as primary or sanity source.
-	CoinMarketCapSymbol string `yaml:"coinmarketcap_symbol"`
-	// CoinGeckoID is required when coingecko is selected as primary or sanity source.
-	CoinGeckoID string `yaml:"coingecko_id"`
-	// Uniswap configures the on-chain V3 sanity route for this chain's native asset.
+	// CoinMarketCap configures the CoinMarketCap source when referenced.
+	CoinMarketCap CoinMarketCapPricingConfig `yaml:"coinmarketcap"`
+	// CoinGecko configures the CoinGecko source when referenced.
+	CoinGecko CoinGeckoPricingConfig `yaml:"coingecko"`
+	// Chainlink configures an optional chain-local AggregatorV3 source when referenced.
+	Chainlink ChainlinkPricingConfig `yaml:"chainlink"`
+	// Uniswap configures an optional on-chain V3 TWAP sanity source when referenced.
 	Uniswap UniswapPricingConfig `yaml:"uniswap"`
 }
 
-// UniswapPricingConfig configures one V3 QuoterV2 sanity route.
+// CoinMarketCapPricingConfig configures one CoinMarketCap asset price.
+type CoinMarketCapPricingConfig struct {
+	// ID is the unambiguous CoinMarketCap cryptocurrency ID.
+	ID uint64 `yaml:"id"`
+	// MaxAgeSeconds is the oldest accepted upstream observation.
+	MaxAgeSeconds uint64 `yaml:"max_age_seconds"`
+}
+
+// CoinGeckoPricingConfig configures one CoinGecko asset price.
+type CoinGeckoPricingConfig struct {
+	// ID is the CoinGecko API coin ID.
+	ID string `yaml:"id"`
+	// MaxAgeSeconds is the oldest accepted upstream observation.
+	MaxAgeSeconds uint64 `yaml:"max_age_seconds"`
+}
+
+// ChainlinkPricingConfig configures one chain-local AggregatorV3 price feed.
+type ChainlinkPricingConfig struct {
+	// FeedAddress is the AggregatorV3 proxy address on this pricing chain.
+	FeedAddress EVMAddress `yaml:"feed_address"`
+	// ExpectedDescription identifies the approved feed, for example ETH / USD.
+	ExpectedDescription string `yaml:"expected_description"`
+	// MaxAgeSeconds is the oldest accepted latestRoundData observation.
+	MaxAgeSeconds uint64 `yaml:"max_age_seconds"`
+}
+
+// UniswapPricingConfig configures one V3 pool TWAP sanity route.
 type UniswapPricingConfig struct {
-	// QuoterAddress is the Uniswap V3 QuoterV2 contract used for sanity pricing.
-	QuoterAddress EVMAddress `yaml:"quoter_address"`
+	// PoolAddress is the Uniswap V3 pool used for TWAP observations.
+	PoolAddress EVMAddress `yaml:"pool_address"`
 	// TokenIn is the chain-native or wrapped-native token being priced.
 	TokenIn EVMAddress `yaml:"token_in"`
-	// TokenOut is the reference token returned by the quoter, usually a stablecoin.
+	// TokenOut is the USD reference token in the pool, usually a stablecoin.
 	TokenOut EVMAddress `yaml:"token_out"`
-	// Fee is the Uniswap V3 pool fee tier encoded as a uint24-compatible value.
-	Fee uint32 `yaml:"fee"`
-	// AmountInWei is the positive token-in amount used for the sanity quote.
-	AmountInWei string `yaml:"amount_in_wei"`
-	// TokenOutDecimals converts the quoted token-out amount into USD/native units.
-	TokenOutDecimals uint8 `yaml:"token_out_decimals"`
+	// TWAPWindowSeconds is the lookback used for the arithmetic mean tick.
+	TWAPWindowSeconds uint64 `yaml:"twap_window_seconds"`
+	// MaxBlockAgeSeconds is the oldest accepted latest block timestamp.
+	MaxBlockAgeSeconds uint64 `yaml:"max_block_age_seconds"`
+	// MinHarmonicMeanLiquidity rejects observations below the approved pool liquidity floor.
+	MinHarmonicMeanLiquidity string `yaml:"min_harmonic_mean_liquidity"`
 }
 
 // SignerConfig configures one local signing backend without embedding raw secret material.
@@ -346,7 +377,9 @@ func load(path string, applyEnv bool) (Config, error) {
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(raw))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, err
 	}
 	if env := os.Getenv("DATABASE_URL"); applyEnv && env != "" {
@@ -368,6 +401,9 @@ func load(path string, applyEnv bool) (Config, error) {
 		}
 		if cfg.Pricing.MaxDeviationBps == 0 {
 			cfg.Pricing.MaxDeviationBps = 500
+		}
+		if cfg.Pricing.SourceRequestTimeoutSeconds == 0 {
+			cfg.Pricing.SourceRequestTimeoutSeconds = 10
 		}
 		if cfg.Pricing.GasSpikeBps == 0 {
 			cfg.Pricing.GasSpikeBps = 1_000
@@ -638,6 +674,9 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.MaxDeviationBps == 0 {
 		return errors.New("pricing max_deviation_bps is required")
 	}
+	if c.Pricing.SourceRequestTimeoutSeconds == 0 {
+		return errors.New("pricing source_request_timeout_seconds is required")
+	}
 	if c.Pricing.GasSpikeBps == 0 {
 		return errors.New("pricing gas_spike_bps is required")
 	}
@@ -664,7 +703,10 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	}
 	requiresMarketSources := pricingMarketSourceRequirements(c.Pathways, pricingChains)
 	for _, chain := range c.Pricing.Chains {
-		if !requiresMarketSources[chain.EID] && !pricingChainHasMarketSources(chain) {
+		if !requiresMarketSources[chain.EID] {
+			if pricingChainHasMarketSources(chain) {
+				return fmt.Errorf("pricing chain %d market sources must be omitted when no cross-asset pathway uses the chain", chain.EID)
+			}
 			continue
 		}
 		if err := validatePricingChainSources(chain, c.Pricing.CoinMarketCapAPIKeyEnv); err != nil {
@@ -740,26 +782,39 @@ func pricingMarketSourceRequirements(pathways []PathwayConfig, pricingChains map
 func pricingChainHasMarketSources(chain PricingChainConfig) bool {
 	return chain.PrimarySource != "" ||
 		len(chain.SanitySources) != 0 ||
-		chain.CoinMarketCapSymbol != "" ||
-		chain.CoinGeckoID != "" ||
-		!chain.Uniswap.QuoterAddress.IsZero() ||
-		!chain.Uniswap.TokenIn.IsZero() ||
-		!chain.Uniswap.TokenOut.IsZero() ||
-		chain.Uniswap.Fee != 0 ||
-		chain.Uniswap.AmountInWei != "" ||
-		chain.Uniswap.TokenOutDecimals != 0
+		coinMarketCapPricingConfigured(chain.CoinMarketCap) ||
+		coinGeckoPricingConfigured(chain.CoinGecko) ||
+		chainlinkPricingConfigured(chain.Chainlink) ||
+		uniswapPricingConfigured(chain.Uniswap)
+}
+
+func coinMarketCapPricingConfigured(source CoinMarketCapPricingConfig) bool {
+	return source.ID != 0 || source.MaxAgeSeconds != 0
+}
+
+func coinGeckoPricingConfigured(source CoinGeckoPricingConfig) bool {
+	return source.ID != "" || source.MaxAgeSeconds != 0
+}
+
+func chainlinkPricingConfigured(source ChainlinkPricingConfig) bool {
+	return !source.FeedAddress.IsZero() || source.ExpectedDescription != "" || source.MaxAgeSeconds != 0
+}
+
+func uniswapPricingConfigured(source UniswapPricingConfig) bool {
+	return !source.PoolAddress.IsZero() ||
+		!source.TokenIn.IsZero() ||
+		!source.TokenOut.IsZero() ||
+		source.TWAPWindowSeconds != 0 ||
+		source.MaxBlockAgeSeconds != 0 ||
+		source.MinHarmonicMeanLiquidity != ""
 }
 
 func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEnv string) error {
 	if err := validatePrimaryPricingSourceName(chain.EID, chain.PrimarySource); err != nil {
 		return err
 	}
-	if len(chain.SanitySources) == 0 {
-		return fmt.Errorf("pricing chain %d sanity_sources is required", chain.EID)
-	}
 	seen := make(map[string]struct{}, len(chain.SanitySources)+1)
 	seen[chain.PrimarySource] = struct{}{}
-	hasUniswap := false
 	for idx, source := range chain.SanitySources {
 		if err := validateSanityPricingSourceName(chain.EID, fmt.Sprintf("sanity_sources[%d]", idx), source); err != nil {
 			return err
@@ -768,16 +823,21 @@ func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEn
 			return fmt.Errorf("pricing chain %d source %q is configured more than once", chain.EID, source)
 		}
 		seen[source] = struct{}{}
-		if source == "uniswap" {
-			hasUniswap = true
-		}
-	}
-	if !hasUniswap {
-		return fmt.Errorf("pricing chain %d sanity_sources must include uniswap", chain.EID)
 	}
 	for source := range seen {
 		if err := validateConfiguredPricingSource(chain, source, coinMarketCapAPIKeyEnv); err != nil {
 			return err
+		}
+	}
+	for source, configured := range map[string]bool{
+		"coinmarketcap": coinMarketCapPricingConfigured(chain.CoinMarketCap),
+		"coingecko":     coinGeckoPricingConfigured(chain.CoinGecko),
+		"chainlink":     chainlinkPricingConfigured(chain.Chainlink),
+		"uniswap":       uniswapPricingConfigured(chain.Uniswap),
+	} {
+		_, referenced := seen[source]
+		if configured && !referenced {
+			return fmt.Errorf("pricing chain %d source %q is configured but not referenced", chain.EID, source)
 		}
 	}
 	return nil
@@ -785,7 +845,7 @@ func validatePricingChainSources(chain PricingChainConfig, coinMarketCapAPIKeyEn
 
 func validatePrimaryPricingSourceName(eid uint32, source string) error {
 	switch source {
-	case "coinmarketcap", "coingecko":
+	case "coinmarketcap", "coingecko", "chainlink":
 		return nil
 	case "":
 		return fmt.Errorf("pricing chain %d primary_source is required", eid)
@@ -796,7 +856,7 @@ func validatePrimaryPricingSourceName(eid uint32, source string) error {
 
 func validateSanityPricingSourceName(eid uint32, field, source string) error {
 	switch source {
-	case "coinmarketcap", "coingecko", "uniswap":
+	case "coinmarketcap", "coingecko", "chainlink", "uniswap":
 		return nil
 	case "":
 		return fmt.Errorf("pricing chain %d %s is required", eid, field)
@@ -811,12 +871,22 @@ func validateConfiguredPricingSource(chain PricingChainConfig, source, coinMarke
 		if coinMarketCapAPIKeyEnv == "" {
 			return fmt.Errorf("pricing chain %d coinmarketcap_api_key_env is required when coinmarketcap is used", chain.EID)
 		}
-		if chain.CoinMarketCapSymbol == "" {
-			return fmt.Errorf("pricing chain %d coinmarketcap_symbol is required", chain.EID)
+		if chain.CoinMarketCap.ID == 0 {
+			return fmt.Errorf("pricing chain %d coinmarketcap.id is required", chain.EID)
+		}
+		if chain.CoinMarketCap.MaxAgeSeconds == 0 {
+			return fmt.Errorf("pricing chain %d coinmarketcap.max_age_seconds is required", chain.EID)
 		}
 	case "coingecko":
-		if chain.CoinGeckoID == "" {
-			return fmt.Errorf("pricing chain %d coingecko_id is required", chain.EID)
+		if chain.CoinGecko.ID == "" {
+			return fmt.Errorf("pricing chain %d coingecko.id is required", chain.EID)
+		}
+		if chain.CoinGecko.MaxAgeSeconds == 0 {
+			return fmt.Errorf("pricing chain %d coingecko.max_age_seconds is required", chain.EID)
+		}
+	case "chainlink":
+		if err := validateChainlinkPricingSource(chain); err != nil {
+			return err
 		}
 	case "uniswap":
 		if err := validateUniswapPricingSource(chain); err != nil {
@@ -826,27 +896,49 @@ func validateConfiguredPricingSource(chain PricingChainConfig, source, coinMarke
 	return nil
 }
 
+func validateChainlinkPricingSource(chain PricingChainConfig) error {
+	if chain.Chainlink.FeedAddress.IsZero() {
+		return fmt.Errorf("pricing chain %d chainlink.feed_address is required", chain.EID)
+	}
+	if strings.TrimSpace(chain.Chainlink.ExpectedDescription) == "" {
+		return fmt.Errorf("pricing chain %d chainlink.expected_description is required", chain.EID)
+	}
+	if strings.TrimSpace(chain.Chainlink.ExpectedDescription) != chain.Chainlink.ExpectedDescription {
+		return fmt.Errorf("pricing chain %d chainlink.expected_description must not contain leading or trailing whitespace", chain.EID)
+	}
+	if chain.Chainlink.MaxAgeSeconds == 0 {
+		return fmt.Errorf("pricing chain %d chainlink.max_age_seconds is required", chain.EID)
+	}
+	return nil
+}
+
 func validateUniswapPricingSource(chain PricingChainConfig) error {
 	for label, value := range map[string]EVMAddress{
-		"uniswap.quoter_address": chain.Uniswap.QuoterAddress,
-		"uniswap.token_in":       chain.Uniswap.TokenIn,
-		"uniswap.token_out":      chain.Uniswap.TokenOut,
+		"uniswap.pool_address": chain.Uniswap.PoolAddress,
+		"uniswap.token_in":     chain.Uniswap.TokenIn,
+		"uniswap.token_out":    chain.Uniswap.TokenOut,
 	} {
 		if value.IsZero() {
 			return fmt.Errorf("pricing chain %d %s is required", chain.EID, label)
 		}
 	}
-	if chain.Uniswap.Fee > (1<<24)-1 {
-		return fmt.Errorf("pricing chain %d uniswap fee exceeds uint24", chain.EID)
+	if chain.Uniswap.TokenIn == chain.Uniswap.TokenOut {
+		return fmt.Errorf("pricing chain %d uniswap token_in and token_out must differ", chain.EID)
 	}
-	if chain.Uniswap.AmountInWei == "" {
-		return fmt.Errorf("pricing chain %d uniswap amount_in_wei is required", chain.EID)
+	if chain.Uniswap.TWAPWindowSeconds == 0 {
+		return fmt.Errorf("pricing chain %d uniswap.twap_window_seconds is required", chain.EID)
 	}
-	if _, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("pricing chain %d uniswap amount_in_wei", chain.EID), chain.Uniswap.AmountInWei); err != nil {
+	if chain.Uniswap.TWAPWindowSeconds > math.MaxUint32 {
+		return fmt.Errorf("pricing chain %d uniswap.twap_window_seconds exceeds uint32", chain.EID)
+	}
+	if chain.Uniswap.MaxBlockAgeSeconds == 0 {
+		return fmt.Errorf("pricing chain %d uniswap.max_block_age_seconds is required", chain.EID)
+	}
+	if chain.Uniswap.MinHarmonicMeanLiquidity == "" {
+		return fmt.Errorf("pricing chain %d uniswap.min_harmonic_mean_liquidity is required", chain.EID)
+	}
+	if _, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("pricing chain %d uniswap.min_harmonic_mean_liquidity", chain.EID), chain.Uniswap.MinHarmonicMeanLiquidity); err != nil {
 		return err
-	}
-	if chain.Uniswap.TokenOutDecimals == 0 {
-		return fmt.Errorf("pricing chain %d uniswap token_out_decimals is required", chain.EID)
 	}
 	return nil
 }

@@ -20,8 +20,8 @@ pricing:
   interval_seconds: 300
   stale_after_seconds: 1800
   max_deviation_bps: 500
+  source_request_timeout_seconds: 10
   gas_spike_bps: 1000
-  allow_sanity_fallback: true
   max_fee_per_gas_wei: "2000000000"
   max_priority_fee_per_gas_wei: "1000000000"
   min_native_balance_wei: "100000000000000000"
@@ -34,24 +34,30 @@ pricing:
       data_fee_per_byte_wei: "0"
 
     # Example cross-asset pricing chain. Same-native chains above do not need
-    # market sources. Cross-asset chains still declare native_asset_id, need a
-    # primary source plus sanity sources, and Uniswap sanity uses a deployed
-    # Uniswap V3 QuoterV2 route.
+    # market sources. Cross-asset chains still declare native_asset_id and need
+    # one primary source. sanity_sources, Chainlink, and Uniswap are optional.
     # - eid: 40161
     #   native_asset_id: eth
+    #   data_fee_per_byte_wei: "0"
     #   primary_source: coingecko
     #   sanity_sources:
     #     - uniswap
-    #   coinmarketcap_symbol: ETH
-    #   coingecko_id: ethereum
+    #   coingecko:
+    #     id: ethereum
+    #     max_age_seconds: 180
+    #   # Optional AggregatorV3 primary or sanity source.
+    #   chainlink:
+    #     feed_address: "0x1111111111111111111111111111111111111111"
+    #     expected_description: "ETH / USD"
+    #     max_age_seconds: 3600
     #   uniswap:
-    #     # QuoterV2 for this chain, not the legacy IQuoter contract.
-    #     quoter_address: "0x1111111111111111111111111111111111111111"
+    #     # Optional V3 pool TWAP sanity source.
+    #     pool_address: "0x4444444444444444444444444444444444444444"
     #     token_in: "0x2222222222222222222222222222222222222222"
     #     token_out: "0x3333333333333333333333333333333333333333"
-    #     fee: 500
-    #     amount_in_wei: "1000000000000000000"
-    #     token_out_decimals: 6
+    #     twap_window_seconds: 1800
+    #     max_block_age_seconds: 120
+    #     min_harmonic_mean_liquidity: "1000000"
 chains:
   - eid: 40161
     name: ethereum-sepolia

@@ -9,6 +9,7 @@ import (
 	"maps"
 	"math/big"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -115,13 +116,13 @@ type PriceReader interface {
 
 // Settings controls price update generation.
 type Settings struct {
-	Enabled             bool
-	SignerID            string
-	Interval            time.Duration
-	StaleAfter          time.Duration
-	MaxDeviation        uint64
-	GasSpikeBps         uint64
-	AllowSanityFallback bool
+	Enabled              bool
+	SignerID             string
+	Interval             time.Duration
+	StaleAfter           time.Duration
+	MaxDeviation         uint64
+	SourceRequestTimeout time.Duration
+	GasSpikeBps          uint64
 }
 
 // FeeModel controls one worker role's source-chain quote inputs.
@@ -149,6 +150,9 @@ func (s Settings) Validate() error {
 	if s.MaxDeviation == 0 {
 		return errors.New("pricing max deviation bps is required")
 	}
+	if s.SourceRequestTimeout <= 0 {
+		return errors.New("pricing source request timeout must be positive")
+	}
 	if s.GasSpikeBps == 0 {
 		return errors.New("pricing gas spike bps is required")
 	}
@@ -168,17 +172,36 @@ func (m FeeModel) Validate(prefix string) error {
 
 // ChainSources are the price and gas inputs for one configured chain.
 type ChainSources struct {
-	Primary           PriceReader
-	Sanity            []PriceReader
+	Primary           ConfiguredPriceReader
+	Sanity            []ConfiguredPriceReader
 	Gas               GasPriceReader
 	DataFeePerByteWei *big.Int
 	NativeAssetID     string
 }
 
+// ConfiguredPriceReader binds one source reader to its freshness policy.
+type ConfiguredPriceReader struct {
+	Name   string
+	Reader PriceReader
+	MaxAge time.Duration
+}
+
 // PriceSelectionPolicy controls primary/sanity price-source selection.
 type PriceSelectionPolicy struct {
-	MaxDeviationBps     uint64
-	AllowSanityFallback bool
+	MaxDeviationBps      uint64
+	SourceRequestTimeout time.Duration
+	Now                  func() time.Time
+	OnSourceFailure      func(PriceSourceFailure)
+}
+
+// PriceSourceFailure describes one rejected primary or sanity observation.
+type PriceSourceFailure struct {
+	EID          uint32
+	Source       string
+	Role         string
+	Category     string
+	DeviationBps uint64
+	Err          error
 }
 
 // EnqueueOnce computes current price snapshots and enqueues shared price-feed update batches.
@@ -197,8 +220,12 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 		b.logger.Debug("skipped price update batch", "reason", "no_pathways")
 		return nil
 	}
+	cycle, err := b.preparePriceCycle(ctx, updates, nil)
+	if err != nil {
+		return err
+	}
 	for _, batch := range priceUpdateBatches(updates) {
-		if _, err := b.enqueuePriceUpdateBatch(ctx, batch); err != nil {
+		if _, err := b.enqueuePriceUpdateBatch(ctx, batch, cycle); err != nil {
 			return err
 		}
 	}
@@ -221,13 +248,14 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		b.logger.Debug("skipped price gas-spike check", "reason", "no_pathways")
 		return nil
 	}
+	gasPrices, err := b.readDestinationGasPrices(ctx, updates)
+	if err != nil {
+		return err
+	}
 	spikes := make([]pricedGasSpike, 0, len(updates))
 	for _, update := range updates {
 		key := priceUpdateKey(update)
-		current, err := b.currentDstGasPrice(ctx, update.DstEID)
-		if err != nil {
-			return err
-		}
+		current := gasPrices[update.DstEID]
 		previous := b.lastGasPrices[key]
 		if previous == nil {
 			b.lastGasPrices[key] = bigutil.Clone(current)
@@ -242,8 +270,13 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			current:  bigutil.Clone(current),
 		})
 	}
-	for _, batch := range priceUpdateBatches(spikeUpdates(spikes)) {
-		txOutboxID, err := b.enqueuePriceUpdateBatch(ctx, batch)
+	selectedUpdates := spikeUpdates(spikes)
+	cycle, err := b.preparePriceCycle(ctx, selectedUpdates, gasPrices)
+	if err != nil {
+		return err
+	}
+	for _, batch := range priceUpdateBatches(selectedUpdates) {
+		txOutboxID, err := b.enqueuePriceUpdateBatch(ctx, batch, cycle)
 		if err != nil {
 			return err
 		}
@@ -275,7 +308,12 @@ type pricedUpdateBatch struct {
 	Targets   []pricedUpdate
 }
 
-func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBatch) (int64, error) {
+type priceCycleInputs struct {
+	nativeUSD map[uint32]*big.Rat
+	gasWei    map[uint32]*big.Int
+}
+
+func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBatch, cycle priceCycleInputs) (int64, error) {
 	srcChain, err := b.registry.Get(batch.SrcEID)
 	if err != nil {
 		return 0, err
@@ -288,13 +326,13 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 		if err != nil {
 			return 0, err
 		}
-		srcPrice, dstPrice, err := b.pathwayPrices(ctx, target.SrcEID, target.DstEID)
+		srcPrice, dstPrice, err := b.cyclePathwayPrices(cycle, target.SrcEID, target.DstEID)
 		if err != nil {
 			return 0, err
 		}
-		dstGasPrice, err := b.currentDstGasPrice(ctx, target.DstEID)
-		if err != nil {
-			return 0, err
+		dstGasPrice := cycle.gasWei[target.DstEID]
+		if dstGasPrice == nil || dstGasPrice.Sign() <= 0 {
+			return 0, fmt.Errorf("pricing gas source for chain %d is missing from prepared cycle", target.DstEID)
 		}
 		dstDataFeePerByte, err := b.currentDstDataFeePerByte(target.DstEID)
 		if err != nil {
@@ -333,11 +371,97 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 	return id, nil
 }
 
-func (b *Bot) pathwayPrices(ctx context.Context, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
-	return PathwayNativePrices(ctx, b.sources, srcEID, dstEID, PriceSelectionPolicy{
-		MaxDeviationBps:     b.settings.MaxDeviation,
-		AllowSanityFallback: b.settings.AllowSanityFallback,
-	})
+func (b *Bot) preparePriceCycle(ctx context.Context, updates []pricedUpdate, knownGas map[uint32]*big.Int) (priceCycleInputs, error) {
+	cycle := priceCycleInputs{nativeUSD: make(map[uint32]*big.Rat), gasWei: make(map[uint32]*big.Int)}
+	if len(updates) == 0 {
+		return cycle, nil
+	}
+	priceEIDs := make(map[uint32]struct{})
+	gasEIDs := make(map[uint32]struct{})
+	for _, update := range updates {
+		src, srcOK := b.sources[update.SrcEID]
+		dst, dstOK := b.sources[update.DstEID]
+		if !srcOK || !dstOK {
+			return priceCycleInputs{}, fmt.Errorf("pricing sources for pathway %d -> %d are not configured", update.SrcEID, update.DstEID)
+		}
+		if src.NativeAssetID == "" || src.NativeAssetID != dst.NativeAssetID {
+			priceEIDs[update.SrcEID] = struct{}{}
+			priceEIDs[update.DstEID] = struct{}{}
+		}
+		gasEIDs[update.DstEID] = struct{}{}
+	}
+	policy := PriceSelectionPolicy{
+		MaxDeviationBps:      b.settings.MaxDeviation,
+		SourceRequestTimeout: b.settings.SourceRequestTimeout,
+		Now:                  b.now,
+		OnSourceFailure:      b.logSourceFailure,
+	}
+	for eid := range priceEIDs {
+		price, err := ChainNativePrice(ctx, b.sources, eid, policy)
+		if err != nil {
+			return priceCycleInputs{}, err
+		}
+		cycle.nativeUSD[eid] = price
+	}
+	for eid := range gasEIDs {
+		if gas := knownGas[eid]; gas != nil {
+			cycle.gasWei[eid] = bigutil.Clone(gas)
+			continue
+		}
+		gas, err := b.currentDstGasPrice(ctx, eid)
+		if err != nil {
+			return priceCycleInputs{}, err
+		}
+		cycle.gasWei[eid] = gas
+	}
+	return cycle, nil
+}
+
+func (b *Bot) logSourceFailure(failure PriceSourceFailure) {
+	attributes := []any{
+		"eid", failure.EID,
+		"source", failure.Source,
+		"role", failure.Role,
+		"category", failure.Category,
+	}
+	if failure.DeviationBps > 0 {
+		attributes = append(attributes, "deviation_bps", failure.DeviationBps)
+	}
+	if failure.Err != nil {
+		attributes = append(attributes, "error", failure.Err.Error())
+	}
+	b.logger.Warn("price source rejected", attributes...)
+}
+
+func (b *Bot) cyclePathwayPrices(cycle priceCycleInputs, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
+	src, srcOK := b.sources[srcEID]
+	dst, dstOK := b.sources[dstEID]
+	if !srcOK || !dstOK {
+		return nil, nil, fmt.Errorf("pricing sources for pathway %d -> %d are not configured", srcEID, dstEID)
+	}
+	if src.NativeAssetID != "" && src.NativeAssetID == dst.NativeAssetID {
+		return big.NewRat(1, 1), big.NewRat(1, 1), nil
+	}
+	srcPrice, dstPrice := cycle.nativeUSD[srcEID], cycle.nativeUSD[dstEID]
+	if srcPrice == nil || dstPrice == nil {
+		return nil, nil, fmt.Errorf("pricing market inputs for pathway %d -> %d are missing from prepared cycle", srcEID, dstEID)
+	}
+	return bigutil.CloneRat(srcPrice), bigutil.CloneRat(dstPrice), nil
+}
+
+func (b *Bot) readDestinationGasPrices(ctx context.Context, updates []pricedUpdate) (map[uint32]*big.Int, error) {
+	prices := make(map[uint32]*big.Int)
+	for _, update := range updates {
+		if prices[update.DstEID] != nil {
+			continue
+		}
+		price, err := b.currentDstGasPrice(ctx, update.DstEID)
+		if err != nil {
+			return nil, err
+		}
+		prices[update.DstEID] = price
+	}
+	return prices, nil
 }
 
 func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {
@@ -503,37 +627,39 @@ func feeModelsEqual(left, right FeeModel) bool {
 
 // SourcePrice is one USD/native price observed from a configured data source.
 type SourcePrice struct {
-	Source string
-	USD    *big.Rat
+	Source     string
+	USD        *big.Rat
+	ObservedAt time.Time
 }
 
-// SelectPrice applies the phase-1 primary/sanity policy for one sanity source.
-func SelectPrice(primary, sanity SourcePrice, maxDeviationBps uint64, allowFallback bool) (*big.Rat, error) {
-	return SelectPriceWithSanity(primary, []SourcePrice{sanity}, maxDeviationBps, allowFallback)
+// SelectPrice applies the primary/sanity policy for one sanity source.
+func SelectPrice(primary, sanity SourcePrice, maxDeviationBps uint64) (*big.Rat, error) {
+	return SelectPriceWithSanity(primary, []SourcePrice{sanity}, maxDeviationBps)
 }
 
-// SelectPriceWithSanity applies the phase-1 primary/sanity policy.
-func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxDeviationBps uint64, allowFallback bool) (*big.Rat, error) {
-	if primary.USD != nil && primary.USD.Sign() > 0 {
-		for _, sanity := range sanityPrices {
-			if sanity.USD == nil || sanity.USD.Sign() <= 0 {
-				continue
-			}
-			deviation := DeviationBps(primary.USD, sanity.USD)
-			if deviation > maxDeviationBps {
-				return nil, fmt.Errorf("price deviation between %s and %s is %d bps, exceeds limit %d bps", primary.Source, sanity.Source, deviation, maxDeviationBps)
-			}
-		}
-		return bigutil.CloneRat(primary.USD), nil
+// SelectPriceWithSanity validates every healthy sanity price without ever replacing the primary.
+func SelectPriceWithSanity(primary SourcePrice, sanityPrices []SourcePrice, maxDeviationBps uint64) (*big.Rat, error) {
+	if primary.USD == nil || primary.USD.Sign() <= 0 {
+		return nil, errors.New("primary price source is unhealthy")
 	}
-	if allowFallback {
-		for _, sanity := range sanityPrices {
-			if sanity.USD != nil && sanity.USD.Sign() > 0 {
-				return bigutil.CloneRat(sanity.USD), nil
-			}
+	for _, sanity := range sanityPrices {
+		if sanity.USD == nil || sanity.USD.Sign() <= 0 {
+			return nil, fmt.Errorf("sanity price source %s is unhealthy", sanity.Source)
+		}
+		deviation := DeviationBps(primary.USD, sanity.USD)
+		if deviation > maxDeviationBps {
+			return nil, fmt.Errorf("price deviation between %s and %s is %d bps, exceeds limit %d bps", primary.Source, sanity.Source, deviation, maxDeviationBps)
 		}
 	}
-	return nil, errors.New("no healthy price source")
+	return bigutil.CloneRat(primary.USD), nil
+}
+
+const sourceFutureTolerance = 30 * time.Second
+
+type configuredPriceResult struct {
+	configured ConfiguredPriceReader
+	price      SourcePrice
+	err        error
 }
 
 // ChainNativePrice reads one chain's selected USD/native price with the configured source-selection policy.
@@ -542,48 +668,172 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 	if !ok {
 		return nil, fmt.Errorf("pricing sources for chain %d are not configured", eid)
 	}
-	var primary SourcePrice
-	var primaryErr error
-	if chainSources.Primary != nil {
-		price, err := chainSources.Primary.PriceUSD(ctx)
-		if err == nil {
-			primary = price
-		} else {
-			primaryErr = err
+	if chainSources.Primary.Reader == nil {
+		return nil, fmt.Errorf("primary price source for chain %d is not configured", eid)
+	}
+	if policy.SourceRequestTimeout <= 0 {
+		return nil, errors.New("price source request timeout must be positive")
+	}
+	now := time.Now
+	if policy.Now != nil {
+		now = policy.Now
+	}
+	configured := make([]ConfiguredPriceReader, 0, len(chainSources.Sanity)+1)
+	configured = append(configured, chainSources.Primary)
+	configured = append(configured, chainSources.Sanity...)
+	sourceNames := make(map[string]struct{}, len(configured))
+	for _, source := range configured {
+		if source.Name == "" || source.Reader == nil {
+			return nil, fmt.Errorf("pricing chain %d contains an incomplete price source", eid)
 		}
+		if source.MaxAge <= 0 {
+			return nil, fmt.Errorf("%s max age must be positive", source.Name)
+		}
+		if _, duplicate := sourceNames[source.Name]; duplicate {
+			return nil, fmt.Errorf("pricing chain %d contains duplicate source %s", eid, source.Name)
+		}
+		sourceNames[source.Name] = struct{}{}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, policy.SourceRequestTimeout)
+	defer cancel()
+	results := make(chan configuredPriceResult, len(configured))
+	for _, source := range configured {
+		go func(source ConfiguredPriceReader) {
+			price, err := source.Reader.PriceUSD(requestCtx)
+			results <- configuredPriceResult{configured: source, price: price, err: err}
+		}(source)
+	}
+	completed := make(map[string]configuredPriceResult, len(configured))
+	for len(completed) < len(configured) {
+		select {
+		case result := <-results:
+			if _, duplicate := completed[result.configured.Name]; duplicate {
+				continue
+			}
+			completed[result.configured.Name] = result
+		case <-requestCtx.Done():
+			for _, source := range configured {
+				if _, ok := completed[source.Name]; ok {
+					continue
+				}
+				completed[source.Name] = configuredPriceResult{configured: source, err: requestCtx.Err()}
+			}
+		}
+	}
+	validationNow := now()
+	primaryResult := completed[chainSources.Primary.Name]
+	primary := primaryResult.price
+	primaryErr := primaryResult.err
+	if primaryErr == nil {
+		primaryErr = validateObservedPrice(chainSources.Primary, primary, validationNow)
 	}
 	sanityPrices := make([]SourcePrice, 0, len(chainSources.Sanity))
 	var sanityErrs []error
-	sanityConfigured := 0
-	for _, reader := range chainSources.Sanity {
-		if reader == nil {
-			continue
+	for _, source := range chainSources.Sanity {
+		result := completed[source.Name]
+		err := result.err
+		if err == nil {
+			err = validateObservedPrice(source, result.price, validationNow)
 		}
-		sanityConfigured++
-		price, err := reader.PriceUSD(ctx)
 		if err != nil {
-			sanityErrs = append(sanityErrs, err)
+			sanityErrs = append(sanityErrs, sanitySourceError{source: source.Name, err: err})
 			continue
 		}
-		if price.USD == nil || price.USD.Sign() <= 0 {
-			sanityErrs = append(sanityErrs, fmt.Errorf("%s returned non-positive price", price.Source))
-			continue
-		}
-		{
-			sanityPrices = append(sanityPrices, price)
+		sanityPrices = append(sanityPrices, result.price)
+	}
+	if primaryErr != nil {
+		notifyPriceSourceFailure(policy, PriceSourceFailure{
+			EID: eid, Source: chainSources.Primary.Name, Role: "primary", Category: priceSourceFailureCategory(primaryErr), Err: primaryErr,
+		})
+		return nil, fmt.Errorf("%s primary source for chain %d: %w", chainSources.Primary.Name, eid, primaryErr)
+	}
+	for _, err := range sanityErrs {
+		var sourceErr sanitySourceError
+		if errors.As(err, &sourceErr) {
+			notifyPriceSourceFailure(policy, PriceSourceFailure{
+				EID: eid, Source: sourceErr.source, Role: "sanity", Category: priceSourceFailureCategory(sourceErr.err), Err: sourceErr.err,
+			})
 		}
 	}
-	if primary.USD != nil && primary.USD.Sign() > 0 && sanityConfigured > 0 && len(sanityPrices) == 0 {
+	if len(chainSources.Sanity) > 0 && len(sanityPrices) == 0 {
 		err := fmt.Errorf("no healthy sanity price source for chain %d", eid)
 		if len(sanityErrs) > 0 {
 			return nil, errors.Join(append([]error{err}, sanityErrs...)...)
 		}
 		return nil, err
 	}
-	if primary.USD == nil && primaryErr != nil && len(sanityPrices) == 0 && !policy.AllowSanityFallback {
-		return nil, primaryErr
+	for _, sanity := range sanityPrices {
+		deviation := DeviationBps(primary.USD, sanity.USD)
+		if deviation > policy.MaxDeviationBps {
+			err := fmt.Errorf("price deviation between %s and %s is %d bps, exceeds limit %d bps", primary.Source, sanity.Source, deviation, policy.MaxDeviationBps)
+			notifyPriceSourceFailure(policy, PriceSourceFailure{
+				EID: eid, Source: sanity.Source, Role: "sanity", Category: "deviation", DeviationBps: deviation, Err: err,
+			})
+			return nil, err
+		}
 	}
-	return SelectPriceWithSanity(primary, sanityPrices, policy.MaxDeviationBps, policy.AllowSanityFallback)
+	return SelectPriceWithSanity(primary, sanityPrices, policy.MaxDeviationBps)
+}
+
+type sanitySourceError struct {
+	source string
+	err    error
+}
+
+func (e sanitySourceError) Error() string {
+	return fmt.Sprintf("%s sanity source: %v", e.source, e.err)
+}
+func (e sanitySourceError) Unwrap() error { return e.err }
+
+func notifyPriceSourceFailure(policy PriceSelectionPolicy, failure PriceSourceFailure) {
+	if policy.OnSourceFailure != nil {
+		policy.OnSourceFailure(failure)
+	}
+}
+
+func priceSourceFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case strings.Contains(err.Error(), "stale"):
+		return "stale"
+	case strings.Contains(err.Error(), "future"):
+		return "future"
+	case strings.Contains(err.Error(), "non-positive"):
+		return "non_positive"
+	case strings.Contains(err.Error(), "missing observation time"):
+		return "missing_time"
+	default:
+		return "unavailable"
+	}
+}
+
+func validateObservedPrice(source ConfiguredPriceReader, price SourcePrice, now time.Time) error {
+	if source.Name == "" || source.Reader == nil {
+		return errors.New("price source is not configured")
+	}
+	if source.MaxAge <= 0 {
+		return fmt.Errorf("%s max age must be positive", source.Name)
+	}
+	if price.Source == "" {
+		return fmt.Errorf("%s returned missing source name", source.Name)
+	}
+	if price.Source != source.Name {
+		return fmt.Errorf("%s returned unexpected source %q", source.Name, price.Source)
+	}
+	if price.USD == nil || price.USD.Sign() <= 0 {
+		return fmt.Errorf("%s returned non-positive price", source.Name)
+	}
+	if price.ObservedAt.IsZero() {
+		return fmt.Errorf("%s returned missing observation time", source.Name)
+	}
+	if price.ObservedAt.After(now.Add(sourceFutureTolerance)) {
+		return fmt.Errorf("%s observation time is too far in the future", source.Name)
+	}
+	if now.Sub(price.ObservedAt) > source.MaxAge {
+		return fmt.Errorf("%s observation is stale", source.Name)
+	}
+	return nil
 }
 
 // PathwayNativePrices returns source and destination USD/native prices, using 1:1 for shared native assets.
@@ -608,6 +858,34 @@ func PathwayNativePrices(ctx context.Context, sources map[uint32]ChainSources, s
 		return nil, nil, err
 	}
 	return srcPrice, dstPrice, nil
+}
+
+// ValidateSources reads every market-priced chain required by configured cross-asset pathways.
+func ValidateSources(ctx context.Context, pathways []chain.Pathway, sources map[uint32]ChainSources, policy PriceSelectionPolicy) error {
+	required := make(map[uint32]struct{})
+	for _, pathway := range pathways {
+		src, srcOK := sources[pathway.SrcEID]
+		dst, dstOK := sources[pathway.DstEID]
+		if !srcOK || !dstOK {
+			return fmt.Errorf("pricing sources for pathway %d -> %d are not configured", pathway.SrcEID, pathway.DstEID)
+		}
+		if src.NativeAssetID == dst.NativeAssetID {
+			continue
+		}
+		required[pathway.SrcEID] = struct{}{}
+		required[pathway.DstEID] = struct{}{}
+	}
+	eids := make([]uint32, 0, len(required))
+	for eid := range required {
+		eids = append(eids, eid)
+	}
+	sort.Slice(eids, func(i, j int) bool { return eids[i] < eids[j] })
+	for _, eid := range eids {
+		if _, err := ChainNativePrice(ctx, sources, eid, policy); err != nil {
+			return fmt.Errorf("pricing source preflight for chain %d: %w", eid, err)
+		}
+	}
+	return nil
 }
 
 // ConvertDstWeiToSrcWei converts destination-chain native wei into source-chain native wei.
@@ -641,7 +919,7 @@ func GasIncreaseBps(previous, current *big.Int) uint64 {
 	return bigutil.CeilRat(ratio).Uint64()
 }
 
-// DeviationBps returns abs(left-right)/left in basis points.
+// DeviationBps returns abs(left-right)/min(left,right) in basis points.
 func DeviationBps(left, right *big.Rat) uint64 {
 	if left == nil || right == nil || left.Sign() <= 0 || right.Sign() <= 0 {
 		return ^uint64(0)
@@ -651,7 +929,11 @@ func DeviationBps(left, right *big.Rat) uint64 {
 		diff.Neg(diff)
 	}
 	diff.Mul(diff, big.NewRat(10_000, 1))
-	diff.Quo(diff, left)
+	denominator := left
+	if right.Cmp(left) < 0 {
+		denominator = right
+	}
+	diff.Quo(diff, denominator)
 	return bigutil.CeilRat(diff).Uint64()
 }
 

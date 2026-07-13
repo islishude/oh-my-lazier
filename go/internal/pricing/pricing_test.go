@@ -1,8 +1,12 @@
 package pricing
 
 import (
+	"context"
+	"errors"
 	"math/big"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 )
@@ -12,37 +16,30 @@ func TestSelectPriceRejectsDeviationAboveThreshold(t *testing.T) {
 		SourcePrice{Source: "primary", USD: big.NewRat(2000, 1)},
 		SourcePrice{Source: "uniswap", USD: big.NewRat(2101, 1)},
 		500,
-		true,
 	)
 	if err == nil {
 		t.Fatal("SelectPrice() error = nil, want deviation error")
 	}
 }
 
-func TestSelectPriceFallsBackWhenPrimaryUnavailable(t *testing.T) {
-	price, err := SelectPrice(
-		SourcePrice{Source: "primary"},
-		SourcePrice{Source: "uniswap", USD: big.NewRat(2000, 1)},
-		500,
-		true,
-	)
-	if err != nil {
-		t.Fatalf("SelectPrice() error = %v", err)
-	}
-	if price.Cmp(big.NewRat(2000, 1)) != 0 {
-		t.Fatalf("price = %s, want 2000", price)
-	}
-}
-
-func TestSelectPriceRejectsFallbackWhenDisabled(t *testing.T) {
+func TestSelectPriceRejectsUnhealthyPrimary(t *testing.T) {
 	_, err := SelectPrice(
 		SourcePrice{Source: "primary"},
 		SourcePrice{Source: "uniswap", USD: big.NewRat(2000, 1)},
 		500,
-		false,
 	)
 	if err == nil {
-		t.Fatal("SelectPrice() error = nil, want no healthy price source")
+		t.Fatal("SelectPrice() error = nil, want unhealthy primary error")
+	}
+}
+
+func TestSelectPriceWithNoSanityReturnsPrimary(t *testing.T) {
+	price, err := SelectPriceWithSanity(SourcePrice{Source: "primary", USD: big.NewRat(2000, 1)}, nil, 500)
+	if err != nil {
+		t.Fatalf("SelectPriceWithSanity() error = %v", err)
+	}
+	if price.Cmp(big.NewRat(2000, 1)) != 0 {
+		t.Fatalf("price = %s, want 2000", price)
 	}
 }
 
@@ -54,10 +51,239 @@ func TestSelectPriceWithSanityRejectsAnyDeviatingSource(t *testing.T) {
 			{Source: "uniswap", USD: big.NewRat(2200, 1)},
 		},
 		500,
-		true,
 	)
 	if err == nil {
 		t.Fatal("SelectPriceWithSanity() error = nil, want deviation error")
+	}
+}
+
+func TestChainNativePriceAllowsEmptySanity(t *testing.T) {
+	price, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {Primary: testConfiguredPrice("primary", big.NewRat(2000, 1))},
+	}, 1, testSelectionPolicy())
+	if err != nil {
+		t.Fatalf("ChainNativePrice() error = %v", err)
+	}
+	if price.Cmp(big.NewRat(2000, 1)) != 0 {
+		t.Fatalf("price = %s, want 2000", price)
+	}
+}
+
+func TestChainNativePriceAllowsOneFailedSanityWhenAnotherIsHealthy(t *testing.T) {
+	price, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {
+			Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)),
+			Sanity: []ConfiguredPriceReader{
+				{Name: "failed", Reader: failingPrice{}, MaxAge: time.Minute},
+				testConfiguredPrice("healthy", big.NewRat(2001, 1)),
+			},
+		},
+	}, 1, testSelectionPolicy())
+	if err != nil {
+		t.Fatalf("ChainNativePrice() error = %v", err)
+	}
+	if price.Cmp(big.NewRat(2000, 1)) != 0 {
+		t.Fatalf("price = %s, want primary 2000", price)
+	}
+}
+
+func TestChainNativePriceRejectsAllFailedSanity(t *testing.T) {
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {
+			Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)),
+			Sanity:  []ConfiguredPriceReader{{Name: "failed", Reader: failingPrice{}, MaxAge: time.Minute}},
+		},
+	}, 1, testSelectionPolicy())
+	if err == nil {
+		t.Fatal("ChainNativePrice() error = nil, want no healthy sanity error")
+	}
+}
+
+func TestChainNativePriceNeverFallsBackFromPrimary(t *testing.T) {
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {
+			Primary: ConfiguredPriceReader{Name: "primary", Reader: failingPrice{}, MaxAge: time.Minute},
+			Sanity:  []ConfiguredPriceReader{testConfiguredPrice("sanity", big.NewRat(2000, 1))},
+		},
+	}, 1, testSelectionPolicy())
+	if err == nil {
+		t.Fatal("ChainNativePrice() error = nil, want primary error")
+	}
+}
+
+func TestChainNativePriceRejectsInvalidObservationMetadata(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	tests := []struct {
+		name       string
+		price      SourcePrice
+		wantReason string
+	}{
+		{name: "stale", price: SourcePrice{Source: "primary", USD: big.NewRat(2000, 1), ObservedAt: now.Add(-2 * time.Minute)}, wantReason: "stale"},
+		{name: "future", price: SourcePrice{Source: "primary", USD: big.NewRat(2000, 1), ObservedAt: now.Add(31 * time.Second)}, wantReason: "future"},
+		{name: "missing time", price: SourcePrice{Source: "primary", USD: big.NewRat(2000, 1)}, wantReason: "missing observation time"},
+		{name: "non-positive", price: SourcePrice{Source: "primary", USD: big.NewRat(0, 1), ObservedAt: now}, wantReason: "non-positive"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+				1: {Primary: ConfiguredPriceReader{Name: "primary", Reader: staticSourcePrice{price: test.price}, MaxAge: time.Minute}},
+			}, 1, PriceSelectionPolicy{MaxDeviationBps: 500, SourceRequestTimeout: time.Second, Now: func() time.Time { return now }})
+			if err == nil || !strings.Contains(err.Error(), test.wantReason) {
+				t.Fatalf("ChainNativePrice() error = %v, want %q", err, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestChainNativePriceRejectsObservationThatExpiresDuringRead(t *testing.T) {
+	requestStartedAt := time.Unix(1_700_000_000, 0)
+	selectionTime := requestStartedAt
+	reader := advancingPrice{
+		price: SourcePrice{Source: "primary", USD: big.NewRat(2000, 1), ObservedAt: requestStartedAt},
+		advance: func() {
+			selectionTime = requestStartedAt.Add(2 * time.Minute)
+		},
+	}
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {Primary: ConfiguredPriceReader{Name: "primary", Reader: reader, MaxAge: time.Minute}},
+	}, 1, PriceSelectionPolicy{
+		MaxDeviationBps:      500,
+		SourceRequestTimeout: time.Second,
+		Now:                  func() time.Time { return selectionTime },
+	})
+	if err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("ChainNativePrice() error = %v, want stale observation", err)
+	}
+}
+
+func TestChainNativePriceTimesOutAndReportsFailureCategory(t *testing.T) {
+	var failure PriceSourceFailure
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {Primary: ConfiguredPriceReader{Name: "primary", Reader: blockingPrice{}, MaxAge: time.Minute}},
+	}, 1, PriceSelectionPolicy{
+		MaxDeviationBps:      500,
+		SourceRequestTimeout: time.Millisecond,
+		OnSourceFailure:      func(got PriceSourceFailure) { failure = got },
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ChainNativePrice() error = %v, want deadline exceeded", err)
+	}
+	if failure.EID != 1 || failure.Source != "primary" || failure.Role != "primary" || failure.Category != "timeout" {
+		t.Fatalf("failure = %+v", failure)
+	}
+}
+
+func TestChainNativePriceEnforcesTimeoutForNonCooperativeReader(t *testing.T) {
+	started := time.Now()
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {Primary: ConfiguredPriceReader{Name: "primary", Reader: nonCooperativePrice{}, MaxAge: time.Minute}},
+	}, 1, PriceSelectionPolicy{MaxDeviationBps: 500, SourceRequestTimeout: 10 * time.Millisecond})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ChainNativePrice() error = %v, want deadline exceeded", err)
+	}
+	if time.Since(started) > time.Second {
+		t.Fatalf("ChainNativePrice() exceeded enforced timeout: %s", time.Since(started))
+	}
+}
+
+func TestChainNativePriceReadsPrimaryAndSanityConcurrently(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+			1: {
+				Primary: ConfiguredPriceReader{Name: "primary", Reader: gatedPrice{source: "primary", started: started, release: release, observedAt: now}, MaxAge: time.Minute},
+				Sanity:  []ConfiguredPriceReader{{Name: "sanity", Reader: gatedPrice{source: "sanity", started: started, release: release, observedAt: now}, MaxAge: time.Minute}},
+			},
+		}, 1, PriceSelectionPolicy{MaxDeviationBps: 500, SourceRequestTimeout: time.Second, Now: func() time.Time { return now }})
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			close(release)
+			t.Fatal("primary and sanity readers did not start concurrently")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("ChainNativePrice() error = %v", err)
+	}
+}
+
+func TestChainNativePriceReportsIgnoredSanityFailure(t *testing.T) {
+	var failures []PriceSourceFailure
+	_, err := ChainNativePrice(context.Background(), map[uint32]ChainSources{
+		1: {
+			Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)),
+			Sanity: []ConfiguredPriceReader{
+				{Name: "failed", Reader: failingPrice{}, MaxAge: time.Minute},
+				testConfiguredPrice("healthy", big.NewRat(2000, 1)),
+			},
+		},
+	}, 1, PriceSelectionPolicy{
+		MaxDeviationBps:      500,
+		SourceRequestTimeout: time.Second,
+		Now:                  func() time.Time { return time.Unix(1_700_000_000, 0) },
+		OnSourceFailure:      func(got PriceSourceFailure) { failures = append(failures, got) },
+	})
+	if err != nil {
+		t.Fatalf("ChainNativePrice() error = %v", err)
+	}
+	if len(failures) != 1 || failures[0].Source != "failed" || failures[0].Role != "sanity" {
+		t.Fatalf("failures = %+v", failures)
+	}
+}
+
+type staticSourcePrice struct{ price SourcePrice }
+
+func (s staticSourcePrice) PriceUSD(context.Context) (SourcePrice, error) { return s.price, nil }
+
+type advancingPrice struct {
+	price   SourcePrice
+	advance func()
+}
+
+func (p advancingPrice) PriceUSD(context.Context) (SourcePrice, error) {
+	p.advance()
+	return p.price, nil
+}
+
+type blockingPrice struct{}
+
+func (blockingPrice) PriceUSD(ctx context.Context) (SourcePrice, error) {
+	<-ctx.Done()
+	return SourcePrice{}, ctx.Err()
+}
+
+type nonCooperativePrice struct{}
+
+func (nonCooperativePrice) PriceUSD(context.Context) (SourcePrice, error) {
+	time.Sleep(200 * time.Millisecond)
+	return SourcePrice{}, errors.New("late failure")
+}
+
+type gatedPrice struct {
+	source     string
+	started    chan<- string
+	release    <-chan struct{}
+	observedAt time.Time
+}
+
+func (p gatedPrice) PriceUSD(context.Context) (SourcePrice, error) {
+	p.started <- p.source
+	<-p.release
+	return SourcePrice{Source: p.source, USD: big.NewRat(2000, 1), ObservedAt: p.observedAt}, nil
+}
+
+func testSelectionPolicy() PriceSelectionPolicy {
+	return PriceSelectionPolicy{
+		MaxDeviationBps:      500,
+		SourceRequestTimeout: time.Second,
+		Now:                  func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 }
 

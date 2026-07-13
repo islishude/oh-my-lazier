@@ -15,7 +15,7 @@ func TestDiffUsesSemanticKeysForLists(t *testing.T) {
 	after.Pathways[1].SourceWorkers.OpenExecutor = config.MustEVMAddress("0x7777777777777777777777777777777777777777")
 	after.Pathways[0].MaxMessageSize = 20000
 	after.Pricing = validPricingConfig()
-	after.Pricing.Chains[1].Uniswap.Fee = 3000
+	after.Pricing.Chains[1].CoinGecko.MaxAgeSeconds = 300
 
 	changes := Diff(before, after)
 
@@ -326,48 +326,30 @@ func validConfig() config.Config {
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		Metrics:     config.MetricsConfig{ListenAddress: ":9090"},
 		Pricing: config.PricingConfig{
-			Enabled:                 true,
-			Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			IntervalSeconds:         300,
-			StaleAfterSeconds:       1800,
-			MaxDeviationBps:         500,
-			GasSpikeBps:             1000,
-			AllowSanityFallback:     true,
-			MaxFeePerGasWei:         "2000000000",
-			MaxPriorityFeePerGasWei: "1000000000",
-			MinNativeBalanceWei:     "100000000000000000",
+			Enabled:                     true,
+			Signer:                      config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			IntervalSeconds:             300,
+			StaleAfterSeconds:           1800,
+			MaxDeviationBps:             500,
+			SourceRequestTimeoutSeconds: 10,
+			GasSpikeBps:                 1000,
+			MaxFeePerGasWei:             "2000000000",
+			MaxPriorityFeePerGasWei:     "1000000000",
+			MinNativeBalanceWei:         "100000000000000000",
 			Chains: []config.PricingChainConfig{
 				{
 					EID:               40161,
 					NativeAssetID:     "eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "coingecko",
-					SanitySources:     []string{"uniswap"},
-					CoinGeckoID:       "ethereum",
-					Uniswap: config.UniswapPricingConfig{
-						QuoterAddress:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
-						TokenIn:          config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
-						TokenOut:         config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
-						Fee:              500,
-						AmountInWei:      "1000000000000000000",
-						TokenOutDecimals: 6,
-					},
+					CoinGecko:         config.CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180},
 				},
 				{
 					EID:               40449,
 					NativeAssetID:     "hoodi-eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "coingecko",
-					SanitySources:     []string{"uniswap"},
-					CoinGeckoID:       "ethereum",
-					Uniswap: config.UniswapPricingConfig{
-						QuoterAddress:    config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
-						TokenIn:          config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
-						TokenOut:         config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
-						Fee:              500,
-						AmountInWei:      "1000000000000000000",
-						TokenOutDecimals: 6,
-					},
+					CoinGecko:         config.CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180},
 				},
 			},
 		},

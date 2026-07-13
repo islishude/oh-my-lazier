@@ -119,7 +119,7 @@ Evidence:
 - `npm audit --audit-level=moderate --json` reports zero critical findings.
 - The remaining high and moderate findings are limited to pinned LayerZero
   transitive dependencies, retained Hardhat toolbox transitive dependencies,
-  and the pinned Uniswap V3 periphery package used as an ABI source.
+  and transitive tooling bundled by the pinned Chainlink AggregatorV3 ABI source.
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 

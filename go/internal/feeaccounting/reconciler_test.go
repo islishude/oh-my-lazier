@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
@@ -31,8 +32,8 @@ func TestProcessOncePricesReceiptCosts(t *testing.T) {
 		{
 			name: "cross asset rounds up",
 			sources: map[uint32]pricing.ChainSources{
-				40161: {Primary: fixedPrice{usd: big.NewRat(3, 1)}},
-				40449: {Primary: fixedPrice{usd: big.NewRat(2, 1)}},
+				40161: {Primary: configuredFixedPrice(big.NewRat(3, 1))},
+				40449: {Primary: configuredFixedPrice(big.NewRat(2, 1))},
 			},
 			cost: big.NewInt(10),
 			want: big.NewInt(7),
@@ -61,7 +62,7 @@ func TestProcessOnceLeavesReceiptPendingOnPricingError(t *testing.T) {
 	store := &fakeStore{costs: []db.UnpricedWorkerReceiptCost{testCost(big.NewInt(10))}}
 	reconciler := testReconciler(t, store, map[uint32]pricing.ChainSources{
 		40161: {},
-		40449: {Primary: fixedPrice{usd: big.NewRat(2, 1)}},
+		40449: {Primary: configuredFixedPrice(big.NewRat(2, 1))},
 	})
 
 	processed, err := reconciler.ProcessOnce(t.Context())
@@ -79,7 +80,7 @@ func TestProcessOnceLeavesReceiptPendingOnPricingError(t *testing.T) {
 func testReconciler(t *testing.T, store *fakeStore, sources map[uint32]pricing.ChainSources) *Reconciler {
 	t.Helper()
 	reconciler, err := New(store, sources, Settings{
-		PriceSelection: pricing.PriceSelectionPolicy{MaxDeviationBps: 500},
+		PriceSelection: pricing.PriceSelectionPolicy{MaxDeviationBps: 500, SourceRequestTimeout: time.Second, Now: func() time.Time { return time.Unix(1_700_000_000, 0) }},
 	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -122,5 +123,9 @@ type fixedPrice struct {
 }
 
 func (p fixedPrice) PriceUSD(context.Context) (pricing.SourcePrice, error) {
-	return pricing.SourcePrice{Source: "fixed", USD: p.usd}, nil
+	return pricing.SourcePrice{Source: "fixed", USD: p.usd, ObservedAt: time.Unix(1_700_000_000, 0)}, nil
+}
+
+func configuredFixedPrice(price *big.Rat) pricing.ConfiguredPriceReader {
+	return pricing.ConfiguredPriceReader{Name: "fixed", Reader: fixedPrice{usd: price}, MaxAge: time.Minute}
 }

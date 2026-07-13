@@ -120,6 +120,16 @@ func (a *App) Run(ctx context.Context) error {
 			return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
 		}
 	}
+	var priceSources map[uint32]pricing.ChainSources
+	if a.cfg.Pricing.Enabled {
+		priceSources, err = a.pricingSources(registry)
+		if err != nil {
+			return err
+		}
+		if err := pricing.ValidateSources(ctx, registry.Pathways(), priceSources, a.priceSelectionPolicy()); err != nil {
+			return err
+		}
+	}
 
 	a.logger.Info("connecting to database and running migrations...")
 	store, err := db.Connect(ctx, a.cfg.DatabaseURL)
@@ -160,19 +170,12 @@ func (a *App) Run(ctx context.Context) error {
 	var priceBot *pricing.Bot
 	var feeReconciler *feeaccounting.Reconciler
 	if a.cfg.Pricing.Enabled {
-		priceSources, err := a.pricingSources(registry)
-		if err != nil {
-			return err
-		}
 		priceBot, err = a.priceBotWithSources(store, registry, priceSources)
 		if err != nil {
 			return err
 		}
 		feeReconciler, err = feeaccounting.New(store, priceSources, feeaccounting.Settings{
-			PriceSelection: pricing.PriceSelectionPolicy{
-				MaxDeviationBps:     a.cfg.Pricing.MaxDeviationBps,
-				AllowSanityFallback: a.cfg.Pricing.AllowSanityFallback,
-			},
+			PriceSelection: a.priceSelectionPolicy(),
 		}, a.logger)
 		if err != nil {
 			return err
@@ -341,15 +344,37 @@ func (a *App) priceBotWithSources(store *db.Store, registry *chain.Registry, sou
 		return pricing.New(a.logger), nil
 	}
 	settings := pricing.Settings{
-		Enabled:             true,
-		SignerID:            a.cfg.Pricing.Signer.Hex(),
-		Interval:            time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
-		StaleAfter:          time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
-		MaxDeviation:        a.cfg.Pricing.MaxDeviationBps,
-		GasSpikeBps:         a.cfg.Pricing.GasSpikeBps,
-		AllowSanityFallback: a.cfg.Pricing.AllowSanityFallback,
+		Enabled:              true,
+		SignerID:             a.cfg.Pricing.Signer.Hex(),
+		Interval:             time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second,
+		StaleAfter:           time.Duration(a.cfg.Pricing.StaleAfterSeconds) * time.Second,
+		MaxDeviation:         a.cfg.Pricing.MaxDeviationBps,
+		SourceRequestTimeout: time.Duration(a.cfg.Pricing.SourceRequestTimeoutSeconds) * time.Second,
+		GasSpikeBps:          a.cfg.Pricing.GasSpikeBps,
 	}
 	return pricing.NewWithDependencies(store, registry, settings, sources, a.logger)
+}
+
+func (a *App) priceSelectionPolicy() pricing.PriceSelectionPolicy {
+	return pricing.PriceSelectionPolicy{
+		MaxDeviationBps:      a.cfg.Pricing.MaxDeviationBps,
+		SourceRequestTimeout: time.Duration(a.cfg.Pricing.SourceRequestTimeoutSeconds) * time.Second,
+		OnSourceFailure: func(failure pricing.PriceSourceFailure) {
+			attributes := []any{
+				"eid", failure.EID,
+				"source", failure.Source,
+				"role", failure.Role,
+				"category", failure.Category,
+			}
+			if failure.DeviationBps > 0 {
+				attributes = append(attributes, "deviation_bps", failure.DeviationBps)
+			}
+			if failure.Err != nil {
+				attributes = append(attributes, "error", failure.Err.Error())
+			}
+			a.logger.Warn("price source rejected", attributes...)
+		},
+	}
 }
 
 func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.ChainSources, error) {
@@ -361,57 +386,73 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 			return nil, err
 		}
 	}
-	coinGeckoClient := pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, http.DefaultClient)
+	var coinGeckoClient *pricing.CoinGeckoClient
+	if pricingUsesSource(a.cfg.Pricing.Chains, "coingecko") {
+		var err error
+		coinGeckoClient, err = pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, a.cfg.Pricing.CoinGeckoAPIKeyEnv, http.DefaultClient)
+		if err != nil {
+			return nil, err
+		}
+	}
 	sources := make(map[uint32]pricing.ChainSources, len(a.cfg.Pricing.Chains))
 	for _, cfg := range a.cfg.Pricing.Chains {
 		configuredChain, err := registry.Get(cfg.EID)
 		if err != nil {
 			return nil, err
 		}
-		readers := make(map[string]pricing.PriceReader)
+		readers := make(map[string]pricing.ConfiguredPriceReader)
 		if pricingChainUsesSource(cfg, "coinmarketcap") && coinMarketCapClient != nil {
-			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCapSymbol)
+			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCap.ID)
 			if err != nil {
 				return nil, err
 			}
-			readers["coinmarketcap"] = reader
+			readers["coinmarketcap"] = pricing.ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader, MaxAge: time.Duration(cfg.CoinMarketCap.MaxAgeSeconds) * time.Second}
 		}
-		if pricingChainUsesSource(cfg, "coingecko") {
-			reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGeckoID)
+		if pricingChainUsesSource(cfg, "coingecko") && coinGeckoClient != nil {
+			reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGecko.ID)
 			if err != nil {
 				return nil, err
 			}
-			readers["coingecko"] = reader
+			readers["coingecko"] = pricing.ConfiguredPriceReader{Name: "coingecko", Reader: reader, MaxAge: time.Duration(cfg.CoinGecko.MaxAgeSeconds) * time.Second}
 		}
-		if pricingChainUsesSource(cfg, "uniswap") {
-			amountIn, err := bigutil.ParsePositiveDecimal("uniswap amount_in_wei", cfg.Uniswap.AmountInWei)
-			if err != nil {
-				return nil, err
-			}
-			sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, pricing.UniswapV3Config{
-				QuoterAddress:    cfg.Uniswap.QuoterAddress.Common(),
-				TokenIn:          cfg.Uniswap.TokenIn.Common(),
-				TokenOut:         cfg.Uniswap.TokenOut.Common(),
-				Fee:              cfg.Uniswap.Fee,
-				AmountIn:         amountIn,
-				TokenOutDecimals: cfg.Uniswap.TokenOutDecimals,
+		if pricingChainUsesSource(cfg, "chainlink") {
+			reader, err := pricing.NewChainlinkClient(configuredChain.RPC, pricing.ChainlinkConfig{
+				FeedAddress:         cfg.Chainlink.FeedAddress.Common(),
+				ExpectedDescription: cfg.Chainlink.ExpectedDescription,
 			})
 			if err != nil {
 				return nil, err
 			}
-			readers["uniswap"] = sanity
+			readers["chainlink"] = pricing.ConfiguredPriceReader{Name: "chainlink", Reader: reader, MaxAge: time.Duration(cfg.Chainlink.MaxAgeSeconds) * time.Second}
 		}
-		var primary pricing.PriceReader
-		var sanityReaders []pricing.PriceReader
+		if pricingChainUsesSource(cfg, "uniswap") {
+			minimumLiquidity, err := bigutil.ParsePositiveDecimal("uniswap min_harmonic_mean_liquidity", cfg.Uniswap.MinHarmonicMeanLiquidity)
+			if err != nil {
+				return nil, err
+			}
+			sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, configuredChain.RPC, pricing.UniswapV3Config{
+				PoolAddress:              cfg.Uniswap.PoolAddress.Common(),
+				TokenIn:                  cfg.Uniswap.TokenIn.Common(),
+				TokenOut:                 cfg.Uniswap.TokenOut.Common(),
+				TWAPWindowSeconds:        uint32(cfg.Uniswap.TWAPWindowSeconds),
+				MinHarmonicMeanLiquidity: minimumLiquidity,
+			})
+			if err != nil {
+				return nil, err
+			}
+			readers["uniswap"] = pricing.ConfiguredPriceReader{Name: "uniswap", Reader: sanity, MaxAge: time.Duration(cfg.Uniswap.MaxBlockAgeSeconds) * time.Second}
+		}
+		var primary pricing.ConfiguredPriceReader
+		var sanityReaders []pricing.ConfiguredPriceReader
 		if cfg.PrimarySource != "" || len(cfg.SanitySources) != 0 {
 			primary = readers[cfg.PrimarySource]
-			if primary == nil {
+			if primary.Reader == nil {
 				return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
 			}
-			sanityReaders = make([]pricing.PriceReader, 0, len(cfg.SanitySources))
+			sanityReaders = make([]pricing.ConfiguredPriceReader, 0, len(cfg.SanitySources))
 			for _, source := range cfg.SanitySources {
 				reader := readers[source]
-				if reader == nil {
+				if reader.Reader == nil {
 					return nil, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
 				}
 				sanityReaders = append(sanityReaders, reader)

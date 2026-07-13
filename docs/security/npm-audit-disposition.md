@@ -31,16 +31,18 @@ Current npm audit metadata:
 
 ```text
 critical: 0
-high: 6
-moderate: 5
-low: 21
-total: 32
+high: 7
+moderate: 7
+low: 22
+total: 36
 ```
 
 ## Remediation Applied
 
 - `@nomicfoundation/hardhat-toolbox-viem` remains a direct dependency.
 - `viem` remains a direct pinned dependency for scripts.
+- `@chainlink/contracts = 1.5.0` is pinned only as the AggregatorV3 ABI source.
+- `@uniswap/v3-core = 1.0.1` is pinned only as the V3 pool ABI source; the retired V3 periphery/QuoterV2 dependency is removed.
 - Independent vulnerable transitive packages are pinned through npm overrides:
   - `axios = 1.18.1`
   - `elliptic = 6.6.1`
@@ -60,23 +62,26 @@ LayerZero package versions or removing Hardhat toolbox support.
 | `@layerzerolabs/lz-evm-messagelib-v2` | yes    | pinned LayerZero package                            | Open. Required for current LayerZero interface compatibility.             |
 | `@layerzerolabs/lz-evm-oapp-v2`       | yes    | pinned LayerZero package                            | Open. Required for current OFT base contracts.                            |
 | `lodash-es`                           | no     | Hardhat toolbox transitive dependency               | Open. Keep Hardhat V3 toolbox support.                                    |
+| `tmp`                                 | no     | Chainlink ABI package transitive tooling            | Open. Not imported by the Go runtime or project contracts.                |
 
 ## Remaining Moderate Findings
 
 The remaining moderate findings are attached to retained Hardhat toolbox
-dependencies and the pinned Uniswap V3 periphery artifact package used for ABI
-generation:
+dependencies and transitive tooling bundled by the pinned Chainlink ABI source:
 
+- `@arbitrum/nitro-contracts`
+- `@chainlink/contracts`
 - `@nomicfoundation/hardhat-toolbox-viem`
 - `@nomicfoundation/hardhat-ignition`
 - `@nomicfoundation/hardhat-ignition-viem`
 - `@nomicfoundation/ignition-core`
-- `@uniswap/v3-periphery`
+- `@offchainlabs/upgrade-executor`
 
 These are not accepted for mainnet by this document. They require either a
 compatible upstream fix or explicit approval before mainnet readiness.
-`@uniswap/v3-periphery` is used as a pinned source for `IQuoterV2` ABI
-generation; the project does not deploy its bundled contracts.
+`@chainlink/contracts` is used as a pinned source for the AggregatorV3 ABI; the
+project does not deploy its bundled contracts. The Go worker embeds the generated
+ABI and has no Node.js runtime dependency.
 
 ## Release Decision
 
@@ -85,7 +90,7 @@ generation; the project does not deploy its bundled contracts.
 - Do not apply npm's suggested LayerZero downgrade automatically; the project
   relies on the currently pinned package interfaces.
 - Mainnet readiness requires one of:
-  - compatible LayerZero/Hardhat/Uniswap package updates that clear these advisories
+  - compatible LayerZero/Hardhat/Chainlink package updates that clear these advisories
   - an explicit security approval accepting the remaining transitive toolchain
     exposure for the planned release
 
