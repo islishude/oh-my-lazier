@@ -228,9 +228,6 @@ type pricingConfigGlobal struct {
 	MaxDeviationBps             uint64 `json:"max_deviation_bps"`
 	SourceRequestTimeoutSeconds uint64 `json:"source_request_timeout_seconds"`
 	GasSpikeBps                 uint64 `json:"gas_spike_bps"`
-	MaxFeePerGasWei             string `json:"max_fee_per_gas_wei"`
-	MaxPriorityFeePerGasWei     string `json:"max_priority_fee_per_gas_wei"`
-	MinNativeBalanceWei         string `json:"min_native_balance_wei"`
 	CoinMarketCapBaseURL        string `json:"coinmarketcap_base_url"`
 	CoinMarketCapAPIKeyEnv      string `json:"coinmarketcap_api_key_env"`
 	CoinGeckoBaseURL            string `json:"coingecko_base_url"`
@@ -258,9 +255,6 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 		MaxDeviationBps:             pricing.MaxDeviationBps,
 		SourceRequestTimeoutSeconds: pricing.SourceRequestTimeoutSeconds,
 		GasSpikeBps:                 pricing.GasSpikeBps,
-		MaxFeePerGasWei:             pricing.MaxFeePerGasWei,
-		MaxPriorityFeePerGasWei:     pricing.MaxPriorityFeePerGasWei,
-		MinNativeBalanceWei:         pricing.MinNativeBalanceWei,
 		CoinMarketCapBaseURL:        pricing.CoinMarketCapBaseURL,
 		CoinMarketCapAPIKeyEnv:      pricing.CoinMarketCapAPIKeyEnv,
 		CoinGeckoBaseURL:            pricing.CoinGeckoBaseURL,

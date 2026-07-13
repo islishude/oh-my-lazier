@@ -71,7 +71,7 @@ Implementation evidence:
 - When an AWS-compatible KMS mock is available, run `RUSTACK_KMS_ENDPOINT=<endpoint> make test-kms-rustack`. The target requires `RUSTACK_KMS_ENDPOINT` and runs only the Rustack KMS transaction signing integration test.
 - Run `go run ./go/cmd/configdiff -from <current.yaml> -to <proposed.yaml>` and confirm signer changes are expected.
 - Confirm worker logs do not include private key material, decrypted keystore JSON, KMS signatures, or raw secrets.
-- Confirm each configured signer has native gas above the role's `min_native_balance_wei` threshold on the chains assigned to enabled executor, active DVN, or pricing purposes.
+- Confirm each configured signer has native gas above the role's `min_native_balance_wei` threshold on the chains assigned to enabled executor or active DVN purposes, and above `pricing.chains[].tx_policy.min_native_balance_wei` for pricing purposes.
 - Confirm break-glass operators can pause OFT sends and worker assignments without needing private key material from the worker host.
 
 ## Rotation Procedure

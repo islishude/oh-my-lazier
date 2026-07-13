@@ -126,9 +126,6 @@ func (a *App) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := pricing.ValidateSources(ctx, registry.Pathways(), priceSources, a.priceSelectionPolicy()); err != nil {
-			return err
-		}
 	}
 
 	a.logger.Info("connecting to database and running migrations...")
@@ -545,14 +542,20 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy, minBalance)
 			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy, minBalance)
 		}
-		if a.cfg.Pricing.Enabled {
-			pricingPolicy, err := feePolicy(a.cfg.Pricing.MaxFeePerGasWei, a.cfg.Pricing.MaxPriorityFeePerGasWei)
+	}
+	if a.cfg.Pricing.Enabled {
+		for _, pricingChain := range a.cfg.Pricing.Chains {
+			configuredChain, err := registry.Get(pricingChain.EID)
 			if err != nil {
-				return nil, fmt.Errorf("pricing fee policy: %w", err)
+				return nil, err
 			}
-			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", a.cfg.Pricing.MinNativeBalanceWei)
+			pricingPolicy, err := feePolicy(pricingChain.TxPolicy.MaxFeePerGasWei, pricingChain.TxPolicy.MaxPriorityFeePerGasWei)
 			if err != nil {
-				return nil, fmt.Errorf("pricing min native balance: %w", err)
+				return nil, fmt.Errorf("chain %s pricing fee policy: %w", configuredChain.Name, err)
+			}
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", pricingChain.TxPolicy.MinNativeBalanceWei)
+			if err != nil {
+				return nil, fmt.Errorf("chain %s pricing min native balance: %w", configuredChain.Name, err)
 			}
 			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
 		}

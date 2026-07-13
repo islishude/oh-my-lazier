@@ -6,8 +6,11 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,7 +181,7 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 	}
 }
 
-func TestTxTargetsUsesMaxSignerBalanceThresholdAcrossRoles(t *testing.T) {
+func TestTxTargetsUsesPerChainPricingPolicies(t *testing.T) {
 	stubReadTxHeader(t, &gethtypes.Header{})
 
 	dir := t.TempDir()
@@ -192,7 +195,16 @@ func TestTxTargetsUsesMaxSignerBalanceThresholdAcrossRoles(t *testing.T) {
 	cfg := testConfig(account.Address.Hex(), filepath.Clean(account.URL.Path))
 	cfg.Pricing = testPricingConfig()
 	cfg.Pricing.Signer = config.MustEVMAddress(account.Address.Hex())
-	cfg.Pricing.MinNativeBalanceWei = "200000000000000000"
+	cfg.Pricing.Chains[0].TxPolicy = config.PricingTxPolicyConfig{
+		MaxFeePerGasWei:         "3000000000",
+		MaxPriorityFeePerGasWei: "1500000000",
+		MinNativeBalanceWei:     "200000000000000000",
+	}
+	cfg.Pricing.Chains[1].TxPolicy = config.PricingTxPolicyConfig{
+		MaxFeePerGasWei:         "4000000000",
+		MaxPriorityFeePerGasWei: "2000000000",
+		MinNativeBalanceWei:     "300000000000000000",
+	}
 	for i := range cfg.Chains {
 		cfg.Chains[i].TxRoles.Executor.MinNativeBalanceWei = "100000000000000000"
 	}
@@ -212,9 +224,76 @@ func TestTxTargetsUsesMaxSignerBalanceThresholdAcrossRoles(t *testing.T) {
 	if len(targets) != 2 {
 		t.Fatalf("targets = %d, want 2", len(targets))
 	}
+	want := map[uint32]struct {
+		maxFee     int64
+		priority   int64
+		minBalance *big.Int
+	}{
+		40161: {maxFee: 3_000_000_000, priority: 1_500_000_000, minBalance: big.NewInt(200_000_000_000_000_000)},
+		40449: {maxFee: 4_000_000_000, priority: 2_000_000_000, minBalance: big.NewInt(300_000_000_000_000_000)},
+	}
 	for _, target := range targets {
-		if target.MinNativeBalanceWei == nil || target.MinNativeBalanceWei.Cmp(big.NewInt(200_000_000_000_000_000)) != 0 {
-			t.Fatalf("target %d min native balance = %v, want pricing max threshold", target.ChainEID, target.MinNativeBalanceWei)
+		expected, ok := want[target.ChainEID]
+		if !ok {
+			t.Fatalf("unexpected target chain %d", target.ChainEID)
+		}
+		policy, ok := target.FeePolicies["pricing_set_price_snapshot"]
+		if !ok {
+			t.Fatalf("target %d missing pricing fee policy", target.ChainEID)
+		}
+		if policy.ConfiguredMaxFeePerGas.Cmp(big.NewInt(expected.maxFee)) != 0 ||
+			policy.ConfiguredMaxPriorityFeePerGas.Cmp(big.NewInt(expected.priority)) != 0 {
+			t.Fatalf("target %d pricing fee policy = %+v, want max=%d priority=%d", target.ChainEID, policy, expected.maxFee, expected.priority)
+		}
+		if target.MinNativeBalanceWei == nil || target.MinNativeBalanceWei.Cmp(expected.minBalance) != 0 {
+			t.Fatalf("target %d min native balance = %v, want %s", target.ChainEID, target.MinNativeBalanceWei, expected.minBalance)
+		}
+	}
+}
+
+func TestRunDoesNotProbeMarketSourcesDuringStartup(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		requests.Add(1)
+	}))
+	defer server.Close()
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://%"
+	cfg.Pricing = testPricingConfig()
+	cfg.Pricing.CoinGeckoBaseURL = server.URL
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	if err := worker.Run(t.Context()); err == nil {
+		t.Fatal("Run() error = nil, want invalid database URL error")
+	}
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("market source requests during startup = %d, want 0", got)
+	}
+}
+
+func TestRunRejectsInvalidMarketSourceConfigBeforeDatabase(t *testing.T) {
+	const invalidBaseURL = "ftp://pricing-user:pricing-password@pricing-secret.example/private-api-key"
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://%"
+	cfg.Pricing = testPricingConfig()
+	cfg.Pricing.CoinGeckoBaseURL = invalidBaseURL
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	err = worker.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want invalid CoinGecko base URL error")
+	}
+	if !strings.Contains(err.Error(), "coingecko base URL must be an absolute HTTP(S) URL") {
+		t.Fatalf("Run() error = %q, want CoinGecko base URL error", err)
+	}
+	for _, secret := range []string{invalidBaseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("Run() error leaked %q: %s", secret, err)
 		}
 	}
 }
@@ -640,12 +719,10 @@ func testPricingConfig() config.PricingConfig {
 		MaxDeviationBps:             500,
 		SourceRequestTimeoutSeconds: 10,
 		GasSpikeBps:                 1000,
-		MaxFeePerGasWei:             "2000000000",
-		MaxPriorityFeePerGasWei:     "1000000000",
-		MinNativeBalanceWei:         "100000000000000000",
 		Chains: []config.PricingChainConfig{
 			{
 				EID:               40161,
+				TxPolicy:          testPricingTxPolicy(),
 				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
@@ -653,12 +730,21 @@ func testPricingConfig() config.PricingConfig {
 			},
 			{
 				EID:               40449,
+				TxPolicy:          testPricingTxPolicy(),
 				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
 				CoinGecko:         config.CoinGeckoPricingConfig{ID: "ethereum", MaxAgeSeconds: 180},
 			},
 		},
+	}
+}
+
+func testPricingTxPolicy() config.PricingTxPolicyConfig {
+	return config.PricingTxPolicyConfig{
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
 	}
 }
 

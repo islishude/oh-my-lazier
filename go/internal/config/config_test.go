@@ -386,9 +386,18 @@ func TestValidateAcceptsEnabledPricing(t *testing.T) {
 func TestValidateRejectsEnabledPricingWithoutMinNativeBalance(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.MinNativeBalanceWei = ""
+	cfg.Pricing.Chains[0].TxPolicy.MinNativeBalanceWei = ""
 	if err := cfg.Validate(); err == nil {
-		t.Fatal("Validate() error = nil, want missing pricing min native balance error")
+		t.Fatal("Validate() error = nil, want missing per-chain pricing min native balance error")
+	}
+}
+
+func TestValidateRejectsPricingStaleAfterAboveContractMaximum(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	cfg.Pricing.StaleAfterSeconds = MaxPriceSnapshotStaleAfterSeconds + 1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want OpenPriceFeed stale-after maximum error")
 	}
 }
 
@@ -510,7 +519,9 @@ func TestValidateRejectsCrossAssetPricingWithoutMarketSources(t *testing.T) {
 func TestValidateAcceptsPricingWithoutPriorityFeeCap(t *testing.T) {
 	cfg := validConfig()
 	cfg.Pricing = validPricingConfig()
-	cfg.Pricing.MaxPriorityFeePerGasWei = ""
+	for i := range cfg.Pricing.Chains {
+		cfg.Pricing.Chains[i].TxPolicy.MaxPriorityFeePerGasWei = ""
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
@@ -751,6 +762,9 @@ func TestLoadStaticRejectsRetiredPricingFields(t *testing.T) {
 		body string
 	}{
 		{name: "sanity fallback", body: "pricing:\n  allow_sanity_fallback: true\n"},
+		{name: "global max fee", body: "pricing:\n  max_fee_per_gas_wei: \"2000000000\"\n"},
+		{name: "global priority fee", body: "pricing:\n  max_priority_fee_per_gas_wei: \"1000000000\"\n"},
+		{name: "global minimum balance", body: "pricing:\n  min_native_balance_wei: \"100000000000000000\"\n"},
 		{name: "coinmarketcap symbol", body: "pricing:\n  chains:\n    - eid: 1\n      coinmarketcap_symbol: ETH\n"},
 		{name: "flat coingecko id", body: "pricing:\n  chains:\n    - eid: 1\n      coingecko_id: ethereum\n"},
 		{name: "quoter", body: "pricing:\n  chains:\n    - eid: 1\n      uniswap:\n        quoter_address: 0x1111111111111111111111111111111111111111\n"},
@@ -890,12 +904,10 @@ func validPricingConfig() PricingConfig {
 		MaxDeviationBps:             500,
 		SourceRequestTimeoutSeconds: 10,
 		GasSpikeBps:                 1000,
-		MaxFeePerGasWei:             "2000000000",
-		MaxPriorityFeePerGasWei:     "1000000000",
-		MinNativeBalanceWei:         "100000000000000000",
 		Chains: []PricingChainConfig{
 			{
 				EID:               40161,
+				TxPolicy:          validPricingTxPolicyConfig(),
 				NativeAssetID:     "eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
@@ -903,6 +915,7 @@ func validPricingConfig() PricingConfig {
 			},
 			{
 				EID:               40449,
+				TxPolicy:          validPricingTxPolicyConfig(),
 				NativeAssetID:     "hoodi-eth",
 				DataFeePerByteWei: "0",
 				PrimarySource:     "coingecko",
@@ -917,11 +930,20 @@ func sameNativePricingConfig() PricingConfig {
 	for idx, chain := range pricing.Chains {
 		pricing.Chains[idx] = PricingChainConfig{
 			EID:               chain.EID,
+			TxPolicy:          chain.TxPolicy,
 			NativeAssetID:     "eth",
 			DataFeePerByteWei: "0",
 		}
 	}
 	return pricing
+}
+
+func validPricingTxPolicyConfig() PricingTxPolicyConfig {
+	return PricingTxPolicyConfig{
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
+	}
 }
 
 func validPathwayPricingConfig() PathwayPricingConfig {

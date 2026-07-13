@@ -314,6 +314,65 @@ test("normalizeProfile rejects zero tx role minimum native balance", () => {
   );
 });
 
+test("normalizeProfile rejects invalid per-chain pricing transaction policies", () => {
+  const cases: Array<{
+    name: string;
+    mutate: (input: ReturnType<typeof baseProfile>) => void;
+    error: RegExp;
+  }> = [
+    {
+      name: "missing policy",
+      mutate: (input) => {
+        delete (input.chains[0] as Record<string, unknown>).pricingTxPolicy;
+      },
+      error: /profile\.chains\[0\]\.pricingTxPolicy must be an object/,
+    },
+    {
+      name: "zero max fee",
+      mutate: (input) => {
+        input.chains[0].pricingTxPolicy.maxFeePerGasWei = "0";
+      },
+      error:
+        /profile\.chains\[0\]\.pricingTxPolicy\.maxFeePerGasWei must be positive/,
+    },
+    {
+      name: "zero priority fee",
+      mutate: (input) => {
+        input.chains[0].pricingTxPolicy.maxPriorityFeePerGasWei = "0";
+      },
+      error:
+        /profile\.chains\[0\]\.pricingTxPolicy\.maxPriorityFeePerGasWei must be positive/,
+    },
+    {
+      name: "priority fee exceeds max fee",
+      mutate: (input) => {
+        input.chains[0].pricingTxPolicy.maxFeePerGasWei = "1";
+        input.chains[0].pricingTxPolicy.maxPriorityFeePerGasWei = "2";
+      },
+      error:
+        /profile\.chains\[0\]\.pricingTxPolicy\.maxPriorityFeePerGasWei must not exceed maxFeePerGasWei/,
+    },
+    {
+      name: "zero minimum balance",
+      mutate: (input) => {
+        input.chains[1].pricingTxPolicy.minNativeBalanceWei = "0";
+      },
+      error:
+        /profile\.chains\[1\]\.pricingTxPolicy\.minNativeBalanceWei must be positive/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const input = baseProfile();
+    testCase.mutate(input);
+    assert.throws(
+      () => normalizeProfile(input),
+      testCase.error,
+      testCase.name,
+    );
+  }
+});
+
 test("normalizeProfile rejects Hardhat private key env injection", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).privateKeyEnv =
@@ -593,7 +652,6 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(yaml, /native_asset_id: eth/);
   assert.doesNotMatch(yaml, /primary_source:/);
   assert.match(yaml, /source_request_timeout_seconds: 10/);
-  assert.match(yaml, /min_native_balance_wei: "100000000000000000"/);
   assert.match(yaml, /start_block_number: 123456/);
   assert.match(yaml, /start_block_number: 654321/);
 });
@@ -620,6 +678,40 @@ test("renderWorkerConfig emits only referenced optional price sources", () => {
   assert.doesNotMatch(yaml, /sanity_sources:/);
   assert.doesNotMatch(yaml, /chainlink:/);
   assert.doesNotMatch(yaml, /uniswap:/);
+});
+
+test("renderWorkerConfig emits pricing transaction policy per chain", () => {
+  const input = externalProfile();
+  input.chains[0].pricingTxPolicy = {
+    maxFeePerGasWei: "111",
+    maxPriorityFeePerGasWei: "11",
+    minNativeBalanceWei: "1111",
+  };
+  input.chains[1].pricingTxPolicy = {
+    maxFeePerGasWei: "222",
+    maxPriorityFeePerGasWei: "22",
+    minNativeBalanceWei: "2222",
+  };
+  const profile = normalizeProfile(input);
+  const yaml = renderWorkerConfig({
+    profile,
+    state: stateWithPriceFeeds(profile),
+    rpcUrls: {
+      sepolia: "https://sepolia.invalid",
+      hoodi: "https://hoodi.invalid",
+    },
+    workerStartBlocks: { sepolia: 1, hoodi: 1 },
+  });
+
+  assert.match(
+    yaml,
+    /- eid: 40161\n      tx_policy:\n        max_fee_per_gas_wei: "111"\n        max_priority_fee_per_gas_wei: "11"\n        min_native_balance_wei: "1111"/,
+  );
+  assert.match(
+    yaml,
+    /- eid: 40449\n      tx_policy:\n        max_fee_per_gas_wei: "222"\n        max_priority_fee_per_gas_wei: "22"\n        min_native_balance_wei: "2222"/,
+  );
+  assert.doesNotMatch(yaml, /^  max_fee_per_gas_wei:/m);
 });
 
 test("resolveWorkerStartBlocks queries latest height only for missing profile overrides", async () => {
@@ -971,6 +1063,11 @@ function baseProfile() {
         confirmations: 12,
         indexerQueryBlockRange: 500,
         externalDVNs: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        pricingTxPolicy: {
+          maxFeePerGasWei: "100000000000",
+          maxPriorityFeePerGasWei: "1000000000",
+          minNativeBalanceWei: "100000000000000000",
+        },
         txRoles: {
           executor: {
             signer: "0x2222222222222222222222222222222222222222",
@@ -1000,6 +1097,11 @@ function baseProfile() {
         confirmations: 12,
         indexerQueryBlockRange: 500,
         externalDVNs: ["0x9999999999999999999999999999999999999999"],
+        pricingTxPolicy: {
+          maxFeePerGasWei: "100000000000",
+          maxPriorityFeePerGasWei: "1000000000",
+          minNativeBalanceWei: "100000000000000000",
+        },
         txRoles: {
           executor: {
             signer: "0x2222222222222222222222222222222222222222",

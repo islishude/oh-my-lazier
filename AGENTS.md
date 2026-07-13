@@ -35,7 +35,7 @@
 - Keep signer implementations behind `internal/signer.Signer`.
 - Never log private keys, decrypted keystores, KMS signatures, API keys, raw secrets, or secret-bearing config values.
 - Validate every configured RPC URL against the configured chain ID; one healthy endpoint is not enough.
-- Keep price sources configurable. CoinMarketCap and CoinGecko may be primary or sanity sources; Uniswap V3 remains the on-chain sanity route.
+- Keep price sources configurable. CoinMarketCap, CoinGecko, and Chainlink may be primary or sanity sources; Uniswap V3 remains an on-chain sanity-only route.
 - CoinMarketCap API keys must be referenced by environment variable name, not stored in YAML.
 - Go exported functions, methods, types, and packages need doc comments when they are part of a maintained package surface.
 

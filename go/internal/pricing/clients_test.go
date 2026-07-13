@@ -120,6 +120,55 @@ func TestNewCoinGeckoClientSelectsEndpointForAuthenticationMode(t *testing.T) {
 	}
 }
 
+func TestMarketDataClientsRejectInvalidBaseURL(t *testing.T) {
+	constructors := []struct {
+		name string
+		new  func(string) error
+	}{
+		{
+			name: "coinmarketcap",
+			new: func(baseURL string) error {
+				_, err := NewCoinMarketCapClient(baseURL, "", http.DefaultClient)
+				return err
+			},
+		},
+		{
+			name: "coingecko",
+			new: func(baseURL string) error {
+				_, err := NewCoinGeckoClient(baseURL, "", http.DefaultClient)
+				return err
+			},
+		},
+	}
+	invalidURLs := []struct {
+		name string
+		url  string
+	}{
+		{name: "missing scheme", url: "pricing-secret.example/private-api-key"},
+		{name: "unsupported scheme", url: "ftp://pricing-secret.example/private-api-key"},
+		{name: "malformed host", url: "https://pricing-user:pricing-password@[::1/private-api-key"},
+		{name: "query", url: "https://pricing-secret.example/path?api_key=private-api-key"},
+	}
+	for _, constructor := range constructors {
+		for _, invalidURL := range invalidURLs {
+			t.Run(constructor.name+"/"+invalidURL.name, func(t *testing.T) {
+				err := constructor.new(invalidURL.url)
+				if err == nil {
+					t.Fatal("client constructor error = nil, want invalid base URL error")
+				}
+				if !strings.Contains(err.Error(), constructor.name+" base URL must be an absolute HTTP(S) URL") {
+					t.Fatalf("client constructor error = %q, want source-specific base URL error", err)
+				}
+				for _, secret := range []string{"pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
+					if strings.Contains(err.Error(), secret) {
+						t.Fatalf("client constructor error leaked %q: %s", secret, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestMarketDataClientTransportErrorsRedactConfiguredBaseURL(t *testing.T) {
 	secretBaseURL := "https://pricing-user:pricing-password@pricing-secret.example/private-api-key"
 	transportCause := errors.New("transport cause")

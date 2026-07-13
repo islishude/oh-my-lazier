@@ -345,12 +345,17 @@ The profile renderer enables the worker price bot in the generated
 `worker.yaml`. Global `pricing.sourceRequestTimeoutSeconds` and
 `pricing.maxDeviationBps` default to `10` and `500`; optional CoinMarketCap and
 CoinGecko BaseURLs and API-key environment-variable names also live under that
-profile block. Chains default to `nativeAssetId: "eth"`, so the Sepolia/Hoodi
-testnet profile writes same-native pricing chains that use destination RPC gas
-prices directly without requiring any market source. Set a different lowercase
-`nativeAssetId` on any chain whose native gas asset differs; every chain in a
-cross-asset profile must then declare `priceSources.primarySource` and the
-matching source configuration. CoinMarketCap, CoinGecko, and Chainlink may be
+profile block. Each chain requires its own `pricingTxPolicy`; both fee caps and
+the minimum-balance threshold must be positive, and the priority-fee cap must
+not exceed the total fee cap. The renderer writes that policy to
+`pricing.chains[].tx_policy` so different gas markets do not share fee caps or
+minimum-balance thresholds. Chains default to `nativeAssetId: "eth"`,
+so the Sepolia/Hoodi testnet profile writes same-native pricing chains that use
+destination RPC gas prices directly without requiring any market source. Set a
+different lowercase `nativeAssetId` on any chain whose native gas asset differs;
+every chain in a cross-asset profile must then declare
+`priceSources.primarySource` and the matching source configuration.
+CoinMarketCap, CoinGecko, and Chainlink may be
 primary sources. `sanitySources` may be omitted or empty, and Chainlink and
 Uniswap are optional. Uniswap may only be listed as a sanity source and reads an
 approved V3 pool TWAP through `observe()`; it is not a required Hoodi dependency

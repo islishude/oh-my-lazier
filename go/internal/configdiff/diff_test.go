@@ -41,6 +41,17 @@ func TestRenderTextReportsNoConfigChanges(t *testing.T) {
 	}
 }
 
+func TestDiffReportsPerChainPricingTxPolicy(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	after.Pricing.Chains[1].TxPolicy.MaxFeePerGasWei = "3000000000"
+
+	changes := Diff(before, after)
+	if len(changes) != 1 || changes[0].Path != "pricing.chains[40449]" {
+		t.Fatalf("changes = %#v, want pricing chain transaction policy change", changes)
+	}
+}
+
 func TestRenderTextIncludesChangedPath(t *testing.T) {
 	before := validConfig()
 	after := validConfig()
@@ -333,12 +344,10 @@ func validConfig() config.Config {
 			MaxDeviationBps:             500,
 			SourceRequestTimeoutSeconds: 10,
 			GasSpikeBps:                 1000,
-			MaxFeePerGasWei:             "2000000000",
-			MaxPriorityFeePerGasWei:     "1000000000",
-			MinNativeBalanceWei:         "100000000000000000",
 			Chains: []config.PricingChainConfig{
 				{
 					EID:               40161,
+					TxPolicy:          testPricingTxPolicy(),
 					NativeAssetID:     "eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "coingecko",
@@ -346,6 +355,7 @@ func validConfig() config.Config {
 				},
 				{
 					EID:               40449,
+					TxPolicy:          testPricingTxPolicy(),
 					NativeAssetID:     "hoodi-eth",
 					DataFeePerByteWei: "0",
 					PrimarySource:     "coingecko",
@@ -427,6 +437,14 @@ func validConfig() config.Config {
 func testExecutorRole() config.ExecutorTxRoleConfig {
 	return config.ExecutorTxRoleConfig{
 		Signer:                  config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+		MaxFeePerGasWei:         "2000000000",
+		MaxPriorityFeePerGasWei: "1000000000",
+		MinNativeBalanceWei:     "100000000000000000",
+	}
+}
+
+func testPricingTxPolicy() config.PricingTxPolicyConfig {
+	return config.PricingTxPolicyConfig{
 		MaxFeePerGasWei:         "2000000000",
 		MaxPriorityFeePerGasWei: "1000000000",
 		MinNativeBalanceWei:     "100000000000000000",

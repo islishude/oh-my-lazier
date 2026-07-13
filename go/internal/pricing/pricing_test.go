@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 )
 
 func TestSelectPriceRejectsDeviationAboveThreshold(t *testing.T) {
@@ -324,6 +325,35 @@ func TestBuildPriceSnapshotRoundsUpFractionalWei(t *testing.T) {
 	}
 	if snapshot.DstDataFeePerByteInSrcToken.Cmp(big.NewInt(7)) != 0 {
 		t.Fatalf("dst data fee per byte = %s, want rounded-up 7", snapshot.DstDataFeePerByteInSrcToken)
+	}
+}
+
+func TestBuildPriceSnapshotRejectsStaleAfterAboveContractMaximum(t *testing.T) {
+	_, err := BuildPriceSnapshot(PriceInputs{
+		SrcNativeUSD:         big.NewRat(1, 1),
+		DstNativeUSD:         big.NewRat(1, 1),
+		DstGasPriceWei:       big.NewInt(1),
+		DstDataFeePerByteWei: big.NewInt(0),
+		UpdatedAtUnix:        1,
+		StaleAfterSeconds:    config.MaxPriceSnapshotStaleAfterSeconds + 1,
+	})
+	if err == nil {
+		t.Fatal("BuildPriceSnapshot() error = nil, want OpenPriceFeed stale-after maximum error")
+	}
+}
+
+func TestSettingsRejectStaleAfterAboveContractMaximum(t *testing.T) {
+	settings := Settings{
+		Enabled:              true,
+		SignerID:             "0x9999999999999999999999999999999999999999",
+		Interval:             time.Minute,
+		StaleAfter:           time.Duration(config.MaxPriceSnapshotStaleAfterSeconds+1) * time.Second,
+		MaxDeviation:         500,
+		SourceRequestTimeout: time.Second,
+		GasSpikeBps:          1000,
+	}
+	if err := settings.Validate(); err == nil {
+		t.Fatal("Settings.Validate() error = nil, want OpenPriceFeed stale-after maximum error")
 	}
 }
 

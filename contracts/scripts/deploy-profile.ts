@@ -74,6 +74,7 @@ export type ChainProfile = {
   network: string;
   name: string;
   nativeAssetId: string;
+  pricingTxPolicy: TxPolicyProfile;
   priceSources?: PriceSourcesProfile;
   eid: number;
   chainId: number;
@@ -133,6 +134,9 @@ const hardhatNetworks = new Map<string, { chainId: number; eid: number }>([
 
 export type TxRoleProfile = {
   signer: Address;
+} & TxPolicyProfile;
+
+export type TxPolicyProfile = {
   maxFeePerGasWei: string;
   maxPriorityFeePerGasWei: string;
   minNativeBalanceWei: string;
@@ -610,10 +614,6 @@ ${pathwayBlocks}
 
 function renderPricingConfig(profile: DeploymentProfile): string {
   const signer = pricingSigner(profile);
-  const pricingFeePolicy = profile.chains[0]?.txRoles.executor;
-  if (pricingFeePolicy === undefined) {
-    throw new Error("profile.chains must include at least one chain");
-  }
   const pricingChains = profile.chains.map(renderPricingChain).join("\n");
   return `pricing:
   enabled: true
@@ -623,9 +623,6 @@ function renderPricingConfig(profile: DeploymentProfile): string {
   max_deviation_bps: ${profile.pricing.maxDeviationBps}
   source_request_timeout_seconds: ${profile.pricing.sourceRequestTimeoutSeconds}
   gas_spike_bps: 1000
-  max_fee_per_gas_wei: "${pricingFeePolicy.maxFeePerGasWei}"
-  max_priority_fee_per_gas_wei: "${pricingFeePolicy.maxPriorityFeePerGasWei}"
-  min_native_balance_wei: "${pricingFeePolicy.minNativeBalanceWei}"
 ${renderOptionalPricingGlobal(profile.pricing)}  chains:
 ${pricingChains}`;
 }
@@ -650,6 +647,10 @@ function renderOptionalPricingGlobal(pricing: PricingProfile): string {
 function renderPricingChain(chain: ChainProfile): string {
   const lines = [
     `    - eid: ${chain.eid}`,
+    "      tx_policy:",
+    `        max_fee_per_gas_wei: "${chain.pricingTxPolicy.maxFeePerGasWei}"`,
+    `        max_priority_fee_per_gas_wei: "${chain.pricingTxPolicy.maxPriorityFeePerGasWei}"`,
+    `        min_native_balance_wei: "${chain.pricingTxPolicy.minNativeBalanceWei}"`,
     `      native_asset_id: ${chain.nativeAssetId}`,
     `      data_fee_per_byte_wei: "0"`,
   ];
@@ -1545,6 +1546,10 @@ function normalizeChain(
       `${pathLabel}.externalDVNs`,
     ),
     includeLayerZeroLabsDVN,
+    pricingTxPolicy: normalizeTxPolicy(
+      input.pricingTxPolicy,
+      `${pathLabel}.pricingTxPolicy`,
+    ),
     txRoles: normalizeTxRoles(input.txRoles, `${pathLabel}.txRoles`, signerIDs),
     layerZero,
   };
@@ -1915,26 +1920,34 @@ function normalizeTxRole(
   if (!signerIDs.has(signer.toLowerCase())) {
     throw new Error(`${pathLabel}.signer must reference a configured signer`);
   }
-  const minNativeBalanceWei = decimalField(
-    role,
+  return { signer, ...normalizeTxPolicy(role, pathLabel) };
+}
+
+function normalizeTxPolicy(value: unknown, pathLabel: string): TxPolicyProfile {
+  const policy = object(value, pathLabel);
+  const maxFeePerGasWei = positiveDecimalField(
+    policy,
+    "maxFeePerGasWei",
+    `${pathLabel}.maxFeePerGasWei`,
+  );
+  const maxPriorityFeePerGasWei = positiveDecimalField(
+    policy,
+    "maxPriorityFeePerGasWei",
+    `${pathLabel}.maxPriorityFeePerGasWei`,
+  );
+  if (BigInt(maxPriorityFeePerGasWei) > BigInt(maxFeePerGasWei)) {
+    throw new Error(
+      `${pathLabel}.maxPriorityFeePerGasWei must not exceed maxFeePerGasWei`,
+    );
+  }
+  const minNativeBalanceWei = positiveDecimalField(
+    policy,
     "minNativeBalanceWei",
     `${pathLabel}.minNativeBalanceWei`,
   );
-  if (minNativeBalanceWei === "0") {
-    throw new Error(`${pathLabel}.minNativeBalanceWei must be positive`);
-  }
   return {
-    signer,
-    maxFeePerGasWei: decimalField(
-      role,
-      "maxFeePerGasWei",
-      `${pathLabel}.maxFeePerGasWei`,
-    ),
-    maxPriorityFeePerGasWei: decimalField(
-      role,
-      "maxPriorityFeePerGasWei",
-      `${pathLabel}.maxPriorityFeePerGasWei`,
-    ),
+    maxFeePerGasWei,
+    maxPriorityFeePerGasWei,
     minNativeBalanceWei,
   };
 }

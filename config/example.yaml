@@ -22,14 +22,19 @@ pricing:
   max_deviation_bps: 500
   source_request_timeout_seconds: 10
   gas_spike_bps: 1000
-  max_fee_per_gas_wei: "2000000000"
-  max_priority_fee_per_gas_wei: "1000000000"
-  min_native_balance_wei: "100000000000000000"
   chains:
     - eid: 40161
+      tx_policy:
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       native_asset_id: eth
       data_fee_per_byte_wei: "0"
     - eid: 40449
+      tx_policy:
+        max_fee_per_gas_wei: "2000000000"
+        max_priority_fee_per_gas_wei: "1000000000"
+        min_native_balance_wei: "100000000000000000"
       native_asset_id: eth
       data_fee_per_byte_wei: "0"
 
@@ -37,6 +42,10 @@ pricing:
     # market sources. Cross-asset chains still declare native_asset_id and need
     # one primary source. sanity_sources, Chainlink, and Uniswap are optional.
     # - eid: 40161
+    #   tx_policy:
+    #     max_fee_per_gas_wei: "2000000000"
+    #     max_priority_fee_per_gas_wei: "1000000000"
+    #     min_native_balance_wei: "100000000000000000"
     #   native_asset_id: eth
     #   data_fee_per_byte_wei: "0"
     #   primary_source: coingecko

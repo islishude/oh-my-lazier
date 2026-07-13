@@ -51,7 +51,8 @@ npm run deploy:profile -- \
 
 The profile is the maintained operator input for owner, long-term PriceFeed
 submitters, initial recipient, per-chain canary TestOFT balance thresholds,
-worker signer addresses, fee caps, worker fee models, and the environment
+worker signer addresses, per-chain executor/DVN fee caps and pricing transaction
+policies, worker fee models, and the environment
 variable names that hold RPC URLs. The owner is
 added as a temporary deployment submitter only while the initial worker pathway
 price snapshot is configured, then `OpenWorkersPathwayConfig` revokes that

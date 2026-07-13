@@ -51,6 +51,10 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 	if baseURL == "" {
 		baseURL = defaultCoinMarketCapBaseURL
 	}
+	normalizedBaseURL, err := normalizeMarketDataBaseURL("coinmarketcap", baseURL)
+	if err != nil {
+		return nil, err
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -61,7 +65,7 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 			return nil, fmt.Errorf("coinmarketcap api key env %s is empty", apiKeyEnv)
 		}
 	}
-	return &CoinMarketCapClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
+	return &CoinMarketCapClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
 }
 
 // NewCoinMarketCapPriceReader creates a configured CoinMarketCap asset-ID reader.
@@ -154,6 +158,10 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 			baseURL = defaultCoinGeckoProBaseURL
 		}
 	}
+	normalizedBaseURL, err := normalizeMarketDataBaseURL("coingecko", baseURL)
+	if err != nil {
+		return nil, err
+	}
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -164,7 +172,21 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 			return nil, fmt.Errorf("coingecko api key env %s is empty", apiKeyEnv)
 		}
 	}
-	return &CoinGeckoClient{baseURL: strings.TrimRight(baseURL, "/"), apiKey: apiKey, httpClient: httpClient}, nil
+	return &CoinGeckoClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
+}
+
+func normalizeMarketDataBaseURL(source, baseURL string) (string, error) {
+	normalized := strings.TrimRight(baseURL, "/")
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Opaque != "" || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery {
+		return "", fmt.Errorf("%s base URL must be an absolute HTTP(S) URL without query or fragment", source)
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("%s base URL must be an absolute HTTP(S) URL without query or fragment", source)
+	}
+	parsed.Scheme = scheme
+	return parsed.String(), nil
 }
 
 // NewCoinGeckoPriceReader creates a configured CoinGecko coin-id reader.

@@ -147,6 +147,9 @@ func (s Settings) Validate() error {
 	if s.StaleAfter <= 0 {
 		return errors.New("pricing stale_after must be positive")
 	}
+	if s.StaleAfter > time.Duration(config.MaxPriceSnapshotStaleAfterSeconds)*time.Second {
+		return fmt.Errorf("pricing stale_after exceeds OpenPriceFeed maximum %s", time.Duration(config.MaxPriceSnapshotStaleAfterSeconds)*time.Second)
+	}
 	if s.MaxDeviation == 0 {
 		return errors.New("pricing max deviation bps is required")
 	}
@@ -860,34 +863,6 @@ func PathwayNativePrices(ctx context.Context, sources map[uint32]ChainSources, s
 	return srcPrice, dstPrice, nil
 }
 
-// ValidateSources reads every market-priced chain required by configured cross-asset pathways.
-func ValidateSources(ctx context.Context, pathways []chain.Pathway, sources map[uint32]ChainSources, policy PriceSelectionPolicy) error {
-	required := make(map[uint32]struct{})
-	for _, pathway := range pathways {
-		src, srcOK := sources[pathway.SrcEID]
-		dst, dstOK := sources[pathway.DstEID]
-		if !srcOK || !dstOK {
-			return fmt.Errorf("pricing sources for pathway %d -> %d are not configured", pathway.SrcEID, pathway.DstEID)
-		}
-		if src.NativeAssetID == dst.NativeAssetID {
-			continue
-		}
-		required[pathway.SrcEID] = struct{}{}
-		required[pathway.DstEID] = struct{}{}
-	}
-	eids := make([]uint32, 0, len(required))
-	for eid := range required {
-		eids = append(eids, eid)
-	}
-	sort.Slice(eids, func(i, j int) bool { return eids[i] < eids[j] })
-	for _, eid := range eids {
-		if _, err := ChainNativePrice(ctx, sources, eid, policy); err != nil {
-			return fmt.Errorf("pricing source preflight for chain %d: %w", eid, err)
-		}
-	}
-	return nil
-}
-
 // ConvertDstWeiToSrcWei converts destination-chain native wei into source-chain native wei.
 func ConvertDstWeiToSrcWei(dstWei *big.Int, srcNativeUSD, dstNativeUSD *big.Rat) (*big.Int, error) {
 	if dstWei == nil || dstWei.Sign() < 0 {
@@ -981,6 +956,9 @@ func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	if inputs.StaleAfterSeconds == 0 {
 		return PriceSnapshot{}, errors.New("stale_after is required")
 	}
+	if inputs.StaleAfterSeconds > config.MaxPriceSnapshotStaleAfterSeconds {
+		return PriceSnapshot{}, fmt.Errorf("stale_after exceeds OpenPriceFeed maximum %d", config.MaxPriceSnapshotStaleAfterSeconds)
+	}
 	dstGasPriceInSrcToken := new(big.Rat).SetInt(inputs.DstGasPriceWei)
 	dstGasPriceInSrcToken.Mul(dstGasPriceInSrcToken, inputs.DstNativeUSD)
 	dstGasPriceInSrcToken.Quo(dstGasPriceInSrcToken, inputs.SrcNativeUSD)
@@ -1049,6 +1027,9 @@ func (s PriceSnapshot) Validate() error {
 	}
 	if s.StaleAfter == 0 {
 		return errors.New("price snapshot stale_after is required")
+	}
+	if s.StaleAfter > config.MaxPriceSnapshotStaleAfterSeconds {
+		return fmt.Errorf("price snapshot stale_after exceeds OpenPriceFeed maximum %d", config.MaxPriceSnapshotStaleAfterSeconds)
 	}
 	return nil
 }

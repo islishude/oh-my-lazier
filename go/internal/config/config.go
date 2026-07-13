@@ -24,6 +24,9 @@ const (
 
 const defaultTxManagerStaleBroadcastReplacementAfterSeconds = 900
 
+// MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
+const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
+
 // DVNMode selects whether the DVN verifier only reports or also submits verification transactions.
 type DVNMode string
 
@@ -132,7 +135,7 @@ type ChainTxRolesConfig struct {
 
 // PricingConfig controls optional price update generation.
 type PricingConfig struct {
-	// Enabled turns on price-bot startup validation and setPriceSnapshot transaction generation.
+	// Enabled turns on price-source construction and setPriceSnapshot transaction generation.
 	Enabled bool `yaml:"enabled"`
 	// Signer references the local signer used for price snapshot update transactions.
 	Signer EVMAddress `yaml:"signer"`
@@ -146,12 +149,6 @@ type PricingConfig struct {
 	SourceRequestTimeoutSeconds uint64 `yaml:"source_request_timeout_seconds"`
 	// GasSpikeBps triggers early updates when destination gas rises past the previous quoted price.
 	GasSpikeBps uint64 `yaml:"gas_spike_bps"`
-	// MaxFeePerGasWei caps txmgr send-time gas pricing for price snapshot update transactions.
-	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
-	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips for price snapshot update transactions.
-	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
-	// MinNativeBalanceWei is the advisory minimum pricing signer gas balance for monitoring.
-	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
 	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTP API endpoint.
 	CoinMarketCapBaseURL string `yaml:"coinmarketcap_base_url"`
 	// CoinMarketCapAPIKeyEnv names the environment variable containing the CoinMarketCap API key.
@@ -162,6 +159,16 @@ type PricingConfig struct {
 	CoinGeckoAPIKeyEnv string `yaml:"coingecko_api_key_env"`
 	// Chains configures native-asset price feeds for every chain when pricing is enabled.
 	Chains []PricingChainConfig `yaml:"chains"`
+}
+
+// PricingTxPolicyConfig controls price snapshot transaction submission on one chain.
+type PricingTxPolicyConfig struct {
+	// MaxFeePerGasWei caps txmgr send-time gas pricing for price snapshot update transactions.
+	MaxFeePerGasWei string `yaml:"max_fee_per_gas_wei"`
+	// MaxPriorityFeePerGasWei caps dynamic-fee priority tips; legacy transactions may leave it empty.
+	MaxPriorityFeePerGasWei string `yaml:"max_priority_fee_per_gas_wei"`
+	// MinNativeBalanceWei is the advisory minimum pricing signer gas balance for monitoring.
+	MinNativeBalanceWei string `yaml:"min_native_balance_wei"`
 }
 
 // WorkerFeeModelConfig controls one worker role's source-chain service fee model.
@@ -180,6 +187,8 @@ type WorkerFeeModelConfig struct {
 type PricingChainConfig struct {
 	// EID links this feed config to one configured ChainConfig endpoint ID.
 	EID uint32 `yaml:"eid"`
+	// TxPolicy configures pricing transaction fee caps and signer balance monitoring for this chain.
+	TxPolicy PricingTxPolicyConfig `yaml:"tx_policy"`
 	// NativeAssetID identifies the chain's native gas asset for same-asset conversion shortcuts.
 	NativeAssetID string `yaml:"native_asset_id"`
 	// DataFeePerByteWei is the destination-native data fee per byte used for generic data-fee quotes.
@@ -671,6 +680,9 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if c.Pricing.StaleAfterSeconds == 0 {
 		return errors.New("pricing stale_after_seconds is required")
 	}
+	if c.Pricing.StaleAfterSeconds > MaxPriceSnapshotStaleAfterSeconds {
+		return fmt.Errorf("pricing stale_after_seconds exceeds OpenPriceFeed maximum %d", MaxPriceSnapshotStaleAfterSeconds)
+	}
 	if c.Pricing.MaxDeviationBps == 0 {
 		return errors.New("pricing max_deviation_bps is required")
 	}
@@ -679,9 +691,6 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	}
 	if c.Pricing.GasSpikeBps == 0 {
 		return errors.New("pricing gas_spike_bps is required")
-	}
-	if err := validateTxSubmissionPolicy("pricing", c.Pricing.MaxFeePerGasWei, c.Pricing.MaxPriorityFeePerGasWei, c.Pricing.MinNativeBalanceWei); err != nil {
-		return err
 	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
 	pricingChains := make(map[uint32]PricingChainConfig, len(c.Pricing.Chains))
@@ -694,6 +703,14 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 		}
 		seen[chain.EID] = struct{}{}
 		if err := validatePricingChainBase(chain); err != nil {
+			return err
+		}
+		if err := validateTxSubmissionPolicy(
+			fmt.Sprintf("pricing chain %d tx_policy", chain.EID),
+			chain.TxPolicy.MaxFeePerGasWei,
+			chain.TxPolicy.MaxPriorityFeePerGasWei,
+			chain.TxPolicy.MinNativeBalanceWei,
+		); err != nil {
 			return err
 		}
 		pricingChains[chain.EID] = chain
