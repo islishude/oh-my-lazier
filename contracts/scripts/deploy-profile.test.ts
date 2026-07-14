@@ -373,6 +373,38 @@ test("normalizeProfile rejects invalid per-chain pricing transaction policies", 
   }
 });
 
+test("normalizeProfile enforces the OpenPriceFeed staleAfter range", () => {
+  const atLimit = baseProfile();
+  atLimit.pathway.priceSnapshot.staleAfter = "86400";
+  assert.equal(
+    normalizeProfile(atLimit).pathway.priceSnapshot.staleAfter,
+    "86400",
+  );
+
+  const cases = [
+    {
+      name: "zero",
+      staleAfter: "0",
+      error: /profile\.pathway\.priceSnapshot\.staleAfter must be positive/,
+    },
+    {
+      name: "above contract maximum",
+      staleAfter: "86401",
+      error:
+        /profile\.pathway\.priceSnapshot\.staleAfter must not exceed 86400/,
+    },
+  ];
+  for (const testCase of cases) {
+    const input = baseProfile();
+    input.pathway.priceSnapshot.staleAfter = testCase.staleAfter;
+    assert.throws(
+      () => normalizeProfile(input),
+      testCase.error,
+      testCase.name,
+    );
+  }
+});
+
 test("normalizeProfile rejects Hardhat private key env injection", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).privateKeyEnv =

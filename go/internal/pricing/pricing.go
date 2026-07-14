@@ -891,7 +891,11 @@ func GasIncreaseBps(previous, current *big.Int) uint64 {
 	diff := new(big.Int).Sub(current, previous)
 	ratio := new(big.Rat).SetFrac(diff, previous)
 	ratio.Mul(ratio, big.NewRat(10_000, 1))
-	return bigutil.CeilRat(ratio).Uint64()
+	bps := bigutil.CeilRat(ratio)
+	if !bps.IsUint64() {
+		return ^uint64(0)
+	}
+	return bps.Uint64()
 }
 
 // DeviationBps returns abs(left-right)/min(left,right) in basis points.
@@ -909,7 +913,11 @@ func DeviationBps(left, right *big.Rat) uint64 {
 		denominator = right
 	}
 	diff.Quo(diff, denominator)
-	return bigutil.CeilRat(diff).Uint64()
+	bps := bigutil.CeilRat(diff)
+	if !bps.IsUint64() {
+		return ^uint64(0)
+	}
+	return bps.Uint64()
 }
 
 // PriceInputs are the source data used to construct WorkerTypes.PriceSnapshot.

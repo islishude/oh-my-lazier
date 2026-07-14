@@ -366,6 +366,22 @@ func TestGasIncreaseBpsOnlyCountsUpwardMoves(t *testing.T) {
 	}
 }
 
+func TestBasisPointCalculationsSaturateAboveUint64(t *testing.T) {
+	// An unchecked Uint64 conversion truncates this exact result to 500 bps.
+	overflowBps := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(500))
+	previous := big.NewInt(10_000)
+	current := new(big.Int).Add(new(big.Int).Set(previous), overflowBps)
+	if got := GasIncreaseBps(previous, current); got != ^uint64(0) {
+		t.Fatalf("GasIncreaseBps() = %d, want saturated uint64", got)
+	}
+
+	rightNumerator := new(big.Int).Add(new(big.Int).Set(overflowBps), big.NewInt(10_000))
+	right := new(big.Rat).SetFrac(rightNumerator, big.NewInt(10_000))
+	if got := DeviationBps(big.NewRat(1, 1), right); got != ^uint64(0) {
+		t.Fatalf("DeviationBps() = %d, want saturated uint64", got)
+	}
+}
+
 func TestBuildSetPriceSnapshotCalldata(t *testing.T) {
 	snapshot := testPriceSnapshot()
 	calldata, err := BuildSetPriceSnapshotCalldata([]PriceSnapshotUpdate{{DstEid: 40449, Snapshot: snapshot}})

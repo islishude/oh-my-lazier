@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -15,9 +16,10 @@ import (
 )
 
 const (
-	defaultCoinMarketCapBaseURL = "https://pro-api.coinmarketcap.com"
-	defaultCoinGeckoBaseURL     = "https://api.coingecko.com"
-	defaultCoinGeckoProBaseURL  = "https://pro-api.coingecko.com"
+	defaultCoinMarketCapBaseURL    = "https://pro-api.coinmarketcap.com"
+	defaultCoinGeckoBaseURL        = "https://api.coingecko.com"
+	defaultCoinGeckoProBaseURL     = "https://pro-api.coingecko.com"
+	maxMarketDataResponseBodyBytes = int64(1 << 20)
 )
 
 // CoinMarketCapClient reads public USD prices from CoinMarketCap quotes.
@@ -53,6 +55,25 @@ type marketDataHTTPStatusError struct {
 
 func (e *marketDataHTTPStatusError) Error() string {
 	return fmt.Sprintf("%s price request returned HTTP %d", e.source, e.statusCode)
+}
+
+func decodeMarketDataJSON(source string, body io.Reader, value any) error {
+	limited := &io.LimitedReader{R: body, N: maxMarketDataResponseBodyBytes + 1}
+	decoder := json.NewDecoder(limited)
+	decoder.UseNumber()
+	if err := decoder.Decode(value); err != nil {
+		if limited.N == 0 {
+			return fmt.Errorf("%s price response body exceeds %d bytes", source, maxMarketDataResponseBodyBytes)
+		}
+		return err
+	}
+	if _, err := io.Copy(io.Discard, limited); err != nil {
+		return fmt.Errorf("%s price response body read failed: %w", source, err)
+	}
+	if limited.N == 0 {
+		return fmt.Errorf("%s price response body exceeds %d bytes", source, maxMarketDataResponseBodyBytes)
+	}
+	return nil
 }
 
 // NewCoinMarketCapClient creates a CoinMarketCap quote client.
@@ -139,9 +160,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 			} `json:"quote"`
 		} `json:"data"`
 	}
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil {
+	if err := decodeMarketDataJSON("coinmarketcap", response.Body, &payload); err != nil {
 		return SourcePrice{}, err
 	}
 	if len(payload.Data) != 1 || payload.Data[0].ID != id {
@@ -263,9 +282,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 		USD           json.Number `json:"usd"`
 		LastUpdatedAt int64       `json:"last_updated_at"`
 	}
-	decoder := json.NewDecoder(response.Body)
-	decoder.UseNumber()
-	if err := decoder.Decode(&payload); err != nil {
+	if err := decodeMarketDataJSON("coingecko", response.Body, &payload); err != nil {
 		return SourcePrice{}, err
 	}
 	entry, ok := payload[coinID]

@@ -28,6 +28,8 @@ import {
   type PathwayConfigInput,
 } from "./oft-pathway-ignition.js";
 
+const maxPriceSnapshotStaleAfter = 86_400n;
+
 export type DeploymentMode = "test-oft-rehearsal" | "external-oapp";
 
 export type DeploymentPhase =
@@ -1958,6 +1960,16 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
     input.priceSnapshot,
     `${pathLabel}.priceSnapshot`,
   );
+  const staleAfter = positiveDecimalField(
+    priceSnapshot,
+    "staleAfter",
+    `${pathLabel}.priceSnapshot.staleAfter`,
+  );
+  if (BigInt(staleAfter) > maxPriceSnapshotStaleAfter) {
+    throw new Error(
+      `${pathLabel}.priceSnapshot.staleAfter must not exceed ${maxPriceSnapshotStaleAfter}`,
+    );
+  }
   return {
     maxMessageSize: integerField(
       input,
@@ -1990,11 +2002,7 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
         "dstDataFeePerByteInSrcToken",
         `${pathLabel}.priceSnapshot.dstDataFeePerByteInSrcToken`,
       ),
-      staleAfter: decimalField(
-        priceSnapshot,
-        "staleAfter",
-        `${pathLabel}.priceSnapshot.staleAfter`,
-      ),
+      staleAfter,
       maxAgeSeconds: decimalField(
         priceSnapshot,
         "maxAgeSeconds",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/big"
 	"net/http"
@@ -94,6 +95,57 @@ func TestCoinGeckoClientPriceUSD(t *testing.T) {
 	}
 	if !price.ObservedAt.Equal(time.Unix(1_700_000_000, 0)) {
 		t.Fatalf("observed at = %s", price.ObservedAt)
+	}
+}
+
+func TestMarketDataClientsRejectOversizedResponseBody(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		price   func(*http.Client) error
+	}{
+		{
+			name:    "coinmarketcap",
+			payload: `{"data":[{"id":1027,"quote":[{"symbol":"USD","price":2000,"last_updated":"2023-11-14T22:13:20Z"}]}]}`,
+			price: func(httpClient *http.Client) error {
+				client, err := NewCoinMarketCapClient("", "", httpClient)
+				if err != nil {
+					return err
+				}
+				_, err = client.PriceUSD(t.Context(), 1027)
+				return err
+			},
+		},
+		{
+			name:    "coingecko",
+			payload: `{"ethereum":{"usd":2000,"last_updated_at":1700000000}}`,
+			price: func(httpClient *http.Client) error {
+				client, err := NewCoinGeckoClient("", "", httpClient)
+				if err != nil {
+					return err
+				}
+				_, err = client.PriceUSD(t.Context(), "ethereum")
+				return err
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := test.payload + strings.Repeat(" ", int(maxMarketDataResponseBodyBytes)+1)
+			httpClient := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+					Request:    request,
+				}, nil
+			})}
+			err := test.price(httpClient)
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%s price response body exceeds %d bytes", test.name, maxMarketDataResponseBodyBytes)) {
+				t.Fatalf("PriceUSD() error = %v, want bounded response-body error", err)
+			}
+		})
 	}
 }
 
