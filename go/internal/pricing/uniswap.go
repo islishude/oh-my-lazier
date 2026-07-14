@@ -97,18 +97,8 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	if header == nil || header.Time == 0 {
 		return SourcePrice{}, errors.New("uniswap returned invalid latest block header")
 	}
-	token0, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token0")
-	if err != nil {
+	if err := c.validateSourceConfiguration(ctx); err != nil {
 		return SourcePrice{}, err
-	}
-	token1, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token1")
-	if err != nil {
-		return SourcePrice{}, err
-	}
-	directOrder := token0 == c.tokenIn && token1 == c.tokenOut
-	reverseOrder := token0 == c.tokenOut && token1 == c.tokenIn
-	if !directOrder && !reverseOrder {
-		return SourcePrice{}, errors.New("uniswap pool tokens do not match configured token pair")
 	}
 	inDecimals, err := c.readDecimals(ctx, c.tokenIn)
 	if err != nil {
@@ -136,6 +126,23 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	price := new(big.Rat).SetInt(quoteAmount)
 	price.Quo(price, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(outDecimals)), nil)))
 	return SourcePrice{Source: "uniswap", USD: price, ObservedAt: time.Unix(int64(header.Time), 0)}, nil
+}
+
+func (c *UniswapV3Client) validateSourceConfiguration(ctx context.Context) error {
+	token0, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token0")
+	if err != nil {
+		return err
+	}
+	token1, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token1")
+	if err != nil {
+		return err
+	}
+	directOrder := token0 == c.tokenIn && token1 == c.tokenOut
+	reverseOrder := token0 == c.tokenOut && token1 == c.tokenIn
+	if !directOrder && !reverseOrder {
+		return newPriceSourceConfigurationError(errors.New("uniswap pool tokens do not match configured token pair"))
+	}
+	return nil
 }
 
 func (c *UniswapV3Client) observe(ctx context.Context) (int, *big.Int, error) {

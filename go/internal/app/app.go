@@ -126,6 +126,9 @@ func (a *App) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		if err := pricing.ValidateSourceConfigurations(ctx, priceSources, a.priceSelectionPolicy()); err != nil {
+			return err
+		}
 	}
 
 	a.logger.Info("connecting to database and running migrations...")

@@ -49,16 +49,8 @@ func NewChainlinkClient(caller CallContractReader, cfg ChainlinkConfig) (*Chainl
 
 // PriceUSD reads and validates the latest AggregatorV3 USD/native observation.
 func (c *ChainlinkClient) PriceUSD(ctx context.Context) (SourcePrice, error) {
-	descriptionValues, err := c.call(ctx, "description")
-	if err != nil {
+	if err := c.validateSourceConfiguration(ctx); err != nil {
 		return SourcePrice{}, err
-	}
-	if len(descriptionValues) != 1 {
-		return SourcePrice{}, fmt.Errorf("chainlink description returned %d values", len(descriptionValues))
-	}
-	description, ok := descriptionValues[0].(string)
-	if !ok || description != c.expectedDescription {
-		return SourcePrice{}, fmt.Errorf("chainlink description %q does not match expected %q", description, c.expectedDescription)
 	}
 	decimalValues, err := c.call(ctx, "decimals")
 	if err != nil {
@@ -94,6 +86,21 @@ func (c *ChainlinkClient) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	price := new(big.Rat).SetInt(answer)
 	price.Quo(price, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)))
 	return SourcePrice{Source: "chainlink", USD: price, ObservedAt: time.Unix(updatedAt.Int64(), 0)}, nil
+}
+
+func (c *ChainlinkClient) validateSourceConfiguration(ctx context.Context) error {
+	descriptionValues, err := c.call(ctx, "description")
+	if err != nil {
+		return err
+	}
+	if len(descriptionValues) != 1 {
+		return newPriceSourceConfigurationError(fmt.Errorf("chainlink description returned %d values", len(descriptionValues)))
+	}
+	description, ok := descriptionValues[0].(string)
+	if !ok || description != c.expectedDescription {
+		return newPriceSourceConfigurationError(fmt.Errorf("chainlink description %q does not match expected %q", description, c.expectedDescription))
+	}
+	return nil
 }
 
 func (c *ChainlinkClient) call(ctx context.Context, method string) ([]any, error) {

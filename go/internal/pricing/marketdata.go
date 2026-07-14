@@ -46,6 +46,15 @@ type CoinGeckoPriceReader struct {
 	coinID string
 }
 
+type marketDataHTTPStatusError struct {
+	source     string
+	statusCode int
+}
+
+func (e *marketDataHTTPStatusError) Error() string {
+	return fmt.Sprintf("%s price request returned HTTP %d", e.source, e.statusCode)
+}
+
 // NewCoinMarketCapClient creates a CoinMarketCap quote client.
 func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*CoinMarketCapClient, error) {
 	if baseURL == "" {
@@ -84,6 +93,14 @@ func (r *CoinMarketCapPriceReader) PriceUSD(ctx context.Context) (SourcePrice, e
 	return r.client.PriceUSD(ctx, r.id)
 }
 
+func (r *CoinMarketCapPriceReader) validateSourceConfiguration(ctx context.Context) error {
+	_, err := r.PriceUSD(ctx)
+	if isDeterministicMarketDataError(err) {
+		return newPriceSourceConfigurationError(err)
+	}
+	return err
+}
+
 // PriceUSD fetches the latest cryptocurrency-ID price as USD/native.
 func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePrice, error) {
 	if id == 0 {
@@ -110,7 +127,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return SourcePrice{}, fmt.Errorf("coinmarketcap price request returned HTTP %d", response.StatusCode)
+		return SourcePrice{}, &marketDataHTTPStatusError{source: "coinmarketcap", statusCode: response.StatusCode}
 	}
 	var payload struct {
 		Data []struct {
@@ -128,7 +145,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 		return SourcePrice{}, err
 	}
 	if len(payload.Data) != 1 || payload.Data[0].ID != id {
-		return SourcePrice{}, fmt.Errorf("coinmarketcap returned no unique price for id %d", id)
+		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coinmarketcap returned no unique price for id %d", id))
 	}
 	var priceText, observedText string
 	for _, quote := range payload.Data[0].Quote {
@@ -205,6 +222,14 @@ func (r *CoinGeckoPriceReader) PriceUSD(ctx context.Context) (SourcePrice, error
 	return r.client.PriceUSD(ctx, r.coinID)
 }
 
+func (r *CoinGeckoPriceReader) validateSourceConfiguration(ctx context.Context) error {
+	_, err := r.PriceUSD(ctx)
+	if isDeterministicMarketDataError(err) {
+		return newPriceSourceConfigurationError(err)
+	}
+	return err
+}
+
 // PriceUSD fetches the latest coin id price as USD/native.
 func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePrice, error) {
 	if coinID == "" {
@@ -232,7 +257,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
-		return SourcePrice{}, fmt.Errorf("coingecko price request returned HTTP %d", response.StatusCode)
+		return SourcePrice{}, &marketDataHTTPStatusError{source: "coingecko", statusCode: response.StatusCode}
 	}
 	var payload map[string]struct {
 		USD           json.Number `json:"usd"`
@@ -245,7 +270,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	entry, ok := payload[coinID]
 	if !ok {
-		return SourcePrice{}, fmt.Errorf("coingecko returned no price for %s", coinID)
+		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coingecko returned no price for %s", coinID))
 	}
 	priceText := entry.USD.String()
 	price, ok := new(big.Rat).SetString(priceText)
@@ -256,4 +281,27 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 		return SourcePrice{}, errors.New("coingecko returned invalid last_updated_at")
 	}
 	return SourcePrice{Source: "coingecko", USD: price, ObservedAt: time.Unix(entry.LastUpdatedAt, 0)}, nil
+}
+
+func isDeterministicMarketDataError(err error) bool {
+	if err == nil || isPriceSourceConfigurationError(err) {
+		return err != nil
+	}
+	var statusError *marketDataHTTPStatusError
+	if !errors.As(err, &statusError) {
+		return false
+	}
+	switch statusError.statusCode {
+	case http.StatusBadRequest,
+		http.StatusUnauthorized,
+		http.StatusPaymentRequired,
+		http.StatusForbidden,
+		http.StatusNotFound,
+		http.StatusMethodNotAllowed,
+		http.StatusGone,
+		http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
 }

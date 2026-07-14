@@ -251,10 +251,11 @@ func TestTxTargetsUsesPerChainPricingPolicies(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotProbeMarketSourcesDuringStartup(t *testing.T) {
+func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
@@ -266,11 +267,43 @@ func TestRunDoesNotProbeMarketSourcesDuringStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithOptions() error = %v", err)
 	}
-	if err := worker.Run(t.Context()); err == nil {
+	err = worker.Run(t.Context())
+	if err == nil {
 		t.Fatal("Run() error = nil, want invalid database URL error")
 	}
-	if got := requests.Load(); got != 0 {
-		t.Fatalf("market source requests during startup = %d, want 0", got)
+	if strings.Contains(err.Error(), "source configuration") {
+		t.Fatalf("Run() error = %q, want transient source failure deferred", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("market source configuration requests during startup = %d, want 2", got)
+	}
+}
+
+func TestRunRejectsDeterministicMarketSourceMismatchBeforeDatabase(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://%"
+	cfg.Pricing = testPricingConfig()
+	cfg.Pricing.CoinGeckoBaseURL = server.URL
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	err = worker.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want deterministic source configuration error")
+	}
+	if !strings.Contains(err.Error(), "coingecko source configuration for chain 40161: coingecko returned no price for ethereum") {
+		t.Fatalf("Run() error = %q, want CoinGecko source configuration error", err)
+	}
+	if got := requests.Load(); got != 2 {
+		t.Fatalf("market source configuration requests during startup = %d, want 2", got)
 	}
 }
 
