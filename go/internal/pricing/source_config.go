@@ -45,6 +45,16 @@ func isPriceSourceConfigurationError(err error) bool {
 	return errors.As(err, &configurationError)
 }
 
+func classifySourceIdentityCallError(message string, err error) error {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if isPriceSourceRequestError(err) && !isPriceSourceContractRevert(err) {
+		return err
+	}
+	return newPriceSourceConfigurationError(fmt.Errorf("%s: %w", message, err))
+}
+
 type sourceConfigurationCheck struct {
 	eid      uint32
 	source   string

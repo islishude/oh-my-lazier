@@ -104,7 +104,7 @@ func (c *ChainlinkClient) validateSourceConfiguration(ctx context.Context) error
 func (c *ChainlinkClient) validateSourceConfigurationAtBlock(ctx context.Context, blockNumber *big.Int) error {
 	descriptionValues, err := c.call(ctx, "description", blockNumber)
 	if err != nil {
-		return err
+		return classifySourceIdentityCallError("chainlink description response is incompatible with the AggregatorV3 ABI", err)
 	}
 	if len(descriptionValues) != 1 {
 		return newPriceSourceConfigurationError(fmt.Errorf("chainlink description returned %d values", len(descriptionValues)))

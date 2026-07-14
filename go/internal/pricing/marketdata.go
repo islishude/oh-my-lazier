@@ -92,7 +92,7 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 	if apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
 		if apiKey == "" {
-			return nil, fmt.Errorf("coinmarketcap api key env %s is empty", apiKeyEnv)
+			return nil, errors.New("coinmarketcap api key environment variable is empty")
 		}
 	}
 	return &CoinMarketCapClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
@@ -164,7 +164,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 		return SourcePrice{}, err
 	}
 	if len(payload.Data) != 1 || payload.Data[0].ID != id {
-		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coinmarketcap returned no unique price for id %d", id))
+		return SourcePrice{}, fmt.Errorf("coinmarketcap returned no unique price for id %d", id)
 	}
 	var priceText, observedText string
 	for _, quote := range payload.Data[0].Quote {
@@ -205,7 +205,7 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 	if apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
 		if apiKey == "" {
-			return nil, fmt.Errorf("coingecko api key env %s is empty", apiKeyEnv)
+			return nil, errors.New("coingecko api key environment variable is empty")
 		}
 	}
 	return &CoinGeckoClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
@@ -287,7 +287,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	entry, ok := payload[coinID]
 	if !ok {
-		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coingecko returned no price for %s", coinID))
+		return SourcePrice{}, fmt.Errorf("coingecko returned no price for %s", coinID)
 	}
 	priceText := entry.USD.String()
 	price, ok := new(big.Rat).SetString(priceText)
@@ -312,8 +312,6 @@ func isDeterministicMarketDataError(err error) bool {
 	case http.StatusBadRequest,
 		http.StatusUnauthorized,
 		http.StatusPaymentRequired,
-		http.StatusForbidden,
-		http.StatusNotFound,
 		http.StatusMethodNotAllowed,
 		http.StatusGone,
 		http.StatusUnprocessableEntity:

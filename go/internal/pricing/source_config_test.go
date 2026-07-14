@@ -42,25 +42,6 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 			want: "coinmarketcap price request returned HTTP 400",
 		},
 		{
-			name: "coingecko missing id",
-			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					_, _ = w.Write([]byte(`{}`))
-				}))
-				t.Cleanup(server.Close)
-				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
-				if err != nil {
-					t.Fatalf("NewCoinGeckoClient() error = %v", err)
-				}
-				reader, err := NewCoinGeckoPriceReader(client, "missing-asset")
-				if err != nil {
-					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
-				}
-				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
-			},
-			want: "coingecko returned no price for missing-asset",
-		},
-		{
 			name: "chainlink description mismatch",
 			build: func(t *testing.T) ConfiguredPriceReader {
 				caller := newFakeEVMReader(t, time.Unix(1_700_000_000, 0))
@@ -74,6 +55,27 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 				return ConfiguredPriceReader{Name: "chainlink", Reader: reader}
 			},
 			want: `chainlink description "BTC / USD" does not match expected "ETH / USD"`,
+		},
+		{
+			name: "chainlink EOA response",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredChainlinkTestReader(t, staticEVMResponseReader{})
+			},
+			want: "chainlink description response is incompatible with the AggregatorV3 ABI",
+		},
+		{
+			name: "chainlink wrong ABI response",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredChainlinkTestReader(t, staticEVMResponseReader{response: []byte{0x01}})
+			},
+			want: "chainlink description response is incompatible with the AggregatorV3 ABI",
+		},
+		{
+			name: "chainlink wrong ABI revert",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredChainlinkTestReader(t, staticEVMResponseReader{err: contractRevertRPCError{}})
+			},
+			want: "chainlink description response is incompatible with the AggregatorV3 ABI",
 		},
 		{
 			name: "uniswap token pair mismatch",
@@ -94,6 +96,27 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 				return ConfiguredPriceReader{Name: "uniswap", Reader: reader}
 			},
 			want: "uniswap pool tokens do not match configured token pair",
+		},
+		{
+			name: "uniswap EOA response",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapTestReader(t, staticEVMResponseReader{})
+			},
+			want: "uniswap token0 response is incompatible with the pool ABI",
+		},
+		{
+			name: "uniswap wrong ABI response",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapTestReader(t, staticEVMResponseReader{response: []byte{0x01}})
+			},
+			want: "uniswap token0 response is incompatible with the pool ABI",
+		},
+		{
+			name: "uniswap wrong ABI revert",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapTestReader(t, staticEVMResponseReader{err: contractRevertRPCError{}})
+			},
+			want: "uniswap token0 response is incompatible with the pool ABI",
 		},
 	}
 
@@ -141,10 +164,90 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 			want:    "unavailable",
 		},
 		{
+			name: "coinmarketcap forbidden",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusForbidden)
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinMarketCapClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapClient() error = %v", err)
+				}
+				reader, err := NewCoinMarketCapPriceReader(client, 1027)
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
+			},
+			timeout: time.Second,
+			want:    "unavailable",
+		},
+		{
+			name: "coinmarketcap empty successful payload",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(`{"data":[]}`))
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinMarketCapClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapClient() error = %v", err)
+				}
+				reader, err := NewCoinMarketCapPriceReader(client, 1027)
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
+			},
+			timeout: time.Second,
+			want:    "unavailable",
+		},
+		{
 			name: "coingecko rate limit",
 			build: func(t *testing.T) ConfiguredPriceReader {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusTooManyRequests)
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinGeckoClient() error = %v", err)
+				}
+				reader, err := NewCoinGeckoPriceReader(client, "ethereum")
+				if err != nil {
+					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
+			},
+			timeout: time.Second,
+			want:    "unavailable",
+		},
+		{
+			name: "coingecko not found",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNotFound)
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinGeckoClient() error = %v", err)
+				}
+				reader, err := NewCoinGeckoPriceReader(client, "ethereum")
+				if err != nil {
+					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
+			},
+			timeout: time.Second,
+			want:    "unavailable",
+		},
+		{
+			name: "coingecko empty successful payload",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(`{}`))
 				}))
 				t.Cleanup(server.Close)
 				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
@@ -243,6 +346,50 @@ func (unavailableEVMReader) CallContract(context.Context, ethereum.CallMsg, *big
 
 func (unavailableEVMReader) HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error) {
 	return nil, errors.New("rpc unavailable")
+}
+
+type staticEVMResponseReader struct {
+	response []byte
+	err      error
+}
+
+func (r staticEVMResponseReader) CallContract(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+	return append([]byte(nil), r.response...), r.err
+}
+
+func (staticEVMResponseReader) HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error) {
+	return &gethtypes.Header{Number: big.NewInt(1), Time: 1}, nil
+}
+
+type contractRevertRPCError struct{}
+
+func (contractRevertRPCError) Error() string  { return "execution reverted" }
+func (contractRevertRPCError) ErrorCode() int { return 3 }
+
+func configuredChainlinkTestReader(t *testing.T, caller staticEVMResponseReader) ConfiguredPriceReader {
+	t.Helper()
+	reader, err := NewChainlinkClient(caller, caller, ChainlinkConfig{
+		FeedAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"), ExpectedDescription: "ETH / USD",
+	})
+	if err != nil {
+		t.Fatalf("NewChainlinkClient() error = %v", err)
+	}
+	return ConfiguredPriceReader{Name: "chainlink", Reader: reader}
+}
+
+func configuredUniswapTestReader(t *testing.T, caller staticEVMResponseReader) ConfiguredPriceReader {
+	t.Helper()
+	reader, err := NewUniswapV3Client(caller, caller, UniswapV3Config{
+		PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		TokenIn:                  common.HexToAddress("0x2222222222222222222222222222222222222222"),
+		TokenOut:                 common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
+		MinHarmonicMeanLiquidity: big.NewInt(1),
+	})
+	if err != nil {
+		t.Fatalf("NewUniswapV3Client() error = %v", err)
+	}
+	return ConfiguredPriceReader{Name: "uniswap", Reader: reader}
 }
 
 type blockingSourceConfigurationReader struct{}

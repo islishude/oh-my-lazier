@@ -132,11 +132,11 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 func (c *UniswapV3Client) validateSourceConfiguration(ctx context.Context) error {
 	token0, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token0")
 	if err != nil {
-		return err
+		return classifySourceIdentityCallError("uniswap token0 response is incompatible with the pool ABI", err)
 	}
 	token1, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token1")
 	if err != nil {
-		return err
+		return classifySourceIdentityCallError("uniswap token1 response is incompatible with the pool ABI", err)
 	}
 	directOrder := token0 == c.tokenIn && token1 == c.tokenOut
 	reverseOrder := token0 == c.tokenOut && token1 == c.tokenIn

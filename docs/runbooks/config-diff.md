@@ -14,6 +14,11 @@ represented only as `[REDACTED]`. The database URL
 retains a validated `sslmode` value so TLS policy changes remain visible during
 review; all other database query values are omitted. Malformed or opaque
 database URLs are also represented only as `[REDACTED]`.
+Secret-reference fields (`keystore.password_env`, `coinmarketcap_api_key_env`,
+and `coingecko_api_key_env`) must use uppercase environment-variable names.
+Config loading rejects malformed references without echoing the supplied value;
+the diff projection also replaces any malformed non-empty reference with
+`[REDACTED]` as defense in depth.
 
 Text review:
 

@@ -307,6 +307,53 @@ func TestDiffRedactsPricingAndSignerEndpointURLsWithoutHidingChanges(t *testing.
 	}
 }
 
+func TestDiffRedactsInvalidSecretEnvironmentReferences(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	before.Pricing.CoinMarketCapAPIKeyEnv = "before-cmc-secret=abc123"
+	after.Pricing.CoinMarketCapAPIKeyEnv = "after-cmc-secret=def456"
+	before.Pricing.CoinGeckoAPIKeyEnv = "before-cg-secret=ghi789"
+	after.Pricing.CoinGeckoAPIKeyEnv = "after-cg-secret=jkl012"
+	signerID := config.MustEVMAddress("0x9999999999999999999999999999999999999999")
+	before.Signers = []config.SignerConfig{{
+		ID: signerID, Type: "keystore", Keystore: config.KeystoreSignerConfig{
+			Path: "/run/secrets/worker.json", PasswordEnv: "before-password-secret=mno345",
+		},
+	}}
+	after.Signers = []config.SignerConfig{{
+		ID: signerID, Type: "keystore", Keystore: config.KeystoreSignerConfig{
+			Path: "/run/secrets/worker.json", PasswordEnv: "after-password-secret=pqr678",
+		},
+	}}
+
+	changes := Diff(before, after)
+	encoded, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	output := string(encoded) + RenderText(changes)
+	for _, secret := range []string{
+		"before-cmc-secret", "abc123", "after-cmc-secret", "def456",
+		"before-cg-secret", "ghi789", "after-cg-secret", "jkl012",
+		"before-password-secret", "mno345", "after-password-secret", "pqr678",
+	} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("config diff leaked secret environment reference %q:\n%s", secret, output)
+		}
+	}
+	for _, path := range []string{
+		`"path":"pricing"`,
+		`"path":"signers[0x9999999999999999999999999999999999999999]"`,
+	} {
+		if !strings.Contains(output, path) {
+			t.Fatalf("config diff omitted redacted change %s:\n%s", path, output)
+		}
+	}
+	if strings.Count(output, "[REDACTED]") < 6 {
+		t.Fatalf("config diff missing secret environment reference redaction:\n%s", output)
+	}
+}
+
 func TestEndpointURLRedactionUsesContextSpecificSchemeAllowLists(t *testing.T) {
 	tests := []struct {
 		name   string

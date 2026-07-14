@@ -173,6 +173,45 @@ func TestNewCoinGeckoClientSelectsEndpointForAuthenticationMode(t *testing.T) {
 	}
 }
 
+func TestMarketDataClientsDoNotEchoMissingAPIKeyEnvironmentReference(t *testing.T) {
+	const secretLikeReference = "PASTEDSECRET123"
+	t.Setenv(secretLikeReference, "")
+	constructors := []struct {
+		name string
+		new  func() error
+	}{
+		{
+			name: "coinmarketcap",
+			new: func() error {
+				_, err := NewCoinMarketCapClient("", secretLikeReference, http.DefaultClient)
+				return err
+			},
+		},
+		{
+			name: "coingecko",
+			new: func() error {
+				_, err := NewCoinGeckoClient("", secretLikeReference, http.DefaultClient)
+				return err
+			},
+		},
+	}
+
+	for _, constructor := range constructors {
+		t.Run(constructor.name, func(t *testing.T) {
+			err := constructor.new()
+			if err == nil {
+				t.Fatal("client constructor error = nil, want missing API key error")
+			}
+			if strings.Contains(err.Error(), secretLikeReference) {
+				t.Fatalf("client constructor error leaked secret-like environment reference: %q", err)
+			}
+			if !strings.Contains(err.Error(), "api key environment variable is empty") {
+				t.Fatalf("client constructor error = %q, want redacted missing API key error", err)
+			}
+		})
+	}
+}
+
 func TestMarketDataClientsRejectInvalidBaseURL(t *testing.T) {
 	constructors := []struct {
 		name string

@@ -279,7 +279,7 @@ func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	}
 }
 
-func TestRunRejectsDeterministicMarketSourceMismatchBeforeDatabase(t *testing.T) {
+func TestRunDefersEmptyMarketSourceResponseDuringStartup(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -297,10 +297,10 @@ func TestRunRejectsDeterministicMarketSourceMismatchBeforeDatabase(t *testing.T)
 	}
 	err = worker.Run(t.Context())
 	if err == nil {
-		t.Fatal("Run() error = nil, want deterministic source configuration error")
+		t.Fatal("Run() error = nil, want invalid database URL error")
 	}
-	if !strings.Contains(err.Error(), "coingecko source configuration for chain 40161: coingecko returned no price for ethereum") {
-		t.Fatalf("Run() error = %q, want CoinGecko source configuration error", err)
+	if strings.Contains(err.Error(), "source configuration") {
+		t.Fatalf("Run() error = %q, want empty market response deferred", err)
 	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("market source configuration requests during startup = %d, want 2", got)

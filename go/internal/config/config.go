@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
@@ -23,6 +24,8 @@ const (
 )
 
 const defaultTxManagerStaleBroadcastReplacementAfterSeconds = 900
+
+var environmentVariableNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
 const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
@@ -92,6 +95,11 @@ func (s ServiceToggleConfig) EnabledOrDefault(defaultEnabled bool) bool {
 		return defaultEnabled
 	}
 	return *s.Enabled
+}
+
+// IsValidEnvironmentVariableName reports whether value follows the uppercase environment-variable syntax used by deploy profiles.
+func IsValidEnvironmentVariableName(value string) bool {
+	return environmentVariableNamePattern.MatchString(value)
 }
 
 // ExecutorEnabled reports whether this process should run executor workflows.
@@ -436,6 +444,9 @@ func load(path string, applyEnv bool) (Config, error) {
 
 // Validate checks that required chains, pathways, and mode settings are internally consistent.
 func (c Config) Validate() error {
+	if err := c.validateSecretEnvironmentReferences(); err != nil {
+		return err
+	}
 	if c.DatabaseURL == "" {
 		return errors.New("database_url is required")
 	}
@@ -567,6 +578,40 @@ func (c Config) Validate() error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (c Config) validateSecretEnvironmentReferences() error {
+	for index, signer := range c.Signers {
+		if err := validateOptionalEnvironmentVariableName(
+			fmt.Sprintf("signers[%d].keystore.password_env", index),
+			signer.Keystore.PasswordEnv,
+		); err != nil {
+			return err
+		}
+	}
+	if err := validateOptionalEnvironmentVariableName(
+		"pricing.coinmarketcap_api_key_env",
+		c.Pricing.CoinMarketCapAPIKeyEnv,
+	); err != nil {
+		return err
+	}
+	if err := validateOptionalEnvironmentVariableName(
+		"pricing.coingecko_api_key_env",
+		c.Pricing.CoinGeckoAPIKeyEnv,
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateOptionalEnvironmentVariableName(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if !IsValidEnvironmentVariableName(value) {
+		return fmt.Errorf("%s must be an uppercase environment variable name", field)
 	}
 	return nil
 }

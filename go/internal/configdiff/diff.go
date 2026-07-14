@@ -141,6 +141,7 @@ func signers(items []config.SignerConfig) map[string]config.SignerConfig {
 }
 
 func redactSigner(item config.SignerConfig) config.SignerConfig {
+	item.Keystore.PasswordEnv = redactSecretEnvironmentReference(item.Keystore.PasswordEnv)
 	item.KMS.Endpoint = redactHTTPURL(item.KMS.Endpoint)
 	return item
 }
@@ -264,8 +265,17 @@ func pricingGlobal(pricing config.PricingConfig) pricingConfigGlobal {
 
 func redactPricingGlobal(pricing pricingConfigGlobal) pricingConfigGlobal {
 	pricing.CoinMarketCapBaseURL = redactHTTPURL(pricing.CoinMarketCapBaseURL)
+	pricing.CoinMarketCapAPIKeyEnv = redactSecretEnvironmentReference(pricing.CoinMarketCapAPIKeyEnv)
 	pricing.CoinGeckoBaseURL = redactHTTPURL(pricing.CoinGeckoBaseURL)
+	pricing.CoinGeckoAPIKeyEnv = redactSecretEnvironmentReference(pricing.CoinGeckoAPIKeyEnv)
 	return pricing
+}
+
+func redactSecretEnvironmentReference(value string) string {
+	if value == "" || config.IsValidEnvironmentVariableName(value) {
+		return value
+	}
+	return "[REDACTED]"
 }
 
 func jsonValue(value any) string {

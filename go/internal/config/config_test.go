@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -13,6 +14,27 @@ func TestValidateAcceptsSepoliaPathways(t *testing.T) {
 	cfg := validConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestIsValidEnvironmentVariableNameMatchesDeployProfileSyntax(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "API_KEY_2", want: true},
+		{value: "_INTERNAL_KEY", want: true},
+		{value: "", want: false},
+		{value: "api_key", want: false},
+		{value: "2_API_KEY", want: false},
+		{value: "API-KEY", want: false},
+		{value: "API KEY", want: false},
+	}
+
+	for _, test := range tests {
+		if got := IsValidEnvironmentVariableName(test.value); got != test.want {
+			t.Errorf("IsValidEnvironmentVariableName(%q) = %t, want %t", test.value, got, test.want)
+		}
 	}
 }
 
@@ -349,6 +371,54 @@ func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
 	cfg.Signers[0].Keystore.PasswordEnv = ""
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing keystore password source error")
+	}
+}
+
+func TestValidateRejectsInvalidSecretEnvironmentVariableNamesWithoutEcho(t *testing.T) {
+	const secret = "sk-live.actual-secret=abc123"
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{
+			name: "keystore password",
+			mutate: func(cfg *Config) {
+				cfg.Signers[0].Keystore.PasswordEnv = secret
+			},
+			want: "signers[0].keystore.password_env must be an uppercase environment variable name",
+		},
+		{
+			name: "coinmarketcap api key",
+			mutate: func(cfg *Config) {
+				cfg.Pricing.CoinMarketCapAPIKeyEnv = secret
+			},
+			want: "pricing.coinmarketcap_api_key_env must be an uppercase environment variable name",
+		},
+		{
+			name: "coingecko api key",
+			mutate: func(cfg *Config) {
+				cfg.Pricing.CoinGeckoAPIKeyEnv = secret
+			},
+			want: "pricing.coingecko_api_key_env must be an uppercase environment variable name",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			test.mutate(&cfg)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want invalid environment variable name error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Validate() error = %q, want %q", err, test.want)
+			}
+			if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "abc123") {
+				t.Fatalf("Validate() error leaked secret environment reference: %q", err)
+			}
+		})
 	}
 }
 
