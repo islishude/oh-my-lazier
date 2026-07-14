@@ -27,6 +27,9 @@ const defaultTxManagerStaleBroadcastReplacementAfterSeconds = 900
 // MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
 const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
 
+// MinUniswapTWAPWindowSeconds is the shortest accepted Uniswap V3 sanity-price lookback.
+const MinUniswapTWAPWindowSeconds uint64 = 30 * 60
+
 // DVNMode selects whether the DVN verifier only reports or also submits verification transactions.
 type DVNMode string
 
@@ -944,6 +947,9 @@ func validateUniswapPricingSource(chain PricingChainConfig) error {
 	}
 	if chain.Uniswap.TWAPWindowSeconds == 0 {
 		return fmt.Errorf("pricing chain %d uniswap.twap_window_seconds is required", chain.EID)
+	}
+	if chain.Uniswap.TWAPWindowSeconds < MinUniswapTWAPWindowSeconds {
+		return fmt.Errorf("pricing chain %d uniswap.twap_window_seconds must be at least %d", chain.EID, MinUniswapTWAPWindowSeconds)
 	}
 	if chain.Uniswap.TWAPWindowSeconds > math.MaxUint32 {
 		return fmt.Errorf("pricing chain %d uniswap.twap_window_seconds exceeds uint32", chain.EID)

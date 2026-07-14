@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 )
 
 func TestCoinMarketCapClientPriceUSD(t *testing.T) {
@@ -298,7 +299,7 @@ func TestChainlinkClientPriceUSD(t *testing.T) {
 	caller.addResponse(t, chainlinkAggregatorV3ABI.Methods["decimals"].ID, chainlinkAggregatorV3ABI.Methods["decimals"].Outputs, uint8(8))
 	caller.addResponse(t, chainlinkAggregatorV3ABI.Methods["latestRoundData"].ID, chainlinkAggregatorV3ABI.Methods["latestRoundData"].Outputs,
 		big.NewInt(10), big.NewInt(200_000_000_000), big.NewInt(1_699_999_900), big.NewInt(1_700_000_000), big.NewInt(10))
-	client, err := NewChainlinkClient(caller, ChainlinkConfig{
+	client, err := NewChainlinkClient(caller, caller, ChainlinkConfig{
 		FeedAddress:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
 		ExpectedDescription: "ETH / USD",
 	})
@@ -311,6 +312,97 @@ func TestChainlinkClientPriceUSD(t *testing.T) {
 	}
 	if price.USD.Cmp(big.NewRat(2000, 1)) != 0 || !price.ObservedAt.Equal(time.Unix(1_700_000_000, 0)) {
 		t.Fatalf("price = %s at %s", price.USD, price.ObservedAt)
+	}
+	if caller.headerCalls != 1 {
+		t.Fatalf("HeaderByNumber() calls = %d, want 1", caller.headerCalls)
+	}
+	if len(caller.callBlockNumbers) != 3 {
+		t.Fatalf("CallContract() calls = %d, want 3", len(caller.callBlockNumbers))
+	}
+	for index, blockNumber := range caller.callBlockNumbers {
+		if blockNumber == nil || blockNumber.Cmp(caller.header.Number) != 0 {
+			t.Fatalf("CallContract() block[%d] = %v, want %s", index, blockNumber, caller.header.Number)
+		}
+	}
+}
+
+func TestChainlinkClientRejectsInvalidLatestHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeEVMReader)
+		want      string
+	}{
+		{
+			name: "request failure",
+			configure: func(caller *fakeEVMReader) {
+				caller.headerErr = errors.New("rpc unavailable")
+			},
+			want: "chainlink price request header failed",
+		},
+		{
+			name: "nil header",
+			configure: func(caller *fakeEVMReader) {
+				caller.header = nil
+			},
+			want: "chainlink returned invalid latest block header",
+		},
+		{
+			name: "missing block number",
+			configure: func(caller *fakeEVMReader) {
+				caller.header.Number = nil
+			},
+			want: "chainlink returned invalid latest block header",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			caller := newFakeEVMReader(t, time.Unix(1_700_000_000, 0))
+			test.configure(caller)
+			client, err := NewChainlinkClient(caller, caller, ChainlinkConfig{
+				FeedAddress:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				ExpectedDescription: "ETH / USD",
+			})
+			if err != nil {
+				t.Fatalf("NewChainlinkClient() error = %v", err)
+			}
+			if _, err := client.PriceUSD(t.Context()); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("PriceUSD() error = %v, want %q", err, test.want)
+			}
+			if len(caller.callBlockNumbers) != 0 {
+				t.Fatalf("CallContract() calls = %d, want 0", len(caller.callBlockNumbers))
+			}
+		})
+	}
+}
+
+func TestNewUniswapV3ClientEnforcesMinimumTWAPWindow(t *testing.T) {
+	tests := []struct {
+		name    string
+		window  uint32
+		wantErr bool
+	}{
+		{name: "below minimum", window: uint32(config.MinUniswapTWAPWindowSeconds - 1), wantErr: true},
+		{name: "at minimum", window: uint32(config.MinUniswapTWAPWindowSeconds)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			caller := newFakeEVMReader(t, time.Unix(1_700_000_000, 0))
+			_, err := NewUniswapV3Client(caller, caller, UniswapV3Config{
+				PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				TokenIn:                  common.HexToAddress("0x2222222222222222222222222222222222222222"),
+				TokenOut:                 common.HexToAddress("0x3333333333333333333333333333333333333333"),
+				TWAPWindowSeconds:        test.window,
+				MinHarmonicMeanLiquidity: big.NewInt(1),
+			})
+			if test.wantErr && (err == nil || !strings.Contains(err.Error(), "must be at least 1800 seconds")) {
+				t.Fatalf("NewUniswapV3Client() error = %v, want minimum-window error", err)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("NewUniswapV3Client() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -327,7 +419,7 @@ func TestUniswapV3ClientPriceUSD(t *testing.T) {
 		PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
 		TokenIn:                  tokenIn,
 		TokenOut:                 tokenOut,
-		TWAPWindowSeconds:        60,
+		TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
 		MinHarmonicMeanLiquidity: big.NewInt(1),
 	})
 	if err != nil {
@@ -404,7 +496,7 @@ func TestUniswapV3ClientAppliesTokenDecimals(t *testing.T) {
 		[]*big.Int{big.NewInt(0), big.NewInt(0)}, []*big.Int{big.NewInt(0), big.NewInt(1)})
 	client, err := NewUniswapV3Client(caller, caller, UniswapV3Config{
 		PoolAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"), TokenIn: tokenIn, TokenOut: tokenOut,
-		TWAPWindowSeconds: 60, MinHarmonicMeanLiquidity: big.NewInt(1),
+		TWAPWindowSeconds: uint32(config.MinUniswapTWAPWindowSeconds), MinHarmonicMeanLiquidity: big.NewInt(1),
 	})
 	if err != nil {
 		t.Fatalf("NewUniswapV3Client() error = %v", err)
@@ -431,7 +523,8 @@ func TestUniswapV3ClientRejectsLowHarmonicLiquidity(t *testing.T) {
 		[]*big.Int{big.NewInt(0), big.NewInt(0)}, []*big.Int{big.NewInt(0), liquidityDelta})
 	client, err := NewUniswapV3Client(caller, caller, UniswapV3Config{
 		PoolAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"), TokenIn: tokenIn, TokenOut: tokenOut,
-		TWAPWindowSeconds: 60, MinHarmonicMeanLiquidity: big.NewInt(61),
+		TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
+		MinHarmonicMeanLiquidity: big.NewInt(int64(config.MinUniswapTWAPWindowSeconds + 1)),
 	})
 	if err != nil {
 		t.Fatalf("NewUniswapV3Client() error = %v", err)
@@ -442,9 +535,12 @@ func TestUniswapV3ClientRejectsLowHarmonicLiquidity(t *testing.T) {
 }
 
 type fakeEVMReader struct {
-	responses       map[string][]byte
-	targetResponses map[string][]byte
-	header          *gethtypes.Header
+	responses        map[string][]byte
+	targetResponses  map[string][]byte
+	header           *gethtypes.Header
+	headerErr        error
+	headerCalls      int
+	callBlockNumbers []*big.Int
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -457,7 +553,7 @@ func newFakeEVMReader(t *testing.T, observedAt time.Time) *fakeEVMReader {
 	t.Helper()
 	return &fakeEVMReader{
 		responses: make(map[string][]byte), targetResponses: make(map[string][]byte),
-		header: &gethtypes.Header{Time: uint64(observedAt.Unix())},
+		header: &gethtypes.Header{Number: big.NewInt(123), Time: uint64(observedAt.Unix())},
 	}
 }
 
@@ -483,7 +579,12 @@ func (c *fakeEVMReader) addResponse(t *testing.T, selector []byte, outputs inter
 	c.responses[string(selector)] = encoded
 }
 
-func (c *fakeEVMReader) CallContract(_ context.Context, call ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+func (c *fakeEVMReader) CallContract(_ context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	if blockNumber == nil {
+		c.callBlockNumbers = append(c.callBlockNumbers, nil)
+	} else {
+		c.callBlockNumbers = append(c.callBlockNumbers, new(big.Int).Set(blockNumber))
+	}
 	if len(call.Data) < 4 {
 		return nil, errors.New("missing selector")
 	}
@@ -498,5 +599,6 @@ func (c *fakeEVMReader) CallContract(_ context.Context, call ethereum.CallMsg, _
 }
 
 func (c *fakeEVMReader) HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error) {
-	return c.header, nil
+	c.headerCalls++
+	return c.header, c.headerErr
 }

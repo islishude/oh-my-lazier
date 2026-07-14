@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -622,22 +623,42 @@ func TestValidateAcceptsChainlinkPrimaryPricing(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsOptionalUniswapSanityPricing(t *testing.T) {
-	cfg := validConfig()
-	cfg.Pricing = validPricingConfig()
-	for i := range cfg.Pricing.Chains {
-		cfg.Pricing.Chains[i].SanitySources = []string{"uniswap"}
-		cfg.Pricing.Chains[i].Uniswap = UniswapPricingConfig{
-			PoolAddress:              MustEVMAddress("0x1111111111111111111111111111111111111111"),
-			TokenIn:                  MustEVMAddress("0x2222222222222222222222222222222222222222"),
-			TokenOut:                 MustEVMAddress("0x3333333333333333333333333333333333333333"),
-			TWAPWindowSeconds:        1800,
-			MaxBlockAgeSeconds:       120,
-			MinHarmonicMeanLiquidity: "1000000",
-		}
+func TestValidateUniswapTWAPWindowBounds(t *testing.T) {
+	tests := []struct {
+		name    string
+		window  uint64
+		wantErr bool
+	}{
+		{name: "below minimum", window: MinUniswapTWAPWindowSeconds - 1, wantErr: true},
+		{name: "at minimum", window: MinUniswapTWAPWindowSeconds},
+		{name: "at uint32 maximum", window: math.MaxUint32},
+		{name: "above uint32 maximum", window: uint64(math.MaxUint32) + 1, wantErr: true},
 	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("Validate() error = %v", err)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Pricing = validPricingConfig()
+			for i := range cfg.Pricing.Chains {
+				cfg.Pricing.Chains[i].SanitySources = []string{"uniswap"}
+				cfg.Pricing.Chains[i].Uniswap = UniswapPricingConfig{
+					PoolAddress:              MustEVMAddress("0x1111111111111111111111111111111111111111"),
+					TokenIn:                  MustEVMAddress("0x2222222222222222222222222222222222222222"),
+					TokenOut:                 MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					TWAPWindowSeconds:        MinUniswapTWAPWindowSeconds,
+					MaxBlockAgeSeconds:       120,
+					MinHarmonicMeanLiquidity: "1000000",
+				}
+			}
+			cfg.Pricing.Chains[0].Uniswap.TWAPWindowSeconds = test.window
+			err := cfg.Validate()
+			if test.wantErr && err == nil {
+				t.Fatal("Validate() error = nil, want TWAP window bound error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("Validate() error = %v", err)
+			}
+		})
 	}
 }
 

@@ -217,6 +217,54 @@ test("normalizeProfile accepts optional Chainlink primary and Uniswap sanity", (
   assert.deepEqual(profile.chains[0].priceSources?.sanitySources, ["uniswap"]);
 });
 
+test("normalizeProfile enforces the Uniswap TWAP window bounds", () => {
+  const cases = [
+    { name: "below minimum", window: 1_799, wantError: true },
+    { name: "at minimum", window: 1_800, wantError: false },
+    { name: "at uint32 maximum", window: 0xffff_ffff, wantError: false },
+    { name: "above uint32 maximum", window: 0x1_0000_0000, wantError: true },
+  ];
+
+  for (const testCase of cases) {
+    const input = baseProfile();
+    (input.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";
+    for (const chain of input.chains) {
+      (chain as Record<string, unknown>).priceSources = {
+        primarySource: "chainlink",
+        sanitySources: ["uniswap"],
+        chainlink: {
+          feedAddress: "0x1111111111111111111111111111111111111111",
+          expectedDescription: "ETH / USD",
+          maxAgeSeconds: 3600,
+        },
+        uniswap: {
+          poolAddress: "0x2222222222222222222222222222222222222222",
+          tokenIn: "0x3333333333333333333333333333333333333333",
+          tokenOut: "0x4444444444444444444444444444444444444444",
+          twapWindowSeconds: testCase.window,
+          maxBlockAgeSeconds: 120,
+          minHarmonicMeanLiquidity: "1000000",
+        },
+      };
+    }
+
+    if (testCase.wantError) {
+      assert.throws(
+        () => normalizeProfile(input),
+        /twapWindowSeconds must be between 1800 and 4294967295/,
+        testCase.name,
+      );
+      continue;
+    }
+    assert.equal(
+      normalizeProfile(input).chains[0].priceSources?.uniswap
+        ?.twapWindowSeconds,
+      testCase.window,
+      testCase.name,
+    );
+  }
+});
+
 test("normalizeProfile accepts CoinMarketCap primary with environment key reference", () => {
   const input = baseProfile();
   (input as Record<string, unknown>).pricing = {
@@ -1028,7 +1076,6 @@ function deployedWorkers(prefix: string, includePriceFeed = true) {
     ...(includePriceFeed ? { "OpenWorkers#OpenPriceFeed": `${base}4` } : {}),
   };
 }
-
 function deployedTestOFT(prefix: string) {
   const base = prefix.slice(0, -1);
   return {

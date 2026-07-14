@@ -416,7 +416,7 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 			readers["coingecko"] = pricing.ConfiguredPriceReader{Name: "coingecko", Reader: reader, MaxAge: time.Duration(cfg.CoinGecko.MaxAgeSeconds) * time.Second}
 		}
 		if pricingChainUsesSource(cfg, "chainlink") {
-			reader, err := pricing.NewChainlinkClient(configuredChain.RPC, pricing.ChainlinkConfig{
+			reader, err := pricing.NewChainlinkClient(configuredChain.RPC, configuredChain.RPC, pricing.ChainlinkConfig{
 				FeedAddress:         cfg.Chainlink.FeedAddress.Common(),
 				ExpectedDescription: cfg.Chainlink.ExpectedDescription,
 			})

@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 )
 
 func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T) {
@@ -64,7 +65,7 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 			build: func(t *testing.T) ConfiguredPriceReader {
 				caller := newFakeEVMReader(t, time.Unix(1_700_000_000, 0))
 				caller.addResponse(t, chainlinkAggregatorV3ABI.Methods["description"].ID, chainlinkAggregatorV3ABI.Methods["description"].Outputs, "BTC / USD")
-				reader, err := NewChainlinkClient(caller, ChainlinkConfig{
+				reader, err := NewChainlinkClient(caller, caller, ChainlinkConfig{
 					FeedAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"), ExpectedDescription: "ETH / USD",
 				})
 				if err != nil {
@@ -84,7 +85,7 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 					PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:                  common.HexToAddress("0x2222222222222222222222222222222222222222"),
 					TokenOut:                 common.HexToAddress("0x3333333333333333333333333333333333333333"),
-					TWAPWindowSeconds:        60,
+					TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
 					MinHarmonicMeanLiquidity: big.NewInt(1),
 				})
 				if err != nil {
@@ -162,7 +163,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 		{
 			name: "chainlink rpc failure",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				reader, err := NewChainlinkClient(unavailableEVMReader{}, ChainlinkConfig{
+				reader, err := NewChainlinkClient(unavailableEVMReader{}, unavailableEVMReader{}, ChainlinkConfig{
 					FeedAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"), ExpectedDescription: "ETH / USD",
 				})
 				if err != nil {
@@ -180,7 +181,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 					PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
 					TokenIn:                  common.HexToAddress("0x2222222222222222222222222222222222222222"),
 					TokenOut:                 common.HexToAddress("0x3333333333333333333333333333333333333333"),
-					TWAPWindowSeconds:        60,
+					TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
 					MinHarmonicMeanLiquidity: big.NewInt(1),
 				})
 				if err != nil {

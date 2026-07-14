@@ -29,14 +29,15 @@ type ChainlinkConfig struct {
 // ChainlinkClient reads one USD/native price from an AggregatorV3 proxy.
 type ChainlinkClient struct {
 	caller              CallContractReader
+	headers             HeaderReader
 	feed                common.Address
 	expectedDescription string
 }
 
 // NewChainlinkClient creates an AggregatorV3-backed price reader.
-func NewChainlinkClient(caller CallContractReader, cfg ChainlinkConfig) (*ChainlinkClient, error) {
-	if caller == nil {
-		return nil, errors.New("chainlink caller is required")
+func NewChainlinkClient(caller CallContractReader, headers HeaderReader, cfg ChainlinkConfig) (*ChainlinkClient, error) {
+	if caller == nil || headers == nil {
+		return nil, errors.New("chainlink caller and header reader are required")
 	}
 	if cfg.FeedAddress == (common.Address{}) {
 		return nil, errors.New("chainlink feed address is required")
@@ -44,15 +45,23 @@ func NewChainlinkClient(caller CallContractReader, cfg ChainlinkConfig) (*Chainl
 	if cfg.ExpectedDescription == "" {
 		return nil, errors.New("chainlink expected description is required")
 	}
-	return &ChainlinkClient{caller: caller, feed: cfg.FeedAddress, expectedDescription: cfg.ExpectedDescription}, nil
+	return &ChainlinkClient{caller: caller, headers: headers, feed: cfg.FeedAddress, expectedDescription: cfg.ExpectedDescription}, nil
 }
 
 // PriceUSD reads and validates the latest AggregatorV3 USD/native observation.
 func (c *ChainlinkClient) PriceUSD(ctx context.Context) (SourcePrice, error) {
-	if err := c.validateSourceConfiguration(ctx); err != nil {
+	header, err := c.headers.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return SourcePrice{}, wrapPriceSourceRequestError("chainlink", "header", err)
+	}
+	if header == nil || header.Number == nil || header.Number.Sign() < 0 {
+		return SourcePrice{}, errors.New("chainlink returned invalid latest block header")
+	}
+	blockNumber := new(big.Int).Set(header.Number)
+	if err := c.validateSourceConfigurationAtBlock(ctx, blockNumber); err != nil {
 		return SourcePrice{}, err
 	}
-	decimalValues, err := c.call(ctx, "decimals")
+	decimalValues, err := c.call(ctx, "decimals", blockNumber)
 	if err != nil {
 		return SourcePrice{}, err
 	}
@@ -63,7 +72,7 @@ func (c *ChainlinkClient) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	if !ok || decimals > 18 {
 		return SourcePrice{}, errors.New("chainlink returned unsupported decimals")
 	}
-	roundValues, err := c.call(ctx, "latestRoundData")
+	roundValues, err := c.call(ctx, "latestRoundData", blockNumber)
 	if err != nil {
 		return SourcePrice{}, err
 	}
@@ -89,7 +98,11 @@ func (c *ChainlinkClient) PriceUSD(ctx context.Context) (SourcePrice, error) {
 }
 
 func (c *ChainlinkClient) validateSourceConfiguration(ctx context.Context) error {
-	descriptionValues, err := c.call(ctx, "description")
+	return c.validateSourceConfigurationAtBlock(ctx, nil)
+}
+
+func (c *ChainlinkClient) validateSourceConfigurationAtBlock(ctx context.Context, blockNumber *big.Int) error {
+	descriptionValues, err := c.call(ctx, "description", blockNumber)
 	if err != nil {
 		return err
 	}
@@ -103,12 +116,12 @@ func (c *ChainlinkClient) validateSourceConfiguration(ctx context.Context) error
 	return nil
 }
 
-func (c *ChainlinkClient) call(ctx context.Context, method string) ([]any, error) {
+func (c *ChainlinkClient) call(ctx context.Context, method string, blockNumber *big.Int) ([]any, error) {
 	calldata, err := chainlinkAggregatorV3ABI.Pack(method)
 	if err != nil {
 		return nil, err
 	}
-	result, err := c.caller.CallContract(ctx, ethereum.CallMsg{To: &c.feed, Data: calldata}, nil)
+	result, err := c.caller.CallContract(ctx, ethereum.CallMsg{To: &c.feed, Data: calldata}, blockNumber)
 	if err != nil {
 		return nil, wrapPriceSourceRequestError("chainlink", "execute", err)
 	}

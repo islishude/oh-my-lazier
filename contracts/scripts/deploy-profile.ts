@@ -29,6 +29,8 @@ import {
 } from "./oft-pathway-ignition.js";
 
 const maxPriceSnapshotStaleAfter = 86_400n;
+const minUniswapTWAPWindowSeconds = 1_800;
+const maxUniswapTWAPWindowSeconds = 0xffff_ffff;
 
 export type DeploymentMode = "test-oft-rehearsal" | "external-oapp";
 
@@ -1740,15 +1742,24 @@ function normalizeOptionalUniswapSource(
   if (isAddressEqual(tokenIn, tokenOut)) {
     throw new Error(`${label}.tokenIn and tokenOut must differ`);
   }
+  const twapWindowSeconds = integerField(
+    input,
+    "twapWindowSeconds",
+    `${label}.twapWindowSeconds`,
+  );
+  if (
+    twapWindowSeconds < minUniswapTWAPWindowSeconds ||
+    twapWindowSeconds > maxUniswapTWAPWindowSeconds
+  ) {
+    throw new Error(
+      `${label}.twapWindowSeconds must be between ${minUniswapTWAPWindowSeconds} and ${maxUniswapTWAPWindowSeconds}`,
+    );
+  }
   return {
     poolAddress: addressField(input, "poolAddress", `${label}.poolAddress`),
     tokenIn,
     tokenOut,
-    twapWindowSeconds: integerField(
-      input,
-      "twapWindowSeconds",
-      `${label}.twapWindowSeconds`,
-    ),
+    twapWindowSeconds,
     maxBlockAgeSeconds: integerField(
       input,
       "maxBlockAgeSeconds",

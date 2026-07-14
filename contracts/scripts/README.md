@@ -347,7 +347,11 @@ The profile renderer enables the worker price bot in the generated
 CoinGecko BaseURLs and API-key environment-variable names also live under that
 profile block. Each chain requires its own `pricingTxPolicy`; both fee caps and
 the minimum-balance threshold must be positive, and the priority-fee cap must
-not exceed the total fee cap. The renderer writes that policy to
+not exceed the total fee cap. Generated profiles always require a positive
+priority-fee cap even though the Go loader permits hand-authored legacy-chain
+YAML to omit it. Fee caps intentionally have no repository-wide absolute
+ceiling because chain gas markets differ, so operators must approve them per
+chain. The renderer writes that policy to
 `pricing.chains[].tx_policy` so different gas markets do not share fee caps or
 minimum-balance thresholds. Chains default to `nativeAssetId: "eth"`,
 so the Sepolia/Hoodi testnet profile writes same-native pricing chains that use
@@ -358,9 +362,10 @@ every chain in a cross-asset profile must then declare
 CoinMarketCap, CoinGecko, and Chainlink may be
 primary sources. `sanitySources` may be omitted or empty, and Chainlink and
 Uniswap are optional. Uniswap may only be listed as a sanity source and reads an
-approved V3 pool TWAP through `observe()`; it is not a required Hoodi dependency
-and does not use QuoterV2. The renderer emits only referenced source blocks and
-rejects configured but unreferenced sources.
+approved V3 pool TWAP of at least 1800 seconds through `observe()`; it is not a
+required Hoodi dependency and does not use QuoterV2. Chainlink runtime reads pin
+feed metadata and round data to one latest block number. The renderer emits only
+referenced source blocks and rejects configured but unreferenced sources.
 
 The profile renderer writes worker pathway parameters at
 `tmp/deploy-profile/ignition/parameters/sepolia-to-hoodi.open-workers-pathway.json`

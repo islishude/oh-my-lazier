@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/abiutil"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 )
 
 var (
@@ -71,8 +72,8 @@ func NewUniswapV3Client(caller CallContractReader, headers HeaderReader, cfg Uni
 	if cfg.TokenIn == (common.Address{}) || cfg.TokenOut == (common.Address{}) || cfg.TokenIn == cfg.TokenOut {
 		return nil, errors.New("uniswap token addresses must be non-zero and distinct")
 	}
-	if cfg.TWAPWindowSeconds == 0 {
-		return nil, errors.New("uniswap twap window must be positive")
+	if uint64(cfg.TWAPWindowSeconds) < config.MinUniswapTWAPWindowSeconds {
+		return nil, fmt.Errorf("uniswap twap window must be at least %d seconds", config.MinUniswapTWAPWindowSeconds)
 	}
 	if cfg.MinHarmonicMeanLiquidity == nil || cfg.MinHarmonicMeanLiquidity.Sign() <= 0 {
 		return nil, errors.New("uniswap minimum harmonic mean liquidity must be positive")
