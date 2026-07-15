@@ -342,6 +342,24 @@ func TestBuildPriceSnapshotRejectsStaleAfterAboveContractMaximum(t *testing.T) {
 	}
 }
 
+func TestBuildPriceSnapshotRejectsUint256Overflow(t *testing.T) {
+	tinySourcePrice, ok := new(big.Rat).SetString("1e-70")
+	if !ok {
+		t.Fatal("failed to parse tiny source price")
+	}
+	_, err := BuildPriceSnapshot(PriceInputs{
+		SrcNativeUSD:         tinySourcePrice,
+		DstNativeUSD:         big.NewRat(2000, 1),
+		DstGasPriceWei:       big.NewInt(1_000_000_000),
+		DstDataFeePerByteWei: big.NewInt(0),
+		UpdatedAtUnix:        1,
+		StaleAfterSeconds:    2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "destination gas price exceeds uint256") {
+		t.Fatalf("BuildPriceSnapshot() error = %v, want uint256 overflow error", err)
+	}
+}
+
 func TestSettingsRejectStaleAfterAboveContractMaximum(t *testing.T) {
 	settings := Settings{
 		Enabled:              true,
@@ -397,9 +415,53 @@ func TestBuildSetPriceSnapshotCalldata(t *testing.T) {
 	}
 }
 
+func TestBuildSetPriceSnapshotCalldataAcceptsUint256Maximum(t *testing.T) {
+	snapshot := testPriceSnapshot()
+	snapshot.DstGasPriceInSrcToken = new(big.Int).Set(maxUint256)
+	snapshot.DstDataFeePerByteInSrcToken = new(big.Int).Set(maxUint256)
+	if _, err := BuildSetPriceSnapshotCalldata([]PriceSnapshotUpdate{{DstEid: 40449, Snapshot: snapshot}}); err != nil {
+		t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v, want uint256 maximum accepted", err)
+	}
+}
+
 func TestBuildSetPriceSnapshotCalldataRejectsEmptyUpdates(t *testing.T) {
 	if _, err := BuildSetPriceSnapshotCalldata(nil); err == nil {
 		t.Fatal("BuildSetPriceSnapshotCalldata() error = nil, want empty updates error")
+	}
+}
+
+func TestBuildSetPriceSnapshotCalldataRejectsUint256Overflow(t *testing.T) {
+	overflow := new(big.Int).Lsh(big.NewInt(1), 256)
+	tests := []struct {
+		name   string
+		mutate func(*PriceSnapshot)
+		want   string
+	}{
+		{
+			name: "destination gas price",
+			mutate: func(snapshot *PriceSnapshot) {
+				snapshot.DstGasPriceInSrcToken = new(big.Int).Set(overflow)
+			},
+			want: "destination gas price exceeds uint256",
+		},
+		{
+			name: "destination data fee",
+			mutate: func(snapshot *PriceSnapshot) {
+				snapshot.DstDataFeePerByteInSrcToken = new(big.Int).Set(overflow)
+			},
+			want: "destination data fee per byte exceeds uint256",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := testPriceSnapshot()
+			test.mutate(&snapshot)
+			_, err := BuildSetPriceSnapshotCalldata([]PriceSnapshotUpdate{{DstEid: 40449, Snapshot: snapshot}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("BuildSetPriceSnapshotCalldata() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -284,18 +284,14 @@ test("normalizeProfile accepts CoinMarketCap primary with environment key refere
   assert.equal(profile.chains[0].priceSources?.coinMarketCap?.id, 1027);
 });
 
-test("normalizeProfile rejects authenticated HTTP market-data BaseURLs without echoing them", () => {
+test("normalizeProfile rejects HTTP market-data BaseURLs without echoing them", () => {
   const cases = [
     {
       baseField: "coinMarketCapBaseURL",
-      keyField: "coinMarketCapAPIKeyEnv",
-      keyEnv: "COINMARKETCAP_API_KEY",
       label: "profile.pricing.coinMarketCapBaseURL",
     },
     {
       baseField: "coinGeckoBaseURL",
-      keyField: "coinGeckoAPIKeyEnv",
-      keyEnv: "COINGECKO_API_KEY",
       label: "profile.pricing.coinGeckoBaseURL",
     },
   ];
@@ -306,7 +302,6 @@ test("normalizeProfile rejects authenticated HTTP market-data BaseURLs without e
     const input = baseProfile();
     (input as Record<string, unknown>).pricing = {
       [testCase.baseField]: secretBaseURL,
-      [testCase.keyField]: testCase.keyEnv,
     };
     let caught: unknown;
     try {
@@ -317,7 +312,7 @@ test("normalizeProfile rejects authenticated HTTP market-data BaseURLs without e
     assert.ok(caught instanceof Error, `${testCase.baseField} should fail`);
     assert.match(
       caught.message,
-      new RegExp(`${testCase.label} must use HTTPS when an API key is configured`),
+      new RegExp(`${testCase.label} must be an absolute HTTPS URL without query or fragment`),
     );
     assert.doesNotMatch(caught.message, /pricing-user|pricing-password|pricing-secret|private-api-key/);
   }
@@ -338,7 +333,7 @@ test("normalizeProfile rejects malformed market-data BaseURLs without echoing th
   assert.ok(caught instanceof Error);
   assert.match(
     caught.message,
-    /profile\.pricing\.coinGeckoBaseURL must be an absolute HTTP\(S\) URL without query or fragment/,
+    /profile\.pricing\.coinGeckoBaseURL must be an absolute HTTPS URL without query or fragment/,
   );
   assert.doesNotMatch(caught.message, /pricing-user|pricing-password|pricing-secret|private-api-key/);
 });

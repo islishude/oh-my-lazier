@@ -5,6 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
+)
+
+const (
+	sourceConfigurationValidationAttempts = 3
+	sourceConfigurationRetryDelay         = 100 * time.Millisecond
 )
 
 type sourceConfigurationValidator interface {
@@ -45,6 +51,34 @@ func isPriceSourceConfigurationError(err error) bool {
 	return errors.As(err, &configurationError)
 }
 
+// inconclusivePriceSourceConfigurationError marks a successful source response
+// whose payload did not establish whether the configured identity is valid.
+// Repeating the same result makes it a deterministic configuration mismatch.
+type inconclusivePriceSourceConfigurationError struct {
+	cause error
+}
+
+func (e *inconclusivePriceSourceConfigurationError) Error() string {
+	if e == nil || e.cause == nil {
+		return "price source configuration check was inconclusive"
+	}
+	return e.cause.Error()
+}
+
+func (e *inconclusivePriceSourceConfigurationError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func newInconclusivePriceSourceConfigurationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &inconclusivePriceSourceConfigurationError{cause: err}
+}
+
 func classifySourceIdentityCallError(message string, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
@@ -83,7 +117,7 @@ func ValidateSourceConfigurations(ctx context.Context, sources map[uint32]ChainS
 	results := make(chan sourceConfigurationResult, len(checks))
 	for index, check := range checks {
 		go func(index int, check sourceConfigurationCheck) {
-			results <- sourceConfigurationResult{index: index, err: check.validate.validateSourceConfiguration(requestCtx)}
+			results <- sourceConfigurationResult{index: index, err: validateSourceConfigurationWithRetry(requestCtx, check.validate)}
 		}(index, check)
 	}
 
@@ -144,6 +178,30 @@ func ValidateSourceConfigurations(ctx context.Context, sources map[uint32]ChainS
 		})
 	}
 	return errors.Join(configurationErrors...)
+}
+
+func validateSourceConfigurationWithRetry(ctx context.Context, validator sourceConfigurationValidator) error {
+	for attempt := 1; attempt <= sourceConfigurationValidationAttempts; attempt++ {
+		err := validator.validateSourceConfiguration(ctx)
+		var inconclusive *inconclusivePriceSourceConfigurationError
+		if !errors.As(err, &inconclusive) {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if attempt == sourceConfigurationValidationAttempts {
+			return newPriceSourceConfigurationError(inconclusive.cause)
+		}
+		timer := time.NewTimer(sourceConfigurationRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil
 }
 
 func sourceConfigurationChecks(sources map[uint32]ChainSources) []sourceConfigurationCheck {

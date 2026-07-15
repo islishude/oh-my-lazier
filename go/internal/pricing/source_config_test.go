@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 		{
 			name: "coinmarketcap rejected id",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusBadRequest)
 				}))
 				t.Cleanup(server.Close)
@@ -46,7 +47,7 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 		{
 			name: "coinmarketcap empty successful payload",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = w.Write([]byte(`{"data":[]}`))
 				}))
 				t.Cleanup(server.Close)
@@ -65,7 +66,7 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 		{
 			name: "coingecko missing id",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = w.Write([]byte(`{}`))
 				}))
 				t.Cleanup(server.Close)
@@ -190,6 +191,73 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 	}
 }
 
+func TestValidateSourceConfigurationsRetriesIncompleteMarketDataPayload(t *testing.T) {
+	tests := []struct {
+		name       string
+		incomplete string
+		complete   string
+		build      func(*testing.T, string, *http.Client) ConfiguredPriceReader
+	}{
+		{
+			name:       "coinmarketcap",
+			incomplete: `{"data":[]}`,
+			complete:   `{"data":[{"id":1027,"quote":[{"symbol":"USD","price":2000,"last_updated":"2023-11-14T22:13:20Z"}]}]}`,
+			build: func(t *testing.T, baseURL string, httpClient *http.Client) ConfiguredPriceReader {
+				client, err := NewCoinMarketCapClient(baseURL, "", httpClient)
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapClient() error = %v", err)
+				}
+				reader, err := NewCoinMarketCapPriceReader(client, 1027)
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
+			},
+		},
+		{
+			name:       "coingecko",
+			incomplete: `{}`,
+			complete:   `{"ethereum":{"usd":2000,"last_updated_at":1700000000}}`,
+			build: func(t *testing.T, baseURL string, httpClient *http.Client) ConfiguredPriceReader {
+				client, err := NewCoinGeckoClient(baseURL, "", httpClient)
+				if err != nil {
+					t.Fatalf("NewCoinGeckoClient() error = %v", err)
+				}
+				reader, err := NewCoinGeckoPriceReader(client, "ethereum")
+				if err != nil {
+					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == 1 {
+					_, _ = w.Write([]byte(test.incomplete))
+					return
+				}
+				_, _ = w.Write([]byte(test.complete))
+			}))
+			t.Cleanup(server.Close)
+
+			reader := test.build(t, server.URL, server.Client())
+			err := ValidateSourceConfigurations(t.Context(), map[uint32]ChainSources{
+				40161: {Primary: reader},
+			}, PriceSelectionPolicy{SourceRequestTimeout: time.Second})
+			if err != nil {
+				t.Fatalf("ValidateSourceConfigurations() error = %v, want retry success", err)
+			}
+			if got := requests.Load(); got != 2 {
+				t.Fatalf("configuration requests = %d, want 2", got)
+			}
+		})
+	}
+}
+
 func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -200,7 +268,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 		{
 			name: "coinmarketcap server failure",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusServiceUnavailable)
 				}))
 				t.Cleanup(server.Close)
@@ -220,7 +288,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 		{
 			name: "coinmarketcap forbidden",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusForbidden)
 				}))
 				t.Cleanup(server.Close)
@@ -240,7 +308,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 		{
 			name: "coingecko rate limit",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusTooManyRequests)
 				}))
 				t.Cleanup(server.Close)
@@ -260,7 +328,7 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 		{
 			name: "coingecko not found",
 			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusNotFound)
 				}))
 				t.Cleanup(server.Close)

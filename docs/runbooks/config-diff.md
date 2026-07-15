@@ -20,7 +20,9 @@ and `coingecko_api_key_env`) must use uppercase environment-variable names;
 always represented as `[REDACTED]` in review output, including invalid input.
 Config loading rejects malformed references without echoing the supplied value;
 the diff projection also replaces any malformed non-empty reference with
-`[REDACTED]` as defense in depth.
+`[REDACTED]` as defense in depth. It also rejects non-HTTPS market-data
+BaseURLs and reports malformed secret-bearing RPC URLs with a fixed error that
+does not include the endpoint.
 
 Text review:
 

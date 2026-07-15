@@ -173,6 +173,32 @@ func TestValidateRejectsInvalidRPCURLFormats(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMalformedSecretBearingRPCURLsWithoutEchoingThem(t *testing.T) {
+	const secret = "SUPER_SECRET_API_KEY"
+	for name, rpcURL := range map[string]string{
+		"invalid port":   "https://host:443:443/v2/" + secret,
+		"invalid escape": "https://host/v2/" + secret + "%zz",
+		"invalid IPv6":   "ws://[::1/" + secret,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Chains[0].RPCURLs = []string{rpcURL}
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want malformed rpc url error")
+			}
+			if !strings.Contains(err.Error(), "rpc_urls[0] is invalid: value is malformed") {
+				t.Fatalf("Validate() error = %q, want fixed malformed URL error", err)
+			}
+			for _, sensitive := range []string{rpcURL, secret, "/v2/"} {
+				if strings.Contains(err.Error(), sensitive) {
+					t.Fatalf("Validate() error leaked %q: %s", sensitive, err)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateRejectsMissingExecutorSigner(t *testing.T) {
 	cfg := validConfig()
 	cfg.Chains[0].TxRoles.Executor.Signer = EVMAddress{}
@@ -477,6 +503,50 @@ func TestValidateAcceptsEnabledPricing(t *testing.T) {
 	cfg.Pricing = validPricingConfig()
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsInsecureMarketDataBaseURLsWithoutEchoingThem(t *testing.T) {
+	const secretBaseURL = "http://pricing-user:pricing-password@pricing-secret.example/private-api-key"
+	tests := []struct {
+		name   string
+		field  string
+		mutate func(*PricingConfig)
+	}{
+		{
+			name:  "coinmarketcap",
+			field: "pricing coinmarketcap_base_url",
+			mutate: func(pricing *PricingConfig) {
+				pricing.CoinMarketCapBaseURL = secretBaseURL
+			},
+		},
+		{
+			name:  "coingecko",
+			field: "pricing coingecko_base_url",
+			mutate: func(pricing *PricingConfig) {
+				pricing.CoinGeckoBaseURL = secretBaseURL
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Pricing = validPricingConfig()
+			test.mutate(&cfg.Pricing)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("Validate() error = nil, want insecure market-data base URL error")
+			}
+			if !strings.Contains(err.Error(), test.field+" must be an absolute HTTPS URL") {
+				t.Fatalf("Validate() error = %q, want HTTPS requirement", err)
+			}
+			for _, secret := range []string{secretBaseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("Validate() error leaked %q: %s", secret, err)
+				}
+			}
+		})
 	}
 }
 

@@ -1585,13 +1585,11 @@ function normalizePricingProfile(value: unknown): PricingProfile {
     coinMarketCapBaseURL: optionalMarketDataBaseURL(
       input.coinMarketCapBaseURL,
       "profile.pricing.coinMarketCapBaseURL",
-      coinMarketCapAPIKeyEnv !== undefined,
     ),
     coinMarketCapAPIKeyEnv,
     coinGeckoBaseURL: optionalMarketDataBaseURL(
       input.coinGeckoBaseURL,
       "profile.pricing.coinGeckoBaseURL",
-      coinGeckoAPIKeyEnv !== undefined,
     ),
     coinGeckoAPIKeyEnv,
   };
@@ -2733,7 +2731,6 @@ function optionalStringValue(
 function optionalMarketDataBaseURL(
   value: unknown,
   label: string,
-  requireHTTPS: boolean,
 ): string | undefined {
   const baseURL = optionalStringValue(value, label);
   if (baseURL === undefined) {
@@ -2744,22 +2741,19 @@ function optionalMarketDataBaseURL(
     parsed = new URL(baseURL);
   } catch {
     throw new Error(
-      `${label} must be an absolute HTTP(S) URL without query or fragment`,
+      `${label} must be an absolute HTTPS URL without query or fragment`,
     );
   }
   if (
     baseURL.trim() !== baseURL ||
-    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.protocol !== "https:" ||
     parsed.hostname === "" ||
     baseURL.includes("?") ||
     baseURL.includes("#")
   ) {
     throw new Error(
-      `${label} must be an absolute HTTP(S) URL without query or fragment`,
+      `${label} must be an absolute HTTPS URL without query or fragment`,
     );
-  }
-  if (requireHTTPS && parsed.protocol !== "https:") {
-    throw new Error(`${label} must use HTTPS when an API key is configured`);
   }
   return baseURL;
 }

@@ -253,7 +253,7 @@ func TestTxTargetsUsesPerChainPricingPolicies(t *testing.T) {
 
 func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -267,6 +267,7 @@ func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithOptions() error = %v", err)
 	}
+	worker.pricingHTTPClient = server.Client()
 	err = worker.Run(t.Context())
 	if err == nil {
 		t.Fatal("Run() error = nil, want invalid database URL error")
@@ -279,9 +280,41 @@ func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	}
 }
 
+func TestRunRetriesIncompleteMarketSourcePayloadDuringStartup(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"ethereum":{"usd":2000,"last_updated_at":1700000000}}`))
+	}))
+	defer server.Close()
+
+	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+	cfg.DatabaseURL = "postgres://%"
+	cfg.Pricing = testPricingConfig()
+	cfg.Pricing.CoinGeckoBaseURL = server.URL
+	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+	if err != nil {
+		t.Fatalf("NewWithOptions() error = %v", err)
+	}
+	worker.pricingHTTPClient = server.Client()
+	err = worker.Run(t.Context())
+	if err == nil {
+		t.Fatal("Run() error = nil, want invalid database URL error")
+	}
+	if strings.Contains(err.Error(), "source configuration") || strings.Contains(err.Error(), "returned no price") {
+		t.Fatalf("Run() error = %q, want incomplete source response recovered", err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("market source configuration requests during startup = %d, want 3", got)
+	}
+}
+
 func TestRunRejectsMissingMarketIDDuringStartup(t *testing.T) {
 	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -295,6 +328,7 @@ func TestRunRejectsMissingMarketIDDuringStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWithOptions() error = %v", err)
 	}
+	worker.pricingHTTPClient = server.Client()
 	err = worker.Run(t.Context())
 	if err == nil {
 		t.Fatal("Run() error = nil, want missing market ID configuration error")
@@ -302,8 +336,8 @@ func TestRunRejectsMissingMarketIDDuringStartup(t *testing.T) {
 	if !strings.Contains(err.Error(), "coingecko returned no price for ethereum") {
 		t.Fatalf("Run() error = %q, want missing CoinGecko ID error", err)
 	}
-	if got := requests.Load(); got != 2 {
-		t.Fatalf("market source configuration requests during startup = %d, want 2", got)
+	if got := requests.Load(); got != 6 {
+		t.Fatalf("market source configuration requests during startup = %d, want 6", got)
 	}
 }
 
@@ -317,13 +351,18 @@ func TestRunRejectsInvalidMarketSourceConfigBeforeDatabase(t *testing.T) {
 		{
 			name:    "unsupported scheme",
 			baseURL: "ftp://pricing-user:pricing-password@pricing-secret.example/private-api-key",
-			want:    "coingecko base URL must be an absolute HTTP(S) URL",
+			want:    "pricing coingecko_base_url must be an absolute HTTPS URL",
 		},
 		{
 			name:      "authenticated HTTP",
 			baseURL:   "http://pricing-user:pricing-password@pricing-secret.example/private-api-key",
 			apiKeyEnv: "COINGECKO_API_KEY",
-			want:      "coingecko base URL must use HTTPS when an API key is configured",
+			want:      "pricing coingecko_base_url must be an absolute HTTPS URL",
+		},
+		{
+			name:    "keyless HTTP",
+			baseURL: "http://pricing-user:pricing-password@pricing-secret.example/private-api-key",
+			want:    "pricing coingecko_base_url must be an absolute HTTPS URL",
 		},
 	}
 	for _, test := range tests {

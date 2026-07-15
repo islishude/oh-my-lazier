@@ -160,11 +160,11 @@ type PricingConfig struct {
 	SourceRequestTimeoutSeconds uint64 `yaml:"source_request_timeout_seconds"`
 	// GasSpikeBps triggers early updates when destination gas rises past the previous quoted price.
 	GasSpikeBps uint64 `yaml:"gas_spike_bps"`
-	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTP API endpoint.
+	// CoinMarketCapBaseURL optionally overrides the CoinMarketCap HTTPS API endpoint.
 	CoinMarketCapBaseURL string `yaml:"coinmarketcap_base_url"`
 	// CoinMarketCapAPIKeyEnv names the environment variable containing the CoinMarketCap API key.
 	CoinMarketCapAPIKeyEnv string `yaml:"coinmarketcap_api_key_env"`
-	// CoinGeckoBaseURL optionally overrides the CoinGecko HTTP API endpoint.
+	// CoinGeckoBaseURL optionally overrides the CoinGecko HTTPS API endpoint.
 	CoinGeckoBaseURL string `yaml:"coingecko_base_url"`
 	// CoinGeckoAPIKeyEnv optionally names the environment variable containing a CoinGecko Pro API key.
 	CoinGeckoAPIKeyEnv string `yaml:"coingecko_api_key_env"`
@@ -447,6 +447,12 @@ func (c Config) Validate() error {
 	if err := c.validateSecretReferences(); err != nil {
 		return err
 	}
+	if err := validateMarketDataBaseURL("pricing coinmarketcap_base_url", c.Pricing.CoinMarketCapBaseURL); err != nil {
+		return err
+	}
+	if err := validateMarketDataBaseURL("pricing coingecko_base_url", c.Pricing.CoinGeckoBaseURL); err != nil {
+		return err
+	}
 	if c.DatabaseURL == "" {
 		return errors.New("database_url is required")
 	}
@@ -665,7 +671,7 @@ func validateRPCURL(raw string) error {
 	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return err
+		return errors.New("value is malformed")
 	}
 	switch parsed.Scheme {
 	case "http", "https", "ws", "wss":
@@ -681,6 +687,18 @@ func validateRPCURL(raw string) error {
 	default:
 		return fmt.Errorf("unsupported scheme %q", parsed.Scheme)
 	}
+}
+
+func validateMarketDataBaseURL(field, raw string) error {
+	if raw == "" {
+		return nil
+	}
+	normalized := strings.TrimRight(raw, "/")
+	parsed, err := url.Parse(normalized)
+	if err != nil || strings.TrimSpace(raw) != raw || parsed.Opaque != "" || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || !strings.EqualFold(parsed.Scheme, "https") {
+		return fmt.Errorf("%s must be an absolute HTTPS URL without query or fragment", field)
+	}
+	return nil
 }
 
 func (c Config) validateSigners() (map[string]struct{}, error) {

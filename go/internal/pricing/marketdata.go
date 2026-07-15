@@ -86,9 +86,6 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMarketDataAPIKeyTransport("coinmarketcap", normalizedBaseURL, apiKeyEnv); err != nil {
-		return nil, err
-	}
 	apiKey := ""
 	if apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
@@ -118,6 +115,10 @@ func (r *CoinMarketCapPriceReader) PriceUSD(ctx context.Context) (SourcePrice, e
 
 func (r *CoinMarketCapPriceReader) validateSourceConfiguration(ctx context.Context) error {
 	_, err := r.PriceUSD(ctx)
+	var inconclusive *inconclusivePriceSourceConfigurationError
+	if errors.As(err, &inconclusive) {
+		return err
+	}
 	if isDeterministicMarketDataError(err) {
 		return newPriceSourceConfigurationError(err)
 	}
@@ -166,7 +167,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 		return SourcePrice{}, err
 	}
 	if len(payload.Data) != 1 || payload.Data[0].ID != id {
-		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coinmarketcap returned no unique price for id %d", id))
+		return SourcePrice{}, newInconclusivePriceSourceConfigurationError(fmt.Errorf("coinmarketcap returned no unique price for id %d", id))
 	}
 	var priceText, observedText string
 	for _, quote := range payload.Data[0].Quote {
@@ -200,9 +201,6 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMarketDataAPIKeyTransport("coingecko", normalizedBaseURL, apiKeyEnv); err != nil {
-		return nil, err
-	}
 	apiKey := ""
 	if apiKeyEnv != "" {
 		apiKey = os.Getenv(apiKeyEnv)
@@ -217,26 +215,15 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 func normalizeMarketDataBaseURL(source, baseURL string) (string, error) {
 	normalized := strings.TrimRight(baseURL, "/")
 	parsed, err := url.Parse(normalized)
-	if err != nil || parsed.Opaque != "" || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery {
-		return "", fmt.Errorf("%s base URL must be an absolute HTTP(S) URL without query or fragment", source)
+	if err != nil || strings.TrimSpace(baseURL) != baseURL || parsed.Opaque != "" || parsed.Hostname() == "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery {
+		return "", fmt.Errorf("%s base URL must be an absolute HTTPS URL without query or fragment", source)
 	}
 	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return "", fmt.Errorf("%s base URL must be an absolute HTTP(S) URL without query or fragment", source)
+	if scheme != "https" {
+		return "", fmt.Errorf("%s base URL must be an absolute HTTPS URL without query or fragment", source)
 	}
 	parsed.Scheme = scheme
 	return parsed.String(), nil
-}
-
-func validateMarketDataAPIKeyTransport(source, baseURL, apiKeyEnv string) error {
-	if apiKeyEnv == "" {
-		return nil
-	}
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" {
-		return fmt.Errorf("%s base URL must use HTTPS when an API key is configured", source)
-	}
-	return nil
 }
 
 func marketDataHTTPClient(baseURL string, httpClient *http.Client) *http.Client {
@@ -300,6 +287,10 @@ func (r *CoinGeckoPriceReader) PriceUSD(ctx context.Context) (SourcePrice, error
 
 func (r *CoinGeckoPriceReader) validateSourceConfiguration(ctx context.Context) error {
 	_, err := r.PriceUSD(ctx)
+	var inconclusive *inconclusivePriceSourceConfigurationError
+	if errors.As(err, &inconclusive) {
+		return err
+	}
 	if isDeterministicMarketDataError(err) {
 		return newPriceSourceConfigurationError(err)
 	}
@@ -344,7 +335,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	entry, ok := payload[coinID]
 	if !ok {
-		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coingecko returned no price for %s", coinID))
+		return SourcePrice{}, newInconclusivePriceSourceConfigurationError(fmt.Errorf("coingecko returned no price for %s", coinID))
 	}
 	priceText := entry.USD.String()
 	price, ok := new(big.Rat).SetString(priceText)

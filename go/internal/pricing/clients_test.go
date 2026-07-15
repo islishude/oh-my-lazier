@@ -239,6 +239,7 @@ func TestMarketDataClientsRejectInvalidBaseURL(t *testing.T) {
 	}{
 		{name: "missing scheme", url: "pricing-secret.example/private-api-key"},
 		{name: "unsupported scheme", url: "ftp://pricing-secret.example/private-api-key"},
+		{name: "insecure transport", url: "http://pricing-secret.example/private-api-key"},
 		{name: "malformed host", url: "https://pricing-user:pricing-password@[::1/private-api-key"},
 		{name: "query", url: "https://pricing-secret.example/path?api_key=private-api-key"},
 	}
@@ -249,7 +250,7 @@ func TestMarketDataClientsRejectInvalidBaseURL(t *testing.T) {
 				if err == nil {
 					t.Fatal("client constructor error = nil, want invalid base URL error")
 				}
-				if !strings.Contains(err.Error(), constructor.name+" base URL must be an absolute HTTP(S) URL") {
+				if !strings.Contains(err.Error(), constructor.name+" base URL must be an absolute HTTPS URL") {
 					t.Fatalf("client constructor error = %q, want source-specific base URL error", err)
 				}
 				for _, secret := range []string{"pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
@@ -288,7 +289,7 @@ func TestMarketDataClientsRequireHTTPSWithAPIKey(t *testing.T) {
 	for _, constructor := range constructors {
 		t.Run(constructor.name, func(t *testing.T) {
 			err := constructor.new()
-			if err == nil || !strings.Contains(err.Error(), constructor.name+" base URL must use HTTPS when an API key is configured") {
+			if err == nil || !strings.Contains(err.Error(), constructor.name+" base URL must be an absolute HTTPS URL") {
 				t.Fatalf("client constructor error = %v, want HTTPS requirement", err)
 			}
 			for _, secret := range []string{secretLikeBaseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {

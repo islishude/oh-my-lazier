@@ -30,6 +30,7 @@ var (
 	priceSnapshotABIJSON string
 
 	priceSnapshotABI = abiutil.MustParse(priceSnapshotABIJSON)
+	maxUint256       = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 )
 
 // Bot updates shared worker price snapshots.
@@ -973,12 +974,16 @@ func BuildPriceSnapshot(inputs PriceInputs) (PriceSnapshot, error) {
 	dstDataFeePerByteInSrcToken := new(big.Rat).SetInt(inputs.DstDataFeePerByteWei)
 	dstDataFeePerByteInSrcToken.Mul(dstDataFeePerByteInSrcToken, inputs.DstNativeUSD)
 	dstDataFeePerByteInSrcToken.Quo(dstDataFeePerByteInSrcToken, inputs.SrcNativeUSD)
-	return PriceSnapshot{
+	snapshot := PriceSnapshot{
 		DstGasPriceInSrcToken:       bigutil.CeilRat(dstGasPriceInSrcToken),
 		DstDataFeePerByteInSrcToken: bigutil.CeilRat(dstDataFeePerByteInSrcToken),
 		UpdatedAt:                   inputs.UpdatedAtUnix,
 		StaleAfter:                  inputs.StaleAfterSeconds,
-	}, nil
+	}
+	if err := snapshot.Validate(); err != nil {
+		return PriceSnapshot{}, err
+	}
+	return snapshot, nil
 }
 
 // BuildSetPriceSnapshotCalldata ABI-encodes OpenPriceFeed setPriceSnapshot.
@@ -1027,8 +1032,14 @@ func (s PriceSnapshot) Validate() error {
 	if s.DstGasPriceInSrcToken == nil || s.DstGasPriceInSrcToken.Sign() <= 0 {
 		return errors.New("price snapshot destination gas price must be positive")
 	}
+	if s.DstGasPriceInSrcToken.Cmp(maxUint256) > 0 {
+		return errors.New("price snapshot destination gas price exceeds uint256")
+	}
 	if s.DstDataFeePerByteInSrcToken == nil || s.DstDataFeePerByteInSrcToken.Sign() < 0 {
 		return errors.New("price snapshot destination data fee per byte must be non-negative")
+	}
+	if s.DstDataFeePerByteInSrcToken.Cmp(maxUint256) > 0 {
+		return errors.New("price snapshot destination data fee per byte exceeds uint256")
 	}
 	if s.UpdatedAt == 0 {
 		return errors.New("price snapshot updated_at is required")

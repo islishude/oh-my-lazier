@@ -345,15 +345,15 @@ The profile renderer enables the worker price bot in the generated
 `worker.yaml`. Global `pricing.sourceRequestTimeoutSeconds` and
 `pricing.maxDeviationBps` default to `10` and `500`; optional CoinMarketCap and
 CoinGecko BaseURLs and API-key environment-variable names also live under that
-profile block. Authenticated market-data BaseURLs must use HTTPS; the renderer
-rejects malformed URLs and authenticated HTTP endpoints before emitting worker
-YAML. Each chain requires its own `pricingTxPolicy`; both fee caps and
-the minimum-balance threshold must be positive, and the priority-fee cap must
-not exceed the total fee cap. Generated profiles always require a positive
-priority-fee cap even though the Go loader permits hand-authored legacy-chain
-YAML to omit it. Fee caps intentionally have no repository-wide absolute
-ceiling because chain gas markets differ, so operators must approve them per
-chain. The renderer writes that policy to
+profile block. Every market-data BaseURL must use HTTPS, including keyless
+CoinGecko endpoints; the renderer rejects malformed or HTTP endpoints before
+emitting worker YAML. Each chain requires its own `pricingTxPolicy`; both fee
+caps and the minimum-balance threshold must be positive, and the priority-fee
+cap must not exceed the total fee cap. Generated profiles always require a
+positive priority-fee cap even though the Go loader permits hand-authored
+legacy-chain YAML to omit it. Fee caps intentionally have no repository-wide
+absolute ceiling because chain gas markets differ, so operators must approve
+them per chain. The renderer writes that policy to
 `pricing.chains[].tx_policy` so different gas markets do not share fee caps or
 minimum-balance thresholds. Chains default to `nativeAssetId: "eth"`,
 so the Sepolia/Hoodi testnet profile writes same-native pricing chains that use

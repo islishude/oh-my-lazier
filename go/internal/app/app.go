@@ -66,9 +66,10 @@ type Options struct {
 
 // App owns the configured worker process and its durable service loops.
 type App struct {
-	cfg     config.Config
-	logger  *slog.Logger
-	options Options
+	cfg               config.Config
+	logger            *slog.Logger
+	options           Options
+	pricingHTTPClient *http.Client
 }
 
 // New builds an App from already-validated configuration.
@@ -85,7 +86,7 @@ func NewWithOptions(cfg config.Config, logger *slog.Logger, options Options) (*A
 	if err != nil {
 		return nil, err
 	}
-	return &App{cfg: cfg, logger: logger, options: normalized}, nil
+	return &App{cfg: cfg, logger: logger, options: normalized, pricingHTTPClient: http.DefaultClient}, nil
 }
 
 func normalizeOptions(options Options) (Options, error) {
@@ -381,7 +382,7 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 	var coinMarketCapClient *pricing.CoinMarketCapClient
 	if pricingUsesSource(a.cfg.Pricing.Chains, "coinmarketcap") {
 		var err error
-		coinMarketCapClient, err = pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, http.DefaultClient)
+		coinMarketCapClient, err = pricing.NewCoinMarketCapClient(a.cfg.Pricing.CoinMarketCapBaseURL, a.cfg.Pricing.CoinMarketCapAPIKeyEnv, a.pricingHTTPClient)
 		if err != nil {
 			return nil, err
 		}
@@ -389,7 +390,7 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 	var coinGeckoClient *pricing.CoinGeckoClient
 	if pricingUsesSource(a.cfg.Pricing.Chains, "coingecko") {
 		var err error
-		coinGeckoClient, err = pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, a.cfg.Pricing.CoinGeckoAPIKeyEnv, http.DefaultClient)
+		coinGeckoClient, err = pricing.NewCoinGeckoClient(a.cfg.Pricing.CoinGeckoBaseURL, a.cfg.Pricing.CoinGeckoAPIKeyEnv, a.pricingHTTPClient)
 		if err != nil {
 			return nil, err
 		}
