@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -65,4 +67,56 @@ func isPriceSourceContractRevert(err error) bool {
 		}
 	}
 	return false
+}
+
+func isPriceSourceContractRevertReason(err error, expected string) bool {
+	var dataError rpc.DataError
+	if errors.As(err, &dataError) {
+		if reason, ok := priceSourceContractRevertReasonData(dataError.ErrorData()); ok && reason == expected {
+			return true
+		}
+	}
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		if reason, ok := priceSourceContractRevertReasonMessage(current.Error()); ok && reason == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func priceSourceContractRevertReasonData(data any) (string, bool) {
+	var encoded []byte
+	switch value := data.(type) {
+	case string:
+		decoded, err := hexutil.Decode(strings.TrimSpace(value))
+		if err != nil {
+			return priceSourceContractRevertReasonMessage(value)
+		}
+		encoded = decoded
+	case []byte:
+		encoded = value
+	default:
+		return "", false
+	}
+	reason, err := gethabi.UnpackRevert(encoded)
+	if err != nil {
+		return "", false
+	}
+	return reason, true
+}
+
+func priceSourceContractRevertReasonMessage(message string) (string, bool) {
+	const marker = "execution reverted"
+	trimmed := strings.TrimSpace(message)
+	index := strings.LastIndex(strings.ToLower(trimmed), marker)
+	if index < 0 {
+		return "", false
+	}
+	reason := strings.TrimSpace(trimmed[index+len(marker):])
+	reason = strings.TrimSpace(strings.TrimPrefix(reason, ":"))
+	reason = strings.Trim(reason, `"'`)
+	if reason == "" {
+		return "", false
+	}
+	return reason, true
 }

@@ -1561,6 +1561,14 @@ function normalizeChain(
 
 function normalizePricingProfile(value: unknown): PricingProfile {
   const input = object(value ?? {}, "profile.pricing");
+  const coinMarketCapAPIKeyEnv = optionalEnvVarName(
+    input.coinMarketCapAPIKeyEnv,
+    "profile.pricing.coinMarketCapAPIKeyEnv",
+  );
+  const coinGeckoAPIKeyEnv = optionalEnvVarName(
+    input.coinGeckoAPIKeyEnv,
+    "profile.pricing.coinGeckoAPIKeyEnv",
+  );
   return {
     sourceRequestTimeoutSeconds:
       optionalIntegerField(
@@ -1574,22 +1582,18 @@ function normalizePricingProfile(value: unknown): PricingProfile {
         "maxDeviationBps",
         "profile.pricing.maxDeviationBps",
       ) ?? 500,
-    coinMarketCapBaseURL: optionalStringValue(
+    coinMarketCapBaseURL: optionalMarketDataBaseURL(
       input.coinMarketCapBaseURL,
       "profile.pricing.coinMarketCapBaseURL",
+      coinMarketCapAPIKeyEnv !== undefined,
     ),
-    coinMarketCapAPIKeyEnv: optionalEnvVarName(
-      input.coinMarketCapAPIKeyEnv,
-      "profile.pricing.coinMarketCapAPIKeyEnv",
-    ),
-    coinGeckoBaseURL: optionalStringValue(
+    coinMarketCapAPIKeyEnv,
+    coinGeckoBaseURL: optionalMarketDataBaseURL(
       input.coinGeckoBaseURL,
       "profile.pricing.coinGeckoBaseURL",
+      coinGeckoAPIKeyEnv !== undefined,
     ),
-    coinGeckoAPIKeyEnv: optionalEnvVarName(
-      input.coinGeckoAPIKeyEnv,
-      "profile.pricing.coinGeckoAPIKeyEnv",
-    ),
+    coinGeckoAPIKeyEnv,
   };
 }
 
@@ -2724,6 +2728,40 @@ function optionalStringValue(
     throw new Error(`${label} must be a string`);
   }
   return value;
+}
+
+function optionalMarketDataBaseURL(
+  value: unknown,
+  label: string,
+  requireHTTPS: boolean,
+): string | undefined {
+  const baseURL = optionalStringValue(value, label);
+  if (baseURL === undefined) {
+    return undefined;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseURL);
+  } catch {
+    throw new Error(
+      `${label} must be an absolute HTTP(S) URL without query or fragment`,
+    );
+  }
+  if (
+    baseURL.trim() !== baseURL ||
+    (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
+    parsed.hostname === "" ||
+    baseURL.includes("?") ||
+    baseURL.includes("#")
+  ) {
+    throw new Error(
+      `${label} must be an absolute HTTP(S) URL without query or fragment`,
+    );
+  }
+  if (requireHTTPS && parsed.protocol !== "https:") {
+    throw new Error(`${label} must use HTTPS when an API key is configured`);
+  }
+  return baseURL;
 }
 
 function normalizeNativeAssetID(value: unknown, label: string): string {

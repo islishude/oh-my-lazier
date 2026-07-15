@@ -20,6 +20,7 @@ const (
 	defaultCoinGeckoBaseURL        = "https://api.coingecko.com"
 	defaultCoinGeckoProBaseURL     = "https://pro-api.coingecko.com"
 	maxMarketDataResponseBodyBytes = int64(1 << 20)
+	maxMarketDataRedirects         = 10
 )
 
 // CoinMarketCapClient reads public USD prices from CoinMarketCap quotes.
@@ -85,8 +86,8 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 	if err != nil {
 		return nil, err
 	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	if err := validateMarketDataAPIKeyTransport("coinmarketcap", normalizedBaseURL, apiKeyEnv); err != nil {
+		return nil, err
 	}
 	apiKey := ""
 	if apiKeyEnv != "" {
@@ -95,6 +96,7 @@ func NewCoinMarketCapClient(baseURL, apiKeyEnv string, httpClient *http.Client) 
 			return nil, errors.New("coinmarketcap api key environment variable is empty")
 		}
 	}
+	httpClient = marketDataHTTPClient(normalizedBaseURL, httpClient)
 	return &CoinMarketCapClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
 }
 
@@ -164,7 +166,7 @@ func (c *CoinMarketCapClient) PriceUSD(ctx context.Context, id uint64) (SourcePr
 		return SourcePrice{}, err
 	}
 	if len(payload.Data) != 1 || payload.Data[0].ID != id {
-		return SourcePrice{}, fmt.Errorf("coinmarketcap returned no unique price for id %d", id)
+		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coinmarketcap returned no unique price for id %d", id))
 	}
 	var priceText, observedText string
 	for _, quote := range payload.Data[0].Quote {
@@ -198,8 +200,8 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 	if err != nil {
 		return nil, err
 	}
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	if err := validateMarketDataAPIKeyTransport("coingecko", normalizedBaseURL, apiKeyEnv); err != nil {
+		return nil, err
 	}
 	apiKey := ""
 	if apiKeyEnv != "" {
@@ -208,6 +210,7 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 			return nil, errors.New("coingecko api key environment variable is empty")
 		}
 	}
+	httpClient = marketDataHTTPClient(normalizedBaseURL, httpClient)
 	return &CoinGeckoClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
 }
 
@@ -223,6 +226,60 @@ func normalizeMarketDataBaseURL(source, baseURL string) (string, error) {
 	}
 	parsed.Scheme = scheme
 	return parsed.String(), nil
+}
+
+func validateMarketDataAPIKeyTransport(source, baseURL, apiKeyEnv string) error {
+	if apiKeyEnv == "" {
+		return nil
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" {
+		return fmt.Errorf("%s base URL must use HTTPS when an API key is configured", source)
+	}
+	return nil
+}
+
+func marketDataHTTPClient(baseURL string, httpClient *http.Client) *http.Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	configured := *httpClient
+	base, _ := url.Parse(baseURL)
+	originalCheckRedirect := httpClient.CheckRedirect
+	configured.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if !sameMarketDataOrigin(base, request.URL) {
+			return http.ErrUseLastResponse
+		}
+		if originalCheckRedirect != nil {
+			return originalCheckRedirect(request, via)
+		}
+		if len(via) >= maxMarketDataRedirects {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &configured
+}
+
+func sameMarketDataOrigin(left, right *url.URL) bool {
+	if left == nil || right == nil || !strings.EqualFold(left.Scheme, right.Scheme) || !strings.EqualFold(left.Hostname(), right.Hostname()) {
+		return false
+	}
+	return marketDataOriginPort(left) == marketDataOriginPort(right)
+}
+
+func marketDataOriginPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(value.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
 }
 
 // NewCoinGeckoPriceReader creates a configured CoinGecko coin-id reader.
@@ -287,7 +344,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 	}
 	entry, ok := payload[coinID]
 	if !ok {
-		return SourcePrice{}, fmt.Errorf("coingecko returned no price for %s", coinID)
+		return SourcePrice{}, newPriceSourceConfigurationError(fmt.Errorf("coingecko returned no price for %s", coinID))
 	}
 	priceText := entry.USD.String()
 	price, ok := new(big.Rat).SetString(priceText)

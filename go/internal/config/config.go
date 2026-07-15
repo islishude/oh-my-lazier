@@ -444,7 +444,7 @@ func load(path string, applyEnv bool) (Config, error) {
 
 // Validate checks that required chains, pathways, and mode settings are internally consistent.
 func (c Config) Validate() error {
-	if err := c.validateSecretEnvironmentReferences(); err != nil {
+	if err := c.validateSecretReferences(); err != nil {
 		return err
 	}
 	if c.DatabaseURL == "" {
@@ -582,11 +582,17 @@ func (c Config) Validate() error {
 	return nil
 }
 
-func (c Config) validateSecretEnvironmentReferences() error {
+func (c Config) validateSecretReferences() error {
 	for index, signer := range c.Signers {
 		if err := validateOptionalEnvironmentVariableName(
 			fmt.Sprintf("signers[%d].keystore.password_env", index),
 			signer.Keystore.PasswordEnv,
+		); err != nil {
+			return err
+		}
+		if err := validateOptionalAbsoluteFilePath(
+			fmt.Sprintf("signers[%d].keystore.password_file", index),
+			signer.Keystore.PasswordFile,
 		); err != nil {
 			return err
 		}
@@ -612,6 +618,16 @@ func validateOptionalEnvironmentVariableName(field, value string) error {
 	}
 	if !IsValidEnvironmentVariableName(value) {
 		return fmt.Errorf("%s must be an uppercase environment variable name", field)
+	}
+	return nil
+}
+
+func validateOptionalAbsoluteFilePath(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if strings.TrimSpace(value) != value || strings.ContainsRune(value, '\x00') || !filepath.IsAbs(value) {
+		return fmt.Errorf("%s must be an absolute file path without surrounding whitespace or NUL bytes", field)
 	}
 	return nil
 }

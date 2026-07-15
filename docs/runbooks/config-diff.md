@@ -15,7 +15,9 @@ retains a validated `sslmode` value so TLS policy changes remain visible during
 review; all other database query values are omitted. Malformed or opaque
 database URLs are also represented only as `[REDACTED]`.
 Secret-reference fields (`keystore.password_env`, `coinmarketcap_api_key_env`,
-and `coingecko_api_key_env`) must use uppercase environment-variable names.
+and `coingecko_api_key_env`) must use uppercase environment-variable names;
+`keystore.password_file` must be an absolute path. Password-file values are
+always represented as `[REDACTED]` in review output, including invalid input.
 Config loading rejects malformed references without echoing the supplied value;
 the diff projection also replaces any malformed non-empty reference with
 `[REDACTED]` as defense in depth.
@@ -54,7 +56,7 @@ Review checklist:
 - Confirm chain `eid`, `family`, `chain_id`, endpoint, transaction roles, and RPC changes are intentional. Phase-1 configs must use `family: evm`.
 - Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, source worker contracts, DVN mode, enablement, and max message size changes are intentional.
 - Confirm pathway `min_lz_receive_gas` and `max_lz_receive_gas` changes match the OpenExecutor/OpenDVN on-chain pathway settings.
-- Confirm signer changes are expected and do not point to unapproved keys. Review same-address backend, KMS key and region, keystore path, and password-source changes; KMS endpoint values are redacted in the artifact.
+- Confirm signer changes are expected and do not point to unapproved keys. Review same-address backend, KMS key and region, keystore path, and password-source changes; KMS endpoint and password-file values are redacted in the artifact.
 - Confirm pricing `native_asset_id`, source request timeout, primary source, declared sanity sources, per-source freshness, market-data BaseURL, pathway-scoped worker fee model, stale threshold, gas spike threshold, and each `pricing.chains[eid].tx_policy` fee cap and signer balance threshold are expected. Pricing fee caps have no repository-wide absolute ceiling and therefore require explicit per-chain operator approval. Market-data BaseURL values are redacted in the artifact. Pathways that share a source worker and destination EID must keep that worker role's fee model identical. Outer transaction gas is estimated by the tx manager at send time.
 - For DVN migration, confirm each proposed pathway still uses `pathways[].dvn.mode: shadow` until the explicit active-mode change is approved.
 - Keep the text output in the migration ticket and the JSON output as an immutable review artifact.

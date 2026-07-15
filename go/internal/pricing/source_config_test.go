@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	gethabi "github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 )
@@ -40,6 +42,44 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
 			},
 			want: "coinmarketcap price request returned HTTP 400",
+		},
+		{
+			name: "coinmarketcap empty successful payload",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(`{"data":[]}`))
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinMarketCapClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapClient() error = %v", err)
+				}
+				reader, err := NewCoinMarketCapPriceReader(client, 1027)
+				if err != nil {
+					t.Fatalf("NewCoinMarketCapPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
+			},
+			want: "coinmarketcap returned no unique price for id 1027",
+		},
+		{
+			name: "coingecko missing id",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte(`{}`))
+				}))
+				t.Cleanup(server.Close)
+				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
+				if err != nil {
+					t.Fatalf("NewCoinGeckoClient() error = %v", err)
+				}
+				reader, err := NewCoinGeckoPriceReader(client, "missing-asset")
+				if err != nil {
+					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
+				}
+				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
+			},
+			want: "coingecko returned no price for missing-asset",
 		},
 		{
 			name: "chainlink description mismatch",
@@ -118,6 +158,20 @@ func TestValidateSourceConfigurationsRejectsDeterministicMismatches(t *testing.T
 			},
 			want: "uniswap token0 response is incompatible with the pool ABI",
 		},
+		{
+			name: "uniswap insufficient observation history",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapObservationErrorReader(t, contractRevertRPCError{reason: "OLD"})
+			},
+			want: "uniswap pool observation history is shorter than the configured 1800-second twap window",
+		},
+		{
+			name: "uniswap insufficient observation history from revert data",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapObservationErrorReader(t, contractRevertDataRPCError{data: encodedRevertReason(t, "OLD")})
+			},
+			want: "uniswap pool observation history is shorter than the configured 1800-second twap window",
+		},
 	}
 
 	for _, test := range tests {
@@ -184,26 +238,6 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 			want:    "unavailable",
 		},
 		{
-			name: "coinmarketcap empty successful payload",
-			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					_, _ = w.Write([]byte(`{"data":[]}`))
-				}))
-				t.Cleanup(server.Close)
-				client, err := NewCoinMarketCapClient(server.URL, "", server.Client())
-				if err != nil {
-					t.Fatalf("NewCoinMarketCapClient() error = %v", err)
-				}
-				reader, err := NewCoinMarketCapPriceReader(client, 1027)
-				if err != nil {
-					t.Fatalf("NewCoinMarketCapPriceReader() error = %v", err)
-				}
-				return ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader}
-			},
-			timeout: time.Second,
-			want:    "unavailable",
-		},
-		{
 			name: "coingecko rate limit",
 			build: func(t *testing.T) ConfiguredPriceReader {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -228,26 +262,6 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 			build: func(t *testing.T) ConfiguredPriceReader {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.WriteHeader(http.StatusNotFound)
-				}))
-				t.Cleanup(server.Close)
-				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
-				if err != nil {
-					t.Fatalf("NewCoinGeckoClient() error = %v", err)
-				}
-				reader, err := NewCoinGeckoPriceReader(client, "ethereum")
-				if err != nil {
-					t.Fatalf("NewCoinGeckoPriceReader() error = %v", err)
-				}
-				return ConfiguredPriceReader{Name: "coingecko", Reader: reader}
-			},
-			timeout: time.Second,
-			want:    "unavailable",
-		},
-		{
-			name: "coingecko empty successful payload",
-			build: func(t *testing.T) ConfiguredPriceReader {
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					_, _ = w.Write([]byte(`{}`))
 				}))
 				t.Cleanup(server.Close)
 				client, err := NewCoinGeckoClient(server.URL, "", server.Client())
@@ -291,6 +305,14 @@ func TestValidateSourceConfigurationsDefersTransientFailures(t *testing.T) {
 					t.Fatalf("NewUniswapV3Client() error = %v", err)
 				}
 				return ConfiguredPriceReader{Name: "uniswap", Reader: reader}
+			},
+			timeout: time.Second,
+			want:    "unavailable",
+		},
+		{
+			name: "uniswap observe non-OLD revert",
+			build: func(t *testing.T) ConfiguredPriceReader {
+				return configuredUniswapObservationErrorReader(t, contractRevertRPCError{reason: "I"})
 			},
 			timeout: time.Second,
 			want:    "unavailable",
@@ -361,10 +383,54 @@ func (staticEVMResponseReader) HeaderByNumber(context.Context, *big.Int) (*getht
 	return &gethtypes.Header{Number: big.NewInt(1), Time: 1}, nil
 }
 
-type contractRevertRPCError struct{}
+type contractRevertRPCError struct {
+	reason string
+}
 
-func (contractRevertRPCError) Error() string  { return "execution reverted" }
+func (e contractRevertRPCError) Error() string {
+	if e.reason == "" {
+		return "execution reverted"
+	}
+	return "execution reverted: " + e.reason
+}
+
 func (contractRevertRPCError) ErrorCode() int { return 3 }
+
+type contractRevertDataRPCError struct {
+	data any
+}
+
+func (contractRevertDataRPCError) Error() string  { return "execution reverted" }
+func (contractRevertDataRPCError) ErrorCode() int { return 3 }
+func (e contractRevertDataRPCError) ErrorData() any {
+	return e.data
+}
+
+func encodedRevertReason(t *testing.T, reason string) string {
+	t.Helper()
+	stringType, err := gethabi.NewType("string", "", nil)
+	if err != nil {
+		t.Fatalf("NewType() error = %v", err)
+	}
+	encoded, err := (gethabi.Arguments{{Type: stringType}}).Pack(reason)
+	if err != nil {
+		t.Fatalf("Pack() error = %v", err)
+	}
+	return hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, encoded...))
+}
+
+type methodErrorCallReader struct {
+	fallback CallContractReader
+	selector string
+	err      error
+}
+
+func (r methodErrorCallReader) CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	if len(call.Data) >= 4 && string(call.Data[:4]) == r.selector {
+		return nil, r.err
+	}
+	return r.fallback.CallContract(ctx, call, blockNumber)
+}
 
 func configuredChainlinkTestReader(t *testing.T, caller staticEVMResponseReader) ConfiguredPriceReader {
 	t.Helper()
@@ -383,6 +449,31 @@ func configuredUniswapTestReader(t *testing.T, caller staticEVMResponseReader) C
 		PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
 		TokenIn:                  common.HexToAddress("0x2222222222222222222222222222222222222222"),
 		TokenOut:                 common.HexToAddress("0x3333333333333333333333333333333333333333"),
+		TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
+		MinHarmonicMeanLiquidity: big.NewInt(1),
+	})
+	if err != nil {
+		t.Fatalf("NewUniswapV3Client() error = %v", err)
+	}
+	return ConfiguredPriceReader{Name: "uniswap", Reader: reader}
+}
+
+func configuredUniswapObservationErrorReader(t *testing.T, observeErr error) ConfiguredPriceReader {
+	t.Helper()
+	tokenIn := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	tokenOut := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	responses := newFakeEVMReader(t, time.Unix(1_700_000_000, 0))
+	responses.addResponse(t, uniswapV3PoolABI.Methods["token0"].ID, uniswapV3PoolABI.Methods["token0"].Outputs, tokenIn)
+	responses.addResponse(t, uniswapV3PoolABI.Methods["token1"].ID, uniswapV3PoolABI.Methods["token1"].Outputs, tokenOut)
+	caller := methodErrorCallReader{
+		fallback: responses,
+		selector: string(uniswapV3PoolABI.Methods["observe"].ID),
+		err:      observeErr,
+	}
+	reader, err := NewUniswapV3Client(caller, responses, UniswapV3Config{
+		PoolAddress:              common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		TokenIn:                  tokenIn,
+		TokenOut:                 tokenOut,
 		TWAPWindowSeconds:        uint32(config.MinUniswapTWAPWindowSeconds),
 		MinHarmonicMeanLiquidity: big.NewInt(1),
 	})

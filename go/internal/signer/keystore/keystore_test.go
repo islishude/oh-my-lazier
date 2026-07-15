@@ -1,9 +1,12 @@
 package keystore
 
 import (
+	"errors"
+	"io/fs"
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gethkeystore "github.com/ethereum/go-ethereum/accounts/keystore"
@@ -44,6 +47,24 @@ func TestResolvePasswordSources(t *testing.T) {
 func TestResolvePasswordRejectsMissingSource(t *testing.T) {
 	if _, err := ResolvePassword(PasswordSource{}); err == nil {
 		t.Fatal("ResolvePassword() error = nil, want missing source error")
+	}
+}
+
+func TestResolvePasswordFileReadErrorDoesNotEchoPath(t *testing.T) {
+	const secret = "actual-keystore-password=abc123"
+	passwordFile := filepath.Join(t.TempDir(), secret)
+	_, err := ResolvePassword(PasswordSource{File: passwordFile})
+	if err == nil {
+		t.Fatal("ResolvePassword() error = nil, want missing password file error")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("errors.Is(%v, fs.ErrNotExist) = false", err)
+	}
+	if strings.Contains(err.Error(), passwordFile) || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "abc123") {
+		t.Fatalf("ResolvePassword() error leaked password file path: %q", err)
+	}
+	if err.Error() != "read keystore password file failed" {
+		t.Fatalf("ResolvePassword() error = %q, want redacted file read error", err)
 	}
 }
 

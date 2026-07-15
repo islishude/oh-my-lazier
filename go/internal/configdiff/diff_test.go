@@ -354,6 +354,39 @@ func TestDiffRedactsInvalidSecretEnvironmentReferences(t *testing.T) {
 	}
 }
 
+func TestDiffRedactsKeystorePasswordFileValues(t *testing.T) {
+	before := validConfig()
+	after := validConfig()
+	signerID := config.MustEVMAddress("0x9999999999999999999999999999999999999999")
+	before.Signers = []config.SignerConfig{{
+		ID: signerID, Type: "keystore", Keystore: config.KeystoreSignerConfig{
+			Path: "/run/secrets/worker.json", PasswordFile: "before-plaintext-password=abc123",
+		},
+	}}
+	after.Signers = []config.SignerConfig{{
+		ID: signerID, Type: "keystore", Keystore: config.KeystoreSignerConfig{
+			Path: "/run/secrets/worker.json", PasswordFile: "after-plaintext-password=def456",
+		},
+	}}
+
+	changes := Diff(before, after)
+	encoded, err := json.Marshal(changes)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	output := string(encoded) + RenderText(changes)
+	for _, secret := range []string{
+		"before-plaintext-password", "abc123", "after-plaintext-password", "def456",
+	} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("config diff leaked password_file value %q:\n%s", secret, output)
+		}
+	}
+	if !strings.Contains(output, `"path":"signers[0x9999999999999999999999999999999999999999]"`) || strings.Count(output, "[REDACTED]") < 4 {
+		t.Fatalf("config diff missing password_file redaction markers:\n%s", output)
+	}
+}
+
 func TestEndpointURLRedactionUsesContextSpecificSchemeAllowLists(t *testing.T) {
 	tests := []struct {
 		name   string

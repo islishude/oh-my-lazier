@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 
 func TestCoinMarketCapClientPriceUSD(t *testing.T) {
 	t.Setenv("CMC_API_KEY", "test-key")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v3/cryptocurrency/quotes/latest" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
@@ -60,7 +61,7 @@ func TestCoinMarketCapClientPriceUSD(t *testing.T) {
 
 func TestCoinGeckoClientPriceUSD(t *testing.T) {
 	t.Setenv("CG_API_KEY", "test-key")
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v3/simple/price" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
@@ -258,6 +259,98 @@ func TestMarketDataClientsRejectInvalidBaseURL(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMarketDataClientsRequireHTTPSWithAPIKey(t *testing.T) {
+	const secretLikeBaseURL = "http://pricing-user:pricing-password@pricing-secret.example/private-api-key"
+	t.Setenv("MARKET_DATA_API_KEY", "test-key")
+	constructors := []struct {
+		name string
+		new  func() error
+	}{
+		{
+			name: "coinmarketcap",
+			new: func() error {
+				_, err := NewCoinMarketCapClient(secretLikeBaseURL, "MARKET_DATA_API_KEY", http.DefaultClient)
+				return err
+			},
+		},
+		{
+			name: "coingecko",
+			new: func() error {
+				_, err := NewCoinGeckoClient(secretLikeBaseURL, "MARKET_DATA_API_KEY", http.DefaultClient)
+				return err
+			},
+		},
+	}
+
+	for _, constructor := range constructors {
+		t.Run(constructor.name, func(t *testing.T) {
+			err := constructor.new()
+			if err == nil || !strings.Contains(err.Error(), constructor.name+" base URL must use HTTPS when an API key is configured") {
+				t.Fatalf("client constructor error = %v, want HTTPS requirement", err)
+			}
+			for _, secret := range []string{secretLikeBaseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("client constructor error leaked %q: %s", secret, err)
+				}
+			}
+		})
+	}
+}
+
+func TestMarketDataClientsDoNotForwardAPIKeysAcrossOrigins(t *testing.T) {
+	t.Setenv("MARKET_DATA_API_KEY", "test-key")
+	tests := []struct {
+		name  string
+		price func(string, *http.Client) error
+	}{
+		{
+			name: "coinmarketcap",
+			price: func(baseURL string, httpClient *http.Client) error {
+				client, err := NewCoinMarketCapClient(baseURL, "MARKET_DATA_API_KEY", httpClient)
+				if err != nil {
+					return err
+				}
+				_, err = client.PriceUSD(t.Context(), 1027)
+				return err
+			},
+		},
+		{
+			name: "coingecko",
+			price: func(baseURL string, httpClient *http.Client) error {
+				client, err := NewCoinGeckoClient(baseURL, "MARKET_DATA_API_KEY", httpClient)
+				if err != nil {
+					return err
+				}
+				_, err = client.PriceUSD(t.Context(), "ethereum")
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var redirectedRequests atomic.Int32
+			destination := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				redirectedRequests.Add(1)
+			}))
+			defer destination.Close()
+			origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, destination.URL+"/capture", http.StatusTemporaryRedirect)
+			}))
+			defer origin.Close()
+
+			err := test.price(origin.URL, origin.Client())
+			var statusError *marketDataHTTPStatusError
+			if !errors.As(err, &statusError) || statusError.statusCode != http.StatusTemporaryRedirect {
+				t.Fatalf("PriceUSD() error = %v, want blocked cross-origin redirect", err)
+			}
+			if got := redirectedRequests.Load(); got != 0 {
+				t.Fatalf("redirect destination requests = %d, want 0", got)
+			}
+		})
 	}
 }
 

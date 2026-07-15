@@ -345,7 +345,9 @@ The profile renderer enables the worker price bot in the generated
 `worker.yaml`. Global `pricing.sourceRequestTimeoutSeconds` and
 `pricing.maxDeviationBps` default to `10` and `500`; optional CoinMarketCap and
 CoinGecko BaseURLs and API-key environment-variable names also live under that
-profile block. Each chain requires its own `pricingTxPolicy`; both fee caps and
+profile block. Authenticated market-data BaseURLs must use HTTPS; the renderer
+rejects malformed URLs and authenticated HTTP endpoints before emitting worker
+YAML. Each chain requires its own `pricingTxPolicy`; both fee caps and
 the minimum-balance threshold must be positive, and the priority-fee cap must
 not exceed the total fee cap. Generated profiles always require a positive
 priority-fee cap even though the Go loader permits hand-authored legacy-chain

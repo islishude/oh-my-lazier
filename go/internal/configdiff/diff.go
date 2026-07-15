@@ -142,6 +142,7 @@ func signers(items []config.SignerConfig) map[string]config.SignerConfig {
 
 func redactSigner(item config.SignerConfig) config.SignerConfig {
 	item.Keystore.PasswordEnv = redactSecretEnvironmentReference(item.Keystore.PasswordEnv)
+	item.Keystore.PasswordFile = redactSecretFileReference(item.Keystore.PasswordFile)
 	item.KMS.Endpoint = redactHTTPURL(item.KMS.Endpoint)
 	return item
 }
@@ -274,6 +275,13 @@ func redactPricingGlobal(pricing pricingConfigGlobal) pricingConfigGlobal {
 func redactSecretEnvironmentReference(value string) string {
 	if value == "" || config.IsValidEnvironmentVariableName(value) {
 		return value
+	}
+	return "[REDACTED]"
+}
+
+func redactSecretFileReference(value string) string {
+	if value == "" {
+		return ""
 	}
 	return "[REDACTED]"
 }

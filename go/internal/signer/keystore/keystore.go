@@ -20,6 +20,21 @@ type PasswordSource struct {
 	File  string
 }
 
+type passwordFileReadError struct {
+	cause error
+}
+
+func (e *passwordFileReadError) Error() string {
+	return "read keystore password file failed"
+}
+
+func (e *passwordFileReadError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
 // Signer signs Ethereum transactions with an encrypted geth keystore key.
 type Signer struct {
 	key     *keystore.Key
@@ -62,7 +77,7 @@ func ResolvePassword(source PasswordSource) (string, error) {
 	case source.File != "":
 		raw, err := os.ReadFile(source.File)
 		if err != nil {
-			return "", err
+			return "", &passwordFileReadError{cause: err}
 		}
 		password := strings.TrimRight(string(raw), "\r\n")
 		if password == "" {

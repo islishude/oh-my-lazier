@@ -284,6 +284,65 @@ test("normalizeProfile accepts CoinMarketCap primary with environment key refere
   assert.equal(profile.chains[0].priceSources?.coinMarketCap?.id, 1027);
 });
 
+test("normalizeProfile rejects authenticated HTTP market-data BaseURLs without echoing them", () => {
+  const cases = [
+    {
+      baseField: "coinMarketCapBaseURL",
+      keyField: "coinMarketCapAPIKeyEnv",
+      keyEnv: "COINMARKETCAP_API_KEY",
+      label: "profile.pricing.coinMarketCapBaseURL",
+    },
+    {
+      baseField: "coinGeckoBaseURL",
+      keyField: "coinGeckoAPIKeyEnv",
+      keyEnv: "COINGECKO_API_KEY",
+      label: "profile.pricing.coinGeckoBaseURL",
+    },
+  ];
+  const secretBaseURL =
+    "http://pricing-user:pricing-password@pricing-secret.example/private-api-key";
+
+  for (const testCase of cases) {
+    const input = baseProfile();
+    (input as Record<string, unknown>).pricing = {
+      [testCase.baseField]: secretBaseURL,
+      [testCase.keyField]: testCase.keyEnv,
+    };
+    let caught: unknown;
+    try {
+      normalizeProfile(input);
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught instanceof Error, `${testCase.baseField} should fail`);
+    assert.match(
+      caught.message,
+      new RegExp(`${testCase.label} must use HTTPS when an API key is configured`),
+    );
+    assert.doesNotMatch(caught.message, /pricing-user|pricing-password|pricing-secret|private-api-key/);
+  }
+});
+
+test("normalizeProfile rejects malformed market-data BaseURLs without echoing them", () => {
+  const input = baseProfile();
+  (input as Record<string, unknown>).pricing = {
+    coinGeckoBaseURL:
+      "ftp://pricing-user:pricing-password@pricing-secret.example/private-api-key",
+  };
+  let caught: unknown;
+  try {
+    normalizeProfile(input);
+  } catch (error) {
+    caught = error;
+  }
+  assert.ok(caught instanceof Error);
+  assert.match(
+    caught.message,
+    /profile\.pricing\.coinGeckoBaseURL must be an absolute HTTP\(S\) URL without query or fragment/,
+  );
+  assert.doesNotMatch(caught.message, /pricing-user|pricing-password|pricing-secret|private-api-key/);
+});
+
 test("normalizeProfile rejects missing and unreferenced price source blocks", () => {
   const missing = baseProfile();
   (missing.chains[1] as Record<string, unknown>).nativeAssetId = "hoodi-eth";

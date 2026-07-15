@@ -279,7 +279,7 @@ func TestRunDefersTransientMarketSourceFailureDuringStartup(t *testing.T) {
 	}
 }
 
-func TestRunDefersEmptyMarketSourceResponseDuringStartup(t *testing.T) {
+func TestRunRejectsMissingMarketIDDuringStartup(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
@@ -297,10 +297,10 @@ func TestRunDefersEmptyMarketSourceResponseDuringStartup(t *testing.T) {
 	}
 	err = worker.Run(t.Context())
 	if err == nil {
-		t.Fatal("Run() error = nil, want invalid database URL error")
+		t.Fatal("Run() error = nil, want missing market ID configuration error")
 	}
-	if strings.Contains(err.Error(), "source configuration") {
-		t.Fatalf("Run() error = %q, want empty market response deferred", err)
+	if !strings.Contains(err.Error(), "coingecko returned no price for ethereum") {
+		t.Fatalf("Run() error = %q, want missing CoinGecko ID error", err)
 	}
 	if got := requests.Load(); got != 2 {
 		t.Fatalf("market source configuration requests during startup = %d, want 2", got)
@@ -308,26 +308,51 @@ func TestRunDefersEmptyMarketSourceResponseDuringStartup(t *testing.T) {
 }
 
 func TestRunRejectsInvalidMarketSourceConfigBeforeDatabase(t *testing.T) {
-	const invalidBaseURL = "ftp://pricing-user:pricing-password@pricing-secret.example/private-api-key"
-	cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
-	cfg.DatabaseURL = "postgres://%"
-	cfg.Pricing = testPricingConfig()
-	cfg.Pricing.CoinGeckoBaseURL = invalidBaseURL
-	worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
-	if err != nil {
-		t.Fatalf("NewWithOptions() error = %v", err)
+	tests := []struct {
+		name      string
+		baseURL   string
+		apiKeyEnv string
+		want      string
+	}{
+		{
+			name:    "unsupported scheme",
+			baseURL: "ftp://pricing-user:pricing-password@pricing-secret.example/private-api-key",
+			want:    "coingecko base URL must be an absolute HTTP(S) URL",
+		},
+		{
+			name:      "authenticated HTTP",
+			baseURL:   "http://pricing-user:pricing-password@pricing-secret.example/private-api-key",
+			apiKeyEnv: "COINGECKO_API_KEY",
+			want:      "coingecko base URL must use HTTPS when an API key is configured",
+		},
 	}
-	err = worker.Run(t.Context())
-	if err == nil {
-		t.Fatal("Run() error = nil, want invalid CoinGecko base URL error")
-	}
-	if !strings.Contains(err.Error(), "coingecko base URL must be an absolute HTTP(S) URL") {
-		t.Fatalf("Run() error = %q, want CoinGecko base URL error", err)
-	}
-	for _, secret := range []string{invalidBaseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
-		if strings.Contains(err.Error(), secret) {
-			t.Fatalf("Run() error leaked %q: %s", secret, err)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.apiKeyEnv != "" {
+				t.Setenv(test.apiKeyEnv, "test-key")
+			}
+			cfg := testConfig("0x9999999999999999999999999999999999999999", "/unused/keystore.json")
+			cfg.DatabaseURL = "postgres://%"
+			cfg.Pricing = testPricingConfig()
+			cfg.Pricing.CoinGeckoBaseURL = test.baseURL
+			cfg.Pricing.CoinGeckoAPIKeyEnv = test.apiKeyEnv
+			worker, err := NewWithOptions(cfg, discardLogger(), Options{SkipOnchainCheck: true})
+			if err != nil {
+				t.Fatalf("NewWithOptions() error = %v", err)
+			}
+			err = worker.Run(t.Context())
+			if err == nil {
+				t.Fatal("Run() error = nil, want invalid CoinGecko base URL error")
+			}
+			if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %q, want %q", err, test.want)
+			}
+			for _, secret := range []string{test.baseURL, "pricing-user", "pricing-password", "pricing-secret.example", "private-api-key"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("Run() error leaked %q: %s", secret, err)
+				}
+			}
+		})
 	}
 }
 

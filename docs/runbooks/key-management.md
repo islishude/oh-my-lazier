@@ -18,7 +18,7 @@ For each deployment environment, record:
 
 The configured signer address must match the expected address in worker config and migration tickets. Never infer approval from a successful transaction alone.
 
-Worker config keeps a top-level `signers` inventory. `chains[].tx_roles.executor.signer` must reference a configured signer only when `services.executor.enabled` is true. `chains[].tx_roles.dvn.signer` must reference a configured signer only when `services.dvn.enabled` is true and at least one pathway is `dvn.mode: active`. `pricing.signer` must reference a configured signer only when `pricing.enabled` is true. If executor, active DVN, and pricing are all disabled for this process, `signers` may be empty. Signer IDs are EVM 20-byte hex addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. `keystore.password_env` must match `^[A-Z_][A-Z0-9_]*$`; put the password in that environment variable, never in the reference field. Local validation rejects malformed references without echoing their values. KMS entries configure key ID, region, address, and optional AWS-compatible endpoint only; AWS credentials are not part of worker YAML and are resolved by the AWS SDK default configuration chain.
+Worker config keeps a top-level `signers` inventory. `chains[].tx_roles.executor.signer` must reference a configured signer only when `services.executor.enabled` is true. `chains[].tx_roles.dvn.signer` must reference a configured signer only when `services.dvn.enabled` is true and at least one pathway is `dvn.mode: active`. `pricing.signer` must reference a configured signer only when `pricing.enabled` is true. If executor, active DVN, and pricing are all disabled for this process, `signers` may be empty. Signer IDs are EVM 20-byte hex addresses used as `tx_outbox.signer_id`. Keystore entries may reference only a password environment variable or password file. `keystore.password_env` must match `^[A-Z_][A-Z0-9_]*$`, and `keystore.password_file` must be an absolute path; put the password in the referenced source, never in either reference field. Local validation and password-file read failures reject malformed or unavailable references without echoing their values. Config-diff artifacts always redact password-file values. KMS entries configure key ID, region, address, and optional AWS-compatible endpoint only; AWS credentials are not part of worker YAML and are resolved by the AWS SDK default configuration chain.
 
 ## AWS KMS Requirements
 
@@ -60,7 +60,7 @@ Required controls:
 Implementation evidence:
 
 - `go/internal/signer/keystore.LoadWithPasswordSource` supports password value, environment variable, or file.
-- `go/internal/signer/keystore.ResolvePassword` rejects missing or empty password sources.
+- `go/internal/signer/keystore.ResolvePassword` rejects missing or empty password sources and preserves file-error classification without exposing the configured password-file path.
 - `go/internal/signer/keystore.Signer.SignTx` signs with geth's chain-aware latest signer.
 
 ## Pre-Migration Checklist

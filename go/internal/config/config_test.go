@@ -374,6 +374,32 @@ func TestValidateRejectsKeystoreSignerWithoutPasswordSource(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsAbsoluteKeystorePasswordFile(t *testing.T) {
+	cfg := validConfig()
+	cfg.Signers[0].Keystore.PasswordEnv = ""
+	cfg.Signers[0].Keystore.PasswordFile = "/run/secrets/keystore-password"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidKeystorePasswordFileWithoutEcho(t *testing.T) {
+	const secret = "actual-keystore-password=abc123"
+	cfg := validConfig()
+	cfg.Signers[0].Keystore.PasswordEnv = ""
+	cfg.Signers[0].Keystore.PasswordFile = secret
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want invalid password file path error")
+	}
+	if !strings.Contains(err.Error(), "signers[0].keystore.password_file must be an absolute file path") {
+		t.Fatalf("Validate() error = %q, want password file path error", err)
+	}
+	if strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), "abc123") {
+		t.Fatalf("Validate() error leaked password_file value: %q", err)
+	}
+}
+
 func TestValidateRejectsInvalidSecretEnvironmentVariableNamesWithoutEcho(t *testing.T) {
 	const secret = "sk-live.actual-secret=abc123"
 	tests := []struct {

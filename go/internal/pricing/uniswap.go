@@ -98,7 +98,7 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 	if header == nil || header.Time == 0 {
 		return SourcePrice{}, errors.New("uniswap returned invalid latest block header")
 	}
-	if err := c.validateSourceConfiguration(ctx); err != nil {
+	if err := c.validatePoolTokens(ctx); err != nil {
 		return SourcePrice{}, err
 	}
 	inDecimals, err := c.readDecimals(ctx, c.tokenIn)
@@ -130,6 +130,19 @@ func (c *UniswapV3Client) PriceUSD(ctx context.Context) (SourcePrice, error) {
 }
 
 func (c *UniswapV3Client) validateSourceConfiguration(ctx context.Context) error {
+	if err := c.validatePoolTokens(ctx); err != nil {
+		return err
+	}
+	if _, _, err := c.observe(ctx); err != nil {
+		if isPriceSourceContractRevertReason(err, "OLD") {
+			return newPriceSourceConfigurationError(fmt.Errorf("uniswap pool observation history is shorter than the configured %d-second twap window", c.window))
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *UniswapV3Client) validatePoolTokens(ctx context.Context) error {
 	token0, err := c.readAddress(ctx, c.pool, uniswapV3PoolABI, "token0")
 	if err != nil {
 		return classifySourceIdentityCallError("uniswap token0 response is incompatible with the pool ABI", err)
