@@ -1193,22 +1193,30 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	defer cancel()
 	var blockCalls atomic.Int32
 	store := newFakeIndexerStore()
+	metricRecorder := &fakeIndexerMetrics{}
 	client := &fakeLogClient{
 		head: 200,
 		onBlock: func() {
+			if metricRecorder.registerCalls == 0 {
+				metricRecorder.pollStartedBeforeRegister = true
+			}
 			if blockCalls.Add(1) == 2 {
 				cancel()
 			}
 		},
 	}
+	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
+	configuredChain.IndexerPollInterval = time.Millisecond
 	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	)
-	indexer.pollInterval = time.Millisecond
+	).WithMetrics(metricRecorder)
+	if indexer.pollInterval != time.Millisecond {
+		t.Fatalf("poll interval = %s, want 1ms", indexer.pollInterval)
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -1228,6 +1236,15 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	}
 	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
 		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	}
+	if metricRecorder.registerCalls != 1 || metricRecorder.pollStartedBeforeRegister || metricRecorder.pollsBeforeRegister {
+		t.Fatalf("metric registration state = %#v", metricRecorder)
+	}
+	if metricRecorder.chainEID != 40161 || metricRecorder.chainName != "ethereum-sepolia" || metricRecorder.pollInterval != time.Millisecond {
+		t.Fatalf("registered indexer metrics = %#v", metricRecorder)
+	}
+	if metricRecorder.pollCalls < 2 {
+		t.Fatalf("recorded polls = %d, want at least 2", metricRecorder.pollCalls)
 	}
 }
 
@@ -1386,6 +1403,30 @@ type fakeLogClient struct {
 	destinationLogs []gethtypes.Log
 	queries         []ethereum.FilterQuery
 	onBlock         func()
+}
+
+type fakeIndexerMetrics struct {
+	chainEID                  uint32
+	chainName                 string
+	pollInterval              time.Duration
+	registerCalls             int
+	pollCalls                 int
+	pollStartedBeforeRegister bool
+	pollsBeforeRegister       bool
+}
+
+func (m *fakeIndexerMetrics) RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration) {
+	m.chainEID = chainEID
+	m.chainName = chainName
+	m.pollInterval = pollInterval
+	m.registerCalls++
+}
+
+func (m *fakeIndexerMetrics) RecordIndexerPoll(_ uint32, _ string, _ time.Duration, _ uint64, _ uint64, _ int, _ int, _ int, _ time.Duration, _ error) {
+	if m.registerCalls == 0 {
+		m.pollsBeforeRegister = true
+	}
+	m.pollCalls++
 }
 
 func (c *fakeLogClient) BlockNumber(context.Context) (uint64, error) {
@@ -1557,10 +1598,11 @@ func (s *fakeIndexerStore) MarkDVNVerifiedObserved(_ context.Context, guid, _ co
 
 func testIndexerChain(eid uint32, name string, executor common.Address) chain.Chain {
 	return chain.Chain{
-		EID:             eid,
-		Name:            name,
-		EndpointAddress: common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		Confirmations:   12,
+		EID:                 eid,
+		Name:                name,
+		EndpointAddress:     common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		Confirmations:       12,
+		IndexerPollInterval: 5 * time.Second,
 		TxRoles: chain.TxRoles{
 			Executor: chain.ExecutorTxRole{SignerID: executor.Hex()},
 		},

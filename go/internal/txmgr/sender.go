@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -517,13 +518,7 @@ func signReplacementOutboxTx(ctx context.Context, outboxTx db.OutboxTx, chainID 
 }
 
 func signOutboxTxWithStatuses(ctx context.Context, outboxTx db.OutboxTx, chainID *big.Int, gasLimit uint64, quote feeQuote, signer signer.Signer, signableStatuses ...string) (*types.Transaction, error) {
-	signable := false
-	for _, status := range signableStatuses {
-		if outboxTx.Status == status {
-			signable = true
-			break
-		}
-	}
+	signable := slices.Contains(signableStatuses, outboxTx.Status)
 	if !signable {
 		return nil, fmt.Errorf("outbox tx %d status %q is not signable", outboxTx.ID, outboxTx.Status)
 	}

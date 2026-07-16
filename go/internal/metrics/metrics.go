@@ -40,9 +40,13 @@ type RuntimeSnapshot struct {
 type IndexerRuntimeStat struct {
 	ChainEID                uint32
 	ChainName               string
+	PollIntervalSeconds     float64
+	StartedUnix             int64
 	PollSuccess             bool
 	SuccessPolls            uint64
 	ErrorPolls              uint64
+	FailureSinceUnix        int64
+	LastPollUnix            int64
 	LastSuccessUnix         int64
 	LastErrorUnix           int64
 	LastPollDurationSeconds float64
@@ -101,36 +105,62 @@ func NewRegistry() *Registry {
 	}
 }
 
-// RecordIndexerPoll records one indexer polling attempt.
-func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, observedHeadBlock uint64, confirmedToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
+// RegisterIndexer records an indexer before its first polling attempt starts.
+func (r *Registry) RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	key := indexerKey{chainEID: chainEID, chainName: chainName}
-	stat := r.indexers[key]
-	if stat == nil {
-		stat = &IndexerRuntimeStat{ChainEID: chainEID, ChainName: chainName}
-		r.indexers[key] = stat
+	r.indexerStatLocked(chainEID, chainName, pollInterval, r.now().Unix())
+}
+
+// RecordIndexerPoll records one indexer polling attempt.
+func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, confirmedToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
+	if r == nil {
+		return
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := r.now().Unix()
+	stat := r.indexerStatLocked(chainEID, chainName, pollInterval, now)
 	stat.LastPollDurationSeconds = duration.Seconds()
+	stat.LastPollUnix = now
 	stat.ObservedHeadBlock = observedHeadBlock
 	stat.ConfirmedToBlock = confirmedToBlock
-	now := r.now().Unix()
 	if err != nil {
 		stat.PollSuccess = false
 		stat.ErrorPolls++
+		if stat.FailureSinceUnix == 0 {
+			stat.FailureSinceUnix = now
+		}
 		stat.LastErrorUnix = now
 		return
 	}
 	stat.PollSuccess = true
 	stat.SuccessPolls++
+	stat.FailureSinceUnix = 0
 	stat.LastSuccessUnix = now
 	stat.SourceTransactions += uint64(sourceTransactions)
 	stat.DVNTransactions += uint64(dvnTransactions)
 	stat.DestinationLogs += uint64(destinationLogs)
+}
+
+func (r *Registry) indexerStatLocked(chainEID uint32, chainName string, pollInterval time.Duration, now int64) *IndexerRuntimeStat {
+	key := indexerKey{chainEID: chainEID, chainName: chainName}
+	stat := r.indexers[key]
+	if stat == nil {
+		stat = &IndexerRuntimeStat{
+			ChainEID:    chainEID,
+			ChainName:   chainName,
+			StartedUnix: now,
+		}
+		r.indexers[key] = stat
+	}
+	stat.PollIntervalSeconds = pollInterval.Seconds()
+	return stat
 }
 
 // RecordLoopRetry records one supervisor retry after a worker loop returned an error.
@@ -386,16 +416,36 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	for _, stat := range snapshot.Indexers {
 		fmt.Fprintf(output, "laz_indexer_poll_success{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), boolGauge(stat.PollSuccess))
 	}
+	output.WriteString("# HELP laz_indexer_poll_interval_seconds Configured interval between indexer polling attempts.\n")
+	output.WriteString("# TYPE laz_indexer_poll_interval_seconds gauge\n")
+	for _, stat := range snapshot.Indexers {
+		fmt.Fprintf(output, "laz_indexer_poll_interval_seconds{chain_eid=%q,name=%s} %s\n", uint32Label(stat.ChainEID), label(stat.ChainName), floatGauge(stat.PollIntervalSeconds))
+	}
+	output.WriteString("# HELP laz_indexer_start_timestamp_seconds Unix timestamp when the indexer loop was first registered.\n")
+	output.WriteString("# TYPE laz_indexer_start_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.Indexers {
+		fmt.Fprintf(output, "laz_indexer_start_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.StartedUnix)
+	}
 	output.WriteString("# HELP laz_indexer_polls_total Indexer polling attempts by result.\n")
 	output.WriteString("# TYPE laz_indexer_polls_total counter\n")
 	for _, stat := range snapshot.Indexers {
 		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,result=\"success\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SuccessPolls)
 		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,result=\"error\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.ErrorPolls)
 	}
+	output.WriteString("# HELP laz_indexer_last_poll_timestamp_seconds Unix timestamp for the most recent completed indexer poll.\n")
+	output.WriteString("# TYPE laz_indexer_last_poll_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.Indexers {
+		fmt.Fprintf(output, "laz_indexer_last_poll_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.LastPollUnix)
+	}
 	output.WriteString("# HELP laz_indexer_last_success_timestamp_seconds Unix timestamp for the most recent successful indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_success_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
 		fmt.Fprintf(output, "laz_indexer_last_success_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.LastSuccessUnix)
+	}
+	output.WriteString("# HELP laz_indexer_failure_since_timestamp_seconds Unix timestamp when the current sequence of failed indexer polls began, or zero when healthy.\n")
+	output.WriteString("# TYPE laz_indexer_failure_since_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.Indexers {
+		fmt.Fprintf(output, "laz_indexer_failure_since_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.FailureSinceUnix)
 	}
 	output.WriteString("# HELP laz_indexer_last_error_timestamp_seconds Unix timestamp for the most recent failed indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_error_timestamp_seconds gauge\n")

@@ -32,8 +32,8 @@ Required alerts:
 - `LazWorkerFeeNegativeMargin`: `laz_worker_fee_negative_margin_jobs > 0`; page after five minutes. This means mined worker transaction gas cost, converted to source-chain native wei, exceeds the source-chain assignment fee for at least one job.
 - `LazWorkerFeeReconciliationPending`: `laz_worker_fee_unpriced_receipts > 0`; ticket after fifteen minutes. Check pricing source health and `fee_accounting` loop logs; tx receipt status has already been recorded and is not blocked by pricing failures.
 - `LazSignerLowNativeBalance`: `laz_signer_native_balance_wei < laz_signer_min_native_balance_wei`; page after five minutes. Fund the affected worker signer before queued or replacement transactions exhaust their configured fee caps.
-- `LazIndexerPollFailing`: `laz_indexer_poll_success == 0` for a configured indexer; page after the failure persists across polling intervals.
-- `LazIndexerCursorStalled`: missing `laz_indexer_cursor_last_block` movement for an enabled chain over the expected polling window; page if the chain is actively used.
+- `LazIndexerPollFailing`: `laz_indexer_poll_success == 0` with a non-zero `laz_indexer_failure_since_timestamp_seconds`; page only after the failure sequence outlasts the configured poll interval and persists for another five minutes. A successful retry clears the failure sequence before it pages.
+- `LazIndexerPollStalled`: compare `laz_indexer_last_poll_timestamp_seconds`, or `laz_indexer_start_timestamp_seconds` before the first completion, with twice `laz_indexer_poll_interval_seconds`; page after the condition persists for five minutes. This catches an initial or later poll that stops completing without treating regularly completed failed polls as a stall.
 
 Active worker status paths:
 
@@ -63,8 +63,8 @@ Migration dashboard panels:
 - Mined receipt gas cost by chain and purpose: `laz_tx_receipt_gas_cost_dst_wei`.
 - Worker fee revenue, actual gas cost, gross margin, negative-margin jobs, and unpriced receipts by role and pathway: `laz_worker_fee_revenue_src_wei`, `laz_worker_fee_actual_gas_cost_src_wei`, `laz_worker_fee_gross_margin_src_wei`, `laz_worker_fee_negative_margin_jobs`, and `laz_worker_fee_unpriced_receipts`.
 - Signer native balance, configured minimum native balance, balance poll success, last success timestamp, and last error timestamp by chain and signer.
-- Indexer cursor last block by chain and stream: `executor_source`, `executor_destination`, `dvn_source`, and `dvn_destination`.
-- Indexer poll success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain.
+- Indexer cursor last block by chain and stream in `laz_indexer_cursor_last_block`: `executor_source`, `executor_destination`, `dvn_source`, and `dvn_destination`.
+- Indexer configured poll interval, loop start timestamp, poll success, current failure start, last completed poll, last success, last poll duration, observed head, confirmed block upper bound, and last error timestamp by chain: `laz_indexer_poll_interval_seconds`, `laz_indexer_start_timestamp_seconds`, `laz_indexer_poll_success`, `laz_indexer_failure_since_timestamp_seconds`, `laz_indexer_last_poll_timestamp_seconds`, `laz_indexer_last_success_timestamp_seconds`, `laz_indexer_last_poll_duration_seconds`, `laz_indexer_observed_head_block`, `laz_indexer_confirmed_to_block`, and `laz_indexer_last_error_timestamp_seconds`.
 - Worker loop retry count and last retry timestamp by loop name.
 
 Operational assumptions:

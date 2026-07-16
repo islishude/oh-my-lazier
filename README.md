@@ -109,6 +109,7 @@ Phase 1 is EVM-only.
 ## Runtime Notes
 
 - Startup fails before durable loops if local config is invalid or live chain state does not match the loaded YAML.
+- Unsigned worker YAML fields accept only non-negative YAML integer scalars, not decimals or quoted numeric strings. Second-based values used as runtime durations must also fit the worker's duration range.
 - Every configured RPC URL must report the configured EVM chain ID.
 - Address fields are parsed as EVM 20-byte hex addresses during config load.
 - Worker contract addresses remain required in every pathway config, even when this process runs only one role.
@@ -119,7 +120,7 @@ Phase 1 is EVM-only.
 - Tx fees are selected at send time by `txmgr`, which estimates gas, reads current RPC fee suggestions, applies configured caps, signs, broadcasts, replaces pending transactions after `tx_manager.stale_broadcast_replacement_after_seconds` without a receipt, and persists the signed fee state.
 - Worker fee accounting records mined receipt gas usage, converts destination-chain gas cost back into source-chain native wei with the configured pricing sources, and exposes revenue, actual cost, gross margin, negative-margin jobs, and pending reconciliation through `/metrics`.
 - Worker metrics expose each active transaction signer's native balance against its configured `min_native_balance_wei` threshold.
-- Indexers poll confirmed block windows and persist role-specific cursors in Postgres.
+- Indexers poll confirmed block windows at each chain's `indexer_poll_interval_seconds` cadence (default 5 seconds) and persist role-specific cursors in Postgres.
 - Retryable loop errors are logged and supervised with backoff; non-retryable loop errors stop `App.Run`.
 
 ## Maintained Docs
