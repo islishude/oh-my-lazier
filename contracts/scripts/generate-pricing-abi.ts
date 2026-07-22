@@ -103,23 +103,24 @@ const outputs: AbiOutput[] = [
 ];
 
 const repoRoot = process.cwd();
-const checkOnly = process.argv.includes("--check");
 
-async function main() {
+export async function generatePricingABI(checkOnly: boolean): Promise<void> {
   const artifactCache = new Map<string, Artifact>();
 
   for (const output of outputs) {
     const abi = await Promise.all(
       output.selections.map((selection) =>
-        readSelectedEntry(selection, artifactCache),
-      ),
+        readSelectedEntry(selection, artifactCache)
+      )
     );
     const target = path.join(repoRoot, output.path);
     const formatted = formatABI(abi);
     if (checkOnly) {
       const current = await readFile(target, "utf8");
       if (current !== formatted) {
-        throw new Error(`${output.path} is not generated from pinned artifacts`);
+        throw new Error(
+          `${output.path} is not generated from pinned artifacts`
+        );
       }
     } else {
       await writeFile(target, formatted);
@@ -133,15 +134,15 @@ async function main() {
 
 async function readSelectedEntry(
   selection: AbiSelection,
-  artifactCache: Map<string, Artifact>,
+  artifactCache: Map<string, Artifact>
 ): Promise<AbiEntry> {
   const artifact = await readArtifact(selection.artifact, artifactCache);
   const matches = artifact.abi.filter(
-    (entry) => entry.type === selection.type && entry.name === selection.name,
+    (entry) => entry.type === selection.type && entry.name === selection.name
   );
   if (matches.length !== 1) {
     throw new Error(
-      `${selection.artifact}: expected one ${selection.type} ${selection.name}, found ${matches.length}`,
+      `${selection.artifact}: expected one ${selection.type} ${selection.name}, found ${matches.length}`
     );
   }
   return matches[0];
@@ -149,7 +150,7 @@ async function readSelectedEntry(
 
 async function readArtifact(
   artifactPath: string,
-  artifactCache: Map<string, Artifact>,
+  artifactCache: Map<string, Artifact>
 ): Promise<Artifact> {
   const absolutePath = path.join(repoRoot, artifactPath);
   const cached = artifactCache.get(absolutePath);
@@ -247,10 +248,8 @@ function formatParameter(input: AbiInput, indent: number): string {
 
 function formatCompactParameter(input: AbiInput): string {
   return `{ "internalType": ${JSON.stringify(
-    input.internalType,
+    input.internalType
   )}, "name": ${JSON.stringify(input.name)}, "type": ${JSON.stringify(
-    input.type,
+    input.type
   )} }`;
 }
-
-await main();

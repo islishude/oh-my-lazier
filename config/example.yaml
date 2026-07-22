@@ -54,8 +54,8 @@ pricing:
     #   coingecko:
     #     id: ethereum
     #     max_age_seconds: 180
-    #   # Optional AggregatorV3 primary or sanity source.
     #   chainlink:
+    #     # Optional Chainlink feed sanity source. get the address via https://data.chain.link/feeds
     #     feed_address: "0x1111111111111111111111111111111111111111"
     #     expected_description: "ETH / USD"
     #     max_age_seconds: 3600

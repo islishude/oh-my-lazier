@@ -1,64 +1,79 @@
 import { buildCanarySendParam } from "./oft-canary.js";
 import { enrichKnownContractError } from "./contract-error.js";
 import {
-  assertConfiguredChain,
-  createClients,
-  envAddress,
-  envBigInt,
-  envUint32,
   jsonStringify,
   loadABIArtifact,
   loadArtifact,
-  optionalAddress,
-  optionalBigInt,
-  optionalParam,
   waitForTx,
+  type ChainClients,
 } from "./lib.js";
-import type { Abi, Hex } from "viem";
+import type { Abi, Address, Hex } from "viem";
 
-const testOFTArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
-);
-const workerErrorsArtifact = loadABIArtifact(
-  "contracts/artifacts/contracts/contracts/common/WorkerErrors.sol/WorkerErrors.json",
-);
-const knownSendErrorsABI = [
-  ...testOFTArtifact.abi,
-  ...workerErrorsArtifact.abi,
-] as Abi;
+export type SendOFTInput = {
+  testOFT: Address;
+  recipient: Address;
+  dstEid: number;
+  amountLD: bigint;
+  minAmountLD?: bigint;
+  lzReceiveGas?: bigint;
+  extraOptions?: Hex;
+  refundAddress?: Address;
+};
 
-export async function sendOFTFromEnv(label: string): Promise<void> {
-  const { account, publicClient, walletClient } = createClients();
-  await assertConfiguredChain(publicClient);
-  const testOFT = envAddress("TEST_OFT");
-  const recipient = envAddress("RECIPIENT");
-  const dstEid = envUint32("DST_EID");
-  const amountLD = envBigInt("AMOUNT_LD");
-  const minAmountLD = optionalBigInt("MIN_AMOUNT_LD") ?? amountLD;
-  const lzReceiveGas = optionalBigInt("LZ_RECEIVE_GAS");
-  const extraOptions = optionalHex("EXTRA_OPTIONS");
-  if (lzReceiveGas !== undefined && extraOptions !== undefined) {
-    throw new Error("LZ_RECEIVE_GAS and EXTRA_OPTIONS must not both be set");
+export function buildSendOFTPlan(input: SendOFTInput) {
+  const minAmountLD = input.minAmountLD ?? input.amountLD;
+  if (input.lzReceiveGas !== undefined && input.extraOptions !== undefined) {
+    throw new Error(
+      "input.lzReceiveGas and input.extraOptions must not both be set"
+    );
   }
-  const refundAddress = optionalAddress("REFUND_ADDRESS") ?? account.address;
-
-  const sendParam = buildCanarySendParam({
-    dstEid,
-    recipient,
-    amountLD,
+  return {
+    testOFT: input.testOFT,
+    dstEid: input.dstEid,
+    recipient: input.recipient,
+    amountLD: input.amountLD,
     minAmountLD,
-    lzReceiveGas,
-    extraOptions,
-  });
+    ...(input.refundAddress === undefined
+      ? {}
+      : { refundAddress: input.refundAddress }),
+    sendParam: buildCanarySendParam({
+      dstEid: input.dstEid,
+      recipient: input.recipient,
+      amountLD: input.amountLD,
+      minAmountLD,
+      lzReceiveGas: input.lzReceiveGas,
+      extraOptions: input.extraOptions,
+    }),
+  };
+}
+
+export async function sendOFT(
+  label: string,
+  input: SendOFTInput,
+  clients: ChainClients
+): Promise<void> {
+  const plan = buildSendOFTPlan(input);
+  const refundAddress = input.refundAddress ?? clients.account.address;
+  const testOFTArtifact = loadArtifact(
+    "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json"
+  );
+  const workerErrorsArtifact = loadABIArtifact(
+    "contracts/artifacts/contracts/contracts/common/WorkerErrors.sol/WorkerErrors.json"
+  );
+  const knownSendErrorsABI = [
+    ...testOFTArtifact.abi,
+    ...workerErrorsArtifact.abi,
+  ] as Abi;
 
   const fee = (await withKnownContractErrors(
     "TestOFT.quoteSend",
-    publicClient.readContract({
-      address: testOFT,
+    clients.publicClient.readContract({
+      address: input.testOFT,
       abi: testOFTArtifact.abi,
       functionName: "quoteSend",
-      args: [sendParam, false],
+      args: [plan.sendParam, false],
     }),
+    knownSendErrorsABI
   )) as { nativeFee: bigint; lzTokenFee: bigint };
 
   if (fee.lzTokenFee !== 0n) {
@@ -66,41 +81,38 @@ export async function sendOFTFromEnv(label: string): Promise<void> {
   }
 
   await waitForTx(
-    publicClient,
+    clients.publicClient,
     label,
     await withKnownContractErrors(
       "TestOFT.send",
-      walletClient.writeContract({
-        address: testOFT,
+      clients.walletClient.writeContract({
+        address: input.testOFT,
         abi: testOFTArtifact.abi,
         functionName: "send",
-        args: [sendParam, fee, refundAddress],
+        args: [plan.sendParam, fee, refundAddress],
         value: fee.nativeFee,
-        account,
-        chain: walletClient.chain,
+        account: clients.account,
+        chain: clients.walletClient.chain,
       }),
-    ),
+      knownSendErrorsABI
+    )
   );
 
   console.log(
     jsonStringify({
-      chainId: Number(await publicClient.getChainId()),
-      sender: account.address,
-      testOFT,
-      dstEid,
-      recipient,
-      amountLD,
-      minAmountLD,
+      chainId: Number(await clients.publicClient.getChainId()),
+      sender: clients.account.address,
+      ...plan,
       refundAddress,
       fee,
-      sendParam,
-    }),
+    })
   );
 }
 
 async function withKnownContractErrors<T>(
   context: string,
   promise: Promise<T>,
+  knownSendErrorsABI: Abi
 ): Promise<T> {
   try {
     return await promise;
@@ -113,15 +125,4 @@ async function withKnownContractErrors<T>(
       }) ?? error
     );
   }
-}
-
-function optionalHex(name: string): Hex | undefined {
-  const value = optionalParam(name);
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  if (!/^0x(?:[0-9a-fA-F]{2})*$/.test(value)) {
-    throw new Error(`${name} must be 0x-prefixed hex bytes`);
-  }
-  return value as Hex;
 }

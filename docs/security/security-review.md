@@ -118,8 +118,9 @@ Evidence:
 
 - `npm audit --audit-level=moderate --json` reports zero critical findings.
 - The remaining high and moderate findings are limited to pinned LayerZero
-  transitive dependencies, retained Hardhat toolbox transitive dependencies,
-  and transitive tooling bundled by the pinned Chainlink AggregatorV3 ABI source.
+  dependencies, the retained Hardhat/Ignition deployment toolchain (including
+  its `adm-zip` and `lodash-es` dependencies), and transitive tooling bundled by
+  the pinned Chainlink AggregatorV3 ABI source.
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 

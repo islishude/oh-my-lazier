@@ -2,19 +2,37 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import type { IgnitionModule } from "@nomicfoundation/ignition-core";
+import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
+import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
+import OAppEndpointConfigModule from "../../ignition/modules/OAppEndpointConfig.js";
+import OpenWorkersModule from "../../ignition/modules/OpenWorkers.js";
+import OpenWorkersPathwayConfigModule from "../../ignition/modules/OpenWorkersPathwayConfig.js";
+import TestOFTModule from "../../ignition/modules/TestOFT.js";
 import {
-  createPublicClient,
-  defineChain,
-  getAddress,
-  http,
-  isAddress,
-  isAddressEqual,
-  type Abi,
-  type Address,
-  type PublicClient,
-} from "viem";
-import { jsonStringify, loadArtifact, parseCLIParams } from "./lib.js";
+  readIgnitionDeploymentState,
+  type IgnitionDeploymentRequest,
+  type IgnitionDeploymentState,
+  type IgnitionRuntime,
+  type MissingIgnitionDeployment,
+} from "./ignition-deployment-state.js";
+import { verifyIgnitionDeploymentSources } from "./ignition-source-verification.js";
+import { withIgnitionUiOnStderr } from "./ignition-ui-output.js";
+import {
+  type ApplyGate,
+  assertExpectedSigner,
+  assertNoSecretFields,
+  expectOnlyKeys,
+  sanitizeCommandErrorMessage,
+  withReadOnlyConnection,
+  withWriteConnection,
+} from "./command-harness.js";
+import {
+  readDeploymentPreflight,
+  validateDeploymentPreflight,
+} from "./deployment-preflight.js";
+import { inspectLzConfig } from "./inspect-lz-config.js";
+import { jsonStringify, loadArtifact } from "./lib.js";
 import {
   expectedLayerZeroChains,
   requireLayerZeroLabsDVNForLibraries,
@@ -27,6 +45,10 @@ import {
   buildTestOFTParameters,
   type PathwayConfigInput,
 } from "./oft-pathway-ignition.js";
+import {
+  readPriceConfigReport,
+  validatePriceConfigReport,
+} from "./price-config-check.js";
 
 const maxPriceSnapshotStaleAfter = 86_400n;
 // Keep generated worker durations within Go's signed 64-bit nanosecond range.
@@ -84,7 +106,6 @@ export type ChainProfile = {
   priceSources?: PriceSourcesProfile;
   eid: number;
   chainId: number;
-  rpcUrlEnv: string;
   deploymentId: string;
   testOFTDeploymentId?: string;
   oapp?: Address;
@@ -103,7 +124,11 @@ export type ChainProfile = {
   layerZero: LayerZeroAddresses;
 };
 
-export type PriceSourceName = "coinmarketcap" | "coingecko" | "chainlink" | "uniswap";
+export type PriceSourceName =
+  | "coinmarketcap"
+  | "coingecko"
+  | "chainlink"
+  | "uniswap";
 
 export type PriceSourcesProfile = {
   primarySource: Exclude<PriceSourceName, "uniswap">;
@@ -200,7 +225,13 @@ export type DeploymentProfile = {
 export type OpenWorkerContracts = {
   openExecutor: Address;
   openDVN: Address;
-  priceFeed?: Address;
+  priceFeed: Address;
+};
+
+export type IgnitionContractDeployment = {
+  contracts: Readonly<
+    Record<string, { address: Address; contractName: string }>
+  >;
 };
 
 export type ChainDeploymentState = {
@@ -263,56 +294,132 @@ export type CommandPlan = {
   commands: PlannedCommand[];
 };
 
-export type IgnitionCommandOptions = {
-  verify: boolean;
-  autoConfirm: boolean;
-  buildProfile?: string;
+export type DeployProfileInput = {
+  profilePath: string;
+  outDir: string;
+  phase: DeploymentPhase;
+  verifySource?: boolean;
 };
 
-type PriceFeedOverrides = Record<string, Address>;
 type RPCURLMap = Record<string, string>;
 type WorkerStartBlockMap = Record<string, number>;
 type LatestBlockNumberReader = (
   chain: ChainProfile,
-  rpcURL: string,
+  rpcURL: string
 ) => Promise<bigint>;
 
+export type ResolvedProfileNetworks = {
+  rpcUrls: RPCURLMap;
+  latestBlockNumbers: Readonly<Record<string, bigint>>;
+};
+
+export type SourceVerificationInput = {
+  hre: HardhatRuntimeEnvironment;
+  profile: DeploymentProfile;
+  state: DeploymentState;
+  buildProfile: string;
+};
+
+export type DeployProfileDependencies = {
+  build?: (
+    hre: HardhatRuntimeEnvironment,
+    buildProfile: string
+  ) => Promise<void>;
+  deploy?: ProgrammaticIgnitionDeployer;
+  readState?: DeploymentStateReader;
+  resolveNetworks?: (
+    hre: HardhatRuntimeEnvironment,
+    profile: DeploymentProfile
+  ) => Promise<ResolvedProfileNetworks>;
+  verify?: (
+    hre: HardhatRuntimeEnvironment,
+    profile: DeploymentProfile,
+    state: DeploymentState,
+    outDir: string,
+    options: { workerOnly: boolean }
+  ) => Promise<void>;
+  verifySource?: (input: SourceVerificationInput) => Promise<void>;
+};
+
+export type DeployProfileResult = {
+  ok: true;
+  phase: DeploymentPhase;
+  applied: boolean;
+  mode: DeploymentMode;
+  outDir: string;
+  parameters: string;
+  commands: string;
+  workerConfig?: string;
+  deploymentState?: boolean;
+  status?: string;
+};
+
 export function normalizeProfile(value: unknown): DeploymentProfile {
-  const input = object(value, "profile");
+  assertNoSecretFields(value, "profile", [
+    "passwordEnv",
+    "passwordFile",
+    "coinMarketCapAPIKeyEnv",
+    "coinGeckoAPIKeyEnv",
+    "privateKeyEnv",
+    "rpcUrlEnv",
+  ]);
+  const input = object(value, "profile", [
+    "environment",
+    "mode",
+    "databaseUrl",
+    "metricsListenAddress",
+    "owner",
+    "priceFeedSubmitters",
+    "initialRecipient",
+    "canaryTreasury",
+    "minOwnerNativeBalanceWei",
+    "minCanaryNativeBalanceWei",
+    "minCanaryTokenBalance",
+    "dvnMode",
+    "services",
+    "pricing",
+    "signers",
+    "token",
+    "chains",
+    "pathway",
+  ]);
   const mode = normalizeMode(input.mode);
   if (Object.hasOwn(input, "minCanaryTokenBalance")) {
     throw new Error(
-      "profile.minCanaryTokenBalance is not supported; configure chains[].minCanaryTokenBalance",
+      "profile.minCanaryTokenBalance is not supported; configure chains[].minCanaryTokenBalance"
     );
   }
   const owner = addressField(input, "owner", "profile.owner");
   const priceFeedSubmitters = normalizeAddressArrayField(
     input,
     "priceFeedSubmitters",
-    "profile.priceFeedSubmitters",
+    "profile.priceFeedSubmitters"
   );
   validateLongTermPriceSubmitters(priceFeedSubmitters, owner);
   const initialRecipient =
     optionalAddressField(
       input,
       "initialRecipient",
-      "profile.initialRecipient",
+      "profile.initialRecipient"
     ) ?? owner;
   const canaryTreasury = optionalAddressField(
     input,
     "canaryTreasury",
-    "profile.canaryTreasury",
+    "profile.canaryTreasury"
   );
-  const services = object(input.services ?? {}, "profile.services");
+  const services = object(input.services ?? {}, "profile.services", [
+    "executor",
+    "dvn",
+  ]);
   const signers = arrayField(input, "signers", "profile.signers").map(
-    (signer, index) => normalizeSigner(signer, `profile.signers[${index}]`),
+    (signer, index) => normalizeSigner(signer, `profile.signers[${index}]`)
   );
   const signerIDs = new Set(signers.map((signer) => signer.id.toLowerCase()));
-  const token = object(input.token ?? {}, "profile.token");
+  const token = object(input.token ?? {}, "profile.token", ["name", "symbol"]);
   const pricing = normalizePricingProfile(input.pricing);
   const chains = arrayField(input, "chains", "profile.chains").map(
     (chain, index) =>
-      normalizeChain(chain, `profile.chains[${index}]`, signerIDs, mode),
+      normalizeChain(chain, `profile.chains[${index}]`, signerIDs, mode)
   );
   validateTwoChainPair(chains);
   validateProfilePriceSources(chains, pricing);
@@ -323,7 +430,7 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
     metricsListenAddress: stringField(
       input,
       "metricsListenAddress",
-      "profile.metricsListenAddress",
+      "profile.metricsListenAddress"
     ),
     owner,
     priceFeedSubmitters,
@@ -333,20 +440,20 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
       input,
       "minOwnerNativeBalanceWei",
       "profile.minOwnerNativeBalanceWei",
-      "0",
+      "0"
     ),
     minCanaryNativeBalanceWei: optionalDecimalField(
       input,
       "minCanaryNativeBalanceWei",
       "profile.minCanaryNativeBalanceWei",
-      "0",
+      "0"
     ),
     dvnMode: normalizeDVNMode(input.dvnMode),
     services: {
       executor: optionalBoolean(
         services.executor,
         true,
-        "profile.services.executor",
+        "profile.services.executor"
       ),
       dvn: optionalBoolean(services.dvn, true, "profile.services.dvn"),
     },
@@ -356,7 +463,7 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
       name: optionalString(
         token.name,
         "Oh My Lazier Test OFT",
-        "profile.token.name",
+        "profile.token.name"
       ),
       symbol: optionalString(token.symbol, "OMLTOFT", "profile.token.symbol"),
     },
@@ -366,60 +473,60 @@ export function normalizeProfile(value: unknown): DeploymentProfile {
 }
 
 export function extractOpenWorkerContracts(
-  deployedAddresses: unknown,
-  chainKey: string,
+  deployment: IgnitionContractDeployment,
+  chainKey: string
 ): OpenWorkerContracts {
-  const deployed = object(deployedAddresses, `${chainKey}.deployed_addresses`);
-  const openExecutor = moduleAddress(
-    deployed,
-    "OpenWorkers",
+  const openExecutor = deploymentContractAddress(
+    deployment,
+    "OpenWorkers#OpenExecutor",
     "OpenExecutor",
-    chainKey,
+    chainKey
   );
-  const openDVN = moduleAddress(deployed, "OpenWorkers", "OpenDVN", chainKey);
-  const priceFeed = optionalModuleAddress(
-    deployed,
-    "OpenWorkers",
+  const openDVN = deploymentContractAddress(
+    deployment,
+    "OpenWorkers#OpenDVN",
+    "OpenDVN",
+    chainKey
+  );
+  const priceFeed = deploymentContractAddress(
+    deployment,
+    "OpenWorkers#OpenPriceFeed",
     "OpenPriceFeed",
-    chainKey,
+    chainKey
   );
   return { openExecutor, openDVN, priceFeed };
 }
 
 export function extractTestOFTAddress(
-  deployedAddresses: unknown,
-  chainKey: string,
+  deployment: IgnitionContractDeployment,
+  chainKey: string
 ): Address {
-  const deployed = object(deployedAddresses, `${chainKey}.deployed_addresses`);
-  return moduleAddress(deployed, "TestOFT", "TestOFT", chainKey);
+  return deploymentContractAddress(
+    deployment,
+    "TestOFT#TestOFT",
+    "TestOFT",
+    chainKey
+  );
 }
 
 export function buildDeploymentState(input: {
   profile: DeploymentProfile;
-  workerDeployedAddresses: Record<string, unknown>;
-  testOFTDeployedAddresses?: Record<string, unknown>;
-  priceFeedOverrides?: PriceFeedOverrides;
+  workerDeployments: Record<string, IgnitionContractDeployment>;
+  testOFTDeployments?: Record<string, IgnitionContractDeployment>;
   generatedAt?: string;
 }): DeploymentState {
   const chains = input.profile.chains.map((chain) => {
     const workers = extractOpenWorkerContracts(
-      input.workerDeployedAddresses[chain.key],
-      chain.key,
+      input.workerDeployments[chain.key],
+      chain.key
     );
-    const priceFeed =
-      workers.priceFeed ?? input.priceFeedOverrides?.[chain.key];
-    if (priceFeed === undefined) {
-      throw new Error(
-        `${chain.key} deployed_addresses.json is missing OpenWorkers#OpenPriceFeed; rerun with ${chain.rpcUrlEnv} set so OpenExecutor.priceFeed() and OpenDVN.priceFeed() can be hydrated`,
-      );
-    }
     const oapp =
       input.profile.mode === "external-oapp"
         ? requiredOApp(chain)
         : extractTestOFTAddress(
-            input.testOFTDeployedAddresses?.[chain.key] ??
-              input.workerDeployedAddresses[chain.key],
-            chain.key,
+            input.testOFTDeployments?.[chain.key] ??
+              missingTestOFTDeployment(chain.key),
+            chain.key
           );
     return {
       key: chain.key,
@@ -436,7 +543,7 @@ export function buildDeploymentState(input: {
       workers: {
         openExecutor: workers.openExecutor,
         openDVN: workers.openDVN,
-        priceFeed,
+        priceFeed: workers.priceFeed,
       },
     };
   });
@@ -450,37 +557,9 @@ export function buildDeploymentState(input: {
   };
 }
 
-export async function readPriceFeedFromWorkers(input: {
-  publicClient: PublicClient;
-  chainKey: string;
-  openExecutor: Address;
-  openDVN: Address;
-  openExecutorAbi: Abi;
-  openDVNAbi: Abi;
-}): Promise<Address> {
-  const [executorPriceFeed, dvnPriceFeed] = await Promise.all([
-    input.publicClient.readContract({
-      address: input.openExecutor,
-      abi: input.openExecutorAbi,
-      functionName: "priceFeed",
-    }) as Promise<Address>,
-    input.publicClient.readContract({
-      address: input.openDVN,
-      abi: input.openDVNAbi,
-      functionName: "priceFeed",
-    }) as Promise<Address>,
-  ]);
-  if (!isAddressEqual(executorPriceFeed, dvnPriceFeed)) {
-    throw new Error(
-      `${input.chainKey} OpenExecutor.priceFeed ${executorPriceFeed} does not match OpenDVN.priceFeed ${dvnPriceFeed}`,
-    );
-  }
-  return getAddress(executorPriceFeed);
-}
-
 export function openWorkersParameterFile(
   profile: DeploymentProfile,
-  _chain: ChainProfile,
+  _chain: ChainProfile
 ) {
   return buildOpenWorkersParameters({
     owner: profile.owner,
@@ -490,7 +569,7 @@ export function openWorkersParameterFile(
 
 export function testOFTParameterFile(
   profile: DeploymentProfile,
-  chain: ChainProfile,
+  chain: ChainProfile
 ) {
   return buildTestOFTParameters({
     tokenName: profile.token.name,
@@ -504,15 +583,15 @@ export function testOFTParameterFile(
 
 function requiredDVNsForPathway(
   source: ChainProfile,
-  sourceState: ChainDeploymentState,
+  sourceState: ChainDeploymentState
 ): Address[] {
   const dvns = [sourceState.workers.openDVN, ...source.externalDVNs];
   if (source.includeLayerZeroLabsDVN) {
     dvns.push(
       requireLayerZeroLabsDVNForLibraries(
         source.layerZero,
-        `${source.key}.includeLayerZeroLabsDVN`,
-      ),
+        `${source.key}.includeLayerZeroLabsDVN`
+      )
     );
   }
   return dvns;
@@ -546,10 +625,10 @@ export function pathwayInput(input: {
     maxLzReceiveGas: BigInt(input.profile.pathway.maxLzReceiveGas),
     priceSnapshot: {
       dstGasPriceInSrcToken: BigInt(
-        input.profile.pathway.priceSnapshot.dstGasPriceInSrcToken,
+        input.profile.pathway.priceSnapshot.dstGasPriceInSrcToken
       ),
       dstDataFeePerByteInSrcToken: BigInt(
-        input.profile.pathway.priceSnapshot.dstDataFeePerByteInSrcToken,
+        input.profile.pathway.priceSnapshot.dstDataFeePerByteInSrcToken
       ),
       updatedAt:
         input.priceSnapshotUpdatedAt ?? BigInt(Math.floor(Date.now() / 1000)),
@@ -594,8 +673,8 @@ export function renderWorkerConfig(input: {
       renderWorkerChain(
         chain,
         input.rpcUrls[chain.key],
-        workerStartBlock(input.workerStartBlocks, chain),
-      ),
+        workerStartBlock(input.workerStartBlocks, chain)
+      )
     )
     .join("\n");
   const pathwayBlocks = input.state.directions
@@ -637,10 +716,14 @@ ${pricingChains}`;
 function renderOptionalPricingGlobal(pricing: PricingProfile): string {
   const lines: string[] = [];
   if (pricing.coinMarketCapBaseURL !== undefined) {
-    lines.push(`  coinmarketcap_base_url: ${yamlString(pricing.coinMarketCapBaseURL)}`);
+    lines.push(
+      `  coinmarketcap_base_url: ${yamlString(pricing.coinMarketCapBaseURL)}`
+    );
   }
   if (pricing.coinMarketCapAPIKeyEnv !== undefined) {
-    lines.push(`  coinmarketcap_api_key_env: ${pricing.coinMarketCapAPIKeyEnv}`);
+    lines.push(
+      `  coinmarketcap_api_key_env: ${pricing.coinMarketCapAPIKeyEnv}`
+    );
   }
   if (pricing.coinGeckoBaseURL !== undefined) {
     lines.push(`  coingecko_base_url: ${yamlString(pricing.coinGeckoBaseURL)}`);
@@ -676,22 +759,24 @@ function renderPricingChain(chain: ChainProfile): string {
     lines.push(
       "      coinmarketcap:",
       `        id: ${sources.coinMarketCap.id}`,
-      `        max_age_seconds: ${sources.coinMarketCap.maxAgeSeconds}`,
+      `        max_age_seconds: ${sources.coinMarketCap.maxAgeSeconds}`
     );
   }
   if (sources.coinGecko !== undefined) {
     lines.push(
       "      coingecko:",
       `        id: ${sources.coinGecko.id}`,
-      `        max_age_seconds: ${sources.coinGecko.maxAgeSeconds}`,
+      `        max_age_seconds: ${sources.coinGecko.maxAgeSeconds}`
     );
   }
   if (sources.chainlink !== undefined) {
     lines.push(
       "      chainlink:",
       `        feed_address: "${sources.chainlink.feedAddress}"`,
-      `        expected_description: ${yamlString(sources.chainlink.expectedDescription)}`,
-      `        max_age_seconds: ${sources.chainlink.maxAgeSeconds}`,
+      `        expected_description: ${yamlString(
+        sources.chainlink.expectedDescription
+      )}`,
+      `        max_age_seconds: ${sources.chainlink.maxAgeSeconds}`
     );
   }
   if (sources.uniswap !== undefined) {
@@ -702,7 +787,7 @@ function renderPricingChain(chain: ChainProfile): string {
       `        token_out: "${sources.uniswap.tokenOut}"`,
       `        twap_window_seconds: ${sources.uniswap.twapWindowSeconds}`,
       `        max_block_age_seconds: ${sources.uniswap.maxBlockAgeSeconds}`,
-      `        min_harmonic_mean_liquidity: "${sources.uniswap.minHarmonicMeanLiquidity}"`,
+      `        min_harmonic_mean_liquidity: "${sources.uniswap.minHarmonicMeanLiquidity}"`
     );
   }
   return lines.join("\n");
@@ -710,14 +795,14 @@ function renderPricingChain(chain: ChainProfile): string {
 
 function pricingSigner(profile: DeploymentProfile): Address {
   const localSigners = new Set(
-    profile.signers.map((signer) => signer.id.toLowerCase()),
+    profile.signers.map((signer) => signer.id.toLowerCase())
   );
   const submitter = profile.priceFeedSubmitters.find((candidate) =>
-    localSigners.has(candidate.toLowerCase()),
+    localSigners.has(candidate.toLowerCase())
   );
   if (submitter === undefined) {
     throw new Error(
-      "profile.priceFeedSubmitters must include a configured signer for worker pricing",
+      "profile.priceFeedSubmitters must include a configured signer for worker pricing"
     );
   }
   return submitter;
@@ -726,20 +811,19 @@ function pricingSigner(profile: DeploymentProfile): Address {
 export function buildCommandPlan(input: {
   profile: DeploymentProfile;
   outDir: string;
-  ignition?: Partial<IgnitionCommandOptions>;
+  buildProfile?: string;
 }): CommandPlan {
   const commands: PlannedCommand[] = [];
-  const ignition = normalizeIgnitionCommandOptions(input.ignition);
+  const buildProfile = input.buildProfile ?? "production";
   if (input.profile.mode === "test-oft-rehearsal") {
     for (const chain of input.profile.chains) {
       commands.push({
         label: `Deploy ${chain.key} TestOFT rehearsal OApp`,
         command: hardhatCommand(
           chain,
-          "npm run deploy:test-oft",
-          testOFTParameterPath(input.outDir, chain),
-          testOFTDeploymentId(chain),
-          ignition,
+          "deploy:test-oft",
+          testOFTCommandInputPath(input.outDir, chain),
+          buildProfile
         ),
         mutates: true,
         requiresApply: true,
@@ -751,10 +835,9 @@ export function buildCommandPlan(input: {
       label: `Deploy ${chain.key} OpenWorkers`,
       command: hardhatCommand(
         chain,
-        "npm run deploy:open-workers",
-        openWorkersParameterPath(input.outDir, chain),
-        chain.deploymentId,
-        ignition,
+        "deploy:open-workers",
+        openWorkersCommandInputPath(input.outDir, chain),
+        buildProfile
       ),
       mutates: true,
       requiresApply: true,
@@ -765,10 +848,9 @@ export function buildCommandPlan(input: {
       label: `Configure ${source.key} OpenWorkers for ${destination.key}`,
       command: hardhatCommand(
         source,
-        "npm run configure:open-workers-pathway",
-        openWorkersPathwayParameterPath(input.outDir, source, destination),
-        openWorkersPathwayDeploymentId(source, destination),
-        ignition,
+        "configure:open-workers-pathway",
+        openWorkersPathwayCommandInputPath(input.outDir, source, destination),
+        buildProfile
       ),
       mutates: true,
       requiresApply: true,
@@ -777,10 +859,9 @@ export function buildCommandPlan(input: {
       label: `Configure ${source.key} OApp/Endpoint for ${destination.key}`,
       command: hardhatCommand(
         source,
-        "npm run configure:oapp-endpoint",
-        oappEndpointParameterPath(input.outDir, source, destination),
-        oappEndpointDeploymentId(source, destination),
-        ignition,
+        "configure:oapp-endpoint",
+        oappEndpointCommandInputPath(input.outDir, source, destination),
+        buildProfile
       ),
       mutates: true,
       requiresApply: true,
@@ -788,22 +869,66 @@ export function buildCommandPlan(input: {
   }
   commands.push({
     label: "Validate generated worker config against live chains",
-    command: `go run ./go/cmd/configcheck -config ${path.join(input.outDir, "worker.yaml")} -format json`,
+    command: `go run ./go/cmd/configcheck -config ${path.join(
+      input.outDir,
+      "worker.yaml"
+    )} -format json`,
     mutates: false,
     requiresApply: false,
     output: path.join(input.outDir, "artifacts", "configcheck.json"),
   });
+  if (input.profile.mode === "test-oft-rehearsal") {
+    for (const chain of input.profile.chains) {
+      commands.push({
+        label: `Run deployment preflight for ${chain.key}`,
+        command: hardhatCommand(
+          chain,
+          "check:deployment-preflight",
+          deploymentPreflightCommandInputPath(input.outDir, chain),
+          buildProfile
+        ),
+        mutates: false,
+        requiresApply: false,
+        output: path.join(
+          input.outDir,
+          "artifacts",
+          `deployment-preflight-${chain.key}.json`
+        ),
+      });
+    }
+  }
   for (const [source, destination] of profileDirections(input.profile)) {
     const direction = directionKey(source, destination);
     commands.push({
       label: `Inspect LayerZero config for ${direction}`,
-      command: `${source.rpcUrlEnv}=... npm run inspect:lz-config -- --chain-id ${source.chainId} --endpoint ${source.layerZero.endpointV2} --remote-eid ${destination.eid} --send-uln ${source.layerZero.sendUln302} --receive-uln ${source.layerZero.receiveUln302} --oapp <${source.key} OApp>`,
+      command: hardhatCommand(
+        source,
+        "inspect:lz-config",
+        inspectLzCommandInputPath(input.outDir, source, destination),
+        buildProfile
+      ),
       mutates: false,
       requiresApply: false,
       output: path.join(
         input.outDir,
         "artifacts",
-        `lz-config-${direction}.json`,
+        `lz-config-${direction}.json`
+      ),
+    });
+    commands.push({
+      label: `Check worker price config for ${direction}`,
+      command: hardhatCommand(
+        source,
+        "check:price-config",
+        priceConfigCommandInputPath(input.outDir, source, destination),
+        buildProfile
+      ),
+      mutates: false,
+      requiresApply: false,
+      output: path.join(
+        input.outDir,
+        "artifacts",
+        `price-config-${direction}.json`
       ),
     });
   }
@@ -815,11 +940,12 @@ export async function writeRenderedDeployment(input: {
   state: DeploymentState;
   outDir: string;
   rpcUrls: RPCURLMap;
-  ignition?: Partial<IgnitionCommandOptions>;
+  buildProfile: string;
   priceSnapshotUpdatedAt?: bigint;
-  latestBlockNumber?: LatestBlockNumberReader;
+  latestBlockNumber: LatestBlockNumberReader;
 }): Promise<void> {
   await writeInitialParameterFiles(input.profile, input.outDir);
+  await writeInitialCommandFiles(input.profile, input.outDir);
   for (const [source, destination] of profileDirections(input.profile)) {
     await writeJSON(
       openWorkersPathwayParameterPath(input.outDir, source, destination),
@@ -829,7 +955,7 @@ export async function writeRenderedDeployment(input: {
         source,
         destination,
         priceSnapshotUpdatedAt: input.priceSnapshotUpdatedAt,
-      }),
+      })
     );
     await writeJSON(
       oappEndpointParameterPath(input.outDir, source, destination),
@@ -839,12 +965,13 @@ export async function writeRenderedDeployment(input: {
         source,
         destination,
         priceSnapshotUpdatedAt: input.priceSnapshotUpdatedAt,
-      }),
+      })
     );
   }
+  await writeRenderedCommandFiles(input.profile, input.state, input.outDir);
   await writeJSON(
     path.join(input.outDir, "deployment-state.json"),
-    input.state,
+    input.state
   );
   const workerStartBlocks = await resolveWorkerStartBlocks({
     profile: input.profile,
@@ -858,26 +985,25 @@ export async function writeRenderedDeployment(input: {
       state: input.state,
       rpcUrls: input.rpcUrls,
       workerStartBlocks,
-    }),
+    })
   );
   const commands = buildCommandPlan({
     profile: input.profile,
     outDir: input.outDir,
-    ignition: input.ignition,
+    buildProfile: input.buildProfile,
   });
   await writeJSON(path.join(input.outDir, "commands.json"), commands);
   await writeFile(
     path.join(input.outDir, "commands.md"),
-    renderCommands(commands),
+    renderCommands(commands)
   );
 }
 
 export async function resolveWorkerStartBlocks(input: {
   profile: DeploymentProfile;
   rpcUrls: RPCURLMap;
-  latestBlockNumber?: LatestBlockNumberReader;
+  latestBlockNumber: LatestBlockNumberReader;
 }): Promise<WorkerStartBlockMap> {
-  const latestBlockNumber = input.latestBlockNumber ?? readLatestBlockNumber;
   const workerStartBlocks: WorkerStartBlockMap = {};
   for (const chain of input.profile.chains) {
     if (chain.startBlockNumber !== undefined) {
@@ -887,13 +1013,13 @@ export async function resolveWorkerStartBlocks(input: {
     const rpcURL = input.rpcUrls[chain.key];
     if (rpcURL === undefined) {
       throw new Error(
-        `${chain.key} RPC URL is required to resolve start_block_number`,
+        `${chain.key} RPC URL is required to resolve start_block_number`
       );
     }
-    const latest = await latestBlockNumber(chain, rpcURL);
+    const latest = await input.latestBlockNumber(chain, rpcURL);
     workerStartBlocks[chain.key] = safeBlockNumber(
       latest,
-      `${chain.key} latest block number`,
+      `${chain.key} latest block number`
     );
   }
   return workerStartBlocks;
@@ -908,96 +1034,278 @@ function safeBlockNumber(value: bigint, label: string): number {
 
 export async function writeInitialParameterFiles(
   profile: DeploymentProfile,
-  outDir: string,
+  outDir: string
 ): Promise<void> {
   await mkdir(path.join(outDir, "ignition", "parameters"), { recursive: true });
   for (const chain of profile.chains) {
     await writeJSON(
       openWorkersParameterPath(outDir, chain),
-      openWorkersParameterFile(profile, chain),
+      openWorkersParameterFile(profile, chain)
     );
     if (profile.mode === "test-oft-rehearsal") {
       await writeJSON(
         testOFTParameterPath(outDir, chain),
-        testOFTParameterFile(profile, chain),
+        testOFTParameterFile(profile, chain)
       );
     }
   }
 }
 
-async function main() {
-  const flags = parseCLIParams(process.argv.slice(2));
-  const profilePath =
-    flags.get("profile") ?? "config/deployments/template.json";
-  const outDir = flags.get("out") ?? "tmp/deploy-profile";
-  const phase = normalizePhase(flags.get("phase") ?? "render");
-  const apply = flagEnabled(flags.get("apply"));
-  const ignition = parseIgnitionCommandOptions(flags);
-  const profile = normalizeProfile(
-    JSON.parse(await readFile(profilePath, "utf8")),
-  );
+export async function writeInitialCommandFiles(
+  profile: DeploymentProfile,
+  outDir: string
+): Promise<void> {
+  for (const chain of profile.chains) {
+    await writeJSON(openWorkersCommandInputPath(outDir, chain), {
+      input: {
+        parameters: path.resolve(openWorkersParameterPath(outDir, chain)),
+        deploymentId: chain.deploymentId,
+        expectedSigner: profile.owner,
+      },
+      apply: false,
+      confirmation: "interactive",
+    });
+    if (profile.mode === "test-oft-rehearsal") {
+      await writeJSON(testOFTCommandInputPath(outDir, chain), {
+        input: {
+          parameters: path.resolve(testOFTParameterPath(outDir, chain)),
+          deploymentId: testOFTDeploymentId(chain),
+          expectedSigner: profile.owner,
+        },
+        apply: false,
+        confirmation: "interactive",
+      });
+    }
+  }
+}
+
+export async function writeRenderedCommandFiles(
+  profile: DeploymentProfile,
+  state: DeploymentState,
+  outDir: string
+): Promise<void> {
+  for (const [source, destination] of profileDirections(profile)) {
+    const sourceState = chainState(state, source.key);
+    await writeJSON(
+      openWorkersPathwayCommandInputPath(outDir, source, destination),
+      {
+        input: {
+          parameters: path.resolve(
+            openWorkersPathwayParameterPath(outDir, source, destination)
+          ),
+          deploymentId: openWorkersPathwayDeploymentId(source, destination),
+          expectedSigner: profile.owner,
+        },
+        apply: false,
+        confirmation: "interactive",
+      }
+    );
+    await writeJSON(oappEndpointCommandInputPath(outDir, source, destination), {
+      input: {
+        parameters: path.resolve(
+          oappEndpointParameterPath(outDir, source, destination)
+        ),
+        deploymentId: oappEndpointDeploymentId(source, destination),
+        expectedSigner: profile.owner,
+      },
+      apply: false,
+      confirmation: "interactive",
+    });
+    await writeJSON(inspectLzCommandInputPath(outDir, source, destination), {
+      input: {
+        endpoint: sourceState.endpoint,
+        oapp: sourceState.oapp,
+        remoteEid: String(destination.eid),
+        sendUln: sourceState.sendUln,
+        receiveUln: sourceState.receiveUln,
+      },
+    });
+    await writeJSON(priceConfigCommandInputPath(outDir, source, destination), {
+      input: {
+        dstEid: String(destination.eid),
+        maxPriceAgeSeconds: profile.pathway.priceSnapshot.maxAgeSeconds,
+        expectedStaleAfter: profile.pathway.priceSnapshot.staleAfter,
+        priceFeed: sourceState.workers.priceFeed,
+        openExecutor: sourceState.workers.openExecutor,
+        openDVN: sourceState.workers.openDVN,
+      },
+    });
+  }
+
+  if (profile.mode === "test-oft-rehearsal") {
+    for (const chain of profile.chains) {
+      const current = chainState(state, chain.key);
+      await writeJSON(deploymentPreflightCommandInputPath(outDir, chain), {
+        input: {
+          testOFT: current.oapp,
+          openExecutor: current.workers.openExecutor,
+          openDVN: current.workers.openDVN,
+          expectedOwner: profile.owner,
+          minOwnerNativeBalance: profile.minOwnerNativeBalanceWei,
+          ...(profile.canaryTreasury === undefined
+            ? {}
+            : {
+                canaryTreasury: profile.canaryTreasury,
+                minCanaryNativeBalance: profile.minCanaryNativeBalanceWei,
+                minCanaryTokenBalance: chain.minCanaryTokenBalance,
+              }),
+          expectedTestOFTTotalSupply: chain.initialSupply,
+        },
+      });
+    }
+  }
+}
+
+export async function runDeployProfile(
+  input: DeployProfileInput,
+  hre: HardhatRuntimeEnvironment,
+  gate: Pick<ApplyGate, "shouldApply" | "authorize">,
+  dependencies: DeployProfileDependencies = {}
+): Promise<DeployProfileResult> {
+  const phase = normalizePhase(input.phase);
+  if (input.verifySource === true && phase !== "verify" && phase !== "all") {
+    throw new Error("input.verifySource requires phase verify or all");
+  }
+  const profilePath = path.resolve(input.profilePath);
+  const outDir = path.resolve(input.outDir);
+  const buildProfile = hre.globalOptions.buildProfile ?? "production";
+  let profileInput: unknown;
+  try {
+    profileInput = JSON.parse(await readFile(profilePath, "utf8")) as unknown;
+  } catch {
+    throw new Error(`deployment profile contains invalid JSON: ${profilePath}`);
+  }
+  const profile = normalizeProfile(profileInput);
 
   await writeInitialParameterFiles(profile, outDir);
-  const commands = buildCommandPlan({ profile, outDir, ignition });
+  await writeInitialCommandFiles(profile, outDir);
+  const commands = buildCommandPlan({ profile, outDir, buildProfile });
   await writeJSON(path.join(outDir, "commands.json"), commands);
   await writeFile(path.join(outDir, "commands.md"), renderCommands(commands));
 
+  const mutates = phaseMutates(phase);
+  const applied = gate.shouldApply && mutates;
+  if (applied) {
+    await gate.authorize(deployProfileApplySummary(profile, phase));
+  }
+  if (applied || phase === "verify") {
+    await (dependencies.build ?? buildDeployProfile)(hre, buildProfile);
+  }
+  const deploy = dependencies.deploy ?? createProgrammaticIgnitionDeployer(hre);
+
   if (phase === "deploy-test-oft") {
     requireRehearsalMode(profile, phase);
-    if (apply) {
-      runDeployTestOFT(profile, outDir, ignition);
+    if (applied) {
+      await runDeployTestOFT(profile, outDir, deploy);
     }
-    printSummary(phase, apply, outDir, profile);
-    return;
+    return deploymentSummary(phase, applied, outDir, profile);
   }
 
   if (phase === "deploy-workers") {
-    if (apply) {
-      runDeployWorkers(profile, outDir, ignition);
+    if (applied) {
+      await runDeployWorkers(profile, outDir, deploy);
     }
-    printSummary(phase, apply, outDir, profile);
-    return;
+    return deploymentSummary(phase, applied, outDir, profile);
   }
 
-  if (phase === "all" && apply) {
+  if (phase === "all" && applied) {
     if (profile.mode === "test-oft-rehearsal") {
-      runDeployTestOFT(profile, outDir, ignition);
+      await runDeployTestOFT(profile, outDir, deploy);
     }
-    runDeployWorkers(profile, outDir, ignition);
+    await runDeployWorkers(profile, outDir, deploy);
   }
 
   let state: DeploymentState;
   try {
-    state = await loadDeploymentState(profile);
+    state = await loadDeploymentState(
+      profile,
+      hre,
+      dependencies.readState ?? readIgnitionDeploymentState
+    );
   } catch (error) {
     if (phase === "render" && isBootstrapStateUnavailable(error)) {
       await writeBootstrapRenderStatus(outDir, error);
-      printSummary(phase, apply, outDir, profile, { deploymentState: false });
-      return;
+      return deploymentSummary(phase, false, outDir, profile, {
+        deploymentState: false,
+      });
     }
     throw error;
   }
-  const rpcUrls = resolveRPCURLs(profile);
-  await writeRenderedDeployment({ profile, state, outDir, rpcUrls, ignition });
+  const networks = await (
+    dependencies.resolveNetworks ?? resolveProfileNetworks
+  )(hre, profile);
+  await writeRenderedDeployment({
+    profile,
+    state,
+    outDir,
+    rpcUrls: networks.rpcUrls,
+    buildProfile,
+    latestBlockNumber: async (chain) => {
+      const latest = networks.latestBlockNumbers[chain.key];
+      if (latest === undefined) {
+        throw new Error(`${chain.key} latest block number was not resolved`);
+      }
+      return latest;
+    },
+  });
 
-  if ((phase === "configure-workers" || phase === "all") && apply) {
-    runConfigureWorkers(profile, outDir, ignition);
+  if ((phase === "configure-workers" || phase === "all") && applied) {
+    await runConfigureWorkers(profile, outDir, deploy);
   }
-  if (shouldRunConfigureOApp(profile, phase, apply)) {
-    runConfigureOApp(profile, outDir, ignition);
+  if (shouldRunConfigureOApp(profile, phase, applied)) {
+    await runConfigureOApp(profile, outDir, deploy);
   }
-  if (phase === "verify" || (phase === "all" && apply)) {
-    runVerify(profile, state, outDir, rpcUrls, {
-      workerOnly: shouldRunWorkerOnlyVerify(profile, phase),
-    });
+  if (phase === "verify" || (phase === "all" && applied)) {
+    await (dependencies.verify ?? verifyDeploymentProfile)(
+      hre,
+      profile,
+      state,
+      outDir,
+      {
+        workerOnly: shouldRunWorkerOnlyVerify(profile, phase),
+      }
+    );
+    if (input.verifySource === true) {
+      await (dependencies.verifySource ?? verifyProfileSources)({
+        hre,
+        profile,
+        state,
+        buildProfile,
+      });
+    }
   }
-  printSummary(phase, apply, outDir, profile);
+  return deploymentSummary(phase, applied, outDir, profile, {
+    deploymentState: true,
+  });
+}
+
+export async function verifyProfileSources(
+  input: SourceVerificationInput
+): Promise<void> {
+  await verifyIgnitionDeploymentSources({
+    hre: input.hre,
+    buildProfile: input.buildProfile,
+    targets: input.profile.chains.flatMap((chain) => [
+      {
+        network: chain.network,
+        deploymentId: chain.deploymentId,
+      },
+      ...(input.profile.mode === "test-oft-rehearsal"
+        ? [
+            {
+              network: chain.network,
+              deploymentId: testOFTDeploymentId(chain),
+            },
+          ]
+        : []),
+    ]),
+  });
 }
 
 export function shouldRunConfigureOApp(
   profile: DeploymentProfile,
   phase: DeploymentPhase,
-  apply: boolean,
+  apply: boolean
 ): boolean {
   return (
     apply &&
@@ -1008,231 +1316,356 @@ export function shouldRunConfigureOApp(
 
 export function shouldRunWorkerOnlyVerify(
   profile: DeploymentProfile,
-  phase: DeploymentPhase,
+  phase: DeploymentPhase
 ): boolean {
   return phase === "all" && profile.mode === "external-oapp";
 }
 
 export function isBootstrapStateUnavailable(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  return (
-    isMissingDeployedAddressesFile(error) ||
-    /deployed_addresses\.json is missing (OpenWorkers#OpenExecutor|OpenWorkers#OpenDVN|TestOFT#TestOFT)/.test(
-      error.message,
-    )
-  );
+  return error instanceof MissingDeploymentStateError;
 }
 
-async function loadDeploymentState(
-  profile: DeploymentProfile,
-): Promise<DeploymentState> {
-  const workerDeployedAddresses: Record<string, unknown> = {};
-  const testOFTDeployedAddresses: Record<string, unknown> = {};
-  const overrides: PriceFeedOverrides = {};
-  let workerArtifacts:
-    | {
-        openExecutorAbi: Abi;
-        openDVNAbi: Abi;
-      }
-    | undefined;
-  for (const chain of profile.chains) {
-    const workerRaw = JSON.parse(
-      await readFile(workerDeploymentAddressPath(chain), "utf8"),
+export type DeploymentStateReader = (
+  hre: IgnitionRuntime,
+  request: IgnitionDeploymentRequest
+) => Promise<IgnitionDeploymentState>;
+
+export class MissingDeploymentStateError extends Error {
+  constructor(
+    readonly chainKey: string,
+    readonly deployment: MissingIgnitionDeployment
+  ) {
+    super(
+      `${chainKey} Ignition deployment "${deployment.deploymentId}" is missing at ${deployment.deploymentDir}`
     );
-    workerDeployedAddresses[chain.key] = workerRaw;
-    if (profile.mode === "test-oft-rehearsal") {
-      testOFTDeployedAddresses[chain.key] = JSON.parse(
-        await readFile(testOFTDeploymentAddressPath(chain), "utf8"),
-      );
-    }
-    const contracts = extractOpenWorkerContracts(workerRaw, chain.key);
-    if (contracts.priceFeed === undefined) {
-      workerArtifacts ??= {
-        openExecutorAbi: loadArtifact(
-          "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
-        ).abi,
-        openDVNAbi: loadArtifact(
-          "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
-        ).abi,
-      };
-      const rpcURL = requiredProcessEnv(chain.rpcUrlEnv);
-      overrides[chain.key] = await readPriceFeedFromWorkers({
-        publicClient: publicClientFor(chain, rpcURL),
+    this.name = "MissingDeploymentStateError";
+  }
+}
+
+export async function loadDeploymentState(
+  profile: DeploymentProfile,
+  hre: IgnitionRuntime,
+  readState: DeploymentStateReader = readIgnitionDeploymentState
+): Promise<DeploymentState> {
+  const workerDeployments: Record<string, IgnitionContractDeployment> = {};
+  const testOFTDeployments: Record<string, IgnitionContractDeployment> = {};
+  const missingDeployments: Array<{
+    chainKey: string;
+    deployment: MissingIgnitionDeployment;
+  }> = [];
+  for (const chain of profile.chains) {
+    const workerDeployment = await readState(hre, {
+      deploymentId: chain.deploymentId,
+      expectedChainId: chain.chainId,
+      requiredContracts: [
+        {
+          futureId: "OpenWorkers#OpenPriceFeed",
+          contractName: "OpenPriceFeed",
+        },
+        { futureId: "OpenWorkers#OpenDVN", contractName: "OpenDVN" },
+        {
+          futureId: "OpenWorkers#OpenExecutor",
+          contractName: "OpenExecutor",
+        },
+      ],
+    });
+    if (workerDeployment.kind === "missing") {
+      missingDeployments.push({
         chainKey: chain.key,
-        openExecutor: contracts.openExecutor,
-        openDVN: contracts.openDVN,
-        openExecutorAbi: workerArtifacts.openExecutorAbi,
-        openDVNAbi: workerArtifacts.openDVNAbi,
+        deployment: workerDeployment,
       });
+    } else {
+      workerDeployments[chain.key] = workerDeployment;
     }
+    if (profile.mode === "test-oft-rehearsal") {
+      const testOFTDeployment = await readState(hre, {
+        deploymentId: testOFTDeploymentId(chain),
+        expectedChainId: chain.chainId,
+        requiredContracts: [
+          { futureId: "TestOFT#TestOFT", contractName: "TestOFT" },
+        ],
+      });
+      if (testOFTDeployment.kind === "missing") {
+        missingDeployments.push({
+          chainKey: chain.key,
+          deployment: testOFTDeployment,
+        });
+      } else {
+        testOFTDeployments[chain.key] = testOFTDeployment;
+      }
+    }
+  }
+  const firstMissing = missingDeployments[0];
+  if (firstMissing !== undefined) {
+    throw new MissingDeploymentStateError(
+      firstMissing.chainKey,
+      firstMissing.deployment
+    );
   }
   return buildDeploymentState({
     profile,
-    workerDeployedAddresses,
-    testOFTDeployedAddresses,
-    priceFeedOverrides: overrides,
+    workerDeployments,
+    testOFTDeployments:
+      profile.mode === "test-oft-rehearsal" ? testOFTDeployments : undefined,
   });
 }
 
-function runDeployTestOFT(
+export type ProgrammaticIgnitionDeployInput = {
+  network: string;
+  chainId: number;
+  module: IgnitionModule;
+  parametersPath: string;
+  deploymentId: string;
+  expectedSigner: Address;
+};
+
+export type ProgrammaticIgnitionDeployOptions = {
+  parameters: string;
+  deploymentId: string;
+  displayUi: true;
+};
+
+export type ProgrammaticIgnitionConnection = {
+  chainId: number;
+  signerAddress: Address;
+  deploy(
+    module: IgnitionModule,
+    options: ProgrammaticIgnitionDeployOptions
+  ): Promise<unknown>;
+  close(): Promise<void>;
+};
+
+export type ProgrammaticIgnitionConnectionFactory = (
+  network: string
+) => Promise<ProgrammaticIgnitionConnection>;
+
+export type ProgrammaticIgnitionDeployer = (
+  input: ProgrammaticIgnitionDeployInput
+) => Promise<void>;
+
+export async function deployIgnitionModule(
+  input: ProgrammaticIgnitionDeployInput,
+  createConnection: ProgrammaticIgnitionConnectionFactory
+): Promise<void> {
+  const connection = await createConnection(input.network);
+  try {
+    if (connection.chainId !== input.chainId) {
+      throw new Error(
+        `${input.network} connection chain id ${connection.chainId} does not match ${input.chainId}`
+      );
+    }
+    assertExpectedSigner(
+      connection.signerAddress,
+      input.expectedSigner,
+      `${input.network} deployment signer`
+    );
+    await withIgnitionUiOnStderr(() =>
+      connection.deploy(input.module, {
+        parameters: path.resolve(input.parametersPath),
+        deploymentId: input.deploymentId,
+        displayUi: true,
+      })
+    );
+  } finally {
+    await connection.close();
+  }
+}
+
+export function createProgrammaticIgnitionDeployer(
+  hre: HardhatRuntimeEnvironment
+): ProgrammaticIgnitionDeployer {
+  return async (input) =>
+    withWriteConnection(
+      hre,
+      { network: input.network, expectedChainId: input.chainId },
+      async (context) => {
+        assertExpectedSigner(
+          context.signerAddress,
+          input.expectedSigner,
+          `${input.network} deployment signer`
+        );
+        await withIgnitionUiOnStderr(() =>
+          context.connection.ignition.deploy(input.module, {
+            parameters: path.resolve(input.parametersPath),
+            deploymentId: input.deploymentId,
+            displayUi: true,
+          })
+        );
+      }
+    );
+}
+
+export async function runDeployTestOFT(
   profile: DeploymentProfile,
   outDir: string,
-  ignition: IgnitionCommandOptions,
-) {
+  deploy: ProgrammaticIgnitionDeployer
+): Promise<void> {
   requireRehearsalMode(profile, "deploy-test-oft");
   for (const chain of profile.chains) {
-    runHardhatIgnition({
-      label: `deploy ${chain.key} TestOFT`,
-      script: "deploy:test-oft",
-      chain,
-      parametersPath: testOFTParameterPath(outDir, chain),
+    await deploy({
+      network: chain.network,
+      chainId: chain.chainId,
+      module: TestOFTModule,
+      parametersPath: path.resolve(testOFTParameterPath(outDir, chain)),
       deploymentId: testOFTDeploymentId(chain),
-      ignition,
+      expectedSigner: profile.owner,
     });
   }
 }
 
-function runDeployWorkers(
+export async function runDeployWorkers(
   profile: DeploymentProfile,
   outDir: string,
-  ignition: IgnitionCommandOptions,
-) {
+  deploy: ProgrammaticIgnitionDeployer
+): Promise<void> {
   for (const chain of profile.chains) {
-    runHardhatIgnition({
-      label: `deploy ${chain.key} OpenWorkers`,
-      script: "deploy:open-workers",
-      chain,
-      parametersPath: openWorkersParameterPath(outDir, chain),
+    await deploy({
+      network: chain.network,
+      chainId: chain.chainId,
+      module: OpenWorkersModule,
+      parametersPath: path.resolve(openWorkersParameterPath(outDir, chain)),
       deploymentId: chain.deploymentId,
-      ignition,
+      expectedSigner: profile.owner,
     });
   }
 }
 
-function runConfigureWorkers(
+export async function runConfigureWorkers(
   profile: DeploymentProfile,
   outDir: string,
-  ignition: IgnitionCommandOptions,
-) {
+  deploy: ProgrammaticIgnitionDeployer
+): Promise<void> {
   for (const [source, destination] of profileDirections(profile)) {
-    runHardhatIgnition({
-      label: `configure ${source.key} OpenWorkers for ${destination.key}`,
-      script: "configure:open-workers-pathway",
-      chain: source,
-      parametersPath: openWorkersPathwayParameterPath(
-        outDir,
-        source,
-        destination,
+    await deploy({
+      network: source.network,
+      chainId: source.chainId,
+      module: OpenWorkersPathwayConfigModule,
+      parametersPath: path.resolve(
+        openWorkersPathwayParameterPath(outDir, source, destination)
       ),
       deploymentId: openWorkersPathwayDeploymentId(source, destination),
-      ignition,
+      expectedSigner: profile.owner,
     });
   }
 }
 
-function runConfigureOApp(
+export async function runConfigureOApp(
   profile: DeploymentProfile,
   outDir: string,
-  ignition: IgnitionCommandOptions,
-) {
+  deploy: ProgrammaticIgnitionDeployer
+): Promise<void> {
   for (const [source, destination] of profileDirections(profile)) {
-    runHardhatIgnition({
-      label: `configure ${source.key} OApp/Endpoint for ${destination.key}`,
-      script: "configure:oapp-endpoint",
-      chain: source,
-      parametersPath: oappEndpointParameterPath(outDir, source, destination),
+    await deploy({
+      network: source.network,
+      chainId: source.chainId,
+      module: OAppEndpointConfigModule,
+      parametersPath: path.resolve(
+        oappEndpointParameterPath(outDir, source, destination)
+      ),
       deploymentId: oappEndpointDeploymentId(source, destination),
-      ignition,
+      expectedSigner: profile.owner,
     });
   }
 }
 
-function runVerify(
+export async function verifyDeploymentProfile(
+  hre: HardhatRuntimeEnvironment,
   profile: DeploymentProfile,
   state: DeploymentState,
   outDir: string,
-  rpcUrls: RPCURLMap,
-  options: { workerOnly: boolean },
-) {
+  options: { workerOnly: boolean }
+): Promise<void> {
   const artifactDir = path.join(outDir, "artifacts");
-  if (profile.mode === "test-oft-rehearsal") {
-    for (const chain of profile.chains) {
-      const current = chainState(state, chain.key);
-      runCommand({
-        label: `deployment preflight ${chain.key}`,
-        command: "npm",
-        args: deploymentPreflightArgs({
-          profile,
-          chain,
-          current,
-          rpcURL: rpcUrls[chain.key],
-        }),
-        outputPath: path.join(
-          artifactDir,
-          `deployment-preflight-${chain.key}.json`,
-        ),
-      });
-    }
-  }
+  const testOFTArtifact = loadArtifact(
+    "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json"
+  );
+  const openExecutorArtifact = loadArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json"
+  );
+  const openDVNArtifact = loadArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json"
+  );
+  const priceFeedArtifact = loadArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json"
+  );
+
   for (const [source, destination] of profileDirections(profile)) {
     const direction = directionKey(source, destination);
     const sourceState = chainState(state, source.key);
-    if (!options.workerOnly) {
-      runCommand({
-        label: `inspect lz config ${direction}`,
-        command: "npm",
-        args: [
-          "run",
-          "--silent",
-          "inspect:lz-config",
-          "--",
-          "--rpc-url",
-          rpcUrls[source.key],
-          "--chain-id",
-          String(source.chainId),
-          "--endpoint",
-          sourceState.endpoint,
-          "--oapp",
-          sourceState.oapp,
-          "--remote-eid",
-          String(destination.eid),
-          "--send-uln",
-          sourceState.sendUln,
-          "--receive-uln",
-          sourceState.receiveUln,
-        ],
-        outputPath: path.join(artifactDir, `lz-config-${direction}.json`),
-      });
-    }
-    runCommand({
-      label: `price config ${direction}`,
-      command: "npm",
-      args: [
-        "run",
-        "--silent",
-        "check:price-config",
-        "--",
-        "--rpc-url",
-        rpcUrls[source.key],
-        "--chain-id",
-        String(source.chainId),
-        "--dst-eid",
-        String(destination.eid),
-        "--max-price-age-seconds",
-        profile.pathway.priceSnapshot.maxAgeSeconds,
-        "--expected-stale-after",
-        profile.pathway.priceSnapshot.staleAfter,
-        "--price-feed",
-        sourceState.workers.priceFeed,
-        "--open-executor",
-        sourceState.workers.openExecutor,
-        "--open-dvn",
-        sourceState.workers.openDVN,
-      ],
-      outputPath: path.join(artifactDir, `price-config-${direction}.json`),
-    });
+    await withReadOnlyConnection(
+      hre,
+      { network: source.network, expectedChainId: source.chainId },
+      async ({ publicClient }) => {
+        if (profile.mode === "test-oft-rehearsal") {
+          const report = await readDeploymentPreflight({
+            publicClient,
+            testOFT: sourceState.oapp,
+            openExecutor: sourceState.workers.openExecutor,
+            openDVN: sourceState.workers.openDVN,
+            expectedOwner: profile.owner,
+            minOwnerNativeBalance: BigInt(profile.minOwnerNativeBalanceWei),
+            canaryTreasury: profile.canaryTreasury,
+            minCanaryNativeBalance: BigInt(profile.minCanaryNativeBalanceWei),
+            minCanaryTokenBalance: BigInt(source.minCanaryTokenBalance),
+            expectedTestOFTTotalSupply: BigInt(source.initialSupply),
+            testOFTAbi: testOFTArtifact.abi,
+            openExecutorAbi: openExecutorArtifact.abi,
+            openDVNAbi: openDVNArtifact.abi,
+          });
+          const errors = validateDeploymentPreflight(report);
+          await writeJSON(
+            path.join(artifactDir, `deployment-preflight-${source.key}.json`),
+            { ok: errors.length === 0, ...report, errors }
+          );
+          if (errors.length > 0) {
+            throw new Error(
+              `deployment preflight failed with ${errors.length} error(s)`
+            );
+          }
+        }
+
+        if (!options.workerOnly) {
+          const report = await inspectLzConfig(
+            {
+              endpoint: sourceState.endpoint,
+              oapp: sourceState.oapp,
+              remoteEid: destination.eid,
+              sendUln: sourceState.sendUln,
+              receiveUln: sourceState.receiveUln,
+            },
+            publicClient
+          );
+          await writeJSON(
+            path.join(artifactDir, `lz-config-${direction}.json`),
+            report
+          );
+        }
+
+        const priceReport = await readPriceConfigReport({
+          publicClient,
+          dstEid: destination.eid,
+          checkedAt: BigInt(Math.floor(Date.now() / 1_000)),
+          maxAgeSeconds: BigInt(profile.pathway.priceSnapshot.maxAgeSeconds),
+          expectedStaleAfter: BigInt(profile.pathway.priceSnapshot.staleAfter),
+          priceFeed: sourceState.workers.priceFeed,
+          openExecutor: sourceState.workers.openExecutor,
+          openDVN: sourceState.workers.openDVN,
+          priceFeedAbi: priceFeedArtifact.abi,
+          openExecutorAbi: openExecutorArtifact.abi,
+          openDVNAbi: openDVNArtifact.abi,
+        });
+        const priceErrors = validatePriceConfigReport(priceReport);
+        await writeJSON(
+          path.join(artifactDir, `price-config-${direction}.json`),
+          { ok: priceErrors.length === 0, ...priceReport, errors: priceErrors }
+        );
+        if (priceErrors.length > 0) {
+          throw new Error(
+            `price config check failed with ${priceErrors.length} error(s)`
+          );
+        }
+      }
+    );
   }
   if (!options.workerOnly) {
     runCommand({
@@ -1251,69 +1684,6 @@ function runVerify(
   }
 }
 
-export function deploymentPreflightArgs(input: {
-  profile: DeploymentProfile;
-  chain: ChainProfile;
-  current: ChainDeploymentState;
-  rpcURL: string;
-}): string[] {
-  return [
-    "run",
-    "--silent",
-    "check:deployment-preflight",
-    "--",
-    "--rpc-url",
-    input.rpcURL,
-    "--chain-id",
-    String(input.chain.chainId),
-    "--test-oft",
-    input.current.oapp,
-    "--open-executor",
-    input.current.workers.openExecutor,
-    "--open-dvn",
-    input.current.workers.openDVN,
-    "--expected-owner",
-    input.profile.owner,
-    "--min-owner-native-balance",
-    input.profile.minOwnerNativeBalanceWei,
-    ...(input.profile.canaryTreasury === undefined
-      ? []
-      : [
-          "--canary-treasury",
-          input.profile.canaryTreasury,
-          "--min-canary-native-balance",
-          input.profile.minCanaryNativeBalanceWei,
-          "--min-canary-token-balance",
-          input.chain.minCanaryTokenBalance,
-        ]),
-    "--expected-total-supply",
-    input.chain.initialSupply,
-  ];
-}
-
-function runHardhatIgnition(input: {
-  label: string;
-  script: string;
-  chain: ChainProfile;
-  parametersPath: string;
-  deploymentId: string;
-  ignition: IgnitionCommandOptions;
-}) {
-  runCommand({
-    label: input.label,
-    command: "npm",
-    args: [
-      "run",
-      "--silent",
-      input.script,
-      "--",
-      ...hardhatIgnitionArgs(input),
-    ],
-    env: hardhatEnv(input.chain, input.ignition),
-    stdio: "inherit",
-  });
-}
-
 type RunCommandStdio = "pipe" | "inherit";
 
 function runCommand(input: {
@@ -1327,7 +1697,7 @@ function runCommand(input: {
   const stdio = input.stdio ?? "pipe";
   if (input.outputPath !== undefined && stdio !== "pipe") {
     throw new Error(
-      `${input.label} cannot capture output with inherited stdio`,
+      `${input.label} cannot capture output with inherited stdio`
     );
   }
   const result = spawnSync(input.command, input.args, {
@@ -1359,46 +1729,58 @@ function runCommand(input: {
   }
 }
 
-function hardhatEnv(
-  chain: ChainProfile,
-  ignition?: IgnitionCommandOptions,
-): NodeJS.ProcessEnv {
-  const env = { ...process.env };
-  const rpcURL = requiredProcessEnv(chain.rpcUrlEnv);
-  env[chain.rpcUrlEnv] = rpcURL;
-  const prefix = chain.network.toUpperCase().replace(/[^A-Z0-9]/g, "_");
-  env[`${prefix}_RPC_URL`] = rpcURL;
-  if (ignition?.autoConfirm) {
-    env.HARDHAT_IGNITION_CONFIRM_DEPLOYMENT = "true";
-    env.HARDHAT_IGNITION_CONFIRM_RESET = "true";
+export async function resolveProfileNetworks(
+  hre: HardhatRuntimeEnvironment,
+  profile: DeploymentProfile
+): Promise<ResolvedProfileNetworks> {
+  const rpcUrls: RPCURLMap = {};
+  const latestBlockNumbers: Record<string, bigint> = {};
+  for (const chain of profile.chains) {
+    const networkConfig = hre.config.networks[chain.network];
+    if (networkConfig === undefined) {
+      throw new Error(`Hardhat network ${chain.network} is not configured`);
+    }
+    await withReadOnlyConnection(
+      hre,
+      { network: chain.network, expectedChainId: chain.chainId },
+      async ({ publicClient }) => {
+        rpcUrls[chain.key] = configuredHTTPRPCURL(networkConfig, chain.network);
+        if (chain.startBlockNumber === undefined) {
+          latestBlockNumbers[chain.key] = await publicClient.getBlockNumber();
+        }
+      }
+    );
   }
-  return env;
+  return { rpcUrls, latestBlockNumbers };
 }
 
-function resolveRPCURLs(profile: DeploymentProfile): RPCURLMap {
-  return Object.fromEntries(
-    profile.chains.map((chain) => [
-      chain.key,
-      requiredProcessEnv(chain.rpcUrlEnv),
-    ]),
-  );
+function configuredHTTPRPCURL(config: unknown, network: string): string {
+  if (
+    config === null ||
+    typeof config !== "object" ||
+    !("type" in config) ||
+    config.type !== "http" ||
+    !("url" in config) ||
+    typeof config.url !== "string" ||
+    config.url === ""
+  ) {
+    throw new Error(`Hardhat network ${network} must be an HTTP network`);
+  }
+  return config.url;
 }
 
-function publicClientFor(chain: ChainProfile, rpcURL: string): PublicClient {
-  const viemChain = defineChain({
-    id: chain.chainId,
-    name: chain.name,
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    rpcUrls: { default: { http: [rpcURL] } },
+async function buildDeployProfile(
+  hre: HardhatRuntimeEnvironment,
+  buildProfile: string
+): Promise<void> {
+  await hre.tasks.getTask(["build"]).run({
+    force: false,
+    files: [],
+    quiet: true,
+    defaultBuildProfile: buildProfile,
+    noTests: true,
+    noContracts: false,
   });
-  return createPublicClient({ chain: viemChain, transport: http(rpcURL) });
-}
-
-async function readLatestBlockNumber(
-  chain: ChainProfile,
-  rpcURL: string,
-): Promise<bigint> {
-  return publicClientFor(chain, rpcURL).getBlockNumber();
 }
 
 function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
@@ -1406,18 +1788,23 @@ function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
   const id = addressField(input, "id", `${pathLabel}.id`);
   const type = stringField(input, "type", `${pathLabel}.type`);
   if (type === "keystore") {
-    const keystore = object(input.keystore, `${pathLabel}.keystore`);
+    expectOnlyKeys(input, ["id", "type", "keystore"], pathLabel);
+    const keystore = object(input.keystore, `${pathLabel}.keystore`, [
+      "path",
+      "passwordEnv",
+      "passwordFile",
+    ]);
     const passwordEnv = optionalEnvVarName(
       keystore.passwordEnv,
-      `${pathLabel}.keystore.passwordEnv`,
+      `${pathLabel}.keystore.passwordEnv`
     );
     const passwordFile = optionalStringValue(
       keystore.passwordFile,
-      `${pathLabel}.keystore.passwordFile`,
+      `${pathLabel}.keystore.passwordFile`
     );
     if ((passwordEnv === undefined) === (passwordFile === undefined)) {
       throw new Error(
-        `${pathLabel}.keystore must configure exactly one passwordEnv or passwordFile`,
+        `${pathLabel}.keystore must configure exactly one passwordEnv or passwordFile`
       );
     }
     return {
@@ -1431,7 +1818,13 @@ function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
     };
   }
   if (type === "kms") {
-    const kms = object(input.kms, `${pathLabel}.kms`);
+    expectOnlyKeys(input, ["id", "type", "kms"], pathLabel);
+    const kms = object(input.kms, `${pathLabel}.kms`, [
+      "keyId",
+      "region",
+      "address",
+      "endpoint",
+    ]);
     const address = addressField(kms, "address", `${pathLabel}.kms.address`);
     if (!isAddressEqual(id, address)) {
       throw new Error(`${pathLabel}.kms.address must match signer id`);
@@ -1445,7 +1838,7 @@ function normalizeSigner(value: unknown, pathLabel: string): SignerProfile {
         address,
         endpoint: optionalStringValue(
           kms.endpoint,
-          `${pathLabel}.kms.endpoint`,
+          `${pathLabel}.kms.endpoint`
         ),
       },
     };
@@ -1457,9 +1850,33 @@ function normalizeChain(
   value: unknown,
   pathLabel: string,
   signerIDs: ReadonlySet<string>,
-  mode: DeploymentMode,
+  mode: DeploymentMode
 ): ChainProfile {
-  const input = object(value, pathLabel);
+  const input = object(value, pathLabel, [
+    "key",
+    "network",
+    "name",
+    "nativeAssetId",
+    "priceSources",
+    "eid",
+    "chainId",
+    "deploymentId",
+    "testOFTDeploymentId",
+    "oapp",
+    "initialSupply",
+    "minCanaryTokenBalance",
+    "confirmations",
+    "startBlockNumber",
+    "indexerQueryBlockRange",
+    "indexerPollIntervalSeconds",
+    "externalDVNs",
+    "includeLayerZeroLabsDVN",
+    "pricingTxPolicy",
+    "txRoles",
+    "layerZero",
+    "privateKeyEnv",
+    "rpcUrlEnv",
+  ]);
   const eid = integerField(input, "eid", `${pathLabel}.eid`);
   const chainID = integerField(input, "chainId", `${pathLabel}.chainId`);
   const key = stringField(input, "key", `${pathLabel}.key`);
@@ -1470,21 +1887,31 @@ function normalizeChain(
   }
   if (Object.hasOwn(input, "privateKeyEnv")) {
     throw new Error(
-      `${pathLabel}.privateKeyEnv is not supported; store Hardhat private key config variables with hardhat keystore`,
+      `${pathLabel}.privateKeyEnv is not supported; store Hardhat private key config variables with hardhat keystore`
+    );
+  }
+  if (Object.hasOwn(input, "rpcUrlEnv")) {
+    throw new Error(
+      `${pathLabel}.rpcUrlEnv is not supported; configure the RPC URL on the named Hardhat network`
     );
   }
   validateHardhatNetworkChain(pathLabel, network, chainID, eid);
-  const layerZero = normalizeLayerZero(input.layerZero, pathLabel, eid, chainID);
+  const layerZero = normalizeLayerZero(
+    input.layerZero,
+    pathLabel,
+    eid,
+    chainID
+  );
   validateLayerZeroChain(pathLabel, eid, chainID, layerZero);
   const includeLayerZeroLabsDVN = optionalBoolean(
     input.includeLayerZeroLabsDVN,
     false,
-    `${pathLabel}.includeLayerZeroLabsDVN`,
+    `${pathLabel}.includeLayerZeroLabsDVN`
   );
   if (includeLayerZeroLabsDVN) {
     requireLayerZeroLabsDVNForLibraries(
       layerZero,
-      `${pathLabel}.includeLayerZeroLabsDVN`,
+      `${pathLabel}.includeLayerZeroLabsDVN`
     );
   }
   return {
@@ -1493,75 +1920,74 @@ function normalizeChain(
     name: stringField(input, "name", `${pathLabel}.name`),
     nativeAssetId: normalizeNativeAssetID(
       input.nativeAssetId,
-      `${pathLabel}.nativeAssetId`,
+      `${pathLabel}.nativeAssetId`
     ),
     priceSources: normalizePriceSources(
       input.priceSources,
-      `${pathLabel}.priceSources`,
+      `${pathLabel}.priceSources`
     ),
     eid,
     chainId: chainID,
-    rpcUrlEnv: envVarNameField(input, "rpcUrlEnv", `${pathLabel}.rpcUrlEnv`),
     deploymentId: stringField(
       input,
       "deploymentId",
-      `${pathLabel}.deploymentId`,
+      `${pathLabel}.deploymentId`
     ),
     testOFTDeploymentId: optionalStringValue(
       input.testOFTDeploymentId,
-      `${pathLabel}.testOFTDeploymentId`,
+      `${pathLabel}.testOFTDeploymentId`
     ),
     oapp,
     initialSupply: optionalDecimalField(
       input,
       "initialSupply",
       `${pathLabel}.initialSupply`,
-      "0",
+      "0"
     ),
     minCanaryTokenBalance:
       mode === "test-oft-rehearsal"
         ? decimalField(
             input,
             "minCanaryTokenBalance",
-            `${pathLabel}.minCanaryTokenBalance`,
+            `${pathLabel}.minCanaryTokenBalance`
           )
         : optionalDecimalField(
             input,
             "minCanaryTokenBalance",
             `${pathLabel}.minCanaryTokenBalance`,
-            "0",
+            "0"
           ),
     confirmations: integerField(
       input,
       "confirmations",
-      `${pathLabel}.confirmations`,
+      `${pathLabel}.confirmations`
     ),
     startBlockNumber: optionalIntegerField(
       input,
       "startBlockNumber",
       `${pathLabel}.startBlockNumber`,
-      { allowZero: true },
+      { allowZero: true }
     ),
     indexerQueryBlockRange: integerField(
       input,
       "indexerQueryBlockRange",
-      `${pathLabel}.indexerQueryBlockRange`,
+      `${pathLabel}.indexerQueryBlockRange`
     ),
     indexerPollIntervalSeconds: integerField(
       input,
       "indexerPollIntervalSeconds",
       `${pathLabel}.indexerPollIntervalSeconds`,
-      { max: maxDurationSeconds },
+      { max: maxDurationSeconds }
     ),
     externalDVNs: optionalAddressArrayField(
       input,
       "externalDVNs",
-      `${pathLabel}.externalDVNs`,
+      `${pathLabel}.externalDVNs`
     ),
     includeLayerZeroLabsDVN,
     pricingTxPolicy: normalizeTxPolicy(
       input.pricingTxPolicy,
-      `${pathLabel}.pricingTxPolicy`,
+      `${pathLabel}.pricingTxPolicy`
     ),
     txRoles: normalizeTxRoles(input.txRoles, `${pathLabel}.txRoles`, signerIDs),
     layerZero,
@@ -1569,14 +1995,21 @@ function normalizeChain(
 }
 
 function normalizePricingProfile(value: unknown): PricingProfile {
-  const input = object(value ?? {}, "profile.pricing");
+  const input = object(value ?? {}, "profile.pricing", [
+    "sourceRequestTimeoutSeconds",
+    "maxDeviationBps",
+    "coinMarketCapBaseURL",
+    "coinMarketCapAPIKeyEnv",
+    "coinGeckoBaseURL",
+    "coinGeckoAPIKeyEnv",
+  ]);
   const coinMarketCapAPIKeyEnv = optionalEnvVarName(
     input.coinMarketCapAPIKeyEnv,
-    "profile.pricing.coinMarketCapAPIKeyEnv",
+    "profile.pricing.coinMarketCapAPIKeyEnv"
   );
   const coinGeckoAPIKeyEnv = optionalEnvVarName(
     input.coinGeckoAPIKeyEnv,
-    "profile.pricing.coinGeckoAPIKeyEnv",
+    "profile.pricing.coinGeckoAPIKeyEnv"
   );
   return {
     sourceRequestTimeoutSeconds:
@@ -1584,22 +2017,22 @@ function normalizePricingProfile(value: unknown): PricingProfile {
         input,
         "sourceRequestTimeoutSeconds",
         "profile.pricing.sourceRequestTimeoutSeconds",
-        { max: maxDurationSeconds },
+        { max: maxDurationSeconds }
       ) ?? 10,
     maxDeviationBps:
       optionalIntegerField(
         input,
         "maxDeviationBps",
-        "profile.pricing.maxDeviationBps",
+        "profile.pricing.maxDeviationBps"
       ) ?? 500,
     coinMarketCapBaseURL: optionalMarketDataBaseURL(
       input.coinMarketCapBaseURL,
-      "profile.pricing.coinMarketCapBaseURL",
+      "profile.pricing.coinMarketCapBaseURL"
     ),
     coinMarketCapAPIKeyEnv,
     coinGeckoBaseURL: optionalMarketDataBaseURL(
       input.coinGeckoBaseURL,
-      "profile.pricing.coinGeckoBaseURL",
+      "profile.pricing.coinGeckoBaseURL"
     ),
     coinGeckoAPIKeyEnv,
   };
@@ -1607,19 +2040,26 @@ function normalizePricingProfile(value: unknown): PricingProfile {
 
 function normalizePriceSources(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourcesProfile | undefined {
   if (value === undefined) {
     return undefined;
   }
-  const input = object(value, label);
+  const input = object(value, label, [
+    "primarySource",
+    "sanitySources",
+    "coinMarketCap",
+    "coinGecko",
+    "chainlink",
+    "uniswap",
+  ]);
   const primarySource = normalizePrimaryPriceSource(
     input.primarySource,
-    `${label}.primarySource`,
+    `${label}.primarySource`
   );
   const sanitySources = normalizeSanityPriceSources(
     input.sanitySources,
-    `${label}.sanitySources`,
+    `${label}.sanitySources`
   );
   if (sanitySources.includes(primarySource)) {
     throw new Error(`${label}.sanitySources must not contain primarySource`);
@@ -1629,20 +2069,17 @@ function normalizePriceSources(
     sanitySources,
     coinMarketCap: normalizeOptionalCoinMarketCapSource(
       input.coinMarketCap,
-      `${label}.coinMarketCap`,
+      `${label}.coinMarketCap`
     ),
     coinGecko: normalizeOptionalCoinGeckoSource(
       input.coinGecko,
-      `${label}.coinGecko`,
+      `${label}.coinGecko`
     ),
     chainlink: normalizeOptionalChainlinkSource(
       input.chainlink,
-      `${label}.chainlink`,
+      `${label}.chainlink`
     ),
-    uniswap: normalizeOptionalUniswapSource(
-      input.uniswap,
-      `${label}.uniswap`,
-    ),
+    uniswap: normalizeOptionalUniswapSource(input.uniswap, `${label}.uniswap`),
   };
   const referenced = new Set<PriceSourceName>([
     primarySource,
@@ -1656,7 +2093,9 @@ function normalizePriceSources(
   ] as const) {
     const configured = sourceProfile(result, source) !== undefined;
     if (referenced.has(source) && !configured) {
-      throw new Error(`${label}.${source} is required when source is referenced`);
+      throw new Error(
+        `${label}.${source} is required when source is referenced`
+      );
     }
     if (!referenced.has(source) && configured) {
       throw new Error(`${label}.${source} is configured but not referenced`);
@@ -1667,9 +2106,13 @@ function normalizePriceSources(
 
 function normalizePrimaryPriceSource(
   value: unknown,
-  label: string,
+  label: string
 ): Exclude<PriceSourceName, "uniswap"> {
-  if (value === "coinmarketcap" || value === "coingecko" || value === "chainlink") {
+  if (
+    value === "coinmarketcap" ||
+    value === "coingecko" ||
+    value === "chainlink"
+  ) {
     return value;
   }
   throw new Error(`${label} must be coinmarketcap, coingecko, or chainlink`);
@@ -1677,7 +2120,7 @@ function normalizePrimaryPriceSource(
 
 function normalizeSanityPriceSources(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourceName[] {
   if (value === undefined) {
     return [];
@@ -1704,66 +2147,77 @@ function normalizeSanityPriceSources(
 
 function normalizeOptionalCoinMarketCapSource(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourcesProfile["coinMarketCap"] {
   if (value === undefined) return undefined;
-  const input = object(value, label);
+  const input = object(value, label, ["id", "maxAgeSeconds"]);
   return {
     id: integerField(input, "id", `${label}.id`),
     maxAgeSeconds: integerField(
       input,
       "maxAgeSeconds",
       `${label}.maxAgeSeconds`,
-      { max: maxDurationSeconds },
+      { max: maxDurationSeconds }
     ),
   };
 }
 
 function normalizeOptionalCoinGeckoSource(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourcesProfile["coinGecko"] {
   if (value === undefined) return undefined;
-  const input = object(value, label);
+  const input = object(value, label, ["id", "maxAgeSeconds"]);
   return {
     id: stringField(input, "id", `${label}.id`),
     maxAgeSeconds: integerField(
       input,
       "maxAgeSeconds",
       `${label}.maxAgeSeconds`,
-      { max: maxDurationSeconds },
+      { max: maxDurationSeconds }
     ),
   };
 }
 
 function normalizeOptionalChainlinkSource(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourcesProfile["chainlink"] {
   if (value === undefined) return undefined;
-  const input = object(value, label);
+  const input = object(value, label, [
+    "feedAddress",
+    "expectedDescription",
+    "maxAgeSeconds",
+  ]);
   return {
     feedAddress: addressField(input, "feedAddress", `${label}.feedAddress`),
     expectedDescription: stringField(
       input,
       "expectedDescription",
-      `${label}.expectedDescription`,
+      `${label}.expectedDescription`
     ),
     maxAgeSeconds: integerField(
       input,
       "maxAgeSeconds",
       `${label}.maxAgeSeconds`,
-      { max: maxDurationSeconds },
+      { max: maxDurationSeconds }
     ),
   };
 }
 
 function normalizeOptionalUniswapSource(
   value: unknown,
-  label: string,
+  label: string
 ): PriceSourcesProfile["uniswap"] {
   if (value === undefined) return undefined;
-  const input = object(value, label);
+  const input = object(value, label, [
+    "poolAddress",
+    "tokenIn",
+    "tokenOut",
+    "twapWindowSeconds",
+    "maxBlockAgeSeconds",
+    "minHarmonicMeanLiquidity",
+  ]);
   const tokenIn = addressField(input, "tokenIn", `${label}.tokenIn`);
   const tokenOut = addressField(input, "tokenOut", `${label}.tokenOut`);
   if (isAddressEqual(tokenIn, tokenOut)) {
@@ -1772,14 +2226,14 @@ function normalizeOptionalUniswapSource(
   const twapWindowSeconds = integerField(
     input,
     "twapWindowSeconds",
-    `${label}.twapWindowSeconds`,
+    `${label}.twapWindowSeconds`
   );
   if (
     twapWindowSeconds < minUniswapTWAPWindowSeconds ||
     twapWindowSeconds > maxUniswapTWAPWindowSeconds
   ) {
     throw new Error(
-      `${label}.twapWindowSeconds must be between ${minUniswapTWAPWindowSeconds} and ${maxUniswapTWAPWindowSeconds}`,
+      `${label}.twapWindowSeconds must be between ${minUniswapTWAPWindowSeconds} and ${maxUniswapTWAPWindowSeconds}`
     );
   }
   return {
@@ -1791,20 +2245,17 @@ function normalizeOptionalUniswapSource(
       input,
       "maxBlockAgeSeconds",
       `${label}.maxBlockAgeSeconds`,
-      { max: maxDurationSeconds },
+      { max: maxDurationSeconds }
     ),
     minHarmonicMeanLiquidity: positiveDecimalField(
       input,
       "minHarmonicMeanLiquidity",
-      `${label}.minHarmonicMeanLiquidity`,
+      `${label}.minHarmonicMeanLiquidity`
     ),
   };
 }
 
-function sourceProfile(
-  sources: PriceSourcesProfile,
-  source: PriceSourceName,
-) {
+function sourceProfile(sources: PriceSourcesProfile, source: PriceSourceName) {
   switch (source) {
     case "coinmarketcap":
       return sources.coinMarketCap;
@@ -1819,22 +2270,26 @@ function sourceProfile(
 
 function validateProfilePriceSources(
   chains: readonly ChainProfile[],
-  pricing: PricingProfile,
+  pricing: PricingProfile
 ) {
   const crossAsset = chains[0].nativeAssetId !== chains[1].nativeAssetId;
   for (const chain of chains) {
     if (crossAsset && chain.priceSources === undefined) {
-      throw new Error(`${chain.key}.priceSources is required for cross-asset pricing`);
+      throw new Error(
+        `${chain.key}.priceSources is required for cross-asset pricing`
+      );
     }
     if (!crossAsset && chain.priceSources !== undefined) {
-      throw new Error(`${chain.key}.priceSources must be omitted for same-native pricing`);
+      throw new Error(
+        `${chain.key}.priceSources must be omitted for same-native pricing`
+      );
     }
     if (
       chain.priceSources?.coinMarketCap !== undefined &&
       pricing.coinMarketCapAPIKeyEnv === undefined
     ) {
       throw new Error(
-        "profile.pricing.coinMarketCapAPIKeyEnv is required when CoinMarketCap is referenced",
+        "profile.pricing.coinMarketCapAPIKeyEnv is required when CoinMarketCap is referenced"
       );
     }
   }
@@ -1844,7 +2299,7 @@ function validateHardhatNetworkChain(
   pathLabel: string,
   network: string,
   chainID: number,
-  eid: number,
+  eid: number
 ): void {
   const expected = hardhatNetworks.get(network);
   if (expected === undefined) {
@@ -1852,12 +2307,12 @@ function validateHardhatNetworkChain(
   }
   if (expected.chainId !== chainID) {
     throw new Error(
-      `${pathLabel}.network ${network} uses chainId ${expected.chainId}, but ${pathLabel}.chainId is ${chainID}`,
+      `${pathLabel}.network ${network} uses chainId ${expected.chainId}, but ${pathLabel}.chainId is ${chainID}`
     );
   }
   if (expected.eid !== eid) {
     throw new Error(
-      `${pathLabel}.network ${network} uses eid ${expected.eid}, but ${pathLabel}.eid is ${eid}`,
+      `${pathLabel}.network ${network} uses eid ${expected.eid}, but ${pathLabel}.eid is ${eid}`
     );
   }
 }
@@ -1866,16 +2321,16 @@ function validateLayerZeroChain(
   pathLabel: string,
   eid: number,
   chainID: number,
-  layerZero: LayerZeroAddresses,
+  layerZero: LayerZeroAddresses
 ): void {
   if (Number(layerZero.eid) !== eid) {
     throw new Error(
-      `${pathLabel}.layerZero.eid ${layerZero.eid} does not match ${pathLabel}.eid ${eid}`,
+      `${pathLabel}.layerZero.eid ${layerZero.eid} does not match ${pathLabel}.eid ${eid}`
     );
   }
   if (layerZero.nativeChainId !== chainID) {
     throw new Error(
-      `${pathLabel}.layerZero.nativeChainId ${layerZero.nativeChainId} does not match ${pathLabel}.chainId ${chainID}`,
+      `${pathLabel}.layerZero.nativeChainId ${layerZero.nativeChainId} does not match ${pathLabel}.chainId ${chainID}`
     );
   }
 }
@@ -1884,45 +2339,51 @@ function normalizeLayerZero(
   value: unknown,
   pathLabel: string,
   eid: number,
-  chainID: number,
+  chainID: number
 ): LayerZeroAddresses {
   if (value !== undefined) {
-    const input = object(value, `${pathLabel}.layerZero`);
+    const input = object(value, `${pathLabel}.layerZero`, [
+      "chainKey",
+      "endpointV2",
+      "sendUln302",
+      "receiveUln302",
+      "layerZeroLabsDVN",
+    ]);
     if (Object.hasOwn(input, "layerZeroLabsDVN")) {
       throw new Error(
-        `${pathLabel}.layerZero.layerZeroLabsDVN is not supported; configure ${pathLabel}.externalDVNs or ${pathLabel}.includeLayerZeroLabsDVN instead`,
+        `${pathLabel}.layerZero.layerZeroLabsDVN is not supported; configure ${pathLabel}.externalDVNs or ${pathLabel}.includeLayerZeroLabsDVN instead`
       );
     }
     return {
       chainKey: optionalStringValue(
         input.chainKey,
-        `${pathLabel}.layerZero.chainKey`,
+        `${pathLabel}.layerZero.chainKey`
       ),
       nativeChainId: chainID,
       eid: String(eid),
       endpointV2: addressField(
         input,
         "endpointV2",
-        `${pathLabel}.layerZero.endpointV2`,
+        `${pathLabel}.layerZero.endpointV2`
       ),
       sendUln302: addressField(
         input,
         "sendUln302",
-        `${pathLabel}.layerZero.sendUln302`,
+        `${pathLabel}.layerZero.sendUln302`
       ),
       receiveUln302: addressField(
         input,
         "receiveUln302",
-        `${pathLabel}.layerZero.receiveUln302`,
+        `${pathLabel}.layerZero.receiveUln302`
       ),
     };
   }
   const layerZero = expectedLayerZeroChains.find(
-    (chain) => Number(chain.eid) === eid && chain.nativeChainId === chainID,
+    (chain) => Number(chain.eid) === eid && chain.nativeChainId === chainID
   );
   if (layerZero === undefined) {
     throw new Error(
-      `${pathLabel}.layerZero is required when EID ${eid} and chainId ${chainID} are not in repo metadata`,
+      `${pathLabel}.layerZero is required when EID ${eid} and chainId ${chainID} are not in repo metadata`
     );
   }
   return {
@@ -1938,14 +2399,14 @@ function normalizeLayerZero(
 function normalizeTxRoles(
   value: unknown,
   pathLabel: string,
-  signerIDs: ReadonlySet<string>,
+  signerIDs: ReadonlySet<string>
 ) {
-  const roles = object(value, pathLabel);
+  const roles = object(value, pathLabel, ["executor", "dvn"]);
   return {
     executor: normalizeTxRole(
       roles.executor,
       `${pathLabel}.executor`,
-      signerIDs,
+      signerIDs
     ),
     dvn: normalizeTxRole(roles.dvn, `${pathLabel}.dvn`, signerIDs),
   };
@@ -1954,37 +2415,56 @@ function normalizeTxRoles(
 function normalizeTxRole(
   value: unknown,
   pathLabel: string,
-  signerIDs: ReadonlySet<string>,
+  signerIDs: ReadonlySet<string>
 ): TxRoleProfile {
-  const role = object(value, pathLabel);
+  const role = object(value, pathLabel, [
+    "signer",
+    "maxFeePerGasWei",
+    "maxPriorityFeePerGasWei",
+    "minNativeBalanceWei",
+  ]);
   const signer = addressField(role, "signer", `${pathLabel}.signer`);
   if (!signerIDs.has(signer.toLowerCase())) {
     throw new Error(`${pathLabel}.signer must reference a configured signer`);
   }
-  return { signer, ...normalizeTxPolicy(role, pathLabel) };
+  return { signer, ...normalizeTxPolicy(role, pathLabel, true) };
 }
 
-function normalizeTxPolicy(value: unknown, pathLabel: string): TxPolicyProfile {
+function normalizeTxPolicy(
+  value: unknown,
+  pathLabel: string,
+  allowSigner = false
+): TxPolicyProfile {
   const policy = object(value, pathLabel);
+  expectOnlyKeys(
+    policy,
+    [
+      ...(allowSigner ? ["signer"] : []),
+      "maxFeePerGasWei",
+      "maxPriorityFeePerGasWei",
+      "minNativeBalanceWei",
+    ],
+    pathLabel
+  );
   const maxFeePerGasWei = positiveDecimalField(
     policy,
     "maxFeePerGasWei",
-    `${pathLabel}.maxFeePerGasWei`,
+    `${pathLabel}.maxFeePerGasWei`
   );
   const maxPriorityFeePerGasWei = positiveDecimalField(
     policy,
     "maxPriorityFeePerGasWei",
-    `${pathLabel}.maxPriorityFeePerGasWei`,
+    `${pathLabel}.maxPriorityFeePerGasWei`
   );
   if (BigInt(maxPriorityFeePerGasWei) > BigInt(maxFeePerGasWei)) {
     throw new Error(
-      `${pathLabel}.maxPriorityFeePerGasWei must not exceed maxFeePerGasWei`,
+      `${pathLabel}.maxPriorityFeePerGasWei must not exceed maxFeePerGasWei`
     );
   }
   const minNativeBalanceWei = positiveDecimalField(
     policy,
     "minNativeBalanceWei",
-    `${pathLabel}.minNativeBalanceWei`,
+    `${pathLabel}.minNativeBalanceWei`
   );
   return {
     maxFeePerGasWei,
@@ -1994,63 +2474,77 @@ function normalizeTxPolicy(value: unknown, pathLabel: string): TxPolicyProfile {
 }
 
 function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
-  const input = object(value, pathLabel);
+  const input = object(value, pathLabel, [
+    "maxMessageSize",
+    "enforcedLzReceiveGas",
+    "minLzReceiveGas",
+    "maxLzReceiveGas",
+    "priceSnapshot",
+    "executorFee",
+    "dvnFee",
+  ]);
   const priceSnapshot = object(
     input.priceSnapshot,
     `${pathLabel}.priceSnapshot`,
+    [
+      "dstGasPriceInSrcToken",
+      "dstDataFeePerByteInSrcToken",
+      "staleAfter",
+      "maxAgeSeconds",
+    ]
   );
   const staleAfter = positiveDecimalField(
     priceSnapshot,
     "staleAfter",
-    `${pathLabel}.priceSnapshot.staleAfter`,
+    `${pathLabel}.priceSnapshot.staleAfter`
   );
   if (BigInt(staleAfter) > maxPriceSnapshotStaleAfter) {
     throw new Error(
-      `${pathLabel}.priceSnapshot.staleAfter must not exceed ${maxPriceSnapshotStaleAfter}`,
+      `${pathLabel}.priceSnapshot.staleAfter must not exceed ${maxPriceSnapshotStaleAfter}`
     );
   }
   return {
     maxMessageSize: integerField(
       input,
       "maxMessageSize",
-      `${pathLabel}.maxMessageSize`,
+      `${pathLabel}.maxMessageSize`
     ),
     enforcedLzReceiveGas: decimalField(
       input,
       "enforcedLzReceiveGas",
-      `${pathLabel}.enforcedLzReceiveGas`,
+      `${pathLabel}.enforcedLzReceiveGas`
     ),
     minLzReceiveGas: decimalField(
       input,
       "minLzReceiveGas",
-      `${pathLabel}.minLzReceiveGas`,
+      `${pathLabel}.minLzReceiveGas`
     ),
     maxLzReceiveGas: decimalField(
       input,
       "maxLzReceiveGas",
-      `${pathLabel}.maxLzReceiveGas`,
+      `${pathLabel}.maxLzReceiveGas`
     ),
     priceSnapshot: {
       dstGasPriceInSrcToken: decimalField(
         priceSnapshot,
         "dstGasPriceInSrcToken",
-        `${pathLabel}.priceSnapshot.dstGasPriceInSrcToken`,
+        `${pathLabel}.priceSnapshot.dstGasPriceInSrcToken`
       ),
       dstDataFeePerByteInSrcToken: decimalField(
         priceSnapshot,
         "dstDataFeePerByteInSrcToken",
-        `${pathLabel}.priceSnapshot.dstDataFeePerByteInSrcToken`,
+        `${pathLabel}.priceSnapshot.dstDataFeePerByteInSrcToken`
       ),
       staleAfter,
       maxAgeSeconds: decimalField(
         priceSnapshot,
         "maxAgeSeconds",
-        `${pathLabel}.priceSnapshot.maxAgeSeconds`,
+        `${pathLabel}.priceSnapshot.maxAgeSeconds`
       ),
     },
     executorFee: normalizeWorkerFee(
       input.executorFee,
-      `${pathLabel}.executorFee`,
+      `${pathLabel}.executorFee`
     ),
     dvnFee: normalizeWorkerFee(input.dvnFee, `${pathLabel}.dvnFee`),
   };
@@ -2058,9 +2552,14 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
 
 function normalizeWorkerFee(
   value: unknown,
-  pathLabel: string,
+  pathLabel: string
 ): WorkerFeeProfile {
-  const input = object(value, pathLabel);
+  const input = object(value, pathLabel, [
+    "fixedFeeWei",
+    "dstGasOverhead",
+    "dataSizeOverheadBytes",
+    "marginBps",
+  ]);
   const marginBps = integerField(input, "marginBps", `${pathLabel}.marginBps`, {
     allowZero: true,
   });
@@ -2072,51 +2571,39 @@ function normalizeWorkerFee(
     dstGasOverhead: decimalField(
       input,
       "dstGasOverhead",
-      `${pathLabel}.dstGasOverhead`,
+      `${pathLabel}.dstGasOverhead`
     ),
     dataSizeOverheadBytes: decimalField(
       input,
       "dataSizeOverheadBytes",
-      `${pathLabel}.dataSizeOverheadBytes`,
+      `${pathLabel}.dataSizeOverheadBytes`
     ),
     marginBps,
   };
 }
 
-function moduleAddress(
-  deployed: Record<string, unknown>,
-  moduleID: string,
-  contract: string,
-  chainKey: string,
+function deploymentContractAddress(
+  deployment: IgnitionContractDeployment,
+  futureId: string,
+  expectedContractName: string,
+  chainKey: string
 ): Address {
-  const value = optionalModuleAddress(deployed, moduleID, contract, chainKey);
-  if (value === undefined) {
+  const contract = deployment.contracts[futureId];
+  if (contract === undefined) {
     throw new Error(
-      `${chainKey} deployed_addresses.json is missing ${moduleID}#${contract}`,
+      `${chainKey} Ignition deployment is missing required future ${futureId}`
     );
   }
-  return value;
-}
-
-function optionalModuleAddress(
-  deployed: Record<string, unknown>,
-  moduleID: string,
-  contract: string,
-  chainKey: string,
-): Address | undefined {
-  const key = `${moduleID}#${contract}`;
-  const value = deployed[key];
-  if (value === undefined) {
-    return undefined;
+  if (contract.contractName !== expectedContractName) {
+    throw new Error(
+      `${chainKey} Ignition future ${futureId} has contract name ${contract.contractName}, expected ${expectedContractName}`
+    );
   }
-  if (typeof value !== "string") {
-    throw new Error(`${chainKey} deployed address ${key} must be a string`);
-  }
-  return normalizeAddress(value, `${chainKey}.${key}`);
+  return normalizeAddress(contract.address, `${chainKey}.${futureId}`);
 }
 
 function deploymentDirections(
-  chains: readonly ChainDeploymentState[],
+  chains: readonly ChainDeploymentState[]
 ): DeploymentDirectionState[] {
   if (chains.length !== 2) {
     throw new Error("deployment state requires exactly two chains");
@@ -2129,7 +2616,7 @@ function deploymentDirections(
 
 function directionState(
   source: ChainDeploymentState,
-  destination: ChainDeploymentState,
+  destination: ChainDeploymentState
 ): DeploymentDirectionState {
   return {
     key: `${source.key}-to-${destination.key}`,
@@ -2153,7 +2640,9 @@ function renderSigner(signer: SignerProfile): string {
     const passwordLine =
       signer.keystore.passwordEnv !== undefined
         ? `      password_env: ${yamlString(signer.keystore.passwordEnv)}`
-        : `      password_file: ${yamlString(signer.keystore.passwordFile ?? "")}`;
+        : `      password_file: ${yamlString(
+            signer.keystore.passwordFile ?? ""
+          )}`;
     return `  - id: "${signer.id}"
     type: keystore
     keystore:
@@ -2175,7 +2664,7 @@ ${passwordLine}`;
 function renderWorkerChain(
   chain: ChainProfile,
   rpcURL: string,
-  startBlockNumber: number,
+  startBlockNumber: number
 ): string {
   return `  - eid: ${chain.eid}
     name: ${yamlString(chain.name)}
@@ -2192,23 +2681,27 @@ function renderWorkerChain(
       executor:
         signer: "${chain.txRoles.executor.signer}"
         max_fee_per_gas_wei: "${chain.txRoles.executor.maxFeePerGasWei}"
-        max_priority_fee_per_gas_wei: "${chain.txRoles.executor.maxPriorityFeePerGasWei}"
+        max_priority_fee_per_gas_wei: "${
+          chain.txRoles.executor.maxPriorityFeePerGasWei
+        }"
         min_native_balance_wei: "${chain.txRoles.executor.minNativeBalanceWei}"
       dvn:
         signer: "${chain.txRoles.dvn.signer}"
         max_fee_per_gas_wei: "${chain.txRoles.dvn.maxFeePerGasWei}"
-        max_priority_fee_per_gas_wei: "${chain.txRoles.dvn.maxPriorityFeePerGasWei}"
+        max_priority_fee_per_gas_wei: "${
+          chain.txRoles.dvn.maxPriorityFeePerGasWei
+        }"
         min_native_balance_wei: "${chain.txRoles.dvn.minNativeBalanceWei}"`;
 }
 
 function workerStartBlock(
   workerStartBlocks: WorkerStartBlockMap,
-  chain: ChainProfile,
+  chain: ChainProfile
 ): number {
   const startBlockNumber = workerStartBlocks[chain.key];
   if (!Number.isInteger(startBlockNumber) || startBlockNumber < 0) {
     throw new Error(
-      `${chain.key} start_block_number must be a non-negative integer`,
+      `${chain.key} start_block_number must be a non-negative integer`
     );
   }
   return startBlockNumber;
@@ -2216,7 +2709,7 @@ function workerStartBlock(
 
 function renderWorkerPathway(
   profile: DeploymentProfile,
-  direction: DeploymentDirectionState,
+  direction: DeploymentDirectionState
 ): string {
   return `  - src_eid: ${direction.srcEid}
     dst_eid: ${direction.dstEid}
@@ -2253,7 +2746,7 @@ function renderCommands(plan: CommandPlan): string {
   const lines = [
     "# Generated Deployment Commands",
     "",
-    "State-changing commands are not executed unless `--apply` is supplied to `npm run deploy:profile`.",
+    "Each command reads its input envelope from `OML_SCRIPT_PARAMS`. Set `apply: true` only after reviewing the generated file.",
     "",
   ];
   for (const command of plan.commands) {
@@ -2263,7 +2756,7 @@ function renderCommands(plan: CommandPlan): string {
       "```bash",
       command.command,
       "```",
-      "",
+      ""
     );
     if (command.output !== undefined) {
       lines.push(`Output: \`${command.output}\``, "");
@@ -2273,7 +2766,7 @@ function renderCommands(plan: CommandPlan): string {
 }
 
 function profileDirections(
-  profile: DeploymentProfile,
+  profile: DeploymentProfile
 ): [ChainProfile, ChainProfile][] {
   if (profile.chains.length !== 2) {
     throw new Error("profile requires exactly two chains");
@@ -2325,7 +2818,7 @@ function openWorkersParameterPath(outDir: string, chain: ChainProfile): string {
     outDir,
     "ignition",
     "parameters",
-    `${chain.key}.open-workers.json`,
+    `${chain.key}.open-workers.json`
   );
 }
 
@@ -2334,63 +2827,99 @@ function testOFTParameterPath(outDir: string, chain: ChainProfile): string {
     outDir,
     "ignition",
     "parameters",
-    `${chain.key}.test-oft.json`,
+    `${chain.key}.test-oft.json`
   );
 }
 
 function openWorkersPathwayParameterPath(
   outDir: string,
   source: ChainProfile,
-  destination: ChainProfile,
+  destination: ChainProfile
 ): string {
   return path.join(
     outDir,
     "ignition",
     "parameters",
-    `${directionKey(source, destination)}.open-workers-pathway.json`,
+    `${directionKey(source, destination)}.open-workers-pathway.json`
   );
 }
 
 function oappEndpointParameterPath(
   outDir: string,
   source: ChainProfile,
-  destination: ChainProfile,
+  destination: ChainProfile
 ): string {
   return path.join(
     outDir,
     "ignition",
     "parameters",
-    `${directionKey(source, destination)}.oapp-endpoint.json`,
+    `${directionKey(source, destination)}.oapp-endpoint.json`
   );
 }
 
-export function workerDeploymentAddressPath(chain: ChainProfile): string {
-  return ignitionDeploymentAddressPath(chain.deploymentId);
+function commandInputPath(outDir: string, name: string): string {
+  return path.join(outDir, "commands", `${name}.json`);
 }
 
-export function testOFTDeploymentAddressPath(chain: ChainProfile): string {
-  return ignitionDeploymentAddressPath(testOFTDeploymentId(chain));
+function testOFTCommandInputPath(outDir: string, chain: ChainProfile): string {
+  return commandInputPath(outDir, `${chain.key}.deploy-test-oft`);
 }
 
-function ignitionDeploymentAddressPath(deploymentId: string): string {
-  return path.join(
-    "ignition",
-    "deployments",
-    deploymentId,
-    "deployed_addresses.json",
+function openWorkersCommandInputPath(
+  outDir: string,
+  chain: ChainProfile
+): string {
+  return commandInputPath(outDir, `${chain.key}.deploy-open-workers`);
+}
+
+function openWorkersPathwayCommandInputPath(
+  outDir: string,
+  source: ChainProfile,
+  destination: ChainProfile
+): string {
+  return commandInputPath(
+    outDir,
+    `${directionKey(source, destination)}.configure-open-workers-pathway`
   );
 }
 
-function isMissingDeployedAddressesFile(error: Error): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  const missingPath = (error as NodeJS.ErrnoException).path;
-  if (code !== "ENOENT" || typeof missingPath !== "string") {
-    return false;
-  }
-  const normalized = missingPath.split(path.sep).join("/");
-  return (
-    normalized.endsWith("/deployed_addresses.json") &&
-    normalized.includes("ignition/deployments/")
+function oappEndpointCommandInputPath(
+  outDir: string,
+  source: ChainProfile,
+  destination: ChainProfile
+): string {
+  return commandInputPath(
+    outDir,
+    `${directionKey(source, destination)}.configure-oapp-endpoint`
+  );
+}
+
+function deploymentPreflightCommandInputPath(
+  outDir: string,
+  chain: ChainProfile
+): string {
+  return commandInputPath(outDir, `${chain.key}.deployment-preflight`);
+}
+
+function inspectLzCommandInputPath(
+  outDir: string,
+  source: ChainProfile,
+  destination: ChainProfile
+): string {
+  return commandInputPath(
+    outDir,
+    `${directionKey(source, destination)}.inspect-lz-config`
+  );
+}
+
+function priceConfigCommandInputPath(
+  outDir: string,
+  source: ChainProfile,
+  destination: ChainProfile
+): string {
+  return commandInputPath(
+    outDir,
+    `${directionKey(source, destination)}.price-config`
   );
 }
 
@@ -2401,28 +2930,30 @@ async function writeJSON(filePath: string, value: unknown): Promise<void> {
 
 async function writeBootstrapRenderStatus(
   outDir: string,
-  error: unknown,
+  error: unknown
 ): Promise<void> {
   await writeJSON(path.join(outDir, "render-status.json"), {
     ok: true,
     deploymentState: false,
     message:
       "Bootstrap render wrote initial Ignition parameters and command plan only. Run deploy-test-oft/deploy-workers, then run render again to produce pathway parameters, deployment-state.json, worker.yaml, and verification artifacts.",
-    detail: error instanceof Error ? error.message : String(error),
+    detail: sanitizeCommandErrorMessage(
+      error instanceof Error ? error.message : String(error)
+    ),
   });
 }
 
-function printSummary(
+function deploymentSummary(
   phase: DeploymentPhase,
-  apply: boolean,
+  applied: boolean,
   outDir: string,
   profile: DeploymentProfile,
-  options?: { deploymentState?: boolean },
-) {
-  const summary = {
+  options?: { deploymentState?: boolean }
+): DeployProfileResult {
+  const summary: DeployProfileResult = {
     ok: true,
     phase,
-    apply,
+    applied,
     mode: profile.mode,
     outDir,
     parameters: path.join(outDir, "ignition", "parameters"),
@@ -2441,7 +2972,99 @@ function printSummary(
       });
     }
   }
-  console.log(jsonStringify(summary));
+  return summary;
+}
+
+function phaseMutates(phase: DeploymentPhase): boolean {
+  return (
+    phase === "deploy-test-oft" ||
+    phase === "deploy-workers" ||
+    phase === "configure-workers" ||
+    phase === "configure-oapp" ||
+    phase === "all"
+  );
+}
+
+function deployProfileApplySummary(
+  profile: DeploymentProfile,
+  phase: DeploymentPhase
+) {
+  return {
+    command: "deploy:profile",
+    targets: profile.chains.map((chain) => ({
+      network: chain.network,
+      chainId: chain.chainId,
+      deploymentIds: deploymentIDsForPhase(profile, chain, phase),
+    })),
+    actions: actionsForPhase(profile, phase),
+  };
+}
+
+function deploymentIDsForPhase(
+  profile: DeploymentProfile,
+  chain: ChainProfile,
+  phase: DeploymentPhase
+): string[] {
+  const destination = profile.chains.find(
+    (candidate) => candidate.key !== chain.key
+  );
+  if (destination === undefined) {
+    throw new Error(`profile is missing a destination chain for ${chain.key}`);
+  }
+  switch (phase) {
+    case "deploy-test-oft":
+      return [testOFTDeploymentId(chain)];
+    case "deploy-workers":
+      return [chain.deploymentId];
+    case "configure-workers":
+      return [openWorkersPathwayDeploymentId(chain, destination)];
+    case "configure-oapp":
+      return [oappEndpointDeploymentId(chain, destination)];
+    case "all":
+      return [
+        ...(profile.mode === "test-oft-rehearsal"
+          ? [testOFTDeploymentId(chain)]
+          : []),
+        chain.deploymentId,
+        openWorkersPathwayDeploymentId(chain, destination),
+        ...(profile.mode === "test-oft-rehearsal"
+          ? [oappEndpointDeploymentId(chain, destination)]
+          : []),
+      ];
+    case "render":
+    case "verify":
+      return [];
+  }
+}
+
+function actionsForPhase(
+  profile: DeploymentProfile,
+  phase: DeploymentPhase
+): string[] {
+  switch (phase) {
+    case "deploy-test-oft":
+      return ["reconcile TestOFT Ignition deployments"];
+    case "deploy-workers":
+      return ["reconcile OpenWorkers Ignition deployments"];
+    case "configure-workers":
+      return ["reconcile OpenWorkers pathway configuration"];
+    case "configure-oapp":
+      return ["reconcile OApp Endpoint configuration"];
+    case "all":
+      return [
+        ...(profile.mode === "test-oft-rehearsal"
+          ? ["reconcile TestOFT Ignition deployments"]
+          : []),
+        "reconcile OpenWorkers Ignition deployments",
+        "reconcile OpenWorkers pathway configuration",
+        ...(profile.mode === "test-oft-rehearsal"
+          ? ["reconcile OApp Endpoint configuration"]
+          : []),
+      ];
+    case "render":
+    case "verify":
+      return [];
+  }
 }
 
 function normalizePhase(value: string): DeploymentPhase {
@@ -2456,63 +3079,19 @@ function normalizePhase(value: string): DeploymentPhase {
       return value;
     default:
       throw new Error(
-        "--phase must be render, deploy-test-oft, deploy-workers, configure-workers, configure-oapp, verify, or all",
+        "input.phase must be render, deploy-test-oft, deploy-workers, configure-workers, configure-oapp, verify, or all"
       );
   }
 }
 
-function parseIgnitionCommandOptions(
-  flags: ReadonlyMap<string, string>,
-): IgnitionCommandOptions {
-  return {
-    verify: flagEnabled(flags.get("verify")),
-    autoConfirm:
-      flagEnabled(flags.get("auto-confirm")) || flagEnabled(flags.get("yes")),
-    buildProfile: parseBuildProfileFlag(flags.get("build-profile")),
-  };
-}
-
-function normalizeIgnitionCommandOptions(
-  options: Partial<IgnitionCommandOptions> | undefined,
-): IgnitionCommandOptions {
-  return {
-    verify: options?.verify ?? false,
-    autoConfirm: options?.autoConfirm ?? false,
-    buildProfile:
-      options?.buildProfile === undefined
-        ? undefined
-        : normalizeBuildProfileValue(options.buildProfile),
-  };
-}
-
-function parseBuildProfileFlag(value: string | undefined): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "" || value === "true") {
-    throw new Error("--build-profile requires a value");
-  }
-  return normalizeBuildProfileValue(value);
-}
-
-function normalizeBuildProfileValue(value: string): string {
-  if (value.trim() === "") {
-    throw new Error("--build-profile requires a value");
-  }
-  if (/\s/.test(value)) {
-    throw new Error("--build-profile cannot contain whitespace");
-  }
-  return value;
-}
-
 function validateLongTermPriceSubmitters(
   submitters: readonly Address[],
-  owner: Address,
+  owner: Address
 ) {
   for (const submitter of submitters) {
     if (isAddressEqual(submitter, owner)) {
       throw new Error(
-        "profile.priceFeedSubmitters must not include profile.owner; owner is added only as a temporary deployment submitter",
+        "profile.priceFeedSubmitters must not include profile.owner; owner is added only as a temporary deployment submitter"
       );
     }
   }
@@ -2523,21 +3102,6 @@ function normalizeMode(value: unknown): DeploymentMode {
     return value;
   }
   throw new Error("profile.mode must be test-oft-rehearsal or external-oapp");
-}
-
-function flagEnabled(value: string | undefined): boolean {
-  if (value === undefined || value === "") {
-    return false;
-  }
-  return ["1", "true", "yes"].includes(value.toLowerCase());
-}
-
-function requiredProcessEnv(name: string): string {
-  const value = process.env[name];
-  if (value === undefined || value === "") {
-    throw new Error(`${name} is required`);
-  }
-  return value;
 }
 
 function validateTwoChainPair(chains: readonly ChainProfile[]) {
@@ -2571,6 +3135,10 @@ function requiredOApp(chain: ChainProfile): Address {
   return chain.oapp;
 }
 
+function missingTestOFTDeployment(chainKey: string): never {
+  throw new Error(`${chainKey} deployment state is missing TestOFT`);
+}
+
 function requireRehearsalMode(profile: DeploymentProfile, phase: string) {
   if (profile.mode !== "test-oft-rehearsal") {
     throw new Error(`${phase} requires profile.mode test-oft-rehearsal`);
@@ -2583,16 +3151,22 @@ function testOFTDeploymentId(chain: ChainProfile): string {
 
 function openWorkersPathwayDeploymentId(
   source: ChainProfile,
-  destination: ChainProfile,
+  destination: ChainProfile
 ): string {
-  return `${source.deploymentId}-${directionKey(source, destination)}-open-workers-pathway`;
+  return `${source.deploymentId}-${directionKey(
+    source,
+    destination
+  )}-open-workers-pathway`;
 }
 
 function oappEndpointDeploymentId(
   source: ChainProfile,
-  destination: ChainProfile,
+  destination: ChainProfile
 ): string {
-  return `${source.deploymentId}-${directionKey(source, destination)}-oapp-endpoint`;
+  return `${source.deploymentId}-${directionKey(
+    source,
+    destination
+  )}-oapp-endpoint`;
 }
 
 function directionKey(source: ChainProfile, destination: ChainProfile): string {
@@ -2603,68 +3177,50 @@ function hardhatCommand(
   chain: ChainProfile,
   script: string,
   parametersPath: string,
-  deploymentId: string,
-  ignition: IgnitionCommandOptions,
+  buildProfile: string
 ): string {
-  return `${hardhatEnvPrefix(chain, ignition).join(" ")} ${script} -- ${hardhatIgnitionArgs(
-    {
-      chain,
-      parametersPath,
-      deploymentId,
-      ignition,
-    },
-  ).join(" ")}`;
+  const command = `OML_SCRIPT_PARAMS=${shellWord(
+    parametersPath
+  )} npm run ${script} -- --network ${shellWord(
+    chain.network
+  )}`;
+  return fixedProductionBuildProfileScripts.has(script)
+    ? command
+    : `${command} --build-profile ${shellWord(buildProfile)}`;
 }
 
-function hardhatIgnitionArgs(input: {
-  chain: ChainProfile;
-  parametersPath: string;
-  deploymentId: string;
-  ignition: IgnitionCommandOptions;
-}): string[] {
-  const args = [
-    ...(input.ignition.buildProfile === undefined
-      ? []
-      : ["--build-profile", input.ignition.buildProfile]),
-    "--network",
-    input.chain.network,
-    "--parameters",
-    input.parametersPath,
-    "--deployment-id",
-    input.deploymentId,
-  ];
-  if (input.ignition.verify) {
-    args.push("--verify");
-  }
-  return args;
+const fixedProductionBuildProfileScripts = new Set([
+  "deploy:open-workers",
+  "deploy:open-dvn-worker",
+  "deploy:test-oft",
+  "configure:oapp-endpoint",
+  "configure:open-workers-pathway",
+  "configure:open-dvn-pathway",
+]);
+
+function shellWord(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
-function hardhatEnvPrefix(
-  chain: ChainProfile,
-  ignition: IgnitionCommandOptions,
-): string[] {
-  return [
-    `${chain.rpcUrlEnv}=...`,
-    ...(ignition.autoConfirm
-      ? [
-          "HARDHAT_IGNITION_CONFIRM_DEPLOYMENT=true",
-          "HARDHAT_IGNITION_CONFIRM_RESET=true",
-        ]
-      : []),
-  ];
-}
-
-function object(value: unknown, label: string): Record<string, unknown> {
+function object(
+  value: unknown,
+  label: string,
+  allowedKeys?: readonly string[]
+): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
-  return value as Record<string, unknown>;
+  const result = value as Record<string, unknown>;
+  if (allowedKeys !== undefined) {
+    expectOnlyKeys(result, allowedKeys, label);
+  }
+  return result;
 }
 
 function arrayField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): unknown[] {
   const value = input[field];
   if (!Array.isArray(value)) {
@@ -2676,7 +3232,7 @@ function arrayField(
 function normalizeAddressArrayField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): Address[] {
   const value = input[field];
   if (value === undefined) {
@@ -2699,7 +3255,7 @@ function normalizeAddressArrayField(
 function optionalAddressArrayField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): Address[] {
   const value = input[field];
   if (value === undefined) {
@@ -2719,7 +3275,7 @@ function optionalAddressArrayField(
 function stringField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): string {
   const value = input[field];
   if (typeof value !== "string" || value === "") {
@@ -2731,7 +3287,7 @@ function stringField(
 function optionalString(
   value: unknown,
   fallback: string,
-  label: string,
+  label: string
 ): string {
   if (value === undefined || value === "") {
     return fallback;
@@ -2744,7 +3300,7 @@ function optionalString(
 
 function optionalStringValue(
   value: unknown,
-  label: string,
+  label: string
 ): string | undefined {
   if (value === undefined || value === "") {
     return undefined;
@@ -2757,7 +3313,7 @@ function optionalStringValue(
 
 function optionalMarketDataBaseURL(
   value: unknown,
-  label: string,
+  label: string
 ): string | undefined {
   const baseURL = optionalStringValue(value, label);
   if (baseURL === undefined) {
@@ -2768,7 +3324,7 @@ function optionalMarketDataBaseURL(
     parsed = new URL(baseURL);
   } catch {
     throw new Error(
-      `${label} must be an absolute HTTPS URL without query or fragment`,
+      `${label} must be an absolute HTTPS URL without query or fragment`
     );
   }
   if (
@@ -2779,7 +3335,7 @@ function optionalMarketDataBaseURL(
     baseURL.includes("#")
   ) {
     throw new Error(
-      `${label} must be an absolute HTTPS URL without query or fragment`,
+      `${label} must be an absolute HTTPS URL without query or fragment`
     );
   }
   return baseURL;
@@ -2794,14 +3350,6 @@ function normalizeNativeAssetID(value: unknown, label: string): string {
     throw new Error(`${label} must be lowercase`);
   }
   return assetID;
-}
-
-function envVarNameField(
-  input: Record<string, unknown>,
-  field: string,
-  label: string,
-): string {
-  return envVarName(stringField(input, field, label), label);
 }
 
 function optionalEnvVarName(value: unknown, label: string): string | undefined {
@@ -2825,7 +3373,7 @@ function integerField(
   input: Record<string, unknown>,
   field: string,
   label: string,
-  options?: { allowZero?: boolean; max?: number },
+  options?: { allowZero?: boolean; max?: number }
 ): number {
   const value = input[field];
   if (!Number.isInteger(value)) {
@@ -2848,7 +3396,7 @@ function optionalIntegerField(
   input: Record<string, unknown>,
   field: string,
   label: string,
-  options?: { allowZero?: boolean; max?: number },
+  options?: { allowZero?: boolean; max?: number }
 ): number | undefined {
   const value = input[field];
   if (value === undefined) {
@@ -2860,7 +3408,7 @@ function optionalIntegerField(
 function decimalField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): string {
   const value = stringField(input, field, label);
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
@@ -2872,7 +3420,7 @@ function decimalField(
 function positiveDecimalField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): string {
   const value = decimalField(input, field, label);
   if (value === "0") {
@@ -2885,7 +3433,7 @@ function optionalDecimalField(
   input: Record<string, unknown>,
   field: string,
   label: string,
-  fallback: string,
+  fallback: string
 ): string {
   if (input[field] === undefined || input[field] === "") {
     return fallback;
@@ -2896,7 +3444,7 @@ function optionalDecimalField(
 function addressField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): Address {
   const value = stringField(input, field, label);
   return normalizeAddress(value, label);
@@ -2905,7 +3453,7 @@ function addressField(
 function optionalAddressField(
   input: Record<string, unknown>,
   field: string,
-  label: string,
+  label: string
 ): Address | undefined {
   const value = input[field];
   if (value === undefined || value === "") {
@@ -2927,7 +3475,7 @@ function normalizeAddress(value: string, label: string): Address {
 function optionalBoolean(
   value: unknown,
   fallback: boolean,
-  label: string,
+  label: string
 ): boolean {
   if (value === undefined) {
     return fallback;
@@ -2940,8 +3488,4 @@ function optionalBoolean(
 
 function yamlString(value: string): string {
   return JSON.stringify(value);
-}
-
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await main();
 }

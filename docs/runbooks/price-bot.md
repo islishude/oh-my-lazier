@@ -48,7 +48,7 @@ During the long-running worker loop, the bot still tracks the last destination g
 After the tx manager broadcasts and confirms the queued transactions:
 
 1. Confirm the tx outbox rows for the pricing signer reached a terminal confirmed status.
-2. Run `npm run check:price-config` on the source chain for the target `DST_EID`.
+2. Run `check:price-config` with a strict `OML_SCRIPT_PARAMS` envelope and the explicit source-chain Hardhat `--network` for the target `input.dstEid`.
 3. Confirm `updatedAt` is recent, not in the future, and `staleAfter` matches the approved config without exceeding the contract's one-day maximum.
 4. Confirm shared `dstGasPriceInSrcToken`, `dstDataFeePerByteInSrcToken`, and stale window match the recorded gas/data/price inputs, and each worker's `dstGasOverhead`, `dataSizeOverheadBytes`, `marginBps`, and ABI-facing `baseFee` match the approved executor/DVN fee models derived from `fixed_fee_wei`.
 5. Confirm `gas_spike_bps` matches the approved config and is included in config-diff review evidence.
@@ -58,22 +58,22 @@ After the tx manager broadcasts and confirms the queued transactions:
 Example:
 
 ```bash
-npm run check:price-config -- \
-  --rpc-url ... \
-  --chain-id 11155111 \
-  --price-feed ... \
-  --open-executor ... \
-  --open-dvn ... \
-  --dst-eid 40449 \
-  --max-price-age-seconds 300 \
-  --expected-stale-after 1800
+cp config/scripts/examples/check-price-config.json tmp/check-price-config.json
+# Edit only the public addresses and decimal-string values in input.
+OML_SCRIPT_PARAMS=tmp/check-price-config.json \
+  npm run check:price-config -- --network sepolia
 ```
+
+The command uses a read-only Hardhat connection (`accounts: "remote"`), checks
+the configured chain ID against the RPC chain ID, and closes the connection
+after producing its machine-readable stdout. RPC credentials come from the
+Hardhat configuration variable/keystore, never the parameter JSON.
 
 ## Rollback
 
 If the newly submitted price snapshot is wrong:
 
 1. Pause sends for affected pathways when pricing could undercharge execution.
-2. Restore the previous approved snapshot with `contracts/scripts/configure-workers.ts` or a manually reviewed submitter transaction. If the configured `source_workers.price_feed` changed, rotate OpenExecutor/OpenDVN back with `setPriceFeed`; only use worker fee-model updates when the low-frequency model itself was wrong.
+2. Correct the approved pricing inputs and run `go run ./go/cmd/pricebot-once -config <worker.yaml>` to enqueue a fresh snapshot through the normal tx manager and pricing signer. If the incident procedure requires a direct corrective snapshot, use a separately reviewed transaction from an authorized PriceFeed submitter. Do not use `configure:workers` for a routine price refresh because it also writes low-frequency owner configuration. If the configured `source_workers.price_feed` changed, rotate OpenExecutor/OpenDVN back with `setPriceFeed`; only use worker fee-model updates when the low-frequency model itself was wrong.
 3. Restart the worker after updating config files; phase 1 does not support hot reload.
 4. Let txmgr automatic retry and pending replacement handle classified pricing outbox failures or stale broadcasts. Use `txretry` only after automatic retry is exhausted or after the signer balance, fee caps, and calldata have been reviewed for an operator override.

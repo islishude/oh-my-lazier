@@ -1,0 +1,8 @@
+{
+  "input": {
+    "lzConfigSnapshot": "docs/deployments/sepolia-hoodi/artifacts/lz-config-sepolia-to-hoodi.json",
+    "expectedSigner": "0x1111111111111111111111111111111111111111"
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}

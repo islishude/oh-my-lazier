@@ -25,9 +25,38 @@ Implementation evidence:
 
 - `contracts/contracts/oft/OFTPauseAndRateLimit.sol`
 - `contracts/test/OpenWorkers.t.sol` pause and rate-limit tests
-- `contracts/scripts/configure-workers.ts` optional `--rate-limit-capacity` and `--rate-limit-refill-per-second`
-- `npm run oft:pathway` for inspecting and changing TestOFT pathway pause/drain/rate-limit/clear state
+- `npm run configure:workers` with the optional `input.rateLimit` object
+- `npm run oft:pathway` with strict `input.action` and optional
+  `input.rateLimit` for inspecting and changing TestOFT pathway
+  pause/drain/rate-limit/clear state
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` for confirming worker DB state has no in-flight packet, job, or outbox work before a config switch
+
+Every `oft:pathway` invocation uses `OML_SCRIPT_PARAMS` and an explicit
+single-chain Hardhat `--network`. `inspect` is read-only. The write actions
+`pause-send`, `unpause-send`, `pause-receive`, `unpause-receive`, `drain`,
+`clear-rate-limit`, and `set-rate-limit` require a top-level `apply` flag. The
+`set-rate-limit` action alone requires
+`input.rateLimit.{capacity,refillPerSecond}`, both as decimal strings.
+
+Example reviewed drain plan:
+
+```json
+{
+  "input": {
+    "action": "drain",
+    "testOFT": "0x1111111111111111111111111111111111111111",
+    "remoteEid": "40449",
+    "expectedSigner": "0x2222222222222222222222222222222222222222"
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}
+```
+
+```bash
+OML_SCRIPT_PARAMS=tmp/oft-pathway-drain.json \
+  npm run oft:pathway -- --network sepolia
+```
 
 ## Migration Usage
 
@@ -35,9 +64,9 @@ Before switching Executor or DVN config:
 
 1. Set a conservative outbound rate limit for the pathway.
 2. Run canary transfers and confirm `ExecutorFeePaid`, commit, delivery, and destination balance.
-3. For drain, run `npm run oft:pathway -- --oft-pathway-action drain` or `npm run oft:pathway -- --oft-pathway-action pause-send`.
+3. For drain, archive an `oft:pathway` envelope with `input.action: "drain"` or `input.action: "pause-send"` and `apply: false`; after approval, rerun the same explicit network with `apply: true`.
 4. Run `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst>` until it reports `ready: true` before changing DVN required sets.
-5. After validation, restore the approved rate limit with `--oft-pathway-action set-rate-limit`, or remove a temporary limiter with `--oft-pathway-action clear-rate-limit`, then unpause sends with `--oft-pathway-action unpause-send`.
+5. After validation, restore the approved rate limit with `input.action: "set-rate-limit"`, or remove a temporary limiter with `input.action: "clear-rate-limit"`, then unpause sends with `input.action: "unpause-send"`. Each state change requires its own reviewed envelope and explicit `apply` value.
 
 `pauseSend` is preferred when the operator wants an immediate hard stop. Zero-capacity rate limit is preferred when documenting an explicit drain configuration alongside other pathway setup.
 

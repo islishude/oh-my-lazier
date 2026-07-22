@@ -1,0 +1,10 @@
+{
+  "input": {
+    "parameters": "ignition/parameters/sepolia.json",
+    "deploymentId": "sepolia-open-workers",
+    "verify": false,
+    "expectedSigner": "0x1111111111111111111111111111111111111111"
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}

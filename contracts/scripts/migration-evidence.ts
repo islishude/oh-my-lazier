@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { EndpointId } from "@layerzerolabs/lz-definitions";
-import { isMainModule, jsonStringify, requiredEnv } from "./lib.js";
+import { CommandOutputError } from "./command-harness.js";
+import { jsonStringify } from "./lib.js";
 
 const sepoliaEid = EndpointId.SEPOLIA_V2_TESTNET;
 const hoodiEid = EndpointId.HOODI_V2_TESTNET;
@@ -136,7 +137,7 @@ export type MigrationEvidenceRecord = {
 };
 
 export function validateMigrationEvidenceRecord(
-  record: MigrationEvidenceRecord,
+  record: MigrationEvidenceRecord
 ): string[] {
   const errors: string[] = [];
   const evidenceType = validateEvidenceType(errors, record.evidenceType);
@@ -148,7 +149,7 @@ export function validateMigrationEvidenceRecord(
     requireOptionalStringArray(
       errors,
       record.operatorContacts,
-      "operatorContacts",
+      "operatorContacts"
     );
   }
   requireNonEmpty(errors, record.environment, "environment");
@@ -159,7 +160,7 @@ export function validateMigrationEvidenceRecord(
   requireEvidence(
     errors,
     record.layerZeroAddressCheck,
-    "layerZeroAddressCheck",
+    "layerZeroAddressCheck"
   );
   requireEvidence(errors, record.readinessCheck, "readinessCheck");
   requireEvidence(errors, record.keyManagementReview, "keyManagementReview");
@@ -178,7 +179,7 @@ export function validateMigrationEvidenceRecord(
 function validateDirections(
   errors: string[],
   directions: MigrationDirectionEvidence[],
-  evidenceType: EvidenceType,
+  evidenceType: EvidenceType
 ): void {
   if (!Array.isArray(directions) || directions.length === 0) {
     errors.push("directions must contain at least one direction");
@@ -197,12 +198,12 @@ function validateDirections(
     validateSourceWorkers(
       errors,
       direction.sourceWorkers,
-      `${prefix}.sourceWorkers`,
+      `${prefix}.sourceWorkers`
     );
     validateDestinationWorkers(
       errors,
       direction.destinationWorkers,
-      `${prefix}.destinationWorkers`,
+      `${prefix}.destinationWorkers`
     );
     const key = `${direction.srcEid}->${direction.dstEid}`;
     if (seen.has(key)) {
@@ -216,25 +217,25 @@ function validateDirections(
       requireOptionalEvidence(
         errors,
         direction.configDiff,
-        `${prefix}.configDiff`,
+        `${prefix}.configDiff`
       );
     }
     requireEvidence(
       errors,
       direction.deploymentPreflight,
-      `${prefix}.deploymentPreflight`,
+      `${prefix}.deploymentPreflight`
     );
     if (evidenceType === "migration") {
       requireEvidence(
         errors,
         direction.lzConfigBefore,
-        `${prefix}.lzConfigBefore`,
+        `${prefix}.lzConfigBefore`
       );
     } else {
       requireOptionalEvidence(
         errors,
         direction.lzConfigBefore,
-        `${prefix}.lzConfigBefore`,
+        `${prefix}.lzConfigBefore`
       );
     }
     requireEvidence(errors, direction.lzConfigAfter, `${prefix}.lzConfigAfter`);
@@ -243,22 +244,22 @@ function validateDirections(
       direction.priceConfigCheck,
       `${prefix}.priceConfigCheck`,
       direction.dstEid,
-      direction.sourceWorkers,
+      direction.sourceWorkers
     );
     requireEvidence(
       errors,
       direction.drainCheckBeforeSwitch,
-      `${prefix}.drainCheckBeforeSwitch`,
+      `${prefix}.drainCheckBeforeSwitch`
     );
     requireEvidence(
       errors,
       direction.canarySourceReceipt,
-      `${prefix}.canarySourceReceipt`,
+      `${prefix}.canarySourceReceipt`
     );
     requireEvidence(
       errors,
       direction.canaryDestinationReceipt,
-      `${prefix}.canaryDestinationReceipt`,
+      `${prefix}.canaryDestinationReceipt`
     );
     validateCanary(errors, direction.canary, `${prefix}.canary`);
     validateDVNJoin(errors, direction.dvnJoin, `${prefix}.dvnJoin`);
@@ -267,7 +268,7 @@ function validateDirections(
       direction.dvnVerificationReceipt,
       `${prefix}.dvnVerificationReceipt`,
       direction.srcEid,
-      direction.dstEid,
+      direction.dstEid
     );
   });
   for (const key of directionKeys) {
@@ -290,7 +291,7 @@ function validateDirections(
 function validateSourceWorkers(
   errors: string[],
   workers: SourceWorkersEvidence,
-  field: string,
+  field: string
 ): void {
   if (!isRecord(workers)) {
     errors.push(`${field} is required`);
@@ -304,7 +305,7 @@ function validateSourceWorkers(
 function validateDestinationWorkers(
   errors: string[],
   workers: DestinationWorkersEvidence,
-  field: string,
+  field: string
 ): void {
   if (!isRecord(workers)) {
     errors.push(`${field} is required`);
@@ -318,7 +319,7 @@ function validatePriceConfigEvidence(
   evidence: PriceConfigEvidence,
   field: string,
   dstEid: number,
-  sourceWorkers?: SourceWorkersEvidence,
+  sourceWorkers?: SourceWorkersEvidence
 ): void {
   if (!isRecord(evidence)) {
     errors.push(`${field} evidence is required`);
@@ -331,17 +332,17 @@ function validatePriceConfigEvidence(
   const checkedAt = requirePositiveDecimalIntegerValue(
     errors,
     evidence.checkedAt,
-    `${field}.checkedAt`,
+    `${field}.checkedAt`
   );
   const maxAge = requirePositiveDecimalIntegerValue(
     errors,
     evidence.maxAgeSeconds,
-    `${field}.maxAgeSeconds`,
+    `${field}.maxAgeSeconds`
   );
   const expectedStaleAfter = requirePositiveDecimalIntegerValue(
     errors,
     evidence.expectedStaleAfter,
-    `${field}.expectedStaleAfter`,
+    `${field}.expectedStaleAfter`
   );
   let priceFeedAddress: string | undefined;
   if (!isRecord(evidence.priceFeed)) {
@@ -351,14 +352,14 @@ function validatePriceConfigEvidence(
     requireEVMAddress(
       errors,
       evidence.priceFeed.address,
-      `${field}.priceFeed.address`,
+      `${field}.priceFeed.address`
     );
     requireMatchingAddress(
       errors,
       evidence.priceFeed.address,
       `${field}.priceFeed.address`,
       sourceWorkers?.priceFeed,
-      "sourceWorkers.priceFeed",
+      "sourceWorkers.priceFeed"
     );
     validatePriceSnapshotEvidence(
       errors,
@@ -366,7 +367,7 @@ function validatePriceConfigEvidence(
       `${field}.priceFeed.priceSnapshot`,
       checkedAt,
       maxAge,
-      expectedStaleAfter,
+      expectedStaleAfter
     );
   }
   validateWorkerFeeModelEvidence(
@@ -377,14 +378,14 @@ function validatePriceConfigEvidence(
     {
       address: sourceWorkers?.openExecutor,
       field: "sourceWorkers.openExecutor",
-    },
+    }
   );
   validateWorkerFeeModelEvidence(
     errors,
     evidence.dvn,
     `${field}.dvn`,
     priceFeedAddress,
-    { address: sourceWorkers?.openDVN, field: "sourceWorkers.openDVN" },
+    { address: sourceWorkers?.openDVN, field: "sourceWorkers.openDVN" }
   );
 }
 
@@ -394,7 +395,7 @@ function validatePriceSnapshotEvidence(
   field: string,
   checkedAt?: bigint,
   maxAge?: bigint,
-  expectedStaleAfter?: bigint,
+  expectedStaleAfter?: bigint
 ): void {
   if (!isRecord(evidence)) {
     errors.push(`${field} evidence is required`);
@@ -403,22 +404,22 @@ function validatePriceSnapshotEvidence(
   const updatedAt = requirePositiveDecimalIntegerValue(
     errors,
     evidence.updatedAt,
-    `${field}.updatedAt`,
+    `${field}.updatedAt`
   );
   const staleAfter = requirePositiveDecimalIntegerValue(
     errors,
     evidence.staleAfter,
-    `${field}.staleAfter`,
+    `${field}.staleAfter`
   );
   requirePositiveDecimalIntegerValue(
     errors,
     evidence.dstGasPriceInSrcToken,
-    `${field}.dstGasPriceInSrcToken`,
+    `${field}.dstGasPriceInSrcToken`
   );
   requireNonNegativeDecimalIntegerValue(
     errors,
     evidence.dstDataFeePerByteInSrcToken,
-    `${field}.dstDataFeePerByteInSrcToken`,
+    `${field}.dstDataFeePerByteInSrcToken`
   );
   if (
     checkedAt !== undefined &&
@@ -442,7 +443,7 @@ function validatePriceSnapshotEvidence(
     staleAfter !== expectedStaleAfter
   ) {
     errors.push(
-      `${field}.staleAfter must equal expectedStaleAfter ${expectedStaleAfter}`,
+      `${field}.staleAfter must equal expectedStaleAfter ${expectedStaleAfter}`
     );
   }
 }
@@ -452,7 +453,7 @@ function validateWorkerFeeModelEvidence(
   evidence: WorkerFeeModelEvidence,
   field: string,
   expectedPriceFeed?: string,
-  expectedWorker?: { address?: string; field: string },
+  expectedWorker?: { address?: string; field: string }
 ): void {
   if (!isRecord(evidence)) {
     errors.push(`${field} evidence is required`);
@@ -464,7 +465,7 @@ function validateWorkerFeeModelEvidence(
     evidence.address,
     `${field}.address`,
     expectedWorker?.address,
-    expectedWorker?.field,
+    expectedWorker?.field
   );
   requireEVMAddress(errors, evidence.priceFeed, `${field}.priceFeed`);
   if (
@@ -473,23 +474,23 @@ function validateWorkerFeeModelEvidence(
     evidence.priceFeed.toLowerCase() !== expectedPriceFeed.toLowerCase()
   ) {
     errors.push(
-      `${field}.priceFeed must equal priceFeed.address ${expectedPriceFeed}`,
+      `${field}.priceFeed must equal priceFeed.address ${expectedPriceFeed}`
     );
   }
   requireNonNegativeDecimalIntegerValue(
     errors,
     evidence.baseFee,
-    `${field}.baseFee`,
+    `${field}.baseFee`
   );
   requireNonNegativeDecimalIntegerValue(
     errors,
     evidence.dstGasOverhead,
-    `${field}.dstGasOverhead`,
+    `${field}.dstGasOverhead`
   );
   requireNonNegativeDecimalIntegerValue(
     errors,
     evidence.dataSizeOverheadBytes,
-    `${field}.dataSizeOverheadBytes`,
+    `${field}.dataSizeOverheadBytes`
   );
   requireBps(errors, evidence.marginBps, `${field}.marginBps`);
 }
@@ -499,7 +500,7 @@ function requireMatchingAddress(
   actual: string,
   actualField: string,
   expected?: string,
-  expectedField?: string,
+  expectedField?: string
 ): void {
   if (
     expected === undefined ||
@@ -517,7 +518,7 @@ function requireMatchingAddress(
 function validateCanary(
   errors: string[],
   canary: CanaryEvidence,
-  field: string,
+  field: string
 ): void {
   if (!isRecord(canary)) {
     errors.push(`${field} is required`);
@@ -528,30 +529,30 @@ function validateCanary(
   requireEVMAddress(
     errors,
     canary.recipientAccount,
-    `${field}.recipientAccount`,
+    `${field}.recipientAccount`
   );
   requirePositiveDecimalInteger(
     errors,
     canary.minRecipientBalanceLD,
-    `${field}.minRecipientBalanceLD`,
+    `${field}.minRecipientBalanceLD`
   );
   requireEvidence(errors, canary.sourceReceipt, `${field}.sourceReceipt`);
   requireEvidence(
     errors,
     canary.destinationReceipt,
-    `${field}.destinationReceipt`,
+    `${field}.destinationReceipt`
   );
   requireEvidence(
     errors,
     canary.recipientBalanceCheck,
-    `${field}.recipientBalanceCheck`,
+    `${field}.recipientBalanceCheck`
   );
 }
 
 function validateDVNJoin(
   errors: string[],
   dvnJoin: DVNJoinEvidence,
-  field: string,
+  field: string
 ): void {
   if (!isRecord(dvnJoin)) {
     errors.push(`${field} is required`);
@@ -560,12 +561,12 @@ function validateDVNJoin(
   requirePositiveInteger(
     errors,
     dvnJoin.confirmations,
-    `${field}.confirmations`,
+    `${field}.confirmations`
   );
   requireStringArray(errors, dvnJoin.requiredDVNs, `${field}.requiredDVNs`);
   if (Array.isArray(dvnJoin.requiredDVNs)) {
     const required = new Set(
-      dvnJoin.requiredDVNs.map((value) => value.toLowerCase()),
+      dvnJoin.requiredDVNs.map((value) => value.toLowerCase())
     );
     if (!required.has("opendvn")) {
       errors.push(`${field}.requiredDVNs must include opendvn`);
@@ -573,7 +574,7 @@ function validateDVNJoin(
     const hasExternalDVN = [...required].some((label) => label !== "opendvn");
     if (!hasExternalDVN) {
       errors.push(
-        `${field}.requiredDVNs must include at least one independent external dvn`,
+        `${field}.requiredDVNs must include at least one independent external dvn`
       );
     }
   }
@@ -588,7 +589,7 @@ function validateDVNVerification(
   verification: DVNVerificationEvidence,
   field: string,
   srcEid: number,
-  dstEid: number,
+  dstEid: number
 ): void {
   if (!isRecord(verification)) {
     errors.push(`${field} evidence is required`);
@@ -598,38 +599,38 @@ function validateDVNVerification(
   requireBytes32(
     errors,
     verification.expectedPayloadHash,
-    `${field}.expectedPayloadHash`,
+    `${field}.expectedPayloadHash`
   );
   if (verification.expectedSrcEid !== srcEid) {
     errors.push(
-      `${field}.expectedSrcEid must equal direction srcEid ${srcEid}`,
+      `${field}.expectedSrcEid must equal direction srcEid ${srcEid}`
     );
   }
   if (verification.expectedDstEid !== dstEid) {
     errors.push(
-      `${field}.expectedDstEid must equal direction dstEid ${dstEid}`,
+      `${field}.expectedDstEid must equal direction dstEid ${dstEid}`
     );
   }
   requirePositiveDecimalInteger(
     errors,
     verification.expectedNonce,
-    `${field}.expectedNonce`,
+    `${field}.expectedNonce`
   );
   requireEVMAddress(
     errors,
     verification.expectedSender,
-    `${field}.expectedSender`,
+    `${field}.expectedSender`
   );
   requireEVMAddress(
     errors,
     verification.expectedReceiver,
-    `${field}.expectedReceiver`,
+    `${field}.expectedReceiver`
   );
 }
 
 function validateRollback(
   errors: string[],
-  rollback: RollbackEvidence | undefined,
+  rollback: RollbackEvidence | undefined
 ): void {
   if (!isRecord(rollback)) {
     errors.push("rollback is required");
@@ -638,33 +639,33 @@ function validateRollback(
   requireEvidence(
     errors,
     rollback.previousExecutorConfig,
-    "rollback.previousExecutorConfig",
+    "rollback.previousExecutorConfig"
   );
   requireEvidence(
     errors,
     rollback.previousSendUlnConfig,
-    "rollback.previousSendUlnConfig",
+    "rollback.previousSendUlnConfig"
   );
   requireEvidence(
     errors,
     rollback.previousReceiveUlnConfig,
-    "rollback.previousReceiveUlnConfig",
+    "rollback.previousReceiveUlnConfig"
   );
   requireEvidence(errors, rollback.dryRun, "rollback.dryRun");
   requireEvidence(
     errors,
     rollback.restoredConfigCheck,
-    "rollback.restoredConfigCheck",
+    "rollback.restoredConfigCheck"
   );
   requireEvidence(
     errors,
     rollback.canaryAfterRollback,
-    "rollback.canaryAfterRollback",
+    "rollback.canaryAfterRollback"
   );
   requireEVMAddress(
     errors,
     rollback.ownerPauseAccount,
-    "rollback.ownerPauseAccount",
+    "rollback.ownerPauseAccount"
   );
   requireEVMAddress(errors, rollback.signerAccount, "rollback.signerAccount");
   requireEvidence(errors, rollback.drainCheck, "rollback.drainCheck");
@@ -674,7 +675,7 @@ function validateRollback(
 function requireEvidence(
   errors: string[],
   value: EvidenceRef | undefined,
-  field: string,
+  field: string
 ): void {
   if (!isRecord(value)) {
     errors.push(`${field} evidence is required`);
@@ -692,7 +693,7 @@ function requireEvidence(
 function requireOptionalEvidence(
   errors: string[],
   value: EvidenceRef | undefined,
-  field: string,
+  field: string
 ): void {
   if (value !== undefined) {
     requireEvidence(errors, value, field);
@@ -701,7 +702,7 @@ function requireOptionalEvidence(
 
 function validateEvidenceType(
   errors: string[],
-  value: EvidenceType,
+  value: EvidenceType
 ): EvidenceType {
   if (value !== "deployment" && value !== "migration") {
     errors.push("evidenceType must be deployment or migration");
@@ -713,7 +714,7 @@ function validateEvidenceType(
 function requireStringArray(
   errors: string[],
   value: string[] | undefined,
-  field: string,
+  field: string
 ): void {
   if (!Array.isArray(value) || value.length === 0) {
     errors.push(`${field} must contain at least one value`);
@@ -727,7 +728,7 @@ function requireStringArray(
 function requireOptionalStringArray(
   errors: string[],
   value: string[] | undefined,
-  field: string,
+  field: string
 ): void {
   if (value !== undefined) {
     requireStringArray(errors, value, field);
@@ -737,7 +738,7 @@ function requireOptionalStringArray(
 function requirePositiveInteger(
   errors: string[],
   value: number,
-  field: string,
+  field: string
 ): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     errors.push(`${field} must be a positive integer`);
@@ -747,7 +748,7 @@ function requirePositiveInteger(
 function requirePositiveDecimalInteger(
   errors: string[],
   value: string,
-  field: string,
+  field: string
 ): void {
   requirePositiveDecimalIntegerValue(errors, value, field);
 }
@@ -755,7 +756,7 @@ function requirePositiveDecimalInteger(
 function requirePositiveDecimalIntegerValue(
   errors: string[],
   value: string,
-  field: string,
+  field: string
 ): bigint | undefined {
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) {
     errors.push(`${field} must be a positive decimal integer string`);
@@ -767,7 +768,7 @@ function requirePositiveDecimalIntegerValue(
 function requireNonNegativeDecimalIntegerValue(
   errors: string[],
   value: string,
-  field: string,
+  field: string
 ): bigint | undefined {
   if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) {
     errors.push(`${field} must be a non-negative decimal integer string`);
@@ -788,7 +789,11 @@ function requireBytes32(errors: string[], value: string, field: string): void {
   }
 }
 
-function requireNonEmpty(errors: string[], value: unknown, field: string): void {
+function requireNonEmpty(
+  errors: string[],
+  value: unknown,
+  field: string
+): void {
   if (typeof value !== "string" || value.trim() === "") {
     errors.push(`${field} must be a non-empty string`);
   }
@@ -797,7 +802,7 @@ function requireNonEmpty(errors: string[], value: unknown, field: string): void 
 function requireOptionalNonEmpty(
   errors: string[],
   value: string | undefined,
-  field: string,
+  field: string
 ): void {
   if (value !== undefined) {
     requireNonEmpty(errors, value, field);
@@ -807,7 +812,7 @@ function requireOptionalNonEmpty(
 function requireEVMAddress(
   errors: string[],
   value: string,
-  field: string,
+  field: string
 ): void {
   if (!isAddressString(value)) {
     errors.push(`${field} must be an EVM address`);
@@ -830,15 +835,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-if (isMainModule(import.meta.url)) {
-  const path = requiredEnv("MIGRATION_EVIDENCE");
+export function checkMigrationEvidence(path: string): void {
   const record = JSON.parse(
-    readFileSync(path, "utf8"),
+    readFileSync(path, "utf8")
   ) as MigrationEvidenceRecord;
   const errors = validateMigrationEvidenceRecord(record);
   if (errors.length > 0) {
-    console.error(jsonStringify({ ok: false, errors }));
-    process.exit(1);
+    throw new CommandOutputError(jsonStringify({ ok: false, errors }));
   }
   console.log(
     jsonStringify({
@@ -847,6 +850,6 @@ if (isMainModule(import.meta.url)) {
       ...(record.ticket === undefined ? {} : { ticket: record.ticket }),
       environment: record.environment,
       directions: record.directions.length,
-    }),
+    })
   );
 }

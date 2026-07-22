@@ -31,34 +31,46 @@ The owner must be able to:
 Do not use the worker hot signer as `OWNER` unless the migration ticket explicitly approves that temporary testnet shortcut.
 
 After deployment and before any funded migration step, run
-`npm run check:deployment-preflight` on each chain with `EXPECTED_OWNER` set to
-the approved operations owner. Set `CANARY_TREASURY`, the minimum native
-balance, and the chain-specific minimum TestOFT balance when canary transfers
-will be sent from a treasury instead of directly from the owner. Hoodi's
-initial minimum TestOFT balance is `0` because its initial supply is `0`; raise
-that threshold only after a successful inbound Sepolia -> Hoodi canary.
+`check:deployment-preflight` on each chain with an explicit Hardhat `--network`
+and an `OML_SCRIPT_PARAMS` envelope. Set `input.expectedOwner` to the approved
+operations owner. Set `input.canaryTreasury`, the minimum native balance, and
+the chain-specific minimum TestOFT balance when canary transfers will be sent
+from a treasury instead of directly from the owner. Hoodi's initial minimum
+TestOFT balance is `0` because its initial supply is `0`; raise that threshold
+only after a successful inbound Sepolia -> Hoodi canary. The profile renderer
+writes these non-secret command envelopes under its output directory.
 
 For the Sepolia/Hoodi rehearsal, keep these values in the testnet deployment
 profile and generate downstream artifacts from it:
 
+```json
+{
+  "input": {
+    "profilePath": "config/deployments/template.json",
+    "outDir": "tmp/deploy-profile",
+    "phase": "render"
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}
+```
+
 ```bash
-SEPOLIA_RPC_URL=... \
-HOODI_RPC_URL=... \
-npm run deploy:profile -- \
-  --profile config/deployments/template.json \
-  --phase render
+OML_SCRIPT_PARAMS=tmp/deploy-profile-render.json \
+  npm run deploy:profile
 ```
 
 The profile is the maintained operator input for owner, long-term PriceFeed
 submitters, initial recipient, per-chain canary TestOFT balance thresholds,
 worker signer addresses, per-chain executor/DVN fee caps and pricing transaction
-policies, worker fee models, and the environment
-variable names that hold RPC URLs. The owner is
+policies, worker fee models, and the Hardhat network name for each chain. It
+does not contain RPC URLs or environment-variable names for RPC URLs. The owner is
 added as a temporary deployment submitter only while the initial worker pathway
 price snapshot is configured, then `OpenWorkersPathwayConfig` revokes that
 temporary authorization. Hardhat private key configuration variables
-are defined in `hardhat.config.ts` and must be stored with `hardhat-keystore`
-before state-changing Ignition commands. Do not copy contract
+and RPC configuration variables are defined in `hardhat.config.ts` and must be
+stored with `hardhat-keystore` or injected from an automation secret store
+before online commands. Do not copy contract
 addresses from terminal output into worker YAML or pathway parameter files by
 hand; regenerate from the Ignition deployment state instead. The normal
 configuration path uses `OAppEndpointConfig` for rehearsal OApp/Endpoint state
@@ -68,6 +80,23 @@ artifact under `tmp/`, not a maintained policy document. For fresh deployments,
 omit `chains[].startBlockNumber` so the renderer writes the latest RPC block
 height to worker `chains[].start_block_number`; set it explicitly only when a
 fixed historical backfill is approved.
+
+Profile deployment invokes the fixed modules through
+`NetworkConnection.ignition.deploy()` and preserves the tracked deployment and
+Future IDs. Deployment state is read from
+`hre.config.paths.ignition/deployments` through
+`@nomicfoundation/ignition-core` `listDeployments()` and `status()`; application
+code does not parse `deployed_addresses.json`. A wholly absent deployment ID
+allows bootstrap-only render. Existing incomplete/corrupt state, a chain-ID
+mismatch, or a missing `OpenWorkers#OpenPriceFeed`, `OpenWorkers#OpenExecutor`,
+`OpenWorkers#OpenDVN`, or `TestOFT#TestOFT` Future is a hard failure.
+
+State-changing phases require top-level `apply: true`. Interactive operation
+confirms the complete multi-network write set once; non-TTY operation requires
+`confirmation: "approved"`. Runtime phase `verify` remains read-only and must
+use `apply: false`. Optional block-explorer source verification is requested
+with `input.verifySource: true` and runs only after runtime verification, using
+the same build profile as deployment.
 
 ## Initial Supply
 

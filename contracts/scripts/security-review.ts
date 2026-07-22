@@ -1,6 +1,5 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 
 type RequiredSecurityDoc = {
   path: string;
@@ -79,7 +78,7 @@ export function validateSecurityReview(): string[] {
     for (const anchor of doc.anchors) {
       if (!body.includes(anchor)) {
         errors.push(
-          `${doc.path}: missing required anchor ${JSON.stringify(anchor)}`,
+          `${doc.path}: missing required anchor ${JSON.stringify(anchor)}`
         );
       }
     }
@@ -102,7 +101,7 @@ function validateNoSecretLogging(): string[] {
 }
 
 export function findSecretLoggingErrors(
-  sources: Map<string, string>,
+  sources: Map<string, string>
 ): string[] {
   const errors: string[] = [];
   for (const [file, source] of sources) {
@@ -115,7 +114,7 @@ export function findSecretLoggingErrors(
         return;
       }
       errors.push(
-        `${file}:${index + 1}: log call mentions secret-bearing material`,
+        `${file}:${index + 1}: log call mentions secret-bearing material`
       );
     });
   }
@@ -151,17 +150,10 @@ function scanSourceFiles(roots: string[]): string[] {
   return files;
 }
 
-function main(): void {
+export function checkSecurityReview(): void {
   const errors = validateSecurityReview();
   if (errors.length > 0) {
     throw new Error(`security review check failed:\n${errors.join("\n")}`);
   }
   console.log(`security review ok: ${requiredDocs.length} documents checked`);
-}
-
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  main();
 }

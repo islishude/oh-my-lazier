@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 
 type RequiredDoc = {
   path: string;
@@ -23,7 +22,10 @@ const requiredDocs: RequiredDoc[] = [
       "No self-only DVN.",
       "Required DVNs must include OpenDVN and at least one independent external DVN.",
       "Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.",
-      "npm run check:migration-evidence -- --migration-evidence <record.json>",
+      "OML_SCRIPT_PARAMS=<record-params.json> npm run check:migration-evidence",
+      "OML_SCRIPT_PARAMS=<inspect-params.json>",
+      "--network <network>",
+      "apply: false",
       "npm run check:runbooks",
       "make security-check",
       "go run ./go/cmd/readinesscheck -config <worker.yaml>",
@@ -94,6 +96,8 @@ const requiredDocs: RequiredDoc[] = [
     anchors: [
       "go run ./go/cmd/pricebot-once -config <worker.yaml>",
       "npm run check:price-config",
+      "OML_SCRIPT_PARAMS=tmp/check-price-config.json",
+      "--network sepolia",
       "For each unique source/source price-feed key",
       "`updatedAt` is recent",
       "`staleAfter` matches the approved config",
@@ -107,8 +111,45 @@ const requiredDocs: RequiredDoc[] = [
       "pauseReceive(uint32 srcEid, bool paused)",
       "setOutboundRateLimit(uint32 dstEid, RateLimitConfig config)",
       "capacity = 0",
+      "OML_SCRIPT_PARAMS=tmp/oft-pathway-drain.json",
+      'input.action: "set-rate-limit"',
+      "top-level `apply` flag",
       "go run ./go/cmd/draincheck -config <worker.yaml>",
       "Do not approve mainnet readiness if:",
+    ],
+  },
+  {
+    path: "contracts/scripts/README.md",
+    anchors: [
+      "Every executable TypeScript entrypoint in this repository is a thin Hardhat",
+      "OML_SCRIPT_PARAMS",
+      'accounts: "remote"',
+      'confirmation: "approved"',
+      "connection.ignition.deploy",
+      "listDeployments()",
+      "status()",
+      "hardhat.verify.config.ts",
+      "tmp/e2e/ignition",
+    ],
+  },
+  {
+    path: "docs/deployments/test-oft-policy.md",
+    anchors: [
+      "OML_SCRIPT_PARAMS=tmp/deploy-profile-render.json",
+      "NetworkConnection.ignition.deploy()",
+      "listDeployments()",
+      "status()",
+      "OpenWorkers#OpenPriceFeed",
+      'confirmation: "approved"',
+    ],
+  },
+  {
+    path: "docs/deployments/layerzero-testnet-addresses.md",
+    anchors: [
+      "input.requiredDVNs",
+      "config/scripts/examples",
+      "--network sepolia",
+      "--network hoodi",
     ],
   },
   {
@@ -234,11 +275,13 @@ export function validateRunbookReview(): string[] {
   try {
     documents.set(
       "docs/monitoring/prometheus-alerts.yml",
-      readFileSync("docs/monitoring/prometheus-alerts.yml", "utf8"),
+      readFileSync("docs/monitoring/prometheus-alerts.yml", "utf8")
     );
   } catch (error) {
     errors.push(
-      `docs/monitoring/prometheus-alerts.yml: cannot read file: ${(error as Error).message}`,
+      `docs/monitoring/prometheus-alerts.yml: cannot read file: ${
+        (error as Error).message
+      }`
     );
   }
   if (errors.length > 0) {
@@ -248,7 +291,7 @@ export function validateRunbookReview(): string[] {
 }
 
 export function validateRunbookDocuments(
-  documents: Map<string, string>,
+  documents: Map<string, string>
 ): string[] {
   const errors: string[] = [];
   for (const doc of requiredDocs) {
@@ -260,7 +303,7 @@ export function validateRunbookDocuments(
     for (const anchor of doc.anchors) {
       if (!body.includes(anchor)) {
         errors.push(
-          `${doc.path}: missing required anchor ${JSON.stringify(anchor)}`,
+          `${doc.path}: missing required anchor ${JSON.stringify(anchor)}`
         );
       }
     }
@@ -271,7 +314,7 @@ export function validateRunbookDocuments(
 
 function validateAlertRules(
   documents: Map<string, string>,
-  errors: string[],
+  errors: string[]
 ): void {
   const path = "docs/monitoring/prometheus-alerts.yml";
   const body = documents.get(path);
@@ -287,7 +330,9 @@ function validateAlertRules(
     for (const anchor of rule.anchors) {
       if (!body.includes(anchor)) {
         errors.push(
-          `${path}: alert ${rule.alert} missing required anchor ${JSON.stringify(anchor)}`,
+          `${path}: alert ${
+            rule.alert
+          } missing required anchor ${JSON.stringify(anchor)}`
         );
       }
     }
@@ -297,19 +342,12 @@ function validateAlertRules(
   }
 }
 
-function main(): void {
+export function checkRunbookReview(): void {
   const errors = validateRunbookReview();
   if (errors.length > 0) {
     throw new Error(`runbook review check failed:\n${errors.join("\n")}`);
   }
   console.log(
-    `runbook review ok: ${requiredDocs.length} documents and ${requiredAlertRules.length} alert rules checked`,
+    `runbook review ok: ${requiredDocs.length} documents and ${requiredAlertRules.length} alert rules checked`
   );
-}
-
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
-  main();
 }

@@ -45,52 +45,57 @@ inputs instead.
 
 LayerZero Labs DVN is one optional external DVN choice for Sepolia/Hoodi
 rehearsal. If it is selected, use the push DVN address, not the lzRead DVN,
-with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles or inside
-`REQUIRED_DVNS` for lower-level scripts. `render:oft-pathway-params` can also
-append it with `--include-layerzero-labs-dvn` or
-`INCLUDE_LAYERZERO_LABS_DVN=true`.
+with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles. For
+lower-level commands, include it explicitly in the JSON
+`input.requiredDVNs` address array.
 
 ## Hoodi
 
-| Field                                 | Value                                        |
-| ------------------------------------- | -------------------------------------------- |
-| Chain key                             | `hoodi-testnet`                              |
-| Native chain ID                       | `560048`                                     |
-| LayerZero EID                         | `40449`                                      |
-| EndpointV2                            | `0x3aCAAf60502791D199a5a5F0B173D78229eBFe32` |
-| SendUln302                            | `0x45841dd1ca50265Da7614fC43A361e526c0e6160` |
-| ReceiveUln302                         | `0xd682ECF100f6F4284138AA925348633B0611Ae21` |
-| LayerZero Executor                    | `0x701f3927871EfcEa1235dB722f9E608aE120d243` |
-| LayerZero `lzExecutor` metadata entry | `0x4Cf1B3Fa61465c2c907f82fC488B43223BA0CF93` |
-| Dead DVN                              | `0x88B27057A9e00c5F05DDa29241027afF63f9e6e0` |
-| LayerZero Labs DVN                    | `0xa78a78a13074ed93ad447a26ec57121f29e8fec2` |
+| Field                                 | Value                                            |
+| ------------------------------------- | ------------------------------------------------ |
+| Chain key                             | `hoodi-testnet`                                  |
+| Native chain ID                       | `560048`                                         |
+| LayerZero EID                         | `40449`                                          |
+| EndpointV2                            | `0x3aCAAf60502791D199a5a5F0B173D78229eBFe32`     |
+| SendUln302                            | `0x45841dd1ca50265Da7614fC43A361e526c0e6160`     |
+| ReceiveUln302                         | `0xd682ECF100f6F4284138AA925348633B0611Ae21`     |
+| LayerZero Executor                    | `0x701f3927871EfcEa1235dB722f9E608aE120d243`     |
+| LayerZero `lzExecutor` metadata entry | `0x4Cf1B3Fa61465c2c907f82fC488B43223BA0CF93`     |
+| Dead DVN                              | `0x88B27057A9e00c5F05DDa29241027afF63f9e6e0`     |
+| LayerZero Labs DVN                    | `0xa78a78a13074ed93ad447a26ec57121f29e8fec2`     |
 | LayerZero Labs lzRead DVN             | not currently published in `dvnDeployments.json` |
 
 LayerZero Labs DVN is one optional external DVN choice for Sepolia/Hoodi
 rehearsal. If it is selected, use the push DVN address, not the lzRead DVN,
-with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles or inside
-`REQUIRED_DVNS` for lower-level scripts. `render:oft-pathway-params` can also
-append it with `--include-layerzero-labs-dvn` or
-`INCLUDE_LAYERZERO_LABS_DVN=true`.
+with `chains[].includeLayerZeroLabsDVN: true` in deployment profiles. For
+lower-level commands, include it explicitly in the JSON
+`input.requiredDVNs` address array.
 
 ## Direction Inputs
 
 For Ethereum Sepolia -> Hoodi:
 
-- `REMOTE_EID=40449`
-- `ENDPOINT=0x6EDCE65403992e310A62460808c4b910D972f10f`
-- `SEND_ULN=0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE`
-- `RECEIVE_ULN=0xdAf00F5eE2158dD58E0d3857851c432E34A3A851`
+- Hardhat network: `sepolia`
+- `input.remoteEid`: `"40449"`
+- `input.endpoint`: `"0x6EDCE65403992e310A62460808c4b910D972f10f"`
+- `input.sendUln`: `"0xcc1ae8Cf5D3904Cef3360A9532B477529b177cCE"`
+- `input.receiveUln`: `"0xdAf00F5eE2158dD58E0d3857851c432E34A3A851"`
 - Profile convenience: `includeLayerZeroLabsDVN: true`
-- `REQUIRED_DVNS=<sepolia-open-dvn>,0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193`
+- `input.requiredDVNs`: `["<sepolia-open-dvn>", "0x8eebf8b423b73bfca51a1db4b7354aa0bfca9193"]`
 
 For Hoodi -> Ethereum Sepolia:
 
-- `REMOTE_EID=40161`
-- `ENDPOINT=0x3aCAAf60502791D199a5a5F0B173D78229eBFe32`
-- `SEND_ULN=0x45841dd1ca50265Da7614fC43A361e526c0e6160`
-- `RECEIVE_ULN=0xd682ECF100f6F4284138AA925348633B0611Ae21`
+- Hardhat network: `hoodi`
+- `input.remoteEid`: `"40161"`
+- `input.endpoint`: `"0x3aCAAf60502791D199a5a5F0B173D78229eBFe32"`
+- `input.sendUln`: `"0x45841dd1ca50265Da7614fC43A361e526c0e6160"`
+- `input.receiveUln`: `"0xd682ECF100f6F4284138AA925348633B0611Ae21"`
 - Profile convenience: `includeLayerZeroLabsDVN: true`
-- `REQUIRED_DVNS=<hoodi-open-dvn>,0xa78a78a13074ed93ad447a26ec57121f29e8fec2`
+- `input.requiredDVNs`: `["<hoodi-open-dvn>", "0xa78a78a13074ed93ad447a26ec57121f29e8fec2"]`
+
+The lower-level examples use the strict envelope in
+`config/scripts/examples`; pass them through `OML_SCRIPT_PARAMS` and specify
+`--network sepolia` or `--network hoodi`. RPC URLs and credentials come from
+Hardhat configuration variables, not these JSON inputs.
 
 Re-check the source URLs immediately before any funded testnet migration or mainnet proposal; LayerZero metadata is external operational state.

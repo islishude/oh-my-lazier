@@ -1,203 +1,298 @@
-import {
-  assertConfiguredChain,
-  createClients,
-  envAddress,
-  envBigInt,
-  envUint32,
-  loadArtifact,
-  optionalAddress,
-  optionalBigInt,
-  optionalUint64,
-  waitForTx,
-} from "./lib.js";
+import type { Address } from "viem";
+import { loadABIArtifact, waitForTx, type ChainClients } from "./lib.js";
 import { shouldSetPriceFeed } from "./worker-price-feed.js";
 
-const testOFTArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
-);
-const openExecutorArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
-);
-const openDVNArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
-);
-const openPriceFeedArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
-);
-
-const { account, publicClient, walletClient } = createClients();
-await assertConfiguredChain(publicClient);
-
-const testOFT = optionalAddress("TEST_OFT");
-const openExecutor = envAddress("OPEN_EXECUTOR");
-const openDVN = envAddress("OPEN_DVN");
-const priceFeed = envAddress("PRICE_FEED");
-const remoteEid = envUint32("REMOTE_EID");
-const sendLib = envAddress("SEND_LIB");
-const srcOApp = optionalAddress("SRC_OAPP") ?? testOFT;
-if (srcOApp === undefined) {
-  throw new Error("SRC_OAPP or TEST_OFT is required");
-}
-
-const pathwayConfig = {
-  enabled: true,
-  maxMessageSize: envBigInt("MAX_MESSAGE_SIZE"),
-  minLzReceiveGas: envBigInt("MIN_LZ_RECEIVE_GAS"),
-  maxLzReceiveGas: envBigInt("MAX_LZ_RECEIVE_GAS"),
+export type ConfigureWorkersPriceSnapshotInput = {
+  dstGasPriceInSrcToken: bigint;
+  dstDataFeePerByteInSrcToken: bigint;
+  updatedAt?: bigint;
+  staleAfter: bigint;
 };
 
-const now = BigInt(Math.floor(Date.now() / 1000));
-const sharedPriceSnapshot = priceSnapshot(now);
-const executorFeeModel = workerFeeModel("EXECUTOR");
-const dvnFeeModel = workerFeeModel("DVN");
+export type ConfigureWorkersFeeModelInput = {
+  baseFee: bigint;
+  dstGasOverhead: bigint;
+  dataSizeOverheadBytes: bigint;
+  marginBps: bigint;
+};
 
-const rateLimitCapacity = optionalBigInt("RATE_LIMIT_CAPACITY");
-const rateLimitRefillPerSecond = optionalBigInt("RATE_LIMIT_REFILL_PER_SECOND");
-if (rateLimitCapacity !== undefined || rateLimitRefillPerSecond !== undefined) {
+export type ConfigureWorkersRateLimitInput = {
+  capacity: bigint;
+  refillPerSecond: bigint;
+};
+
+export type ConfigureWorkersInput = {
+  testOFT?: Address;
+  openExecutor: Address;
+  openDVN: Address;
+  priceFeed: Address;
+  remoteEid: number;
+  sendLib: Address;
+  srcOApp?: Address;
+  maxMessageSize: bigint;
+  minLzReceiveGas: bigint;
+  maxLzReceiveGas: bigint;
+  priceSnapshot: ConfigureWorkersPriceSnapshotInput;
+  executorFeeModel: ConfigureWorkersFeeModelInput;
+  dvnFeeModel: ConfigureWorkersFeeModelInput;
+  rateLimit?: ConfigureWorkersRateLimitInput;
+};
+
+export type ConfigureWorkersResult = {
+  chainId: number;
+  sender: Address;
+  testOFT?: Address;
+  openExecutor: Address;
+  openDVN: Address;
+  priceFeed: Address;
+  remoteEid: number;
+  sendLib: Address;
+  srcOApp: Address;
+};
+
+export type ConfigureWorkersOptions = {
+  now?: bigint;
+};
+
+export type ConfigureWorkersPlan = {
+  srcOApp: Address;
+  pathwayConfig: {
+    enabled: true;
+    maxMessageSize: bigint;
+    minLzReceiveGas: bigint;
+    maxLzReceiveGas: bigint;
+  };
+  priceSnapshot: Required<ConfigureWorkersPriceSnapshotInput>;
+  actions: string[];
+};
+
+const uint64Max = (1n << 64n) - 1n;
+const uint128Max = (1n << 128n) - 1n;
+const maxStaleAfter = 86_400n;
+const bpsDenominator = 10_000n;
+
+/** Validate every static constraint before any worker transaction is sent. */
+export function buildConfigureWorkersPlan(
+  input: ConfigureWorkersInput,
+  options: ConfigureWorkersOptions = {}
+): ConfigureWorkersPlan {
+  const srcOApp = input.srcOApp ?? input.testOFT;
+  if (srcOApp === undefined) {
+    throw new Error("input.srcOApp or input.testOFT is required");
+  }
+  if (input.rateLimit !== undefined && input.testOFT === undefined) {
+    throw new Error("input.testOFT is required for TestOFT rate-limit changes");
+  }
+  assertMaximum(input.minLzReceiveGas, uint128Max, "input.minLzReceiveGas");
+  assertMaximum(input.maxLzReceiveGas, uint128Max, "input.maxLzReceiveGas");
+  if (input.minLzReceiveGas > input.maxLzReceiveGas) {
+    throw new Error(
+      "input.minLzReceiveGas must not exceed input.maxLzReceiveGas"
+    );
+  }
+
+  const now = options.now ?? BigInt(Math.floor(Date.now() / 1000));
+  const updatedAt = input.priceSnapshot.updatedAt ?? now;
+  assertMaximum(updatedAt, uint64Max, "input.priceSnapshot.updatedAt");
+  assertMaximum(
+    input.priceSnapshot.staleAfter,
+    uint64Max,
+    "input.priceSnapshot.staleAfter"
+  );
+  if (input.priceSnapshot.dstGasPriceInSrcToken === 0n) {
+    throw new Error(
+      "input.priceSnapshot.dstGasPriceInSrcToken must be greater than zero"
+    );
+  }
+  if (updatedAt === 0n || updatedAt > now) {
+    throw new Error(
+      "input.priceSnapshot.updatedAt must be positive and not in the future"
+    );
+  }
   if (
-    rateLimitCapacity === undefined ||
-    rateLimitRefillPerSecond === undefined
+    input.priceSnapshot.staleAfter === 0n ||
+    input.priceSnapshot.staleAfter > maxStaleAfter
   ) {
     throw new Error(
-      "RATE_LIMIT_CAPACITY and RATE_LIMIT_REFILL_PER_SECOND must be set together",
+      "input.priceSnapshot.staleAfter must be between 1 and 86400"
     );
   }
-  if (testOFT === undefined) {
-    throw new Error("TEST_OFT is required for TestOFT rate-limit changes");
-  }
-  await waitForTx(
-    publicClient,
-    "TestOFT.setOutboundRateLimit",
-    await walletClient.writeContract({
-      address: testOFT,
-      abi: testOFTArtifact.abi,
-      functionName: "setOutboundRateLimit",
-      args: [
-        remoteEid,
-        {
-          capacity: rateLimitCapacity,
-          refillPerSecond: rateLimitRefillPerSecond,
-        },
-      ],
-      account,
-      chain: walletClient.chain,
-    }),
-  );
+  validateFeeModel(input.executorFeeModel, "input.executorFeeModel");
+  validateFeeModel(input.dvnFeeModel, "input.dvnFeeModel");
+
+  return {
+    srcOApp,
+    pathwayConfig: {
+      enabled: true,
+      maxMessageSize: input.maxMessageSize,
+      minLzReceiveGas: input.minLzReceiveGas,
+      maxLzReceiveGas: input.maxLzReceiveGas,
+    },
+    priceSnapshot: {
+      ...input.priceSnapshot,
+      updatedAt,
+    },
+    actions: [
+      ...(input.rateLimit === undefined
+        ? []
+        : ["TestOFT.setOutboundRateLimit"]),
+      "OpenPriceFeed.setPriceSnapshot",
+      "OpenExecutor/OpenDVN.setPriceFeed when changed",
+      "OpenExecutor/OpenDVN.setAllowedSendLib",
+      "OpenExecutor/OpenDVN.setPathwayConfig",
+      "OpenExecutor/OpenDVN.setFeeModel",
+    ],
+  };
 }
 
-await waitForTx(
-  publicClient,
-  "OpenPriceFeed.setPriceSnapshot",
-  await walletClient.writeContract({
-    address: priceFeed,
-    abi: openPriceFeedArtifact.abi,
-    functionName: "setPriceSnapshot",
-    args: [[{ dstEid: remoteEid, snapshot: sharedPriceSnapshot }]],
-    account,
-    chain: walletClient.chain,
-  }),
-);
+/** Configure the repeatable worker and optional TestOFT pathway settings. */
+export async function configureWorkers(
+  input: ConfigureWorkersInput,
+  clients: ChainClients,
+  options: ConfigureWorkersOptions = {}
+): Promise<ConfigureWorkersResult> {
+  const plan = buildConfigureWorkersPlan(input, options);
 
-for (const [label, address, abi] of [
-  ["OpenExecutor", openExecutor, openExecutorArtifact.abi],
-  ["OpenDVN", openDVN, openDVNArtifact.abi],
-] as const) {
-  const currentPriceFeed = (await publicClient.readContract({
-    address,
-    abi,
-    functionName: "priceFeed",
-  })) as string;
-  if (shouldSetPriceFeed(currentPriceFeed, priceFeed)) {
+  const testOFTArtifact = loadABIArtifact(
+    "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json"
+  );
+  const openExecutorArtifact = loadABIArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json"
+  );
+  const openDVNArtifact = loadABIArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json"
+  );
+  const openPriceFeedArtifact = loadABIArtifact(
+    "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json"
+  );
+
+  if (input.rateLimit !== undefined && input.testOFT !== undefined) {
     await waitForTx(
-      publicClient,
-      `${label}.setPriceFeed`,
-      await walletClient.writeContract({
+      clients.publicClient,
+      "TestOFT.setOutboundRateLimit",
+      await clients.walletClient.writeContract({
+        address: input.testOFT,
+        abi: testOFTArtifact.abi,
+        functionName: "setOutboundRateLimit",
+        args: [input.remoteEid, input.rateLimit],
+        account: clients.account,
+        chain: clients.walletClient.chain,
+      })
+    );
+  }
+
+  await waitForTx(
+    clients.publicClient,
+    "OpenPriceFeed.setPriceSnapshot",
+    await clients.walletClient.writeContract({
+      address: input.priceFeed,
+      abi: openPriceFeedArtifact.abi,
+      functionName: "setPriceSnapshot",
+      args: [[{ dstEid: input.remoteEid, snapshot: plan.priceSnapshot }]],
+      account: clients.account,
+      chain: clients.walletClient.chain,
+    })
+  );
+
+  for (const [label, address, abi, feeModel] of [
+    [
+      "OpenExecutor",
+      input.openExecutor,
+      openExecutorArtifact.abi,
+      input.executorFeeModel,
+    ],
+    ["OpenDVN", input.openDVN, openDVNArtifact.abi, input.dvnFeeModel],
+  ] as const) {
+    const currentPriceFeed = (await clients.publicClient.readContract({
+      address,
+      abi,
+      functionName: "priceFeed",
+    })) as string;
+    if (shouldSetPriceFeed(currentPriceFeed, input.priceFeed)) {
+      await waitForTx(
+        clients.publicClient,
+        `${label}.setPriceFeed`,
+        await clients.walletClient.writeContract({
+          address,
+          abi,
+          functionName: "setPriceFeed",
+          args: [input.priceFeed],
+          account: clients.account,
+          chain: clients.walletClient.chain,
+        })
+      );
+    }
+
+    await waitForTx(
+      clients.publicClient,
+      `${label}.setAllowedSendLib`,
+      await clients.walletClient.writeContract({
         address,
         abi,
-        functionName: "setPriceFeed",
-        args: [priceFeed],
-        account,
-        chain: walletClient.chain,
-      }),
+        functionName: "setAllowedSendLib",
+        args: [input.sendLib, true],
+        account: clients.account,
+        chain: clients.walletClient.chain,
+      })
+    );
+
+    await waitForTx(
+      clients.publicClient,
+      `${label}.setPathwayConfig`,
+      await clients.walletClient.writeContract({
+        address,
+        abi,
+        functionName: "setPathwayConfig",
+        args: [input.remoteEid, plan.srcOApp, plan.pathwayConfig],
+        account: clients.account,
+        chain: clients.walletClient.chain,
+      })
+    );
+
+    await waitForTx(
+      clients.publicClient,
+      `${label}.setFeeModel`,
+      await clients.walletClient.writeContract({
+        address,
+        abi,
+        functionName: "setFeeModel",
+        args: [input.remoteEid, feeModel],
+        account: clients.account,
+        chain: clients.walletClient.chain,
+      })
     );
   }
 
-  await waitForTx(
-    publicClient,
-    `${label}.setAllowedSendLib`,
-    await walletClient.writeContract({
-      address,
-      abi,
-      functionName: "setAllowedSendLib",
-      args: [sendLib, true],
-      account,
-      chain: walletClient.chain,
-    }),
-  );
-
-  await waitForTx(
-    publicClient,
-    `${label}.setPathwayConfig`,
-    await walletClient.writeContract({
-      address,
-      abi,
-      functionName: "setPathwayConfig",
-      args: [remoteEid, srcOApp, pathwayConfig],
-      account,
-      chain: walletClient.chain,
-    }),
-  );
-
-  await waitForTx(
-    publicClient,
-    `${label}.setFeeModel`,
-    await walletClient.writeContract({
-      address,
-      abi,
-      functionName: "setFeeModel",
-      args: [remoteEid, label === "OpenExecutor" ? executorFeeModel : dvnFeeModel],
-      account,
-      chain: walletClient.chain,
-    }),
-  );
-}
-
-console.log(
-  JSON.stringify(
-    {
-      chainId: Number(await publicClient.getChainId()),
-      sender: account.address,
-      testOFT,
-      openExecutor,
-      openDVN,
-      priceFeed,
-      remoteEid,
-      sendLib,
-      srcOApp,
-    },
-    null,
-    2,
-  ),
-);
-
-function priceSnapshot(defaultUpdatedAt: bigint) {
   return {
-    dstGasPriceInSrcToken: envBigInt(
-      "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
-    ),
-    dstDataFeePerByteInSrcToken: envBigInt(
-      "PRICE_SNAPSHOT_DST_DATA_FEE_PER_BYTE_IN_SRC_TOKEN",
-    ),
-    updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
-    staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
+    chainId: Number(await clients.publicClient.getChainId()),
+    sender: clients.account.address,
+    ...(input.testOFT === undefined ? {} : { testOFT: input.testOFT }),
+    openExecutor: input.openExecutor,
+    openDVN: input.openDVN,
+    priceFeed: input.priceFeed,
+    remoteEid: input.remoteEid,
+    sendLib: input.sendLib,
+    srcOApp: plan.srcOApp,
   };
 }
 
-function workerFeeModel(prefix: "EXECUTOR" | "DVN") {
-  return {
-    baseFee: envBigInt(`${prefix}_FEE_FIXED_FEE_WEI`),
-    dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
-    dataSizeOverheadBytes: envBigInt(`${prefix}_FEE_DATA_SIZE_OVERHEAD_BYTES`),
-    marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
-  };
+function validateFeeModel(
+  model: ConfigureWorkersFeeModelInput,
+  label: string
+): void {
+  assertMaximum(model.dstGasOverhead, uint64Max, `${label}.dstGasOverhead`);
+  assertMaximum(
+    model.dataSizeOverheadBytes,
+    uint64Max,
+    `${label}.dataSizeOverheadBytes`
+  );
+  if (model.marginBps > bpsDenominator) {
+    throw new Error(`${label}.marginBps must not exceed 10000`);
+  }
+}
+
+function assertMaximum(value: bigint, maximum: bigint, label: string): void {
+  if (value > maximum) {
+    throw new Error(`${label} exceeds ${maximum.toString()}`);
+  }
 }

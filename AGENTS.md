@@ -11,8 +11,8 @@
 ## Repository Layout
 
 - `contracts/contracts`: Solidity contracts. Shared worker code lives under `common`, OFT code under `oft`, and `OpenExecutor`/`OpenDVN` under `workers`.
-- `contracts/test`: Solidity tests. Prefer table coverage in the existing test file over one-off near-duplicates.
-- `contracts/scripts`: TypeScript deploy, inspect, check, generation, and runbook/security validator scripts. Script behavior changes need script tests when practical.
+- `contracts/test`: Solidity tests. Prefer table coverage in the existing test file over one-off near-duplicates. Hardhat Node runner tests live under `contracts/test/nodejs`; do not place script tests beside executable wrappers.
+- `contracts/scripts`: Import-safe TypeScript deploy, inspect, check, generation, and runbook/security command cores. Executable entries live under `contracts/scripts/commands` and must remain thin `hardhat run --no-compile` wrappers. Script behavior changes need Node runner tests when practical.
 - Keep each `go/cmd/<command>/main.go` limited to CLI parsing and wiring. Command-specific implementation packages may live below that command directory (for example, `go/cmd/e2ereplaycheck/e2ereplaycheck`); move reusable or worker business logic to `go/internal`.
 - `go/internal/config`, `configcheck`, `configdiff`, `chain`: config loading, validation, on-chain checks, and static chain metadata.
 - `go/internal/db`, `packets`, `dvn`, `executor`, `indexer`, `txmgr`, `readiness`: durable worker state machines and runtime flows. Store packet, DVN, executor, indexer, and tx manager state in Postgres.
@@ -47,6 +47,15 @@
 - Keep `docs/security` for release-readiness records, not personal scan notes.
 - If generated ABI source dependencies change, update npm audit/security dispositions as needed.
 
+## Contract Scripts
+
+- Load command input only from the strict `OML_SCRIPT_PARAMS` JSON envelope. Do not restore custom CLI flags, business-input environment fallbacks, direct `tsx` execution, or `isMainModule` guards.
+- Keep private keys, RPC credentials, keystore passwords, and API keys out of script JSON. Use Hardhat configuration variables/keystore or the existing infrastructure secret environment.
+- Require an explicit Hardhat `--network` for online single-network commands. All connections must validate configured and RPC chain IDs and close in `finally`; read-only connections use `accounts: "remote"`.
+- Every chain-writing command must require explicit `apply`. `apply: false` plans without sending; non-TTY `apply: true` requires `confirmation: "approved"`.
+- Deploy fixed Ignition modules through `NetworkConnection.ignition.deploy()`. Read deployment state through `@nomicfoundation/ignition-core` `listDeployments()` and `status()`; do not parse `deployed_addresses.json` in application code or rename tracked module/Future/deployment IDs.
+- Keep block-explorer source verification as the only Ignition CLI subprocess. It must use the read-only verification config and the same build profile used for deployment.
+
 ## Tests and Checks
 
 - Prefer extending existing table-driven tests, or converting adjacent cases to tables, before adding one-off tests.
@@ -65,9 +74,10 @@ make test-integration
 make security-check
 make docker-smoke
 npm run check:runbooks
-npm run check:migration-evidence -- --migration-evidence docs/deployments/sepolia-hoodi/migration-evidence.json
+OML_SCRIPT_PARAMS=config/scripts/examples/check-migration-evidence.json npm run check:migration-evidence
 ```
 
 - `make test-integration` is the Docker Compose Postgres plus Rustack KMS stack.
 - `make security-check` runs security review validation, npm audit disposition validation, and Go vulnerability checking.
+- `npm run test:scripts` runs only the Hardhat Node test suite; `npx hardhat test solidity --no-compile` runs only Solidity tests.
 - Run `make generate-lzabi` or `make generate-pricing-abi` when their source artifacts or pinned packages change, then keep the corresponding `make check-*` target green.

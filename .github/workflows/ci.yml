@@ -43,7 +43,7 @@ jobs:
         run: npm run test:scripts
 
       - name: Run Solidity tests
-        run: npx hardhat test
+        run: npx hardhat test solidity --no-compile
 
       - name: Check runbooks
         run: npm run check:runbooks

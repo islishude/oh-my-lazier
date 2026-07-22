@@ -1,3 +1,1 @@
-import { sendOFTFromEnv } from "./oft-send-runner.js";
-
-await sendOFTFromEnv("TestOFT.send canary");
+export { sendOFT, type SendOFTInput } from "./oft-send-runner.js";

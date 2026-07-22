@@ -1,16 +1,15 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
+import type { EthereumProvider } from "hardhat/types/providers";
 import {
-  createPublicClient,
-  createWalletClient,
   decodeEventLog,
-  defineChain,
   encodeFunctionData,
   encodeEventTopics,
   getAddress,
-  http,
   isAddressEqual,
   keccak256,
+  type Account,
   type Abi,
   type Address,
   type Hex,
@@ -19,7 +18,11 @@ import {
   type TransactionReceipt,
   type WalletClient,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import {
+  type ApplyGate,
+  type WriteNetworkContext,
+  withWriteConnection,
+} from "./command-harness.js";
 import { buildCanarySendParam } from "./oft-canary.js";
 import {
   sourceExecutorFeeTotal,
@@ -43,7 +46,6 @@ import {
   addressToBytes32,
   jsonStringify,
   loadArtifact,
-  optionalEnv,
   type Artifact,
 } from "./lib.js";
 import {
@@ -52,40 +54,42 @@ import {
   type LocalE2EDeployment,
 } from "./e2e-local-artifacts.js";
 
-const tmpDir = optionalEnv("E2E_TMP_DIR", "tmp/e2e");
-const deployerPrivateKey = normalizePrivateKey(
-  optionalEnv(
-    "E2E_DEPLOYER_PRIVATE_KEY",
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  ),
-);
-const deployer = privateKeyToAccount(deployerPrivateKey);
 const withdrawalRecipient = getAddress(
-  "0x000000000000000000000000000000000000fee1",
+  "0x000000000000000000000000000000000000fee1"
 );
 
 const endpointArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json",
+  "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json"
 );
 const sendUlnArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/SendUln302.sol/SendUln302.json",
+  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/SendUln302.sol/SendUln302.json"
 );
 const receiveUlnArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json",
+  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json"
 );
 const oftArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
+  "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json"
 );
 const openExecutorArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+  "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json"
 );
 const openDVNArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
+  "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json"
 );
 
 type Clients = {
+  provider: EthereumProvider;
   publicClient: PublicClient;
   walletClient: WalletClient;
+  account: Account;
+};
+
+type LocalE2ERunState = {
+  deployment: LocalE2EDeployment;
+  deployerAddress: Address;
+  clients: Record<"a" | "b", Clients>;
+  multiSendIndexerEvidencePath: string;
+  destinationReplayEvidencePath: string;
 };
 
 type RunDirectionOptions = {
@@ -115,56 +119,234 @@ type PendingCommitVerificationTx = {
   maxPriorityFeePerGas?: bigint;
 };
 
-const deploymentPath = path.join(tmpDir, "deployments.json");
-const multiSendIndexerEvidencePath = path.join(
-  tmpDir,
-  "multi-oft-send-indexer.json",
-);
-const destinationReplayEvidencePath = path.join(
-  tmpDir,
-  "destination-replay.json",
-);
-const deployment: LocalE2EDeployment = validateLocalE2EDeployment(
-  JSON.parse(await readFile(deploymentPath, "utf8")),
-);
-
 const amountAB = 1n * 10n ** 18n;
 const amountBA = amountAB / 2n;
 const multiSendAmountsAB = [amountAB / 4n, amountAB / 5n] as const;
 
-logStep("loaded deployment", {
-  path: deploymentPath,
-  chain_a: `${deployment.chains.a.name}:${deployment.chains.a.eid}`,
-  chain_b: `${deployment.chains.b.name}:${deployment.chains.b.eid}`,
-  deployer: deployer.address,
-});
+export const LOCAL_E2E_RUN_NETWORKS = {
+  chainA: "local-anvil-a",
+  chainB: "local-anvil-b",
+} as const;
 
-await waitForWorkerReady();
-await runDirection(deployment.chains.a, deployment.chains.b, amountAB, {
-  exerciseRBF: true,
-});
-await runDirection(deployment.chains.b, deployment.chains.a, amountBA);
-await runMultiSendIndexerScenario(
-  deployment.chains.a,
-  deployment.chains.b,
-  multiSendAmountsAB,
-);
+const defaultWorkerReadyUrl = "http://127.0.0.1:19090/readyz";
 
-console.log(
-  jsonStringify({
-    ok: true,
-    directions: [
-      `${deployment.chains.a.name}->${deployment.chains.b.name}`,
-      `${deployment.chains.b.name}->${deployment.chains.a.name}`,
+export type LocalE2ERunBusinessInput = {
+  tmpDir: string;
+  workerReadyUrl?: string;
+};
+
+export type LocalE2ERunInput = {
+  tmpDir: string;
+  workerReadyUrl: string;
+};
+
+export type LocalE2ERunContext = {
+  hre: HardhatRuntimeEnvironment;
+  gate: Pick<ApplyGate, "authorize">;
+  fetch?: typeof fetch;
+};
+
+export type LocalE2ERunResult =
+  | {
+      applied: false;
+      directions: readonly string[];
+    }
+  | {
+      applied: true;
+      ok: true;
+      directions: readonly string[];
+    };
+
+/** Resolve and validate the non-secret input for the local E2E scenarios. */
+export function resolveLocalE2ERunInput(
+  input: LocalE2ERunBusinessInput
+): LocalE2ERunInput {
+  if (input.tmpDir.trim() === "") {
+    throw new Error("tmpDir must not be empty");
+  }
+  const workerReadyUrl = input.workerReadyUrl ?? defaultWorkerReadyUrl;
+  let parsedWorkerReadyUrl: URL;
+  try {
+    parsedWorkerReadyUrl = new URL(workerReadyUrl);
+  } catch {
+    throw new Error("workerReadyUrl must be a valid URL");
+  }
+  if (
+    parsedWorkerReadyUrl.protocol !== "http:" &&
+    parsedWorkerReadyUrl.protocol !== "https:"
+  ) {
+    throw new Error("workerReadyUrl must use http or https");
+  }
+  return { tmpDir: input.tmpDir, workerReadyUrl };
+}
+
+/** Run every stateful local E2E scenario over the two named Hardhat networks. */
+export async function runLocalE2E(
+  input: LocalE2ERunInput,
+  context: LocalE2ERunContext
+): Promise<LocalE2ERunResult> {
+  const deploymentPath = path.join(input.tmpDir, "deployments.json");
+  const deployment = validateLocalE2ERunDeployment(
+    validateLocalE2EDeployment(
+      JSON.parse(await readFile(deploymentPath, "utf8")) as unknown
+    )
+  );
+  const directions = [
+    directionLabel(deployment.chains.a, deployment.chains.b),
+    directionLabel(deployment.chains.b, deployment.chains.a),
+  ] as const;
+
+  logStep("loaded deployment", {
+    path: deploymentPath,
+    chain_a: `${deployment.chains.a.name}:${deployment.chains.a.eid}`,
+    chain_b: `${deployment.chains.b.name}:${deployment.chains.b.eid}`,
+    deployer: deployment.deployer,
+  });
+
+  const applied = await context.gate.authorize({
+    command: "e2e:run-local",
+    targets: [
+      {
+        network: LOCAL_E2E_RUN_NETWORKS.chainA,
+        chainId: deployment.chains.a.chainId,
+      },
+      {
+        network: LOCAL_E2E_RUN_NETWORKS.chainB,
+        chainId: deployment.chains.b.chainId,
+      },
     ],
-  }),
-);
+    actions: [
+      "run bidirectional OFT sends and delivery assertions",
+      "exercise worker transaction replacement and fee withdrawals",
+      "run the multi-send indexer and destination replay scenarios",
+    ],
+  });
+  if (!applied) {
+    return { applied: false, directions };
+  }
+
+  await waitForWorkerReady(input.workerReadyUrl, context.fetch ?? fetch);
+  return await withWriteConnection(
+    context.hre,
+    {
+      network: LOCAL_E2E_RUN_NETWORKS.chainA,
+      expectedChainId: deployment.chains.a.chainId,
+    },
+    async (chainAContext) =>
+      await withWriteConnection(
+        context.hre,
+        {
+          network: LOCAL_E2E_RUN_NETWORKS.chainB,
+          expectedChainId: deployment.chains.b.chainId,
+        },
+        async (chainBContext) => {
+          const state = createRunState(
+            input,
+            deployment,
+            chainAContext,
+            chainBContext
+          );
+          await runDirection(
+            state,
+            deployment.chains.a,
+            deployment.chains.b,
+            amountAB,
+            { exerciseRBF: true }
+          );
+          await runDirection(
+            state,
+            deployment.chains.b,
+            deployment.chains.a,
+            amountBA
+          );
+          await runMultiSendIndexerScenario(
+            state,
+            deployment.chains.a,
+            deployment.chains.b,
+            multiSendAmountsAB
+          );
+          return { applied: true, ok: true, directions };
+        }
+      )
+  );
+}
+
+export function validateLocalE2ERunDeployment(
+  deployment: LocalE2EDeployment
+): LocalE2EDeployment {
+  const expected = [
+    [deployment.chains.a, "a", LOCAL_E2E_RUN_NETWORKS.chainA, 31337],
+    [deployment.chains.b, "b", LOCAL_E2E_RUN_NETWORKS.chainB, 31338],
+  ] as const;
+  for (const [chain, key, name, chainId] of expected) {
+    if (chain.key !== key || chain.name !== name || chain.chainId !== chainId) {
+      throw new Error(
+        `deployment chain ${key} must use Hardhat network ${name} with chain id ${chainId}`
+      );
+    }
+  }
+  return deployment;
+}
+
+function createRunState(
+  input: LocalE2ERunInput,
+  deployment: LocalE2EDeployment,
+  chainAContext: WriteNetworkContext,
+  chainBContext: WriteNetworkContext
+): LocalE2ERunState {
+  const chainAClients = clientsFromContext(chainAContext);
+  const chainBClients = clientsFromContext(chainBContext);
+  if (
+    !isAddressEqual(
+      chainAClients.account.address,
+      chainBClients.account.address
+    )
+  ) {
+    throw new Error(
+      `local E2E networks use different deployers: ${chainAClients.account.address} and ${chainBClients.account.address}`
+    );
+  }
+  if (!isAddressEqual(chainAClients.account.address, deployment.deployer)) {
+    throw new Error(
+      `configured deployer ${chainAClients.account.address} does not match deployment deployer ${deployment.deployer}`
+    );
+  }
+  return {
+    deployment,
+    deployerAddress: getAddress(chainAClients.account.address),
+    clients: { a: chainAClients, b: chainBClients },
+    multiSendIndexerEvidencePath: path.join(
+      input.tmpDir,
+      "multi-oft-send-indexer.json"
+    ),
+    destinationReplayEvidencePath: path.join(
+      input.tmpDir,
+      "destination-replay.json"
+    ),
+  };
+}
+
+function clientsFromContext(context: WriteNetworkContext): Clients {
+  const account = context.walletClient.account;
+  if (account === undefined) {
+    throw new Error(
+      `Hardhat network ${context.networkName} has no signer account`
+    );
+  }
+  return {
+    provider: context.connection.provider,
+    publicClient: context.publicClient,
+    walletClient: context.walletClient,
+    account,
+  };
+}
 
 async function runDirection(
+  state: LocalE2ERunState,
   source: ChainDeployment,
   destination: ChainDeployment,
   amountLD: bigint,
-  options: RunDirectionOptions = {},
+  options: RunDirectionOptions = {}
 ) {
   const direction = directionLabel(source, destination);
   logStep("direction started", {
@@ -173,24 +355,23 @@ async function runDirection(
     dst_eid: destination.eid,
     amount_ld: amountLD,
   });
-  const sourceClients = clientsFor(source);
-  const destinationClients = clientsFor(destination);
+  const sourceClients = clientsFor(state, source);
+  const destinationClients = clientsFor(state, destination);
   const balanceBefore = await balanceOf(
     destinationClients.publicClient,
     destination.oft,
-    deployer.address,
+    state.deployerAddress
   );
   logStep("destination balance before send", {
     direction,
-    recipient: deployer.address,
+    recipient: state.deployerAddress,
     balance: balanceBefore,
   });
   const sendParam = buildCanarySendParam({
     dstEid: destination.eid,
-    recipient: deployer.address,
+    recipient: state.deployerAddress,
     amountLD,
     minAmountLD: amountLD,
-    lzReceiveGas: BigInt(deployment.parameters.lzReceiveGas),
   });
   const fee = await sourceClients.publicClient.readContract({
     address: source.oft,
@@ -202,14 +383,14 @@ async function runDirection(
   logStep("quoted OFT send", {
     direction,
     native_fee: nativeFee,
-    lz_receive_gas: deployment.parameters.lzReceiveGas,
+    lz_receive_gas: state.deployment.parameters.lzReceiveGas,
   });
   const hash = await sourceClients.walletClient.writeContract({
     address: source.oft,
     abi: oftArtifact.abi,
     functionName: "send",
-    args: [sendParam, { nativeFee, lzTokenFee: 0n }, deployer.address],
-    account: deployer,
+    args: [sendParam, { nativeFee, lzTokenFee: 0n }, state.deployerAddress],
+    account: sourceClients.account,
     chain: sourceClients.walletClient.chain,
     value: nativeFee,
   });
@@ -259,11 +440,7 @@ async function runDirection(
       amount: claim.amount.toString(),
     })),
   });
-  await withdrawSourceWorkerFees(
-    sourceClients,
-    source,
-    feeClaims,
-  );
+  await withdrawSourceWorkerFees(sourceClients, source, feeClaims);
   const [packet] = requirePacketCount(
     packetsFromSourceReceipt({
       receipt: sourceReceipt,
@@ -271,7 +448,7 @@ async function runDirection(
       endpointAbi: endpointArtifact.abi,
     }),
     1,
-    "source receipt",
+    "source receipt"
   );
   logStep("packet extracted", {
     direction,
@@ -282,21 +459,28 @@ async function runDirection(
 
   if (options.exerciseRBF) {
     await submitSecondaryVerificationAndExerciseRBF(
+      state,
       destinationClients,
       destination,
-      packet,
+      packet
     );
   } else {
-    await submitSecondaryVerification(destinationClients, destination, packet);
+    await submitSecondaryVerification(
+      state,
+      destinationClients,
+      destination,
+      packet
+    );
   }
 
   await waitForDelivery(
+    state,
     sourceClients,
     destinationClients,
     source,
     destination,
     packet,
-    balanceBefore + amountLD,
+    balanceBefore + amountLD
   );
   logStep("direction completed", {
     direction,
@@ -305,9 +489,10 @@ async function runDirection(
 }
 
 async function runMultiSendIndexerScenario(
+  state: LocalE2ERunState,
   source: ChainDeployment,
   destination: ChainDeployment,
-  amountsLD: readonly bigint[],
+  amountsLD: readonly bigint[]
 ) {
   const direction = directionLabel(source, destination);
   logStep("multi-send indexer scenario started", {
@@ -316,21 +501,20 @@ async function runMultiSendIndexerScenario(
     dst_eid: destination.eid,
     amounts_ld: amountsLD,
   });
-  const sourceClients = clientsFor(source);
-  const destinationClients = clientsFor(destination);
+  const sourceClients = clientsFor(state, source);
+  const destinationClients = clientsFor(state, destination);
   const balanceBefore = await balanceOf(
     destinationClients.publicClient,
     destination.oft,
-    deployer.address,
+    state.deployerAddress
   );
   const sendParams = amountsLD.map((amountLD) =>
     buildCanarySendParam({
       dstEid: destination.eid,
-      recipient: deployer.address,
+      recipient: state.deployerAddress,
       amountLD,
       minAmountLD: amountLD,
-      lzReceiveGas: BigInt(deployment.parameters.lzReceiveGas),
-    }),
+    })
   );
   const quote = multiSendQuoteFromReturn(
     await sourceClients.publicClient.readContract({
@@ -338,7 +522,7 @@ async function runMultiSendIndexerScenario(
       abi: oftArtifact.abi,
       functionName: "quoteMultiSend",
       args: [sendParams, false],
-    }),
+    })
   );
   logStep("quoted TestOFT multiSend", {
     direction,
@@ -349,8 +533,8 @@ async function runMultiSendIndexerScenario(
     address: source.oft,
     abi: oftArtifact.abi,
     functionName: "multiSend",
-    args: [sendParams, false, deployer.address],
-    account: deployer,
+    args: [sendParams, false, state.deployerAddress],
+    account: sourceClients.account,
     chain: sourceClients.walletClient.chain,
     value: quote.totalFee.nativeFee,
   });
@@ -367,7 +551,7 @@ async function runMultiSendIndexerScenario(
       endpointAbi: endpointArtifact.abi,
     }),
     amountsLD.length,
-    "multi-send source receipt",
+    "multi-send source receipt"
   );
   logStep("TestOFT multiSend confirmed", {
     direction,
@@ -409,15 +593,23 @@ async function runMultiSendIndexerScenario(
     dstEid: destination.eid,
     packets,
   });
-  await writeFile(multiSendIndexerEvidencePath, `${jsonStringify(evidence)}\n`);
+  await writeFile(
+    state.multiSendIndexerEvidencePath,
+    `${jsonStringify(evidence)}\n`
+  );
   logStep("multi-send indexer evidence written", {
-    path: multiSendIndexerEvidencePath,
+    path: state.multiSendIndexerEvidencePath,
     tx: evidence.sourceTxHash,
     packets: evidence.expectedPackets.length,
   });
 
   for (const packet of packets) {
-    await submitSecondaryVerification(destinationClients, destination, packet);
+    await submitSecondaryVerification(
+      state,
+      destinationClients,
+      destination,
+      packet
+    );
   }
   let minBalance = balanceBefore;
   const replayObservations: DestinationReplayObservation[] = [];
@@ -429,20 +621,21 @@ async function runMultiSendIndexerScenario(
     }
     minBalance += amountLD;
     await waitForDelivery(
+      state,
       sourceClients,
       destinationClients,
       source,
       destination,
       packet,
-      minBalance,
+      minBalance
     );
     replayObservations.push(
       await destinationReplayObservation(
         destinationClients.publicClient,
         source,
         destination,
-        packet,
-      ),
+        packet
+      )
     );
   }
   const replayEvidence = destinationReplayEvidence({
@@ -451,9 +644,12 @@ async function runMultiSendIndexerScenario(
     packets,
     observations: replayObservations,
   });
-  await writeFile(destinationReplayEvidencePath, `${jsonStringify(replayEvidence)}\n`);
+  await writeFile(
+    state.destinationReplayEvidencePath,
+    `${jsonStringify(replayEvidence)}\n`
+  );
   logStep("destination replay evidence written", {
-    path: destinationReplayEvidencePath,
+    path: state.destinationReplayEvidencePath,
     tx: replayEvidence.sourceTxHash,
     packets: replayEvidence.expectedPackets.length,
   });
@@ -464,12 +660,20 @@ async function runMultiSendIndexerScenario(
 }
 
 async function submitSecondaryVerification(
+  state: LocalE2ERunState,
   clients: Clients,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ) {
-  const hash = await sendSecondaryVerification(clients, destination, packet);
-  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
+  const hash = await sendSecondaryVerification(
+    state,
+    clients,
+    destination,
+    packet
+  );
+  const receipt = await clients.publicClient.waitForTransactionReceipt({
+    hash,
+  });
   if (receipt.status !== "success") {
     throw new Error(`secondary OpenDVN verification ${hash} failed`);
   }
@@ -482,9 +686,10 @@ async function submitSecondaryVerification(
 }
 
 async function sendSecondaryVerification(
+  state: LocalE2ERunState,
   clients: Clients,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<Hex> {
   logStep("secondary OpenDVN verification submitting", {
     chain: destination.name,
@@ -500,9 +705,9 @@ async function sendSecondaryVerification(
       destination.receiveUln,
       packet.packetHeader,
       packet.payloadHash,
-      BigInt(deployment.parameters.confirmations),
+      BigInt(state.deployment.parameters.confirmations),
     ],
-    account: deployer,
+    account: clients.account,
     chain: clients.walletClient.chain,
   });
   logStep("secondary OpenDVN verification submitted", {
@@ -513,9 +718,10 @@ async function sendSecondaryVerification(
 }
 
 async function submitSecondaryVerificationAndExerciseRBF(
+  state: LocalE2ERunState,
   clients: Clients,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ) {
   logStep("rbf exercise started", {
     chain: destination.name,
@@ -523,29 +729,30 @@ async function submitSecondaryVerificationAndExerciseRBF(
     executor_signer: destination.executorSigner,
     payload_hash: packet.payloadHash,
   });
-  await setAutomine(clients.publicClient, false);
+  await setAutomine(clients, false);
   try {
     const secondaryHash = await sendSecondaryVerification(
+      state,
+      clients,
+      destination,
+      packet
+    );
+    await waitForSecondaryAndPrimaryVerifications(
       clients,
       destination,
       packet,
-    );
-    await waitForSecondaryAndPrimaryVerifications(
-      clients.publicClient,
-      destination,
-      packet,
-      secondaryHash,
+      secondaryHash
     );
     const original = await waitForPendingCommitVerification(
-      clients.publicClient,
+      clients,
       destination,
-      packet,
+      packet
     );
     const replacement = await waitForPendingCommitVerificationReplacement(
-      clients.publicClient,
+      clients,
       destination,
       packet,
-      original,
+      original
     );
     assertReplacementBumped(original, replacement, destination.name);
     logStep("rbf replacement observed", {
@@ -559,25 +766,25 @@ async function submitSecondaryVerificationAndExerciseRBF(
       replacement_max_priority_fee_per_gas: replacement.maxPriorityFeePerGas,
     });
   } finally {
-    await setAutomine(clients.publicClient, true);
+    await setAutomine(clients, true);
   }
-  await mine(clients.publicClient);
+  await mine(clients);
 }
 
 async function waitForSecondaryAndPrimaryVerifications(
-  publicClient: PublicClient,
+  clients: Clients,
   destination: ChainDeployment,
   packet: PacketDetails,
-  secondaryHash: Hex,
+  secondaryHash: Hex
 ) {
   const started = Date.now();
   let secondaryConfirmed = false;
   while (Date.now() - started < 60_000) {
-    await mine(publicClient);
+    await mine(clients);
     if (!secondaryConfirmed) {
       let receipt: TransactionReceipt | undefined;
       try {
-        receipt = await publicClient.getTransactionReceipt({
+        receipt = await clients.publicClient.getTransactionReceipt({
           hash: secondaryHash,
         });
       } catch {
@@ -585,7 +792,9 @@ async function waitForSecondaryAndPrimaryVerifications(
       }
       if (receipt !== undefined) {
         if (receipt.status !== "success") {
-          throw new Error(`secondary OpenDVN verification ${secondaryHash} failed`);
+          throw new Error(
+            `secondary OpenDVN verification ${secondaryHash} failed`
+          );
         }
         secondaryConfirmed = true;
         logStep("secondary OpenDVN verification confirmed", {
@@ -596,7 +805,11 @@ async function waitForSecondaryAndPrimaryVerifications(
         });
       }
     }
-    const verified = await verifiedDVNs(publicClient, destination, packet);
+    const verified = await verifiedDVNs(
+      clients.publicClient,
+      destination,
+      packet
+    );
     if (
       secondaryConfirmed &&
       verified.has(destination.primaryOpenDVN.toLowerCase()) &&
@@ -611,21 +824,21 @@ async function waitForSecondaryAndPrimaryVerifications(
     await sleep(500);
   }
   throw new Error(
-    `${destination.name} timed out waiting for primary and secondary verification before RBF exercise`,
+    `${destination.name} timed out waiting for primary and secondary verification before RBF exercise`
   );
 }
 
 async function waitForPendingCommitVerification(
-  publicClient: PublicClient,
+  clients: Clients,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<PendingCommitVerificationTx> {
   const started = Date.now();
   while (Date.now() - started < 60_000) {
     const pending = await pendingCommitVerificationTxs(
-      publicClient,
+      clients,
       destination,
-      packet,
+      packet
     );
     const tx = pending[0];
     if (tx !== undefined) {
@@ -642,25 +855,25 @@ async function waitForPendingCommitVerification(
     await sleep(500);
   }
   throw new Error(
-    `${destination.name} timed out waiting for pending worker commitVerification tx`,
+    `${destination.name} timed out waiting for pending worker commitVerification tx`
   );
 }
 
 async function waitForPendingCommitVerificationReplacement(
-  publicClient: PublicClient,
+  clients: Clients,
   destination: ChainDeployment,
   packet: PacketDetails,
-  original: PendingCommitVerificationTx,
+  original: PendingCommitVerificationTx
 ): Promise<PendingCommitVerificationTx> {
   const started = Date.now();
   while (Date.now() - started < 90_000) {
     const pending = await pendingCommitVerificationTxs(
-      publicClient,
+      clients,
       destination,
-      packet,
+      packet
     );
     const replacement = pending.find(
-      (tx) => tx.nonce === original.nonce && tx.hash !== original.hash,
+      (tx) => tx.nonce === original.nonce && tx.hash !== original.hash
     );
     if (replacement !== undefined) {
       return replacement;
@@ -668,18 +881,18 @@ async function waitForPendingCommitVerificationReplacement(
     await sleep(500);
   }
   throw new Error(
-    `${destination.name} timed out waiting for pending worker commitVerification replacement`,
+    `${destination.name} timed out waiting for pending worker commitVerification replacement`
   );
 }
 
 async function pendingCommitVerificationTxs(
-  publicClient: PublicClient,
+  clients: Clients,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<PendingCommitVerificationTx[]> {
-  const block = (await publicClient.request({
-    method: "eth_getBlockByNumber" as never,
-    params: ["pending", true] as never,
+  const block = (await clients.provider.request({
+    method: "eth_getBlockByNumber",
+    params: ["pending", true],
   })) as PendingRPCBlock | null;
   const calldata = commitVerificationCalldata(packet).toLowerCase();
   return (block?.transactions ?? [])
@@ -711,15 +924,17 @@ function commitVerificationCalldata(packet: PacketDetails): Hex {
 function assertReplacementBumped(
   original: PendingCommitVerificationTx,
   replacement: PendingCommitVerificationTx,
-  chainName: string,
+  chainName: string
 ) {
   if (replacement.nonce !== original.nonce) {
     throw new Error(
-      `${chainName} replacement nonce ${replacement.nonce} does not match original nonce ${original.nonce}`,
+      `${chainName} replacement nonce ${replacement.nonce} does not match original nonce ${original.nonce}`
     );
   }
   if (replacement.hash === original.hash) {
-    throw new Error(`${chainName} replacement hash matches original ${original.hash}`);
+    throw new Error(
+      `${chainName} replacement hash matches original ${original.hash}`
+    );
   }
   if (
     original.maxFeePerGas !== undefined &&
@@ -729,12 +944,12 @@ function assertReplacementBumped(
   ) {
     if (replacement.maxFeePerGas <= original.maxFeePerGas) {
       throw new Error(
-        `${chainName} replacement max fee ${replacement.maxFeePerGas} is not above original ${original.maxFeePerGas}`,
+        `${chainName} replacement max fee ${replacement.maxFeePerGas} is not above original ${original.maxFeePerGas}`
       );
     }
     if (replacement.maxPriorityFeePerGas <= original.maxPriorityFeePerGas) {
       throw new Error(
-        `${chainName} replacement priority fee ${replacement.maxPriorityFeePerGas} is not above original ${original.maxPriorityFeePerGas}`,
+        `${chainName} replacement priority fee ${replacement.maxPriorityFeePerGas} is not above original ${original.maxPriorityFeePerGas}`
       );
     }
     return;
@@ -742,12 +957,14 @@ function assertReplacementBumped(
   if (original.gasPrice !== undefined && replacement.gasPrice !== undefined) {
     if (replacement.gasPrice <= original.gasPrice) {
       throw new Error(
-        `${chainName} replacement gas price ${replacement.gasPrice} is not above original ${original.gasPrice}`,
+        `${chainName} replacement gas price ${replacement.gasPrice} is not above original ${original.gasPrice}`
       );
     }
     return;
   }
-  throw new Error(`${chainName} replacement transaction is missing comparable fee fields`);
+  throw new Error(
+    `${chainName} replacement transaction is missing comparable fee fields`
+  );
 }
 
 function optionalHexBigInt(value: Hex | undefined): bigint | undefined {
@@ -755,12 +972,13 @@ function optionalHexBigInt(value: Hex | undefined): bigint | undefined {
 }
 
 async function waitForDelivery(
+  state: LocalE2ERunState,
   sourceClients: Clients,
   destinationClients: Clients,
   source: ChainDeployment,
   destination: ChainDeployment,
   packet: PacketDetails,
-  minBalance: bigint,
+  minBalance: bigint
 ) {
   const direction = directionLabel(source, destination);
   const started = Date.now();
@@ -778,13 +996,13 @@ async function waitForDelivery(
   });
   while (Date.now() - started < 180_000) {
     attempts++;
-    await mine(sourceClients.publicClient);
-    await mine(destinationClients.publicClient);
+    await mine(sourceClients);
+    await mine(destinationClients);
     try {
       const verified = await verifiedDVNs(
         destinationClients.publicClient,
         destination,
-        packet,
+        packet
       );
       if (
         !verified.has(destination.primaryOpenDVN.toLowerCase()) ||
@@ -793,7 +1011,7 @@ async function waitForDelivery(
         throw new Error(
           `${destination.name} missing PayloadVerified logs; observed ${[
             ...verified,
-          ].join(",")}`,
+          ].join(",")}`
         );
       }
       if (!loggedPayloadVerified) {
@@ -806,7 +1024,7 @@ async function waitForDelivery(
       const primaryVerifier = await assertPrimaryDVNVerifier(
         destinationClients.publicClient,
         destination,
-        packet,
+        packet
       );
       if (!loggedPrimaryVerifier) {
         logStep("primary OpenDVN verifier assertion passed", {
@@ -819,7 +1037,7 @@ async function waitForDelivery(
         destinationClients.publicClient,
         source,
         destination,
-        packet,
+        packet
       );
       if (!loggedDeliveryReceipt) {
         logStep("PacketDelivered receipt found", {
@@ -834,7 +1052,7 @@ async function waitForDelivery(
         destinationClients.publicClient,
         deliveryReceipt.transactionHash,
         destination.executorSigner,
-        `${destination.name} PacketDelivered`,
+        `${destination.name} PacketDelivered`
       );
       logStep("delivery transaction signer assertion passed", {
         direction,
@@ -849,16 +1067,16 @@ async function waitForDelivery(
       const balance = await balanceOf(
         destinationClients.publicClient,
         destination.oft,
-        deployer.address,
+        state.deployerAddress
       );
       assertCanaryRecipientBalance({
-        recipient: deployer.address,
+        recipient: state.deployerAddress,
         balance,
         minBalance,
       });
       logStep("recipient balance assertion passed", {
         direction,
-        recipient: deployer.address,
+        recipient: state.deployerAddress,
         balance,
         min_balance: minBalance,
       });
@@ -879,9 +1097,11 @@ async function waitForDelivery(
     }
   }
   throw new Error(
-    `timed out waiting for ${source.name}->${destination.name} delivery: ${String(
-      lastError instanceof Error ? lastError.message : lastError,
-    )}`,
+    `timed out waiting for ${source.name}->${
+      destination.name
+    } delivery: ${String(
+      lastError instanceof Error ? lastError.message : lastError
+    )}`
   );
 }
 
@@ -889,25 +1109,25 @@ async function destinationReplayObservation(
   publicClient: PublicClient,
   source: ChainDeployment,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<DestinationReplayObservation> {
   const commitReceipt = await matchingPacketVerifiedReceipt(
     publicClient,
     source,
     destination,
-    packet,
+    packet
   );
   const deliveryReceipt = await matchingPacketDeliveredReceipt(
     publicClient,
     source,
     destination,
-    packet,
+    packet
   );
   const verifyReceipt = await matchingPayloadVerifiedReceipt(
     publicClient,
     destination,
     packet,
-    destination.primaryOpenDVN,
+    destination.primaryOpenDVN
   );
   logStep("destination replay observation captured", {
     direction: directionLabel(source, destination),
@@ -927,7 +1147,7 @@ async function destinationReplayObservation(
 async function withdrawSourceWorkerFees(
   clients: Clients,
   source: ChainDeployment,
-  claims: readonly SourceWorkerFeeClaim[],
+  claims: readonly SourceWorkerFeeClaim[]
 ) {
   for (const claim of claims) {
     await withdrawSourceWorkerFee(clients, source, claim);
@@ -937,12 +1157,12 @@ async function withdrawSourceWorkerFees(
 async function withdrawSourceWorkerFee(
   clients: Clients,
   source: ChainDeployment,
-  claim: SourceWorkerFeeClaim,
+  claim: SourceWorkerFeeClaim
 ) {
   const ledgerBefore = await sendLibFeeBalance(
     clients.publicClient,
     source.sendUln,
-    claim.worker,
+    claim.worker
   );
   logStep("source worker fee ledger checked", {
     chain: source.name,
@@ -953,7 +1173,7 @@ async function withdrawSourceWorkerFee(
   });
   if (ledgerBefore !== claim.amount) {
     throw new Error(
-      `${source.name} ${claim.role} fee ledger ${ledgerBefore} does not match expected ${claim.amount}`,
+      `${source.name} ${claim.role} fee ledger ${ledgerBefore} does not match expected ${claim.amount}`
     );
   }
   const recipientBefore = await clients.publicClient.getBalance({
@@ -968,7 +1188,7 @@ async function withdrawSourceWorkerFee(
     abi: workerArtifactForClaim(claim).abi,
     functionName: "withdrawFee",
     args: [source.sendUln, withdrawalRecipient, claim.amount],
-    account: deployer,
+    account: clients.account,
     chain: clients.walletClient.chain,
   });
   logStep("source worker fee withdrawal submitted", {
@@ -976,9 +1196,13 @@ async function withdrawSourceWorkerFee(
     role: claim.role,
     tx: hash,
   });
-  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await clients.publicClient.waitForTransactionReceipt({
+    hash,
+  });
   if (receipt.status !== "success") {
-    throw new Error(`${source.name} ${claim.role} fee withdrawal ${hash} failed`);
+    throw new Error(
+      `${source.name} ${claim.role} fee withdrawal ${hash} failed`
+    );
   }
   assertFeeWithdrawalReceipt(source, claim, receipt.logs);
   logStep("source worker fee withdrawal confirmed", {
@@ -992,11 +1216,11 @@ async function withdrawSourceWorkerFee(
   const ledgerAfter = await sendLibFeeBalance(
     clients.publicClient,
     source.sendUln,
-    claim.worker,
+    claim.worker
   );
   if (ledgerAfter !== 0n) {
     throw new Error(
-      `${source.name} ${claim.role} fee ledger ${ledgerAfter} after withdrawal, want 0`,
+      `${source.name} ${claim.role} fee ledger ${ledgerAfter} after withdrawal, want 0`
     );
   }
   const recipientAfter = await clients.publicClient.getBalance({
@@ -1006,7 +1230,7 @@ async function withdrawSourceWorkerFee(
     throw new Error(
       `${source.name} withdrawal recipient balance delta ${
         recipientAfter - recipientBefore
-      } does not match ${claim.amount}`,
+      } does not match ${claim.amount}`
     );
   }
   const sendLibAfter = await clients.publicClient.getBalance({
@@ -1016,7 +1240,7 @@ async function withdrawSourceWorkerFee(
     throw new Error(
       `${source.name} SendUln302 balance delta ${
         sendLibBefore - sendLibAfter
-      } does not match ${claim.amount}`,
+      } does not match ${claim.amount}`
     );
   }
   logStep("source worker fee withdrawal assertions passed", {
@@ -1031,7 +1255,7 @@ async function withdrawSourceWorkerFee(
 async function sendLibFeeBalance(
   publicClient: PublicClient,
   sendLib: Address,
-  worker: Address,
+  worker: Address
 ): Promise<bigint> {
   return (await publicClient.readContract({
     address: sendLib,
@@ -1044,7 +1268,7 @@ async function sendLibFeeBalance(
 function assertFeeWithdrawalReceipt(
   source: ChainDeployment,
   claim: SourceWorkerFeeClaim,
-  logs: readonly Log[],
+  logs: readonly Log[]
 ) {
   let sawWorkerEvent = false;
   let sawSendLibEvent = false;
@@ -1092,23 +1316,27 @@ function assertFeeWithdrawalReceipt(
     }
   }
   if (!sawWorkerEvent) {
-    throw new Error(`${source.name} ${claim.role} withdrawal missing worker event`);
+    throw new Error(
+      `${source.name} ${claim.role} withdrawal missing worker event`
+    );
   }
   if (!sawSendLibEvent) {
     throw new Error(
-      `${source.name} ${claim.role} withdrawal missing SendUln302 event`,
+      `${source.name} ${claim.role} withdrawal missing SendUln302 event`
     );
   }
 }
 
 function workerArtifactForClaim(claim: SourceWorkerFeeClaim): Artifact {
-  return claim.role === "open_executor" ? openExecutorArtifact : openDVNArtifact;
+  return claim.role === "open_executor"
+    ? openExecutorArtifact
+    : openDVNArtifact;
 }
 
 async function verifiedDVNs(
   publicClient: PublicClient,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<Set<string>> {
   const logs = await publicClient.getLogs({
     address: destination.receiveUln,
@@ -1144,7 +1372,7 @@ async function verifiedDVNs(
 async function assertPrimaryDVNVerifier(
   publicClient: PublicClient,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<Address> {
   const logs = await publicClient.getLogs({
     address: destination.primaryOpenDVN,
@@ -1154,8 +1382,7 @@ async function assertPrimaryDVNVerifier(
   const packetHeaderHash = keccak256(packet.packetHeader);
   for (const log of logs) {
     if (
-      log.topics[0] !==
-      eventTopic(openDVNArtifact, "DVNVerificationSubmitted")
+      log.topics[0] !== eventTopic(openDVNArtifact, "DVNVerificationSubmitted")
     ) {
       continue;
     }
@@ -1178,14 +1405,14 @@ async function assertPrimaryDVNVerifier(
     ) {
       if (!isAddressEqual(args.verifier, destination.dvnSigner)) {
         throw new Error(
-          `${destination.name} primary OpenDVN verifier ${args.verifier} does not match configured DVN signer ${destination.dvnSigner}`,
+          `${destination.name} primary OpenDVN verifier ${args.verifier} does not match configured DVN signer ${destination.dvnSigner}`
         );
       }
       return getAddress(args.verifier);
     }
   }
   throw new Error(
-    `${destination.name} primary OpenDVN is missing DVNVerificationSubmitted for ${packet.payloadHash}`,
+    `${destination.name} primary OpenDVN is missing DVNVerificationSubmitted for ${packet.payloadHash}`
   );
 }
 
@@ -1193,18 +1420,18 @@ async function matchingPacketVerifiedReceipt(
   publicClient: PublicClient,
   source: ChainDeployment,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<TransactionReceipt> {
   const logs = await matchingPacketVerifiedLogs(
     publicClient,
     source,
     destination,
-    packet,
+    packet
   );
   const txHash = logs[0]?.transactionHash;
   if (txHash === undefined || txHash === null) {
     throw new Error(
-      `${destination.name} PacketVerified log is missing transaction hash`,
+      `${destination.name} PacketVerified log is missing transaction hash`
     );
   }
   return publicClient.getTransactionReceipt({ hash: txHash });
@@ -1214,7 +1441,7 @@ async function matchingPacketVerifiedLogs(
   publicClient: PublicClient,
   source: ChainDeployment,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<Log[]> {
   const logs = await publicClient.getLogs({
     address: destination.endpoint,
@@ -1251,18 +1478,18 @@ async function matchingPacketDeliveredReceipt(
   publicClient: PublicClient,
   source: ChainDeployment,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<TransactionReceipt> {
   const logs = await matchingPacketDeliveredLogs(
     publicClient,
     source,
     destination,
-    packet,
+    packet
   );
   const txHash = logs[0]?.transactionHash;
   if (txHash === undefined || txHash === null) {
     throw new Error(
-      `${destination.name} PacketDelivered log is missing transaction hash`,
+      `${destination.name} PacketDelivered log is missing transaction hash`
     );
   }
   return publicClient.getTransactionReceipt({ hash: txHash });
@@ -1272,7 +1499,7 @@ async function matchingPacketDeliveredLogs(
   publicClient: PublicClient,
   source: ChainDeployment,
   destination: ChainDeployment,
-  packet: PacketDetails,
+  packet: PacketDetails
 ): Promise<Log[]> {
   const logs = await publicClient.getLogs({
     address: destination.endpoint,
@@ -1307,18 +1534,18 @@ async function matchingPayloadVerifiedReceipt(
   publicClient: PublicClient,
   destination: ChainDeployment,
   packet: PacketDetails,
-  dvn: Address,
+  dvn: Address
 ): Promise<TransactionReceipt> {
   const logs = await matchingPayloadVerifiedLogs(
     publicClient,
     destination,
     packet,
-    dvn,
+    dvn
   );
   const txHash = logs[0]?.transactionHash;
   if (txHash === undefined || txHash === null) {
     throw new Error(
-      `${destination.name} PayloadVerified log is missing transaction hash`,
+      `${destination.name} PayloadVerified log is missing transaction hash`
     );
   }
   return publicClient.getTransactionReceipt({ hash: txHash });
@@ -1328,7 +1555,7 @@ async function matchingPayloadVerifiedLogs(
   publicClient: PublicClient,
   destination: ChainDeployment,
   packet: PacketDetails,
-  dvn: Address,
+  dvn: Address
 ): Promise<Log[]> {
   const logs = await publicClient.getLogs({
     address: destination.receiveUln,
@@ -1362,12 +1589,12 @@ async function assertTransactionFrom(
   publicClient: PublicClient,
   txHash: Hex,
   expected: Address,
-  label: string,
+  label: string
 ): Promise<void> {
   const tx = await publicClient.getTransaction({ hash: txHash });
   if (!isAddressEqual(tx.from, expected)) {
     throw new Error(
-      `${label} transaction sender ${tx.from} does not match expected signer ${expected}`,
+      `${label} transaction sender ${tx.from} does not match expected signer ${expected}`
     );
   }
 }
@@ -1375,7 +1602,7 @@ async function assertTransactionFrom(
 async function balanceOf(
   publicClient: PublicClient,
   token: Address,
-  account: Address,
+  account: Address
 ): Promise<bigint> {
   return (await publicClient.readContract({
     address: token,
@@ -1385,34 +1612,20 @@ async function balanceOf(
   })) as bigint;
 }
 
-function clientsFor(chain: ChainDeployment): Clients {
-  const viemChain = defineChain({
-    id: chain.chainId,
-    name: chain.name,
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    rpcUrls: { default: { http: [chain.hostRpcUrl] } },
-  });
-  const transport = http(chain.hostRpcUrl);
-  return {
-    publicClient: createPublicClient({ chain: viemChain, transport }),
-    walletClient: createWalletClient({
-      account: deployer,
-      chain: viemChain,
-      transport,
-    }),
-  };
+function clientsFor(state: LocalE2ERunState, chain: ChainDeployment): Clients {
+  const clients = state.clients[chain.key];
+  if (chain !== state.deployment.chains[chain.key]) {
+    throw new Error(`chain ${chain.key} is not the loaded deployment chain`);
+  }
+  return clients;
 }
 
-async function waitForWorkerReady() {
-  const url = optionalEnv(
-    "E2E_WORKER_READY_URL",
-    "http://127.0.0.1:19090/readyz",
-  );
+async function waitForWorkerReady(url: string, fetchImpl: typeof fetch) {
   const started = Date.now();
   logStep("waiting for worker readiness", { url });
   while (Date.now() - started < 60_000) {
     try {
-      const response = await fetch(url);
+      const response = await fetchImpl(url);
       if (response.ok) {
         logStep("worker readiness healthy", {
           url,
@@ -1428,17 +1641,17 @@ async function waitForWorkerReady() {
   throw new Error(`worker readiness endpoint did not become healthy at ${url}`);
 }
 
-async function mine(publicClient: PublicClient) {
-  await publicClient.request({
-    method: "anvil_mine" as never,
-    params: ["0x1"] as never,
+async function mine(clients: Clients) {
+  await clients.provider.request({
+    method: "anvil_mine",
+    params: ["0x1"],
   });
 }
 
-async function setAutomine(publicClient: PublicClient, enabled: boolean) {
-  await publicClient.request({
-    method: "evm_setAutomine" as never,
-    params: [enabled] as never,
+async function setAutomine(clients: Clients, enabled: boolean) {
+  await clients.provider.request({
+    method: "evm_setAutomine",
+    params: [enabled],
   });
   logStep("anvil automine set", { enabled });
 }
@@ -1473,11 +1686,13 @@ function multiSendQuoteFromReturn(value: unknown): {
     1?: unknown;
   };
   const totalFee = messagingFeeFromUnknown(
-    Array.isArray(value) ? value[0] : record.totalFee ?? record[0],
+    Array.isArray(value) ? value[0] : record.totalFee ?? record[0]
   );
   const feesValue = Array.isArray(value) ? value[1] : record.fees ?? record[1];
   if (!Array.isArray(feesValue)) {
-    throw new Error(`unexpected quoteMultiSend fees return: ${jsonStringify(value)}`);
+    throw new Error(
+      `unexpected quoteMultiSend fees return: ${jsonStringify(value)}`
+    );
   }
   return {
     totalFee,
@@ -1521,15 +1736,10 @@ function mutableTopics(topics: readonly Hex[]): [Hex, ...Hex[]] {
   return [...topics] as [Hex, ...Hex[]];
 }
 
-function normalizePrivateKey(value: string): Hex {
-  const normalized = value.startsWith("0x") ? value : `0x${value}`;
-  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
-    throw new Error("private key must be a 32-byte hex value");
-  }
-  return normalized as Hex;
-}
-
-function directionLabel(source: ChainDeployment, destination: ChainDeployment): string {
+function directionLabel(
+  source: ChainDeployment,
+  destination: ChainDeployment
+): string {
   return `${source.name}->${destination.name}`;
 }
 
@@ -1537,7 +1747,9 @@ function logStep(message: string, fields: Record<string, unknown> = {}) {
   const suffix = Object.entries(fields)
     .map(([key, value]) => `${key}=${formatLogValue(value)}`)
     .join(" ");
-  console.error(`[e2e-local-run] ${message}${suffix === "" ? "" : ` ${suffix}`}`);
+  console.error(
+    `[e2e-local-run] ${message}${suffix === "" ? "" : ` ${suffix}`}`
+  );
 }
 
 function formatLogValue(value: unknown): string {

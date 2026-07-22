@@ -1,5 +1,3 @@
-import { optionalEnv } from "./lib.js";
-
 export type LocalE2EChainKey = "a" | "b";
 
 export type LocalE2EChainSpec = {
@@ -18,6 +16,9 @@ export type LocalE2EKMSConfig = {
 };
 
 type ResolveValue = (name: string, fallback: string) => string;
+
+const environmentValue: ResolveValue = (name, fallback) =>
+  process.env[name] ?? fallback;
 
 const defaultChains = [
   {
@@ -40,7 +41,8 @@ const defaultChains = [
 
 const defaultDatabaseURLs = {
   host: "postgres://laz_worker:laz_worker@127.0.0.1:55433/laz_worker?sslmode=disable",
-  container: "postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable",
+  container:
+    "postgres://laz_worker:laz_worker@postgres:5432/laz_worker?sslmode=disable",
 } as const;
 
 const defaultKMS = {
@@ -50,39 +52,39 @@ const defaultKMS = {
 } as const;
 
 export function localE2EChains(
-  resolve: ResolveValue = optionalEnv,
+  resolve: ResolveValue = environmentValue
 ): readonly LocalE2EChainSpec[] {
   return defaultChains.map((chain) => ({
     ...chain,
     hostRpcUrl: resolve(
       `E2E_CHAIN_${chain.key.toUpperCase()}_HOST_RPC_URL`,
-      chain.hostRpcUrl,
+      chain.hostRpcUrl
     ),
     containerRpcUrl: resolve(
       `E2E_CHAIN_${chain.key.toUpperCase()}_CONTAINER_RPC_URL`,
-      chain.containerRpcUrl,
+      chain.containerRpcUrl
     ),
   }));
 }
 
 export function localE2EDatabaseURL(
   mode: "host" | "container",
-  resolve: ResolveValue = optionalEnv,
+  resolve: ResolveValue = environmentValue
 ): string {
   return resolve(
     mode === "host" ? "E2E_HOST_DATABASE_URL" : "E2E_CONTAINER_DATABASE_URL",
-    defaultDatabaseURLs[mode],
+    defaultDatabaseURLs[mode]
   );
 }
 
 export function localE2EKMS(
-  resolve: ResolveValue = optionalEnv,
+  resolve: ResolveValue = environmentValue
 ): LocalE2EKMSConfig {
   return {
     hostEndpoint: resolve("E2E_KMS_HOST_ENDPOINT", defaultKMS.hostEndpoint),
     containerEndpoint: resolve(
       "E2E_KMS_CONTAINER_ENDPOINT",
-      defaultKMS.containerEndpoint,
+      defaultKMS.containerEndpoint
     ),
     region: resolve("E2E_KMS_REGION", defaultKMS.region),
   };

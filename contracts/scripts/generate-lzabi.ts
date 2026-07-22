@@ -323,9 +323,8 @@ const outputs: AbiOutput[] = [
 ];
 
 const repoRoot = process.cwd();
-const checkOnly = process.argv.includes("--check");
 
-async function main() {
+export async function generateLzABI(checkOnly: boolean): Promise<void> {
   const artifactCache = new Map<string, Artifact>();
 
   for (const output of outputs) {
@@ -333,15 +332,17 @@ async function main() {
       output.entries ??
       (await Promise.all(
         (output.selections ?? []).map((selection) =>
-          readSelectedEntry(selection, artifactCache),
-        ),
+          readSelectedEntry(selection, artifactCache)
+        )
       ));
     const target = path.join(repoRoot, output.path);
     const formatted = formatABI(abi);
     if (checkOnly) {
       const current = await readFile(target, "utf8");
       if (current !== formatted) {
-        throw new Error(`${output.path} is not generated from pinned artifacts`);
+        throw new Error(
+          `${output.path} is not generated from pinned artifacts`
+        );
       }
     } else {
       await mkdir(path.dirname(target), { recursive: true });
@@ -356,15 +357,15 @@ async function main() {
 
 async function readSelectedEntry(
   selection: AbiSelection,
-  artifactCache: Map<string, Artifact>,
+  artifactCache: Map<string, Artifact>
 ): Promise<AbiEntry> {
   const artifact = await readArtifact(selection.artifact, artifactCache);
   const matches = artifact.abi.filter(
-    (entry) => entry.type === selection.type && entry.name === selection.name,
+    (entry) => entry.type === selection.type && entry.name === selection.name
   );
   if (matches.length !== 1) {
     throw new Error(
-      `${selection.artifact}: expected one ${selection.type} ${selection.name}, found ${matches.length}`,
+      `${selection.artifact}: expected one ${selection.type} ${selection.name}, found ${matches.length}`
     );
   }
   return matches[0];
@@ -372,7 +373,7 @@ async function readSelectedEntry(
 
 async function readArtifact(
   artifactPath: string,
-  artifactCache: Map<string, Artifact>,
+  artifactCache: Map<string, Artifact>
 ): Promise<Artifact> {
   const absolutePath = path.join(repoRoot, artifactPath);
   const cached = artifactCache.get(absolutePath);
@@ -396,7 +397,7 @@ async function assertNoUnexpectedABIJSON() {
     const expected = new Set(
       outputs
         .filter((output) => path.dirname(output.path) === dir)
-        .map((output) => path.basename(output.path)),
+        .map((output) => path.basename(output.path))
     );
     const actual = await readdir(path.join(repoRoot, dir));
     const unexpected = actual
@@ -404,7 +405,7 @@ async function assertNoUnexpectedABIJSON() {
       .sort();
     if (unexpected.length > 0) {
       throw new Error(
-        `${dir}: unexpected ABI JSON files: ${unexpected.join(", ")}`,
+        `${dir}: unexpected ABI JSON files: ${unexpected.join(", ")}`
       );
     }
   }
@@ -467,7 +468,7 @@ function formatFunctionParameter(input: AbiInput, indent: number): string {
     (component, index) =>
       `${" ".repeat(indent + 4)}${formatCompactParameter(component)}${
         index === input.components!.length - 1 ? "" : ","
-      }`,
+      }`
   );
   return [
     `${spaces}{`,
@@ -526,7 +527,7 @@ function formatEventParameter(input: AbiInput, indent: number): string {
     (component, index) =>
       `${" ".repeat(indent + 4)}${formatCompactEventComponent(component)}${
         index === input.components!.length - 1 ? "" : ","
-      }`,
+      }`
   );
   return [
     `${spaces}{`,
@@ -543,16 +544,14 @@ function formatEventParameter(input: AbiInput, indent: number): string {
 
 function formatCompactParameter(input: AbiInput): string {
   return `{ "name": ${JSON.stringify(input.name)}, "type": ${JSON.stringify(
-    input.type,
+    input.type
   )} }`;
 }
 
 function formatCompactEventComponent(input: AbiInput): string {
   return `{ "internalType": ${JSON.stringify(
-    input.internalType,
+    input.internalType
   )}, "name": ${JSON.stringify(input.name)}, "type": ${JSON.stringify(
-    input.type,
+    input.type
   )} }`;
 }
-
-await main();

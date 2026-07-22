@@ -31,15 +31,17 @@ Current npm audit metadata:
 
 ```text
 critical: 0
-high: 7
-moderate: 7
-low: 22
-total: 36
+high: 18
+moderate: 4
+low: 21
+total: 43
 ```
 
 ## Remediation Applied
 
 - `@nomicfoundation/hardhat-toolbox-viem` remains a direct dependency.
+- `@nomicfoundation/ignition-core = 3.1.7` is a direct dependency for the
+  documented deployment-state query workaround.
 - `viem` remains a direct pinned dependency for scripts.
 - `@chainlink/contracts = 1.5.0` is pinned only as the AggregatorV3 ABI source.
 - `@uniswap/v3-core = 1.0.1` is pinned only as the V3 pool ABI source; the retired V3 periphery/QuoterV2 dependency is removed.
@@ -54,26 +56,35 @@ LayerZero package versions or removing Hardhat toolbox support.
 
 ## Remaining High Findings
 
-| Package                               | Direct | Source                                              | Disposition                                                               |
-| ------------------------------------- | ------ | --------------------------------------------------- | ------------------------------------------------------------------------- |
-| `@chainlink/contracts-ccip`           | no     | LayerZero messagelib transitive dependency          | Open. Do not auto-downgrade LayerZero packages.                           |
-| `@openzeppelin/contracts`             | no     | LayerZero and Chainlink transitive dependency graph | Open. Project contracts directly use pinned OpenZeppelin v5.              |
-| `@openzeppelin/contracts-upgradeable` | no     | LayerZero and Chainlink transitive dependency graph | Open. Project contracts do not import upgradeable OpenZeppelin contracts. |
-| `@layerzerolabs/lz-evm-messagelib-v2` | yes    | pinned LayerZero package                            | Open. Required for current LayerZero interface compatibility.             |
-| `@layerzerolabs/lz-evm-oapp-v2`       | yes    | pinned LayerZero package                            | Open. Required for current OFT base contracts.                            |
-| `lodash-es`                           | no     | Hardhat toolbox transitive dependency               | Open. Keep Hardhat V3 toolbox support.                                    |
-| `tmp`                                 | no     | Chainlink ABI package transitive tooling            | Open. Not imported by the Go runtime or project contracts.                |
+| Package                                       | Direct | Source                                      | Disposition                                                           |
+| --------------------------------------------- | ------ | ------------------------------------------- | --------------------------------------------------------------------- |
+| `@chainlink/contracts-ccip`                   | no     | LayerZero transitive dependency             | Open. Do not auto-downgrade LayerZero packages.                       |
+| `@layerzerolabs/lz-evm-messagelib-v2`         | yes    | pinned LayerZero package                    | Open. Required for current LayerZero interfaces.                      |
+| `@layerzerolabs/lz-evm-oapp-v2`               | yes    | pinned LayerZero package                    | Open. Required for current OFT base contracts.                        |
+| `@nomicfoundation/hardhat-ignition`           | no     | retained Hardhat deployment toolchain       | Open. Aggregate finding inherited from Hardhat and Ignition core.     |
+| `@nomicfoundation/hardhat-ignition-viem`      | no     | retained Hardhat deployment toolchain       | Open. Aggregate finding inherited from Hardhat and Ignition core.     |
+| `@nomicfoundation/hardhat-keystore`           | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
+| `@nomicfoundation/hardhat-network-helpers`    | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
+| `@nomicfoundation/hardhat-node-test-runner`   | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
+| `@nomicfoundation/hardhat-toolbox-viem`       | yes    | pinned Hardhat V3 toolbox                   | Open. Required by compile, test, Viem, and Ignition workflows.        |
+| `@nomicfoundation/hardhat-verify`             | no     | retained Hardhat deployment toolchain       | Open. Inherited from Hardhat and legacy Ethers ABI code.              |
+| `@nomicfoundation/hardhat-viem`               | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
+| `@nomicfoundation/hardhat-viem-assertions`    | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat and Viem integration.  |
+| `@openzeppelin/contracts`                     | no     | LayerZero and Chainlink dependency graph    | Open. Project contracts directly use pinned OpenZeppelin v5.          |
+| `@openzeppelin/contracts-upgradeable`         | no     | LayerZero and Chainlink dependency graph    | Open. Project contracts do not import upgradeable contracts.         |
+| `adm-zip`                                     | no     | Hardhat compiler/tooling dependency         | Open. Pinned Hardhat currently exposes no compatible fix.             |
+| `hardhat`                                     | yes    | pinned Hardhat 3.9.1                        | Open. Aggregate finding from vulnerable `adm-zip`.                    |
+| `lodash-es`                                   | no     | Ignition core transitive dependency         | Open. Required by pinned Ignition core.                               |
+| `tmp`                                         | no     | Chainlink ABI package transitive tooling    | Open. Not imported by the Go runtime or project contracts.            |
 
 ## Remaining Moderate Findings
 
-The remaining moderate findings are attached to retained Hardhat toolbox
-dependencies and transitive tooling bundled by the pinned Chainlink ABI source:
+The remaining moderate findings are attached to the direct Ignition core state
+adapter dependency and transitive tooling bundled by the pinned Chainlink ABI
+source:
 
 - `@arbitrum/nitro-contracts`
 - `@chainlink/contracts`
-- `@nomicfoundation/hardhat-toolbox-viem`
-- `@nomicfoundation/hardhat-ignition`
-- `@nomicfoundation/hardhat-ignition-viem`
 - `@nomicfoundation/ignition-core`
 - `@offchainlabs/upgrade-executor`
 

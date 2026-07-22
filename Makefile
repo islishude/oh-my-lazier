@@ -6,6 +6,9 @@ INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
 
 E2E_COMPOSE = docker compose -p oh-my-lazier-e2e -f docker-compose.e2e.yml
 E2E_TMP_DIR = tmp/e2e
+E2E_DEPLOY_SCRIPT_PARAMS ?= config/scripts/e2e-local-deploy.json
+E2E_RUN_SCRIPT_PARAMS ?= config/scripts/e2e-local-run.json
+E2E_CI_RUN_SCRIPT_PARAMS ?= config/scripts/e2e-local-run-ci.json
 E2E_DEPLOYER_PRIVATE_KEY ?= 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 E2E_WORKER_PRIVATE_KEY ?= 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
 E2E_KEYSTORE_PASSWORD ?= local-e2e-password
@@ -24,7 +27,6 @@ E2E_KMS_CONTAINER_ENDPOINT ?= $(E2E_KMS_HOST_ENDPOINT)
 E2E_CI_WORKER_IMAGE ?= oh-my-lazier-worker:e2e
 E2E_CI_WORKER_NAME ?= oh-my-lazier-e2e-worker
 E2E_CI_WORKER_RUN_FLAGS ?= --network host
-E2E_CI_WORKER_READY_URL ?= http://127.0.0.1:9090/readyz
 
 .PHONY: check \
 	generate-lzabi check-lzabi generate-pricing-abi check-pricing-abi \
@@ -38,7 +40,7 @@ check:
 	npm run typecheck
 	npm run check:lzabi
 	npm run check:pricing-abi
-	npx hardhat test solidity
+	npx hardhat test solidity --no-compile
 	npm run test:scripts
 	go test ./...
 	npm run check:runbooks
@@ -86,11 +88,11 @@ e2e-local:
 	npm run compile; \
 	$(E2E_COMPOSE) up -d --wait postgres anvil-a anvil-b localstack; \
 	AWS_ACCESS_KEY_ID="$(E2E_AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(E2E_AWS_SECRET_ACCESS_KEY)" AWS_REGION="$(E2E_KMS_REGION)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" go run ./go/cmd/e2ekmskey -out "$(E2E_TMP_DIR)/kms.json"; \
-	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" npm run e2e:deploy-local; \
 	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
+	OML_SCRIPT_PARAMS="$(E2E_DEPLOY_SCRIPT_PARAMS)" OML_IGNITION_DIR="$(E2E_TMP_DIR)/ignition" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_CHAIN_A_HOST_RPC_URL="$(E2E_CHAIN_A_HOST_RPC_URL)" E2E_CHAIN_B_HOST_RPC_URL="$(E2E_CHAIN_B_HOST_RPC_URL)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" npm run e2e:deploy-local; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" $(E2E_COMPOSE) --profile worker up -d $(E2E_WORKER_UP_FLAGS) --wait worker; \
-	E2E_TMP_DIR="$(E2E_TMP_DIR)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" npm run e2e:run-local; \
+	OML_SCRIPT_PARAMS="$(E2E_RUN_SCRIPT_PARAMS)" E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" E2E_CHAIN_A_HOST_RPC_URL="$(E2E_CHAIN_A_HOST_RPC_URL)" E2E_CHAIN_B_HOST_RPC_URL="$(E2E_CHAIN_B_HOST_RPC_URL)" npm run e2e:run-local; \
 	go run ./go/cmd/e2eindexcheck -config "$(E2E_TMP_DIR)/worker.host.yaml" -evidence "$(E2E_TMP_DIR)/multi-oft-send-indexer.json"; \
 	$(E2E_COMPOSE) --profile worker stop worker; \
 	go run ./go/cmd/e2ereplaycheck -config "$(E2E_TMP_DIR)/worker.host.yaml" -evidence "$(E2E_TMP_DIR)/destination-replay.json"
@@ -111,9 +113,11 @@ e2e-ci:
 	trap cleanup EXIT INT TERM; \
 	npm run compile; \
 	AWS_ACCESS_KEY_ID="$(E2E_AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(E2E_AWS_SECRET_ACCESS_KEY)" AWS_REGION="$(E2E_KMS_REGION)" E2E_KMS_REGION="$(E2E_KMS_REGION)" E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" go run ./go/cmd/e2ekmskey -out "$(E2E_TMP_DIR)/kms.json"; \
+	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_TMP_DIR="$(E2E_TMP_DIR)" \
+	OML_SCRIPT_PARAMS="$(E2E_DEPLOY_SCRIPT_PARAMS)" \
+	OML_IGNITION_DIR="$(E2E_TMP_DIR)/ignition" \
 	E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" \
-	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" \
 	E2E_KMS_REGION="$(E2E_KMS_REGION)" \
 	E2E_KMS_HOST_ENDPOINT="$(E2E_KMS_HOST_ENDPOINT)" \
 	E2E_KMS_CONTAINER_ENDPOINT="$(E2E_KMS_CONTAINER_ENDPOINT)" \
@@ -124,7 +128,6 @@ e2e-ci:
 	E2E_HOST_DATABASE_URL="$(E2E_HOST_DATABASE_URL)" \
 	E2E_CONTAINER_DATABASE_URL="$(E2E_CONTAINER_DATABASE_URL)" \
 	npm run e2e:deploy-local; \
-	E2E_WORKER_PRIVATE_KEY="$(E2E_WORKER_PRIVATE_KEY)" E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" go run ./go/cmd/e2ekeystore -out "$(E2E_TMP_DIR)/worker-keystore.json"; \
 	E2E_KEYSTORE_PASSWORD="$(E2E_KEYSTORE_PASSWORD)" DATABASE_URL="$(E2E_HOST_DATABASE_URL)" go run ./go/cmd/configcheck -config "$(E2E_TMP_DIR)/worker.host.yaml"; \
 	docker rm -f "$(E2E_CI_WORKER_NAME)" >/dev/null 2>&1 || true; \
 	docker run -d --name "$(E2E_CI_WORKER_NAME)" $(E2E_CI_WORKER_RUN_FLAGS) \
@@ -136,9 +139,10 @@ e2e-ci:
 		-e AWS_REGION="$(E2E_KMS_REGION)" \
 		-e AWS_EC2_METADATA_DISABLED=true \
 		"$(E2E_CI_WORKER_IMAGE)" -config /app/tmp/e2e/worker.container.yaml; \
-	E2E_TMP_DIR="$(E2E_TMP_DIR)" \
+	OML_SCRIPT_PARAMS="$(E2E_CI_RUN_SCRIPT_PARAMS)" \
 	E2E_DEPLOYER_PRIVATE_KEY="$(E2E_DEPLOYER_PRIVATE_KEY)" \
-	E2E_WORKER_READY_URL="$(E2E_CI_WORKER_READY_URL)" \
+	E2E_CHAIN_A_HOST_RPC_URL="$(E2E_CHAIN_A_HOST_RPC_URL)" \
+	E2E_CHAIN_B_HOST_RPC_URL="$(E2E_CHAIN_B_HOST_RPC_URL)" \
 	npm run e2e:run-local; \
 	go run ./go/cmd/e2eindexcheck -config "$(E2E_TMP_DIR)/worker.host.yaml" -evidence "$(E2E_TMP_DIR)/multi-oft-send-indexer.json"; \
 	docker stop "$(E2E_CI_WORKER_NAME)" >/dev/null; \
