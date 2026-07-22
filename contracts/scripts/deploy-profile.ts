@@ -5,10 +5,10 @@ import path from "node:path";
 import type { IgnitionModule } from "@nomicfoundation/ignition-core";
 import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
 import { getAddress, isAddress, isAddressEqual, type Address } from "viem";
-import OAppEndpointConfigModule from "../../ignition/modules/OAppEndpointConfig.js";
-import OpenWorkersModule from "../../ignition/modules/OpenWorkers.js";
-import OpenWorkersPathwayConfigModule from "../../ignition/modules/OpenWorkersPathwayConfig.js";
-import TestOFTModule from "../../ignition/modules/TestOFT.js";
+import OAppEndpointConfigModule from "../ignition/modules/OAppEndpointConfig.js";
+import OpenWorkersModule from "../ignition/modules/OpenWorkers.js";
+import OpenWorkersPathwayConfigModule from "../ignition/modules/OpenWorkersPathwayConfig.js";
+import TestOFTModule from "../ignition/modules/TestOFT.js";
 import {
   readIgnitionDeploymentState,
   type IgnitionDeploymentRequest,

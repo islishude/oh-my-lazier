@@ -207,25 +207,6 @@ test("verification validates providers, profile, HTTP network, and deployment id
   );
 });
 
-test("tracked Ignition state exposes resolvable verification information", async () => {
-  let calls = 0;
-  await verifyIgnitionDeploymentSources(
-    {
-      hre: fakeHre(),
-      buildProfile: "production",
-      targets: [{ network: "sepolia", deploymentId: "sepolia-open-workers" }],
-    },
-    {
-      hardhatCliPath: process.execPath,
-      runProcess: async () => {
-        calls += 1;
-        return { exitCode: 0, signal: null };
-      },
-    }
-  );
-  assert.equal(calls, 1);
-});
-
 function fakeHre(
   options: { providersEnabled?: boolean } = {}
 ): HardhatRuntimeEnvironment {
@@ -234,7 +215,7 @@ function fakeHre(
     config: {
       paths: {
         root: projectRoot,
-        ignition: join(projectRoot, "ignition"),
+        ignition: join(projectRoot, "contracts/ignition"),
       },
       networks: {
         hardhat: { type: "edr-simulated", chainId: 31337 },

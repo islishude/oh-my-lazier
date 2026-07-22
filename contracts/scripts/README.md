@@ -122,7 +122,7 @@ Their common `input` is:
 ```json
 {
   "input": {
-    "parameters": "ignition/parameters/sepolia.json",
+    "parameters": "contracts/ignition/parameters/sepolia.json",
     "deploymentId": "sepolia-open-workers",
     "expectedSigner": "0x1111111111111111111111111111111111111111"
   },

@@ -4,11 +4,11 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const endpointArtifact =
-  require("../../node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json") as Artifact;
+  require("../../../node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json") as Artifact;
 const sendUlnArtifact =
-  require("../../node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/SendUln302.sol/SendUln302.json") as Artifact;
+  require("../../../node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/SendUln302.sol/SendUln302.json") as Artifact;
 const receiveUlnArtifact =
-  require("../../node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json") as Artifact;
+  require("../../../node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json") as Artifact;
 
 /**
  * Deploys all contracts owned by one side of the local two-chain E2E topology.

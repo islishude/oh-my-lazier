@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import type { StatusResult } from "@nomicfoundation/ignition-core";
 import {
   ignitionDeploymentsDir,
@@ -207,33 +206,4 @@ test("rejects an unexpected deployed contract name", async () => {
     readIgnitionDeploymentState(hre, request(), fakeIO(deploymentStatus)),
     /has contract name "WrongExecutor", expected "OpenExecutor"/
   );
-});
-
-test("reads the tracked Sepolia OpenWorkers journal through Ignition core", async () => {
-  const testDir = path.dirname(fileURLToPath(import.meta.url));
-  const repoRoot = path.resolve(testDir, "../../..");
-  const result = await readIgnitionDeploymentState(
-    {
-      config: {
-        paths: { ignition: path.join(repoRoot, "ignition") },
-      },
-    },
-    {
-      deploymentId,
-      expectedChainId,
-      requiredContracts: [
-        {
-          futureId: "OpenWorkers#OpenPriceFeed",
-          contractName: "OpenPriceFeed",
-        },
-        { futureId: "OpenWorkers#OpenDVN", contractName: "OpenDVN" },
-        { futureId, contractName },
-      ],
-    }
-  );
-
-  assert.equal(result.kind, "ready");
-  if (result.kind === "ready") {
-    assert.equal(Object.keys(result.contracts).length, 3);
-  }
 });

@@ -1,5 +1,5 @@
 import hre from "hardhat";
-import OpenWorkersModule from "../../../ignition/modules/OpenWorkers.js";
+import OpenWorkersModule from "../../ignition/modules/OpenWorkers.js";
 import { runCommand } from "../command-harness.js";
 import { runIgnitionModuleCommand } from "./ignition-command.js";
 

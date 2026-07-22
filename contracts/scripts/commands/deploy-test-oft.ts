@@ -1,5 +1,5 @@
 import hre from "hardhat";
-import TestOFTModule from "../../../ignition/modules/TestOFT.js";
+import TestOFTModule from "../../ignition/modules/TestOFT.js";
 import { runCommand } from "../command-harness.js";
 import { runIgnitionModuleCommand } from "./ignition-command.js";
 

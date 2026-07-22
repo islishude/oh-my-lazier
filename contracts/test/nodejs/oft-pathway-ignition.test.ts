@@ -266,8 +266,8 @@ test("buildOpenDVNPathwayConfigParameters renders standalone DVN config", () => 
 
 test("committed ignition parameter examples use split modules", () => {
   for (const file of [
-    "ignition/parameters/sepolia.json",
-    "ignition/parameters/hoodi.json",
+    "contracts/ignition/parameters/sepolia.json",
+    "contracts/ignition/parameters/hoodi.json",
   ]) {
     const parameters = readParameters(file);
     assert.deepEqual(Object.keys(parameters).sort(), [
@@ -277,8 +277,8 @@ test("committed ignition parameter examples use split modules", () => {
   }
 
   for (const file of [
-    "ignition/parameters/sepolia-to-hoodi.example.json",
-    "ignition/parameters/hoodi-to-sepolia.example.json",
+    "contracts/ignition/parameters/sepolia-to-hoodi.example.json",
+    "contracts/ignition/parameters/hoodi-to-sepolia.example.json",
   ]) {
     const parameters = readParameters(file);
     assert.deepEqual(Object.keys(parameters).sort(), [

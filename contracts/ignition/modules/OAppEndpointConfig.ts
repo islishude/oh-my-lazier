@@ -4,13 +4,13 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const endpointArtifact = require(
-  "../../node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+  "../../../node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
 ) as Artifact;
 const oAppCoreArtifact = require(
-  "../../node_modules/@layerzerolabs/lz-evm-oapp-v2/artifacts/contracts/oapp/interfaces/IOAppCore.sol/IOAppCore.json",
+  "../../../node_modules/@layerzerolabs/lz-evm-oapp-v2/artifacts/contracts/oapp/interfaces/IOAppCore.sol/IOAppCore.json",
 ) as Artifact;
 const oAppOptionsArtifact = require(
-  "../../node_modules/@layerzerolabs/lz-evm-oapp-v2/artifacts/contracts/oapp/interfaces/IOAppOptionsType3.sol/IOAppOptionsType3.json",
+  "../../../node_modules/@layerzerolabs/lz-evm-oapp-v2/artifacts/contracts/oapp/interfaces/IOAppOptionsType3.sol/IOAppOptionsType3.json",
 ) as Artifact;
 
 const OAppEndpointConfigModule = buildModule("OAppEndpointConfig", (m) => {

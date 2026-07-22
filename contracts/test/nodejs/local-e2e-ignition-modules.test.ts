@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Future, IgnitionModule } from "@nomicfoundation/ignition-core";
-import LocalE2EChainModule from "../../../ignition/modules/LocalE2EChain.js";
-import LocalE2EPathwayModule from "../../../ignition/modules/LocalE2EPathway.js";
+import LocalE2EChainModule from "../../ignition/modules/LocalE2EChain.js";
+import LocalE2EPathwayModule from "../../ignition/modules/LocalE2EPathway.js";
 
 test("LocalE2EChain exposes the complete topology with stable DVN Future IDs", () => {
   assert.equal(LocalE2EChainModule.id, "LocalE2EChain");

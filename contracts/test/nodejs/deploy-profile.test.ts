@@ -1191,7 +1191,7 @@ test("loadDeploymentState treats only a missing Ignition deployment as bootstrap
     kind: "missing",
     deploymentId: profile.chains[0].deploymentId,
     deploymentDir: path.resolve(
-      "ignition/deployments",
+      "contracts/ignition/deployments",
       profile.chains[0].deploymentId
     ),
   } as const;
@@ -1199,7 +1199,9 @@ test("loadDeploymentState treats only a missing Ignition deployment as bootstrap
   await assert.rejects(
     loadDeploymentState(
       profile,
-      { config: { paths: { ignition: path.resolve("ignition") } } },
+      {
+        config: { paths: { ignition: path.resolve("contracts/ignition") } },
+      },
       async () => missing
     ),
     (error: unknown) => {
@@ -1218,7 +1220,7 @@ test("loadDeploymentState does not hide later corrupt state behind a missing dep
     kind: "missing",
     deploymentId: profile.chains[0].deploymentId,
     deploymentDir: path.resolve(
-      "ignition/deployments",
+      "contracts/ignition/deployments",
       profile.chains[0].deploymentId
     ),
   } as const;
@@ -1227,7 +1229,9 @@ test("loadDeploymentState does not hide later corrupt state behind a missing dep
   await assert.rejects(
     loadDeploymentState(
       profile,
-      { config: { paths: { ignition: path.resolve("ignition") } } },
+      {
+        config: { paths: { ignition: path.resolve("contracts/ignition") } },
+      },
       async (_runtime, request) => {
         requests.push(request.deploymentId);
         if (request.deploymentId === profile.chains[0].deploymentId) {
@@ -1750,7 +1754,10 @@ function readyDeployment(
   return {
     kind: "ready",
     deploymentId,
-    deploymentDir: path.resolve("ignition/deployments", deploymentId),
+    deploymentDir: path.resolve(
+      "contracts/ignition/deployments",
+      deploymentId
+    ),
     chainId,
     contracts: Object.fromEntries(
       Object.entries(deployment.contracts).map(

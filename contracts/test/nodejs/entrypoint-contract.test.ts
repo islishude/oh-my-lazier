@@ -101,7 +101,9 @@ test("every contract-script entrypoint is a Hardhat run wrapper", async () => {
     );
     assert.match(
       source,
-      new RegExp(`ignition/modules/${moduleName}\\.js`),
+      new RegExp(
+        `from "\\.\\./\\.\\./ignition/modules/${moduleName}\\.js";`
+      ),
       name
     );
     assert.match(source, new RegExp(`command: "${name}"`), name);

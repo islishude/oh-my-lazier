@@ -41,7 +41,7 @@ const config = defineConfig({
     },
     cache: "contracts/cache",
     artifacts: "contracts/artifacts",
-    ignition: process.env.OML_IGNITION_DIR ?? "ignition",
+    ignition: process.env.OML_IGNITION_DIR ?? "contracts/ignition",
   },
   networks: {
     hardhat: {

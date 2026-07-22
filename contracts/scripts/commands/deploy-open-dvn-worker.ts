@@ -1,5 +1,5 @@
 import hre from "hardhat";
-import OpenDVNWorkerModule from "../../../ignition/modules/OpenDVNWorker.js";
+import OpenDVNWorkerModule from "../../ignition/modules/OpenDVNWorker.js";
 import { runCommand } from "../command-harness.js";
 import { runIgnitionModuleCommand } from "./ignition-command.js";
 

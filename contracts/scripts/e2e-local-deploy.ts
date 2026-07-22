@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
 import { getAddress, type Address } from "viem";
-import LocalE2EChainModule from "../../ignition/modules/LocalE2EChain.js";
-import LocalE2EPathwayModule from "../../ignition/modules/LocalE2EPathway.js";
+import LocalE2EChainModule from "../ignition/modules/LocalE2EChain.js";
+import LocalE2EPathwayModule from "../ignition/modules/LocalE2EPathway.js";
 import {
   type ApplyGate,
   type WriteNetworkContext,

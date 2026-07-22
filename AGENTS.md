@@ -11,6 +11,7 @@
 ## Repository Layout
 
 - `contracts/contracts`: Solidity contracts. Shared worker code lives under `common`, OFT code under `oft`, and `OpenExecutor`/`OpenDVN` under `workers`.
+- `contracts/ignition`: Ignition modules and maintained parameter files. Keep deployment state under `contracts/ignition/deployments` only when it is intentionally retained.
 - `contracts/test`: Solidity tests. Prefer table coverage in the existing test file over one-off near-duplicates. Hardhat Node runner tests live under `contracts/test/nodejs`; do not place script tests beside executable wrappers.
 - `contracts/scripts`: Import-safe TypeScript deploy, inspect, check, generation, and runbook/security command cores. Executable entries live under `contracts/scripts/commands` and must remain thin `hardhat run --no-compile` wrappers. Script behavior changes need Node runner tests when practical.
 - Keep each `go/cmd/<command>/main.go` limited to CLI parsing and wiring. Command-specific implementation packages may live below that command directory (for example, `go/cmd/e2ereplaycheck/e2ereplaycheck`); move reusable or worker business logic to `go/internal`.
