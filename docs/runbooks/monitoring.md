@@ -82,7 +82,7 @@ Operational assumptions:
 - RPC failures and quorum conflicts identify configured endpoints only as `provider[n]`, where `n` is the zero-based configuration order. Logs and persisted job errors must not include complete RPC URLs or their credentials, paths, or query values.
 - RPC head, log, account-nonce, and receipt-canonicality reads require a fixed strict majority of the configured providers (`q = floor(N/2) + 1` over all configured endpoints, not over the currently reachable subset). The nonce read feeds nonce reconciliation, which parks signer lanes and advances the durable nonce cursor, so a single fabricated `eth_getTransactionCount` answer can never drive it: without a majority value the reconciliation round is skipped and durable state stays untouched. A minority provider that forks or serves divergent logs is classified `conflict` (head) or flagged by `laz_rpc_provider_log_conflict` (logs, sticky until an agreeing log window clears it) without stopping the worker; when tip candidates diverge and the head vote only succeeds at a lower height, every provider whose tip is above that verified height is classified `unavailable` for the round, so single-source latest reads and sends never route to an unverified fork descendant; losing the majority itself stops reads fail-closed and surfaces as failed polls and stalled cursors, never as ingesting unverified data.
 - Configured RPC endpoints for one chain must come from independent failure domains (different infrastructure operators). Pointing multiple configured URLs at the same backend or vendor satisfies the count but not the safety assumption: a single compromised or forked backend could then form a "majority" on its own.
-- Pricing logs identify `eid`, source name, primary/sanity role, and failure category. Deviation rejections also include `deviation_bps`. They must not include market-data base URLs, RPC URLs, API keys, or secret-bearing configuration. An unhealthy primary, no healthy declared sanity source, or any healthy sanity deviation stops the whole price-update cycle before enqueue; there is no sanity fallback.
+- Pricing logs identify `eid`, source name, primary/sanity role, and failure category. Source-sanity rejections include `deviation_bps` and remain governed by `max_deviation_bps`; an unhealthy primary, no healthy declared sanity source, or any healthy sanity deviation stops the whole price-update cycle before enqueue, with no sanity fallback. Normal write suppression logs `skipped price snapshot update` at `Debug` with the source EID, destination EID, feed, computed `deviation_bps`, seconds since the last write, `min_update_deviation_bps`, and `heartbeat_seconds`. On startup, the bot bootstraps those per-pathway values from the source-chain OpenPriceFeed instead of forcing a cold write. Verify `heartbeat_seconds + interval_seconds < stale_after_seconds`. Pricing logs must not include market-data base URLs, RPC URLs, API keys, or secret-bearing configuration.
 - The `fee_accounting` loop converts mined worker receipt gas costs to source-chain native wei. Pricing-source errors leave affected receipts pending and visible through `laz_worker_fee_unpriced_receipts`; they do not revert tx receipt confirmation or job state transitions.
 - `services.executor.enabled` and `services.dvn.enabled` are process-level switches. A deployment that runs only one role should page on that role's streams and job states, while the other role's durable cursors may be absent in that process.
 - Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. Broadcast outcomes never destroy send state: an unrecognized or transport-level send error is treated as possibly accepted, the persisted raw is replayed with bounded backoff, and receipt polling covers every persisted attempt hash. Stale broadcast rows are automatically replaced after `tx_manager.stale_broadcast_replacement_after_seconds` seconds, and an underpriced (reprice-held) row is automatically repriced after a one-minute cooldown — both keep the nonce, bump the fee at least 10% over the latest attempt, respect the configured caps, and stop at the automatic replacement cap. At that cap an accepted broadcast row simply stays under receipt polling, while a still-underpriced row remains reprice-held and surfaces as the synthetic `reprice_exhausted` held reason, which fails readiness until the operator replaces or cancels it. A `nonce too low` hold is reconciled automatically each minute against the chain's confirmed account nonce: a still-unspent nonce resumes broadcasting (unless its attempt's broadcast budget is already exhausted — then it parks as `held(broadcast_exhausted)`, because resuming would strand it outside both the replay pipeline and the lower-nonce barrier); a nonce the chain consumed with no receipt on any of our attempts parks as `held(nonce_consumed_externally)` with the observed evidence (this indicates the single-broadcaster assumption was violated — treat it as a key-management incident) and fast-forwards the local nonce cursor so fresh work signs past the consumed range. A row in `status = held` blocks all higher nonces for its signer and needs operator action: `txretry -action replace` authorizes one more replacement for a broadcast, reprice-held, or `broadcast_exhausted` row (a replacement is a fresh attempt with a fresh replay budget for the same intent); `txretry -action cancel-nonce` abandons any nonce-holding row with a same-nonce noop self transfer (the owning job parks as MANUAL_REVIEW, the row terminates as `failed/canceled`, and the lane unlocks) and clears any pending replace request — re-requesting cancel on an already-canceling row is what authorizes one cancel fee bump; `txretry -action resolve-external-nonce -resolution retry|abandon` terminates an externally consumed row and either clones a fresh task or parks the job. Watch `laz_tx_outbox_held_total` and `laz_tx_outbox_held_oldest_age_seconds` (labels: chain, signer, reason — including the synthetic `cancel_requested`) for stuck lanes.
@@ -92,3 +92,49 @@ Operational assumptions:
 - Pause semantics on the send side: once a pause or config-disable commits, the worker adds no new nonce for that scope — work selection stops offering the affected jobs, executor/DVN/pricing transaction enqueues are refused, queued outbox rows are held back from signing, and automatic failure retries — receipt-failed clones and estimate-revert requeues alike — are deferred (their failure metadata and attempt budget stay untouched) until the scope is active again — except the lzReceive purpose, whose failed outbox row is finalized while the `LZ_RECEIVE_FAILED` job keeps carrying the retry budget; the deliverer re-enqueues it once the pathway is active. A packet's scope is its exact pathway plus both endpoint chains; a pricing transaction's scope is its send chain. The bounded set of transactions that already held a nonce before the pause still converges: they are broadcast, replaced, repriced, reconciled, and receipt-polled to a terminal state, because freezing them would wedge the shared signer lane. Operator cancel (`txretry -action cancel-nonce`) and nonce reconciliation stay available while paused — they repair the lane rather than add spend.
 - A deterministic active-DVN destination config mismatch moves the affected job to `MANUAL_REVIEW` and pauses that pathway atomically. Other pathways continue processing; clear the drift and review the recorded `last_error` before unpausing.
 - A deterministic executor delivery build failure, including unsupported persisted executor options observed after a permissionless commit, moves the job and packet to `MANUAL_REVIEW` with `last_error` instead of retrying indefinitely.
+
+After resolving and reviewing an active-DVN destination config mismatch, reset the selected job and its pathway together. Supply the complete 64-character GUID without the `0x` prefix. Resetting to `ASSIGNED` makes the worker re-run destination validation, source-confirmation waiting, and source receipt quorum validation rather than trusting the earlier review state. A remaining mismatch returns the job and pathway to manual review atomically.
+
+```bash
+psql "$DATABASE_URL" -v guid='<64-character-guid>' <<'SQL'
+BEGIN;
+WITH target AS (
+  SELECT packet.guid, packet.src_eid, packet.dst_eid, packet.sender, packet.receiver
+  FROM packets AS packet
+  JOIN dvn_jobs AS job ON job.guid = packet.guid
+  WHERE packet.guid = decode(:'guid', 'hex') AND job.status = 'MANUAL_REVIEW'
+  FOR UPDATE OF packet, job
+), resumed AS (
+  UPDATE dvn_jobs AS job
+  SET status = 'ASSIGNED', quorum_result = NULL, last_error = NULL,
+      retry_count = 0, next_retry_at = NULL, updated_at = now()
+  FROM target
+  WHERE job.guid = target.guid
+  RETURNING job.guid
+), unpaused AS (
+  UPDATE pathways AS pathway
+  SET paused = false
+  FROM target, resumed
+  WHERE pathway.src_eid = target.src_eid
+    AND pathway.dst_eid = target.dst_eid
+    AND pathway.src_oapp = target.sender
+    AND pathway.dst_oapp = target.receiver
+  RETURNING pathway.id
+)
+SELECT (SELECT count(*) FROM resumed) AS resumed_jobs,
+       (SELECT count(*) FROM unpaused) AS unpaused_pathways,
+       (SELECT count(*) FROM resumed) = 1
+         AND (SELECT count(*) FROM unpaused) = 1 AS recovery_ok
+\gset
+\echo resumed_jobs=:resumed_jobs unpaused_pathways=:unpaused_pathways
+\if :recovery_ok
+  COMMIT;
+\else
+  ROLLBACK;
+  \warn 'DVN recovery changed an unexpected number of rows; transaction rolled back'
+  \quit 1
+\endif
+SQL
+```
+
+The transaction commits only when `resumed_jobs = 1` and `unpaused_pathways = 1`; otherwise it rolls back and exits nonzero. After a successful reset, run the readiness check and watch the selected GUID through the DVN states.
