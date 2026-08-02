@@ -1,13 +1,4 @@
-import {
-  assertConfiguredChain,
-  createPublicClientFromEnv,
-  envAddress,
-  isMainModule,
-  jsonStringify,
-  loadArtifact,
-  optionalAddress,
-  optionalBigInt,
-} from "./lib.js";
+import { jsonStringify, loadArtifact } from "./lib.js";
 import type { Abi, Address, PublicClient } from "viem";
 
 export type OwnedContractCheck = {
@@ -54,7 +45,7 @@ export type DeploymentPreflightInput = {
 };
 
 export async function readDeploymentPreflight(
-  input: DeploymentPreflightInput,
+  input: DeploymentPreflightInput
 ): Promise<DeploymentPreflightReport> {
   const [chainId, testOFTOwner, openExecutorOwner, openDVNOwner, ownerBalance] =
     await Promise.all([
@@ -110,7 +101,7 @@ export async function readDeploymentPreflight(
       actual: await readTotalSupply(
         input.publicClient,
         input.testOFT,
-        input.testOFTAbi,
+        input.testOFTAbi
       ),
       expected: input.expectedTestOFTTotalSupply,
     };
@@ -120,13 +111,13 @@ export async function readDeploymentPreflight(
 }
 
 export function validateDeploymentPreflight(
-  report: DeploymentPreflightReport,
+  report: DeploymentPreflightReport
 ): string[] {
   const errors: string[] = [];
   for (const contract of report.contracts) {
     if (contract.owner.toLowerCase() !== report.expectedOwner.toLowerCase()) {
       errors.push(
-        `${contract.label} owner ${contract.owner} does not match EXPECTED_OWNER ${report.expectedOwner}`,
+        `${contract.label} owner ${contract.owner} does not match EXPECTED_OWNER ${report.expectedOwner}`
       );
     }
   }
@@ -135,12 +126,12 @@ export function validateDeploymentPreflight(
     appendBalanceError(
       errors,
       "CANARY_TREASURY native",
-      report.canaryTreasury.nativeBalance,
+      report.canaryTreasury.nativeBalance
     );
     appendBalanceError(
       errors,
       "CANARY_TREASURY TestOFT",
-      report.canaryTreasury.tokenBalance,
+      report.canaryTreasury.tokenBalance
     );
   }
   if (
@@ -148,7 +139,7 @@ export function validateDeploymentPreflight(
     report.testOFTTotalSupply.actual !== report.testOFTTotalSupply.expected
   ) {
     errors.push(
-      `TestOFT totalSupply ${report.testOFTTotalSupply.actual} does not match EXPECTED_TOTAL_SUPPLY ${report.testOFTTotalSupply.expected}`,
+      `TestOFT totalSupply ${report.testOFTTotalSupply.actual} does not match EXPECTED_TOTAL_SUPPLY ${report.testOFTTotalSupply.expected}`
     );
   }
   return errors;
@@ -157,11 +148,11 @@ export function validateDeploymentPreflight(
 function appendBalanceError(
   errors: string[],
   label: string,
-  check: BalanceCheck,
+  check: BalanceCheck
 ): void {
   if (check.balance < check.minBalance) {
     errors.push(
-      `${label} balance ${check.balance} is below required minimum ${check.minBalance} at ${check.address}`,
+      `${label} balance ${check.balance} is below required minimum ${check.minBalance} at ${check.address}`
     );
   }
 }
@@ -169,7 +160,7 @@ function appendBalanceError(
 async function readOwner(
   publicClient: PublicClient,
   address: Address,
-  abi: Abi,
+  abi: Abi
 ): Promise<Address> {
   return (await publicClient.readContract({
     address,
@@ -182,7 +173,7 @@ async function readBalanceOf(
   publicClient: PublicClient,
   address: Address,
   abi: Abi,
-  args: readonly [Address],
+  args: readonly [Address]
 ): Promise<bigint> {
   return (await publicClient.readContract({
     address,
@@ -195,7 +186,7 @@ async function readBalanceOf(
 async function readTotalSupply(
   publicClient: PublicClient,
   address: Address,
-  abi: Abi,
+  abi: Abi
 ): Promise<bigint> {
   return (await publicClient.readContract({
     address,
@@ -204,30 +195,28 @@ async function readTotalSupply(
   })) as bigint;
 }
 
-if (isMainModule(import.meta.url)) {
+export type RunDeploymentPreflightInput = Omit<
+  DeploymentPreflightInput,
+  "publicClient" | "testOFTAbi" | "openExecutorAbi" | "openDVNAbi"
+>;
+
+export async function runDeploymentPreflight(
+  input: RunDeploymentPreflightInput,
+  publicClient: PublicClient
+): Promise<void> {
   const testOFTArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
+    "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json"
   );
   const openExecutorArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json"
   );
   const openDVNArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json"
   );
 
-  const publicClient = createPublicClientFromEnv();
-  await assertConfiguredChain(publicClient);
   const report = await readDeploymentPreflight({
     publicClient,
-    testOFT: envAddress("TEST_OFT"),
-    openExecutor: envAddress("OPEN_EXECUTOR"),
-    openDVN: envAddress("OPEN_DVN"),
-    expectedOwner: envAddress("EXPECTED_OWNER"),
-    minOwnerNativeBalance: optionalBigInt("MIN_OWNER_NATIVE_BALANCE") ?? 0n,
-    canaryTreasury: optionalAddress("CANARY_TREASURY"),
-    minCanaryNativeBalance: optionalBigInt("MIN_CANARY_NATIVE_BALANCE") ?? 0n,
-    minCanaryTokenBalance: optionalBigInt("MIN_CANARY_TOKEN_BALANCE") ?? 0n,
-    expectedTestOFTTotalSupply: optionalBigInt("EXPECTED_TOTAL_SUPPLY"),
+    ...input,
     testOFTAbi: testOFTArtifact.abi,
     openExecutorAbi: openExecutorArtifact.abi,
     openDVNAbi: openDVNArtifact.abi,
@@ -235,6 +224,8 @@ if (isMainModule(import.meta.url)) {
   const errors = validateDeploymentPreflight(report);
   console.log(jsonStringify({ ok: errors.length === 0, ...report, errors }));
   if (errors.length > 0) {
-    process.exitCode = 1;
+    throw new Error(
+      `deployment preflight failed with ${errors.length} error(s)`
+    );
   }
 }

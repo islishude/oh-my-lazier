@@ -1,0 +1,33 @@
+{
+  "input": {
+    "testOFT": "0x1111111111111111111111111111111111111111",
+    "openExecutor": "0x2222222222222222222222222222222222222222",
+    "openDVN": "0x3333333333333333333333333333333333333333",
+    "priceFeed": "0x4444444444444444444444444444444444444444",
+    "remoteEid": "40449",
+    "sendLib": "0x5555555555555555555555555555555555555555",
+    "maxMessageSize": "10000",
+    "minLzReceiveGas": "200000",
+    "maxLzReceiveGas": "1000000",
+    "priceSnapshot": {
+      "dstGasPriceInSrcToken": "1",
+      "dstDataFeePerByteInSrcToken": "0",
+      "staleAfter": "1800"
+    },
+    "executorFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "50000",
+      "dataSizeOverheadBytes": "0",
+      "marginBps": "1000"
+    },
+    "dvnFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "150000",
+      "dataSizeOverheadBytes": "0",
+      "marginBps": "1000"
+    },
+    "expectedSigner": "0x6666666666666666666666666666666666666666"
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}

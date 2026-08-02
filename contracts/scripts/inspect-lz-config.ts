@@ -1,84 +1,99 @@
-import { type Address, type Hex } from "viem";
+import type { Address, Hex, PublicClient } from "viem";
 import {
   CONFIG_TYPE_EXECUTOR,
   CONFIG_TYPE_ULN,
   decodeExecutorConfig,
   decodeUlnConfig,
+  type ExecutorConfig,
+  type UlnConfig,
 } from "./lz-config.js";
-import {
-  assertConfiguredChain,
-  createPublicClientFromEnv,
-  envAddress,
-  envUint32,
-  jsonStringify,
-  loadABIArtifact,
-} from "./lib.js";
+import { loadABIArtifact } from "./lib.js";
 
 const endpointArtifact = loadABIArtifact(
-  "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
+  "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json"
 );
 
-const publicClient = createPublicClientFromEnv();
-await assertConfiguredChain(publicClient);
-const endpoint = envAddress("ENDPOINT");
-const oapp = envAddress("OAPP");
-const remoteEid = envUint32("REMOTE_EID");
-const sendUln = envAddress("SEND_ULN");
-const receiveUln = envAddress("RECEIVE_ULN");
+export type InspectLzConfigInput = {
+  endpoint: Address;
+  oapp: Address;
+  remoteEid: number;
+  sendUln: Address;
+  receiveUln: Address;
+};
 
-const localEid = await publicClient.readContract({
-  address: endpoint,
-  abi: endpointArtifact.abi,
-  functionName: "eid",
-});
-const activeSendLibrary = await publicClient.readContract({
-  address: endpoint,
-  abi: endpointArtifact.abi,
-  functionName: "getSendLibrary",
-  args: [oapp, remoteEid],
-});
-const [activeReceiveLibrary, receiveLibraryIsDefault] =
-  (await publicClient.readContract({
-    address: endpoint,
+export type InspectLzConfigReport = {
+  endpoint: Address;
+  localEid: number;
+  oapp: Address;
+  remoteEid: number;
+  activeSendLibrary: Address;
+  activeReceiveLibrary: Address;
+  receiveLibraryIsDefault: boolean;
+  inspectedLibraries: {
+    sendUln: Address;
+    receiveUln: Address;
+  };
+  executorConfig: ExecutorConfig;
+  sendUlnConfig: UlnConfig;
+  receiveUlnConfig: UlnConfig;
+};
+
+export async function inspectLzConfig(
+  input: InspectLzConfigInput,
+  publicClient: PublicClient
+): Promise<InspectLzConfigReport> {
+  const localEid = (await publicClient.readContract({
+    address: input.endpoint,
     abi: endpointArtifact.abi,
-    functionName: "getReceiveLibrary",
-    args: [oapp, remoteEid],
-  })) as [Address, boolean];
+    functionName: "eid",
+  })) as number;
+  const activeSendLibrary = (await publicClient.readContract({
+    address: input.endpoint,
+    abi: endpointArtifact.abi,
+    functionName: "getSendLibrary",
+    args: [input.oapp, input.remoteEid],
+  })) as Address;
+  const [activeReceiveLibrary, receiveLibraryIsDefault] =
+    (await publicClient.readContract({
+      address: input.endpoint,
+      abi: endpointArtifact.abi,
+      functionName: "getReceiveLibrary",
+      args: [input.oapp, input.remoteEid],
+    })) as [Address, boolean];
 
-const executorConfigBytes = (await publicClient.readContract({
-  address: endpoint,
-  abi: endpointArtifact.abi,
-  functionName: "getConfig",
-  args: [oapp, sendUln, remoteEid, CONFIG_TYPE_EXECUTOR],
-})) as Hex;
-const sendUlnConfigBytes = (await publicClient.readContract({
-  address: endpoint,
-  abi: endpointArtifact.abi,
-  functionName: "getConfig",
-  args: [oapp, sendUln, remoteEid, CONFIG_TYPE_ULN],
-})) as Hex;
-const receiveUlnConfigBytes = (await publicClient.readContract({
-  address: endpoint,
-  abi: endpointArtifact.abi,
-  functionName: "getConfig",
-  args: [oapp, receiveUln, remoteEid, CONFIG_TYPE_ULN],
-})) as Hex;
+  const executorConfigBytes = (await publicClient.readContract({
+    address: input.endpoint,
+    abi: endpointArtifact.abi,
+    functionName: "getConfig",
+    args: [input.oapp, input.sendUln, input.remoteEid, CONFIG_TYPE_EXECUTOR],
+  })) as Hex;
+  const sendUlnConfigBytes = (await publicClient.readContract({
+    address: input.endpoint,
+    abi: endpointArtifact.abi,
+    functionName: "getConfig",
+    args: [input.oapp, input.sendUln, input.remoteEid, CONFIG_TYPE_ULN],
+  })) as Hex;
+  const receiveUlnConfigBytes = (await publicClient.readContract({
+    address: input.endpoint,
+    abi: endpointArtifact.abi,
+    functionName: "getConfig",
+    args: [input.oapp, input.receiveUln, input.remoteEid, CONFIG_TYPE_ULN],
+  })) as Hex;
 
-console.log(
-  jsonStringify({
-    endpoint,
+  return {
+    endpoint: input.endpoint,
     localEid,
-    oapp,
-    remoteEid,
+    oapp: input.oapp,
+    remoteEid: input.remoteEid,
     activeSendLibrary,
     activeReceiveLibrary,
     receiveLibraryIsDefault,
     inspectedLibraries: {
-      sendUln,
-      receiveUln,
+      sendUln: input.sendUln,
+      receiveUln: input.receiveUln,
     },
     executorConfig: decodeExecutorConfig(executorConfigBytes),
     sendUlnConfig: decodeUlnConfig(sendUlnConfigBytes),
     receiveUlnConfig: decodeUlnConfig(receiveUlnConfigBytes),
-  }),
-);
+  };
+}

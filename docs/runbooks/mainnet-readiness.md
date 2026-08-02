@@ -33,12 +33,28 @@ This runbook is the final review index before any mainnet deployment proposal. P
   `chains[].includeLayerZeroLabsDVN` when it exists for the local chain.
 - Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.
 
+## Contract Script Boundary
+
+All contract-script entrypoints run through the npm `hardhat run --no-compile`
+wrappers. Each online single-chain invocation must provide a Hardhat
+`--network` and a strict, command-specific JSON envelope through
+`OML_SCRIPT_PARAMS`. The envelope and profile may contain only public
+operational inputs. RPC credentials, private keys, keystore passwords, and API
+keys must come from Hardhat configuration variables/keystore or the automation
+secret store.
+
+Every transaction-capable command requires an explicit top-level `apply`.
+Archive the `apply: false` plan with the ticket before authorizing
+`apply: true`. Interactive operation confirms the full write set once; non-TTY
+operation must use `confirmation: "approved"`. The actual Hardhat signer must
+match the approved owner/delegate recorded by the command input.
+
 ## Review Sequence
 
 1. Run `make check`.
 2. Run `go run ./go/cmd/configdiff -from <approved.yaml> -to <proposed.yaml>`.
 3. Run `go run ./go/cmd/configcheck -config <proposed.yaml> -format json`.
-4. Run `npm run inspect:lz-config` for each configured direction and archive output.
+4. Run `OML_SCRIPT_PARAMS=<inspect-params.json> npm run inspect:lz-config -- --network <network>` for each configured direction and archive stdout.
 5. Complete `docs/runbooks/key-management.md`.
 6. Complete `docs/runbooks/price-bot.md`.
 7. Complete `docs/runbooks/rate-limit.md`.
@@ -48,7 +64,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
 11. Complete security review and resolve all critical findings.
 12. Confirm rollback steps for Executor and DVN config are documented with previous config values.
 13. Confirm canary transfer amount, sender account, recipient account, minimum recipient balance, signer, owner, and operator contacts.
-14. Run `npm run check:migration-evidence -- --migration-evidence <record.json>`.
+14. Run `OML_SCRIPT_PARAMS=<record-params.json> npm run check:migration-evidence`, where the file contains `{ "input": { "migrationEvidence": "<record.json>" } }`.
 15. Approve the migration ticket only after every artifact above is attached.
 
 ## Go / Worker Checks
@@ -85,8 +101,8 @@ Required commands:
 
 ```bash
 npm run typecheck
-npx hardhat test solidity
-npm run inspect:lz-config
+npx hardhat test solidity --no-compile
+OML_SCRIPT_PARAMS=<inspect-params.json> npm run inspect:lz-config -- --network <network>
 ```
 
 Required state:
@@ -108,7 +124,7 @@ The rollback section of the migration ticket must include:
 - previous Executor config
 - previous send ULN config
 - previous receive ULN config
-- `npm run configure:lz-rollback -- --dry-run` output showing the exact rollback `setConfig` batches
+- `OML_SCRIPT_PARAMS=<rollback-params.json> npm run configure:lz-rollback -- --network <network>` output with top-level `apply: false`, showing the exact rollback `setConfig` batches
 - restored Executor/ULN config check after rollback
 - canary transfer evidence after rollback
 - owner account able to pause/unpause the affected OApp/OFT pathway

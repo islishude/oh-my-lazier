@@ -1,14 +1,4 @@
-import {
-  envAddress,
-  envBigInt,
-  envUint32,
-  jsonStringify,
-  optionalAddress,
-  optionalAddressList,
-  optionalBigInt,
-  optionalBool,
-  optionalUint64,
-} from "./lib.js";
+import type { Address } from "viem";
 import { requireLayerZeroLabsDVNForLibraries } from "./lz-addresses.js";
 import type {
   PriceSnapshotInput,
@@ -19,73 +9,75 @@ import {
   buildOpenWorkersPathwayConfigParameters,
 } from "./oft-pathway-ignition.js";
 
-const maxMessageSizeValue = envBigInt("EXECUTOR_MAX_MESSAGE_SIZE");
-if (maxMessageSizeValue > 0xffffffffn) {
-  throw new Error("EXECUTOR_MAX_MESSAGE_SIZE exceeds uint32");
+export type RenderOftPathwayPriceSnapshotInput = Omit<
+  PriceSnapshotInput,
+  "updatedAt"
+> & {
+  updatedAt?: bigint;
+};
+
+export type RenderOftPathwayParamsInput = {
+  oapp: Address;
+  endpoint: Address;
+  delegate?: Address;
+  remoteEid: number;
+  remoteOApp: Address;
+  sendUln: Address;
+  receiveUln: Address;
+  openExecutor: Address;
+  openDVN: Address;
+  priceFeed: Address;
+  bootstrapPriceSubmitter: Address;
+  requiredDVNs?: Address[];
+  includeLayerZeroLabsDVN?: boolean;
+  confirmations: bigint;
+  maxMessageSize: number;
+  minLzReceiveGas?: bigint;
+  maxLzReceiveGas: bigint;
+  priceSnapshot: RenderOftPathwayPriceSnapshotInput;
+  executorFeeModel: WorkerFeeModelInput;
+  dvnFeeModel: WorkerFeeModelInput;
+  dvnVerifier?: Address;
+  enforcedLzReceiveGas: bigint;
+};
+
+export type RenderOftPathwayParamsOptions = {
+  now?: bigint;
+};
+
+/** Build both Ignition parameter objects for one directional OFT pathway. */
+export function renderOftPathwayParams(
+  input: RenderOftPathwayParamsInput,
+  options: RenderOftPathwayParamsOptions = {}
+) {
+  const requiredDVNs = resolveRequiredDVNs(input);
+  const updatedAt =
+    input.priceSnapshot.updatedAt ??
+    options.now ??
+    BigInt(Math.floor(Date.now() / 1000));
+  const normalizedInput = {
+    ...input,
+    requiredDVNs,
+    minLzReceiveGas: input.minLzReceiveGas ?? input.enforcedLzReceiveGas,
+    priceSnapshot: { ...input.priceSnapshot, updatedAt },
+  };
+
+  return {
+    ...buildOAppEndpointConfigParameters(normalizedInput),
+    ...buildOpenWorkersPathwayConfigParameters(normalizedInput),
+  };
 }
 
-const delegate = optionalAddress("DELEGATE");
-const dvnVerifier = optionalAddress("DVN_VERIFIER");
-const enforcedLzReceiveGas = envBigInt("ENFORCED_LZ_RECEIVE_GAS");
-const minLzReceiveGas =
-  optionalBigInt("MIN_LZ_RECEIVE_GAS") ?? enforcedLzReceiveGas;
-const priceUpdatedAt = BigInt(Math.floor(Date.now() / 1000));
-const openDVN = envAddress("OPEN_DVN");
-const endpoint = envAddress("ENDPOINT");
-const sendUln = envAddress("SEND_ULN");
-const receiveUln = envAddress("RECEIVE_ULN");
-const includeLayerZeroLabsDVN =
-  optionalBool("INCLUDE_LAYERZERO_LABS_DVN") ?? false;
-const requiredDVNs = resolveRequiredDVNs({
-  openDVN,
-  endpoint,
-  sendUln,
-  receiveUln,
-  explicit: optionalAddressList("REQUIRED_DVNS"),
-  includeLayerZeroLabsDVN,
-});
-
-const input = {
-  oapp: envAddress("OAPP"),
-  endpoint,
-  delegate,
-  remoteEid: envUint32("REMOTE_EID"),
-  remoteOApp: envAddress("REMOTE_OAPP"),
-  sendUln,
-  receiveUln,
-  openExecutor: envAddress("OPEN_EXECUTOR"),
-  openDVN,
-  priceFeed: envAddress("PRICE_FEED"),
-  bootstrapPriceSubmitter: envAddress("BOOTSTRAP_PRICE_SUBMITTER"),
-  requiredDVNs,
-  confirmations: envBigInt("CONFIRMATIONS"),
-  maxMessageSize: Number(maxMessageSizeValue),
-  minLzReceiveGas,
-  maxLzReceiveGas: envBigInt("MAX_LZ_RECEIVE_GAS"),
-  priceSnapshot: priceSnapshot(priceUpdatedAt),
-  executorFeeModel: workerFeeModel("EXECUTOR"),
-  dvnFeeModel: workerFeeModel("DVN"),
-  dvnVerifier,
-  enforcedLzReceiveGas,
-};
-
-const parameters = {
-  ...buildOAppEndpointConfigParameters(input),
-  ...buildOpenWorkersPathwayConfigParameters(input),
-};
-
-console.log(jsonStringify(parameters));
-
-function resolveRequiredDVNs(input: {
-  openDVN: `0x${string}`;
-  endpoint: `0x${string}`;
-  sendUln: `0x${string}`;
-  receiveUln: `0x${string}`;
-  explicit?: `0x${string}`[];
-  includeLayerZeroLabsDVN: boolean;
-}) {
-  const dvns = input.explicit ?? [input.openDVN];
-  if (!input.includeLayerZeroLabsDVN) {
+export function resolveRequiredDVNs(input: {
+  openDVN: Address;
+  endpoint: Address;
+  sendUln: Address;
+  receiveUln: Address;
+  requiredDVNs?: Address[];
+  includeLayerZeroLabsDVN?: boolean;
+}): Address[] {
+  const dvns = input.requiredDVNs ?? [input.openDVN];
+  if (input.includeLayerZeroLabsDVN !== true) {
     return dvns;
   }
   return [
@@ -96,29 +88,7 @@ function resolveRequiredDVNs(input: {
         sendUln302: input.sendUln,
         receiveUln302: input.receiveUln,
       },
-      "INCLUDE_LAYERZERO_LABS_DVN",
+      "input.includeLayerZeroLabsDVN"
     ),
   ];
-}
-
-function priceSnapshot(defaultUpdatedAt: bigint): PriceSnapshotInput {
-  return {
-    dstGasPriceInSrcToken: envBigInt(
-      "PRICE_SNAPSHOT_DST_GAS_PRICE_IN_SRC_TOKEN",
-    ),
-    dstDataFeePerByteInSrcToken: envBigInt(
-      "PRICE_SNAPSHOT_DST_DATA_FEE_PER_BYTE_IN_SRC_TOKEN",
-    ),
-    updatedAt: optionalUint64("PRICE_SNAPSHOT_UPDATED_AT", defaultUpdatedAt),
-    staleAfter: envBigInt("PRICE_SNAPSHOT_STALE_AFTER"),
-  };
-}
-
-function workerFeeModel(prefix: "EXECUTOR" | "DVN"): WorkerFeeModelInput {
-  return {
-    baseFee: envBigInt(`${prefix}_FEE_FIXED_FEE_WEI`),
-    dstGasOverhead: envBigInt(`${prefix}_FEE_DST_GAS_OVERHEAD`),
-    dataSizeOverheadBytes: envBigInt(`${prefix}_FEE_DATA_SIZE_OVERHEAD_BYTES`),
-    marginBps: envBigInt(`${prefix}_FEE_MARGIN_BPS`),
-  };
 }

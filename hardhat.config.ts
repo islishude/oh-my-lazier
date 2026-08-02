@@ -35,9 +35,13 @@ const config = defineConfig({
   },
   paths: {
     sources: "contracts/contracts",
-    tests: "contracts/test",
+    tests: {
+      solidity: "contracts/test",
+      nodejs: "contracts/test/nodejs",
+    },
     cache: "contracts/cache",
     artifacts: "contracts/artifacts",
+    ignition: process.env.OML_IGNITION_DIR ?? "contracts/ignition",
   },
   networks: {
     hardhat: {
@@ -64,6 +68,20 @@ const config = defineConfig({
       chainId: 97,
       url: configVariable("BSCTESTNET_RPC_URL"),
       accounts: [configVariable("BSCTESTNET_PRIVATE_KEY")],
+    },
+    "local-anvil-a": {
+      type: "http",
+      chainType: "l1",
+      chainId: 31337,
+      url: configVariable("E2E_CHAIN_A_HOST_RPC_URL"),
+      accounts: [configVariable("E2E_DEPLOYER_PRIVATE_KEY")],
+    },
+    "local-anvil-b": {
+      type: "http",
+      chainType: "l1",
+      chainId: 31338,
+      url: configVariable("E2E_CHAIN_B_HOST_RPC_URL"),
+      accounts: [configVariable("E2E_DEPLOYER_PRIVATE_KEY")],
     },
   },
   ignition: {

@@ -1,0 +1,40 @@
+{
+  "input": {
+    "oapp": "0x1111111111111111111111111111111111111111",
+    "endpoint": "0x2222222222222222222222222222222222222222",
+    "remoteEid": "40449",
+    "remoteOApp": "0x3333333333333333333333333333333333333333",
+    "sendUln": "0x4444444444444444444444444444444444444444",
+    "receiveUln": "0x5555555555555555555555555555555555555555",
+    "openExecutor": "0x6666666666666666666666666666666666666666",
+    "openDVN": "0x7777777777777777777777777777777777777777",
+    "priceFeed": "0x8888888888888888888888888888888888888888",
+    "bootstrapPriceSubmitter": "0x9999999999999999999999999999999999999999",
+    "requiredDVNs": [
+      "0x7777777777777777777777777777777777777777",
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "confirmations": "12",
+    "maxMessageSize": "10000",
+    "minLzReceiveGas": "200000",
+    "maxLzReceiveGas": "1000000",
+    "enforcedLzReceiveGas": "200000",
+    "priceSnapshot": {
+      "dstGasPriceInSrcToken": "1",
+      "dstDataFeePerByteInSrcToken": "0",
+      "staleAfter": "1800"
+    },
+    "executorFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "50000",
+      "dataSizeOverheadBytes": "0",
+      "marginBps": "1000"
+    },
+    "dvnFeeModel": {
+      "baseFee": "0",
+      "dstGasOverhead": "150000",
+      "dataSizeOverheadBytes": "0",
+      "marginBps": "1000"
+    }
+  }
+}

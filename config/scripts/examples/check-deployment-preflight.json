@@ -1,0 +1,11 @@
+{
+  "input": {
+    "testOFT": "0x1111111111111111111111111111111111111111",
+    "openExecutor": "0x2222222222222222222222222222222222222222",
+    "openDVN": "0x3333333333333333333333333333333333333333",
+    "expectedOwner": "0x4444444444444444444444444444444444444444",
+    "minOwnerNativeBalance": "100000000000000000",
+    "minCanaryNativeBalance": "0",
+    "minCanaryTokenBalance": "0"
+  }
+}

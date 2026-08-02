@@ -1,14 +1,4 @@
-import {
-  assertConfiguredChain,
-  createPublicClientFromEnv,
-  envAddress,
-  envBigInt,
-  envUint32,
-  jsonStringify,
-  isMainModule,
-  loadArtifact,
-  optionalBigInt,
-} from "./lib.js";
+import { jsonStringify, loadArtifact } from "./lib.js";
 import type { Abi, Address, PublicClient } from "viem";
 
 export type PriceSnapshot = {
@@ -66,21 +56,21 @@ export async function readPriceConfigReport(input: {
       input.publicClient,
       input.priceFeed,
       input.priceFeedAbi,
-      input.dstEid,
+      input.dstEid
     ),
     readWorkerFeeModel(
       input.publicClient,
       "OpenExecutor",
       input.openExecutor,
       input.openExecutorAbi,
-      input.dstEid,
+      input.dstEid
     ),
     readWorkerFeeModel(
       input.publicClient,
       "OpenDVN",
       input.openDVN,
       input.openDVNAbi,
-      input.dstEid,
+      input.dstEid
     ),
   ]);
   return {
@@ -112,7 +102,9 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
     errors.push(`priceFeed updatedAt ${snapshot.updatedAt} is in the future`);
   } else if (report.checkedAt - snapshot.updatedAt > report.maxAgeSeconds) {
     errors.push(
-      `priceFeed priceSnapshot age ${report.checkedAt - snapshot.updatedAt}s exceeds ${report.maxAgeSeconds}s`,
+      `priceFeed priceSnapshot age ${
+        report.checkedAt - snapshot.updatedAt
+      }s exceeds ${report.maxAgeSeconds}s`
     );
   }
   if (snapshot.staleAfter === 0n) {
@@ -123,14 +115,16 @@ export function validatePriceConfigReport(report: PriceConfigReport): string[] {
     snapshot.staleAfter !== report.expectedStaleAfter
   ) {
     errors.push(
-      `priceFeed staleAfter ${snapshot.staleAfter} does not match expected ${report.expectedStaleAfter}`,
+      `priceFeed staleAfter ${snapshot.staleAfter} does not match expected ${report.expectedStaleAfter}`
     );
   }
 
   for (const worker of report.workers) {
-    if (worker.priceFeed.toLowerCase() !== report.priceFeed.address.toLowerCase()) {
+    if (
+      worker.priceFeed.toLowerCase() !== report.priceFeed.address.toLowerCase()
+    ) {
       errors.push(
-        `${worker.label} priceFeed ${worker.priceFeed} does not match expected ${report.priceFeed.address}`,
+        `${worker.label} priceFeed ${worker.priceFeed} does not match expected ${report.priceFeed.address}`
       );
     }
     if (worker.feeModel.baseFee < 0n) {
@@ -153,7 +147,7 @@ async function readPriceSnapshot(
   publicClient: PublicClient,
   address: Address,
   abi: Abi,
-  dstEid: number,
+  dstEid: number
 ): Promise<PriceSnapshot> {
   return normalizePriceSnapshot(
     await publicClient.readContract({
@@ -161,7 +155,7 @@ async function readPriceSnapshot(
       abi,
       functionName: "priceSnapshot",
       args: [dstEid],
-    }),
+    })
   );
 }
 
@@ -170,7 +164,7 @@ async function readWorkerFeeModel(
   label: "OpenExecutor" | "OpenDVN",
   address: Address,
   abi: Abi,
-  dstEid: number,
+  dstEid: number
 ): Promise<WorkerFeeModel> {
   const [priceFeed, feeModel] = await Promise.all([
     publicClient.readContract({
@@ -239,27 +233,37 @@ function normalizeFeeModel(value: unknown): FeeModel {
   };
 }
 
-if (isMainModule(import.meta.url)) {
+export type RunPriceConfigCheckInput = {
+  dstEid: number;
+  maxPriceAgeSeconds: bigint;
+  expectedStaleAfter?: bigint;
+  priceFeed: Address;
+  openExecutor: Address;
+  openDVN: Address;
+};
+
+export async function runPriceConfigCheck(
+  input: RunPriceConfigCheckInput,
+  publicClient: PublicClient
+): Promise<void> {
   const priceFeedArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json"
   );
   const openExecutorArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json"
   );
   const openDVNArtifact = loadArtifact(
-    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
+    "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json"
   );
-  const publicClient = createPublicClientFromEnv();
-  await assertConfiguredChain(publicClient);
   const report = await readPriceConfigReport({
     publicClient,
-    dstEid: envUint32("DST_EID"),
+    dstEid: input.dstEid,
     checkedAt: BigInt(Math.floor(Date.now() / 1000)),
-    maxAgeSeconds: envBigInt("MAX_PRICE_AGE_SECONDS"),
-    expectedStaleAfter: optionalBigInt("EXPECTED_STALE_AFTER"),
-    priceFeed: envAddress("PRICE_FEED"),
-    openExecutor: envAddress("OPEN_EXECUTOR"),
-    openDVN: envAddress("OPEN_DVN"),
+    maxAgeSeconds: input.maxPriceAgeSeconds,
+    expectedStaleAfter: input.expectedStaleAfter,
+    priceFeed: input.priceFeed,
+    openExecutor: input.openExecutor,
+    openDVN: input.openDVN,
     priceFeedAbi: priceFeedArtifact.abi,
     openExecutorAbi: openExecutorArtifact.abi,
     openDVNAbi: openDVNArtifact.abi,
@@ -267,6 +271,6 @@ if (isMainModule(import.meta.url)) {
   const errors = validatePriceConfigReport(report);
   console.log(jsonStringify({ ok: errors.length === 0, ...report, errors }));
   if (errors.length > 0) {
-    process.exitCode = 1;
+    throw new Error(`price config check failed with ${errors.length} error(s)`);
   }
 }

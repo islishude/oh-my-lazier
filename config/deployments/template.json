@@ -4,9 +4,7 @@
   "databaseUrl": "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable",
   "metricsListenAddress": ":9090",
   "owner": "0x1111111111111111111111111111111111111111",
-  "priceFeedSubmitters": [
-    "0x2222222222222222222222222222222222222222"
-  ],
+  "priceFeedSubmitters": ["0x2222222222222222222222222222222222222222"],
   "initialRecipient": "0x1111111111111111111111111111111111111111",
   "canaryTreasury": "0x1111111111111111111111111111111111111111",
   "minOwnerNativeBalanceWei": "10000000000000000",
@@ -42,7 +40,6 @@
       "nativeAssetId": "eth",
       "eid": 40161,
       "chainId": 11155111,
-      "rpcUrlEnv": "SEPOLIA_RPC_URL",
       "deploymentId": "sepolia-open-workers",
       "testOFTDeploymentId": "sepolia-test-oft",
       "initialSupply": "1000000000000000000000000",
@@ -79,7 +76,6 @@
       "nativeAssetId": "eth",
       "eid": 40449,
       "chainId": 560048,
-      "rpcUrlEnv": "HOODI_RPC_URL",
       "deploymentId": "hoodi-open-workers",
       "testOFTDeploymentId": "hoodi-test-oft",
       "initialSupply": "0",

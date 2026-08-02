@@ -1,0 +1,7 @@
+{
+  "input": {
+    "tmpDir": "tmp/e2e"
+  },
+  "apply": true,
+  "confirmation": "approved"
+}

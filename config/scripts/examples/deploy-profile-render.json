@@ -1,0 +1,10 @@
+{
+  "input": {
+    "profilePath": "config/deployments/template.json",
+    "outDir": "tmp/deploy-profile",
+    "phase": "render",
+    "verifySource": false
+  },
+  "apply": false,
+  "confirmation": "interactive"
+}
