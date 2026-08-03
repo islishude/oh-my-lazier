@@ -1200,6 +1200,14 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
+				SendRequiredDVNs: []config.EVMAddress{
+					config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					config.MustEVMAddress("0xdddddddddddddddddddddddddddddddddddddddd"),
+				},
+				ReceiveRequiredDVNs: []config.EVMAddress{
+					config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+					config.MustEVMAddress("0xdddddddddddddddddddddddddddddddddddddddd"),
+				},
 				DVN:            config.PathwayDVNConfig{Mode: mode},
 				Enabled:        true,
 				MaxMessageSize: 10000,

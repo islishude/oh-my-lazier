@@ -279,6 +279,54 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 	)
 }
 
+func TestBotEnqueueOnGasSpikeAdvancesBaselineWhenSuppressed(t *testing.T) {
+	registry := testRegistry(t)
+	store := &fakeStore{}
+	sourceGas := &mutableGas{price: big.NewInt(1_000_000_000)}
+	destinationGas := &mutableGas{price: big.NewInt(2_000_000_000)}
+	bot, err := NewWithDependencies(store, registry, testSettings(), map[uint32]ChainSources{
+		40161: {Primary: testConfiguredPrice("primary", big.NewRat(2000, 1)), Gas: sourceGas, DataFeePerByteWei: big.NewInt(0)},
+		40449: {Primary: testConfiguredPrice("primary", big.NewRat(1000, 1)), Gas: destinationGas, DataFeePerByteWei: big.NewInt(0)},
+	}, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	seedCalls := store.enqueueCalls
+
+	// The chain pauses, so the spike evaluation runs but nothing is enqueued.
+	store.enqueueErr = db.ErrTxSendScopeInactive
+	destinationGas.price = big.NewInt(2_300_000_000)
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() suppressed error = %v", err)
+	}
+	if store.enqueueCalls != seedCalls+1 {
+		t.Fatalf("enqueue calls after suppressed spike = %d, want %d", store.enqueueCalls, seedCalls+1)
+	}
+
+	// The same gas level must not re-trigger evaluation every check interval.
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() repeat error = %v", err)
+	}
+	if store.enqueueCalls != seedCalls+1 {
+		t.Fatalf("enqueue calls after repeated spike check = %d, want unchanged %d", store.enqueueCalls, seedCalls+1)
+	}
+
+	// A further rise past the threshold from the advanced baseline re-triggers.
+	store.enqueueErr = nil
+	destinationGas.price = big.NewInt(2_600_000_000)
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike() further rise error = %v", err)
+	}
+	if store.enqueueCalls != seedCalls+2 {
+		t.Fatalf("enqueue calls after further rise = %d, want %d", store.enqueueCalls, seedCalls+2)
+	}
+}
+
 func TestBotEnqueueOnceDeduplicatesSharedPriceFeed(t *testing.T) {
 	pathways := testPathways()
 	duplicate := pathways[0]
@@ -478,8 +526,9 @@ func TestBotEnqueueOnceRejectsConflictingSharedRoleFeeModel(t *testing.T) {
 }
 
 type fakeStore struct {
-	requests   []db.TxRequest
-	enqueueErr error
+	requests     []db.TxRequest
+	enqueueErr   error
+	enqueueCalls int
 }
 
 type emptySnapshotReader struct{}
@@ -505,6 +554,7 @@ func (r fixedSnapshotReader) PriceSnapshot(context.Context, uint32, common.Addre
 }
 
 func (s *fakeStore) EnqueueTx(_ context.Context, request db.TxRequest) (int64, error) {
+	s.enqueueCalls++
 	if s.enqueueErr != nil {
 		return 0, s.enqueueErr
 	}

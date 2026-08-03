@@ -394,6 +394,14 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			}
 		}
 	}
+	// The baseline records the gas level this spike check has already reacted to. It
+	// must advance even when nothing was enqueued (paused chain or deviation-gated
+	// batch), otherwise the same spike re-triggers a full market-data cycle every
+	// check interval until gating clears; only a further rise past the threshold
+	// deserves another early evaluation, and the heartbeat still bounds staleness.
+	for _, selected := range spikes {
+		b.lastGasPrices[priceUpdateKey(selected.update)] = bigutil.Clone(selected.current)
+	}
 	return nil
 }
 

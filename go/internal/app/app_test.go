@@ -767,6 +767,14 @@ func testConfig(signerID, keystorePath string) config.Config {
 				DestinationWorkers: config.DestinationWorkerContractsConfig{
 					OpenDVN: config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
 				},
+				SendRequiredDVNs: []config.EVMAddress{
+					config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
+					config.MustEVMAddress("0xdddddddddddddddddddddddddddddddddddddddd"),
+				},
+				ReceiveRequiredDVNs: []config.EVMAddress{
+					config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
+					config.MustEVMAddress("0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"),
+				},
 				DVN:             config.PathwayDVNConfig{Mode: config.DVNModeShadow},
 				Pricing:         testPathwayPricingConfig(),
 				Enabled:         true,

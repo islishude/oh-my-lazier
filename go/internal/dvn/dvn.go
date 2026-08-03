@@ -525,7 +525,7 @@ func validateDestinationVerificationConfig(ctx context.Context, caller ContractC
 	if err != nil {
 		return err
 	}
-	if err := validateReceiveUlnConfig(config, confirmations, pathway.DestinationWorkers.OpenDVN); err != nil {
+	if err := validateReceiveUlnConfig(config, confirmations, pathway.ReceiveRequiredDVNs); err != nil {
 		return fmt.Errorf("%w: %w", errDestinationVerificationConfigMismatch, err)
 	}
 	return nil
@@ -649,7 +649,7 @@ func receiveUlnConfigFromABI(value any) (receiveUlnConfig, error) {
 	}, nil
 }
 
-func validateReceiveUlnConfig(config receiveUlnConfig, confirmations uint64, openDVN common.Address) error {
+func validateReceiveUlnConfig(config receiveUlnConfig, confirmations uint64, requiredDVNs []common.Address) error {
 	// ReceiveUln302 accepts a DVN verification whose submitted confirmations meet or exceed this threshold.
 	if confirmations < config.Confirmations {
 		return fmt.Errorf("assigned confirmations %d are below receive uln required confirmations %d", confirmations, config.Confirmations)
@@ -666,13 +666,25 @@ func validateReceiveUlnConfig(config receiveUlnConfig, confirmations uint64, ope
 	if len(config.OptionalDVNs) != 0 {
 		return fmt.Errorf("receive uln optional DVNs are configured: %v", config.OptionalDVNs)
 	}
-	if len(config.RequiredDVNs) < 2 {
-		return fmt.Errorf("receive uln required DVNs must include OpenDVN plus at least one independent DVN, got %v", config.RequiredDVNs)
-	}
-	if !slices.Contains(config.RequiredDVNs, openDVN) {
-		return fmt.Errorf("receive uln required DVNs %v do not include configured OpenDVN %s", config.RequiredDVNs, openDVN)
+	// An unapproved, stale, or missing entry silently changes the verification quorum,
+	// so the on-chain set must match the approved set exactly (order ignored).
+	if !equalAddressSets(config.RequiredDVNs, requiredDVNs) {
+		return fmt.Errorf("receive uln required DVNs %v do not match configured required set %v", config.RequiredDVNs, requiredDVNs)
 	}
 	return nil
+}
+
+// equalAddressSets reports whether both slices hold the same addresses ignoring order.
+func equalAddressSets(a, b []common.Address) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortedA := slices.Clone(a)
+	sortedB := slices.Clone(b)
+	compare := func(x, y common.Address) int { return bytes.Compare(x.Bytes(), y.Bytes()) }
+	slices.SortFunc(sortedA, compare)
+	slices.SortFunc(sortedB, compare)
+	return slices.Equal(sortedA, sortedB)
 }
 
 func callHashLookup(ctx context.Context, caller ContractCaller, receiveLib common.Address, headerHash, payloadHash common.Hash, dvn common.Address, blockNumber *big.Int) (bool, uint64, error) {

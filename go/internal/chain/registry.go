@@ -68,12 +68,16 @@ type Pathway struct {
 	ReceiveLib         common.Address
 	SourceWorkers      WorkerContracts
 	DestinationWorkers DestinationWorkerContracts
-	DVNMode            config.DVNMode
-	Pricing            config.PathwayPricingConfig
-	Enabled            bool
-	MaxMessageSize     uint64
-	MinLzReceiveGas    uint64
-	MaxLzReceiveGas    uint64
+	// SendRequiredDVNs is the exact required DVN set expected on the source chain's send ULN.
+	SendRequiredDVNs []common.Address
+	// ReceiveRequiredDVNs is the exact required DVN set expected on the destination chain's receive ULN.
+	ReceiveRequiredDVNs []common.Address
+	DVNMode             config.DVNMode
+	Pricing             config.PathwayPricingConfig
+	Enabled             bool
+	MaxMessageSize      uint64
+	MinLzReceiveGas     uint64
+	MaxLzReceiveGas     uint64
 }
 
 // Registry indexes configured chains by endpoint ID.
@@ -131,16 +135,29 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			DestinationWorkers: DestinationWorkerContracts{
 				OpenDVN: cfg.DestinationWorkers.OpenDVN.Common(),
 			},
-			DVNMode:         cfg.DVN.Mode,
-			Pricing:         cfg.Pricing,
-			Enabled:         cfg.Enabled,
-			MaxMessageSize:  cfg.MaxMessageSize,
-			MinLzReceiveGas: cfg.MinLzReceiveGas,
-			MaxLzReceiveGas: cfg.MaxLzReceiveGas,
+			SendRequiredDVNs:    commonAddresses(cfg.SendRequiredDVNs),
+			ReceiveRequiredDVNs: commonAddresses(cfg.ReceiveRequiredDVNs),
+			DVNMode:             cfg.DVN.Mode,
+			Pricing:             cfg.Pricing,
+			Enabled:             cfg.Enabled,
+			MaxMessageSize:      cfg.MaxMessageSize,
+			MinLzReceiveGas:     cfg.MinLzReceiveGas,
+			MaxLzReceiveGas:     cfg.MaxLzReceiveGas,
 		}
 		registry.pathways[pathwayKey(pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)] = pathway
 	}
 	return registry, nil
+}
+
+func commonAddresses(addresses []config.EVMAddress) []common.Address {
+	if len(addresses) == 0 {
+		return nil
+	}
+	result := make([]common.Address, len(addresses))
+	for i, address := range addresses {
+		result[i] = address.Common()
+	}
+	return result
 }
 
 // Get returns the configured chain for an endpoint ID.

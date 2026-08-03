@@ -478,6 +478,12 @@ ${pathways
       price_feed: "${source.priceFeed}"
     destination_workers:
       open_dvn: "${srcDVN(destination)}"
+    send_required_dvns:
+      - "${source.primaryOpenDVN}"
+      - "${source.secondaryOpenDVN}"
+    receive_required_dvns:
+      - "${destination.primaryOpenDVN}"
+      - "${destination.secondaryOpenDVN}"
     dvn:
       mode: ${dvnMode}
     enabled: true

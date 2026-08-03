@@ -1,6 +1,7 @@
 package configcheck
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"encoding/hex"
@@ -321,12 +322,22 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain.Confirmations, pathway.SourceWorkers.OpenDVN)
+	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain.Confirmations, pathway.SendRequiredDVNs)
 	receiveULNConfig, err := c.readULNConfig(ctx, dstClient, dstChain.EndpointAddress, pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID, base+".receive_uln_config")
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.DestinationWorkers.OpenDVN)
+	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.ReceiveRequiredDVNs)
+	// ReceiveUln302 rejects verifications whose assigned confirmations fall below its own
+	// threshold, and DVN jobs are assigned the send-side value, so this relationship must
+	// hold on chain regardless of what either side was configured to match.
+	if sendULNConfig.Confirmations < receiveULNConfig.Confirmations {
+		c.add(
+			base+".uln_confirmations",
+			"send uln confirmations %d are below receive uln confirmations %d; every DVN verification for this pathway would be rejected",
+			sendULNConfig.Confirmations, receiveULNConfig.Confirmations,
+		)
+	}
 	return nil
 }
 
@@ -427,7 +438,7 @@ func (c *checker) readULNConfig(ctx context.Context, client ChainClient, endpoin
 	return config, nil
 }
 
-func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations uint64, openDVN common.Address) {
+func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations uint64, requiredDVNs []common.Address) {
 	if config.Confirmations != confirmations {
 		c.add(path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, confirmations)
 	}
@@ -443,12 +454,24 @@ func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations 
 	if len(config.OptionalDVNs) != 0 {
 		c.add(path+".optional_dvns", "optional DVNs are configured: %s", addressesString(config.OptionalDVNs))
 	}
-	if len(config.RequiredDVNs) < 2 {
-		c.add(path+".required_dvns", "required DVNs must include OpenDVN plus at least one independent DVN, got %s", addressesString(config.RequiredDVNs))
+	// An unapproved, stale, or missing entry silently changes the pathway's verification
+	// quorum, so the on-chain set must match the approved set exactly (order ignored).
+	if !equalAddressSets(config.RequiredDVNs, requiredDVNs) {
+		c.add(path+".required_dvns", "required DVNs %s do not match the configured required set %s", addressesString(config.RequiredDVNs), addressesString(requiredDVNs))
 	}
-	if !slices.Contains(config.RequiredDVNs, openDVN) {
-		c.add(path+".required_dvns", "required DVNs %s do not include configured OpenDVN %s", addressesString(config.RequiredDVNs), openDVN)
+}
+
+// equalAddressSets reports whether both slices hold the same addresses ignoring order.
+func equalAddressSets(a, b []common.Address) bool {
+	if len(a) != len(b) {
+		return false
 	}
+	sortedA := slices.Clone(a)
+	sortedB := slices.Clone(b)
+	compare := func(x, y common.Address) int { return bytes.Compare(x.Bytes(), y.Bytes()) }
+	slices.SortFunc(sortedA, compare)
+	slices.SortFunc(sortedB, compare)
+	return slices.Equal(sortedA, sortedB)
 }
 
 func (c *checker) requireCode(ctx context.Context, client ChainClient, path string, eid uint32, address common.Address) error {

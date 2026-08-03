@@ -129,6 +129,7 @@ Phase 1 is EVM-only.
 
 - [contracts/scripts/README.md](contracts/scripts/README.md): deployment, LayerZero config, local E2E, canary, and rollback script usage.
 - [docs/deployments/test-oft-policy.md](docs/deployments/test-oft-policy.md): Sepolia/Hoodi TestOFT rehearsal deployment policy.
+- [docs/deployments/bsc-testnet.md](docs/deployments/bsc-testnet.md): BSC testnet scope, worker deployment records, and GOAT ↔ BSC lane activation gate.
 - [docs/runbooks/mainnet-readiness.md](docs/runbooks/mainnet-readiness.md): required review sequence before mainnet.
 - [docs/runbooks/config-diff.md](docs/runbooks/config-diff.md): config review and on-chain config check workflow.
 - [docs/runbooks/key-management.md](docs/runbooks/key-management.md), [docs/runbooks/price-bot.md](docs/runbooks/price-bot.md), [docs/runbooks/rate-limit.md](docs/runbooks/rate-limit.md), [docs/runbooks/monitoring.md](docs/runbooks/monitoring.md): operator checklists.

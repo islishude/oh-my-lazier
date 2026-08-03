@@ -375,6 +375,12 @@ type PathwayConfig struct {
 	SourceWorkers WorkerContractsConfig `yaml:"source_workers"`
 	// DestinationWorkers selects destination-side worker contracts used for verification checks.
 	DestinationWorkers DestinationWorkerContractsConfig `yaml:"destination_workers"`
+	// SendRequiredDVNs is the exact required DVN set expected on the source chain's send ULN,
+	// including the pathway's own OpenDVN and every approved peer DVN.
+	SendRequiredDVNs []EVMAddress `yaml:"send_required_dvns"`
+	// ReceiveRequiredDVNs is the exact required DVN set expected on the destination chain's
+	// receive ULN, including the pathway's own OpenDVN and every approved peer DVN.
+	ReceiveRequiredDVNs []EVMAddress `yaml:"receive_required_dvns"`
 	// DVN controls whether the local DVN stays in shadow mode or actively submits verification.
 	DVN PathwayDVNConfig `yaml:"dvn"`
 	// Pricing holds pathway-scoped worker quote models; it is required only when pricing is enabled.
@@ -564,6 +570,16 @@ func (c Config) Validate() error {
 		if pathway.SrcEID == pathway.DstEID {
 			return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
 		}
+		// The send ULN assigns the source chain's confirmations to every DVN job while the
+		// receive ULN enforces the destination chain's value, so a lower source value is a
+		// deterministic misconfiguration that would reject every verification at runtime.
+		if chains[pathway.SrcEID].Confirmations < chains[pathway.DstEID].Confirmations {
+			return fmt.Errorf(
+				"pathway %d -> %d source chain confirmations %d are below destination chain confirmations %d",
+				pathway.SrcEID, pathway.DstEID,
+				chains[pathway.SrcEID].Confirmations, chains[pathway.DstEID].Confirmations,
+			)
+		}
 		for label, value := range map[string]EVMAddress{
 			"src_oapp":                     pathway.SrcOApp,
 			"dst_oapp":                     pathway.DstOApp,
@@ -577,6 +593,18 @@ func (c Config) Validate() error {
 			if value.IsZero() {
 				return fmt.Errorf("pathway %d -> %d %s is required", pathway.SrcEID, pathway.DstEID, label)
 			}
+		}
+		if err := validateRequiredDVNSet(
+			fmt.Sprintf("pathway %d -> %d send_required_dvns", pathway.SrcEID, pathway.DstEID),
+			pathway.SendRequiredDVNs, pathway.SourceWorkers.OpenDVN,
+		); err != nil {
+			return err
+		}
+		if err := validateRequiredDVNSet(
+			fmt.Sprintf("pathway %d -> %d receive_required_dvns", pathway.SrcEID, pathway.DstEID),
+			pathway.ReceiveRequiredDVNs, pathway.DestinationWorkers.OpenDVN,
+		); err != nil {
+			return err
 		}
 		switch pathway.DVN.Mode {
 		case DVNModeShadow:
@@ -869,6 +897,33 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 		if err := validatePricingChainSources(chain, c.Pricing.CoinMarketCapAPIKeyEnv); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateRequiredDVNSet enforces the phase-1 required DVN topology for one ULN side:
+// the pathway's own OpenDVN plus at least one independently operated DVN, with every
+// entry explicit and no duplicates, so startup can pin the exact approved set.
+func validateRequiredDVNSet(label string, dvns []EVMAddress, openDVN EVMAddress) error {
+	if len(dvns) < 2 {
+		return fmt.Errorf("%s must list the pathway's OpenDVN plus at least one independently operated DVN", label)
+	}
+	seen := make(map[EVMAddress]struct{}, len(dvns))
+	containsOpenDVN := false
+	for i, dvn := range dvns {
+		if dvn.IsZero() {
+			return fmt.Errorf("%s[%d] is required", label, i)
+		}
+		if _, ok := seen[dvn]; ok {
+			return fmt.Errorf("%s[%d] duplicates %s", label, i, dvn)
+		}
+		seen[dvn] = struct{}{}
+		if dvn == openDVN {
+			containsOpenDVN = true
+		}
+	}
+	if !containsOpenDVN {
+		return fmt.Errorf("%s must include the pathway's OpenDVN %s", label, openDVN)
 	}
 	return nil
 }

@@ -201,6 +201,37 @@ test("normalizeProfile rejects Hardhat network and EID mismatches with custom La
   );
 });
 
+test("normalizeProfile rejects unequal chain confirmations", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).confirmations = 6;
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains confirmations must match for reciprocal pathways/
+  );
+});
+
+test("normalizeProfile rejects Hardhat networks without a chain binding", () => {
+  const input = baseProfile();
+  (input.chains[0] as Record<string, unknown>).network = "goatTestnet";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.network goatTestnet has no chain_id\/eid binding in hardhatNetworks/
+  );
+});
+
+test("normalizeProfile validates the bscTestnet chain binding", () => {
+  const input = baseProfile();
+  const chain = input.chains[0] as Record<string, unknown>;
+  chain.network = "bscTestnet";
+
+  assert.throws(
+    () => normalizeProfile(input),
+    /profile\.chains\[0\]\.network bscTestnet uses chainId 97, but profile\.chains\[0\]\.chainId is 11155111/
+  );
+});
+
 test("normalizeProfile accepts opt-in LayerZero Labs DVN metadata", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).includeLayerZeroLabsDVN = true;
@@ -977,6 +1008,14 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(
     yaml,
     /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/
+  );
+  assert.match(
+    yaml,
+    /send_required_dvns:\n      - "0x1111111111111111111111111111111111111113"\n      - "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"/
+  );
+  assert.match(
+    yaml,
+    /receive_required_dvns:\n      - "0x2222222222222222222222222222222222222223"\n      - "0x9999999999999999999999999999999999999999"/
   );
   assert.match(yaml, /signer: "0x2222222222222222222222222222222222222222"/);
   assert.match(yaml, /pricing:\n  enabled: true/);
