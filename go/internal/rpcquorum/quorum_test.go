@@ -1336,6 +1336,9 @@ func TestCallContractRevertMajorityKeepsClassification(t *testing.T) {
 	if !errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 3 {
 		t.Fatalf("majority revert must keep its rpc error identity, got %v", err)
 	}
+	if !IsVotedRevert(err) {
+		t.Fatalf("majority revert must carry the voted-revert marker, got %v", err)
+	}
 }
 
 func TestCallContractMessageOnlyRevertMajorityWins(t *testing.T) {
@@ -1395,6 +1398,112 @@ func TestCallContractSameRevertDataMergesAcrossRPCCodes(t *testing.T) {
 	}
 	if IsStateReadConflict(err) || IsQuorumUnavailable(err) {
 		t.Fatalf("same revert data across rpc codes must merge into a revert majority, got %v", err)
+	}
+}
+
+func TestEstimateGasNonRevertDataDoesNotFormRevertMajority(t *testing.T) {
+	// Two differently-coded transient failures carrying identical
+	// provider-specific ErrorData must stay non-comparable: merging them would
+	// out-vote the healthy estimate and terminally fail the queued transaction
+	// as an estimate revert.
+	canonical := testHeaderAt(42, 0x01)
+	diagnostic := map[string]string{"reason": "rate limited"}
+	client := stateReadTestClient(t,
+		testEthService{header: canonical, estimateErr: testCodedRevertError{message: "backend unavailable", code: -32603, data: diagnostic}},
+		testEthService{header: canonical, estimateErr: testCodedRevertError{message: "upstream busy", code: -32000, data: diagnostic}},
+		testEthService{header: canonical, estimateGas: 100},
+	)
+
+	_, err := client.EstimateGas(context.Background(), ethereum.CallMsg{})
+	if !IsQuorumUnavailable(err) {
+		t.Fatalf("EstimateGas() error = %v, want quorum unavailable (non-revert data must not vote)", err)
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		t.Fatalf("unavailable error leaked an rpc revert identity: %v", err)
+	}
+}
+
+func TestRevertEvidenceAcrossClientShapes(t *testing.T) {
+	// One table over the revert shapes the common clients emit and the
+	// non-revert failures that must never be mistaken for them.
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"geth code 3", testRevertError{message: "execution reverted: denied", data: "0x08c379a0"}, true},
+		{"geth message only", testRPCError{message: "execution reverted", code: -32000}, true},
+		{"erigon message", testRPCError{message: "execution reverted: ERC20: insufficient balance", code: -32000}, true},
+		{"ganache vm exception", testRPCError{message: "VM Exception while processing transaction: revert MyError", code: -32000}, true},
+		{"hardhat reverted", testRPCError{message: "Error: VM Exception while processing transaction: reverted with reason string 'x'", code: -32603}, true},
+		{"bare revert", testRPCError{message: "revert", code: -32015}, true},
+		{"nethermind vm execution error with revert data", testCodedRevertError{message: "VM execution error.", code: -32015, data: "0x08c379a0"}, true},
+		{"nethermind vm execution error without data", testRPCError{message: "VM execution error.", code: -32015}, false},
+		{"vm execution error with opaque data", testCodedRevertError{message: "VM execution error.", code: -32015, data: map[string]string{"id": "1"}}, false},
+		{"transport failure", testRPCError{message: "backend unavailable", code: -32603}, false},
+		{"hex diagnostic without claim", testCodedRevertError{message: "upstream busy", code: -32000, data: "0xaabbcc"}, false},
+		{"unrelated wording", testRPCError{message: "reverting proxy misconfigured", code: -32000}, false},
+		{"non-rpc error", errors.New("execution reverted"), false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isDeterministicRevert(test.err); got != test.want {
+				t.Fatalf("isDeterministicRevert(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestEstimateGasNonGethRevertMajorityWins(t *testing.T) {
+	// A majority of non-geth endpoints reporting the same revert must reach
+	// terminal revert handling, not degrade to quorum-unavailable (which would
+	// keep a deterministically failing outbox row queued and retrying).
+	canonical := testHeaderAt(42, 0x01)
+	revert := testCodedRevertError{message: "VM execution error.", code: -32015, data: "0x08c379a0"}
+	client := stateReadTestClient(t,
+		testEthService{header: canonical, estimateErr: revert},
+		testEthService{header: canonical, estimateErr: revert},
+		testEthService{header: canonical, estimateGas: 100},
+	)
+
+	_, err := client.EstimateGas(context.Background(), ethereum.CallMsg{})
+	if err == nil {
+		t.Fatal("EstimateGas() error = nil, want the majority revert")
+	}
+	if IsQuorumUnavailable(err) || IsEstimateGasConflict(err) {
+		t.Fatalf("non-geth revert majority must win the vote, got %v", err)
+	}
+	// Downstream terminal classification consumes the quorum's verdict instead
+	// of re-deriving it from this client's wording.
+	if !IsVotedRevert(err) {
+		t.Fatalf("majority revert must carry the voted-revert marker, got %v", err)
+	}
+	var rpcErr rpc.Error
+	if !errors.As(err, &rpcErr) {
+		t.Fatalf("voted revert marker must unwrap to the provider rpc error: %v", err)
+	}
+}
+
+func TestEstimateGasHexDiagnosticWithoutRevertClaimDoesNotVote(t *testing.T) {
+	// Syntactically valid hex ErrorData is not revert semantics: an opaque
+	// diagnostic (a request or block hash) returned under non-revert codes and
+	// messages, even in differing case, must not form a revert majority that
+	// would terminally fail the queued transaction.
+	canonical := testHeaderAt(42, 0x01)
+	client := stateReadTestClient(t,
+		testEthService{header: canonical, estimateErr: testCodedRevertError{message: "backend unavailable", code: -32603, data: "0xAABBCC"}},
+		testEthService{header: canonical, estimateErr: testCodedRevertError{message: "upstream busy", code: -32000, data: "0xaabbcc"}},
+		testEthService{header: canonical, estimateGas: 100},
+	)
+
+	_, err := client.EstimateGas(context.Background(), ethereum.CallMsg{})
+	if !IsQuorumUnavailable(err) {
+		t.Fatalf("EstimateGas() error = %v, want quorum unavailable (hex diagnostics must not vote)", err)
+	}
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		t.Fatalf("unavailable error leaked an rpc revert identity: %v", err)
 	}
 }
 

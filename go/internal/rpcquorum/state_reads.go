@@ -16,6 +16,35 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
+// VotedRevertError marks a provider error that the fixed configured majority
+// agreed is a deterministic EVM revert. Downstream terminal classification
+// (txmgr's estimate-gas handling) tests this marker instead of re-deriving
+// revert semantics from provider text: the quorum layer already made that
+// decision by vote, and two independent text classifiers drift apart.
+type VotedRevertError struct {
+	// Operation is the RPC method whose vote produced this revert.
+	Operation string
+	// Err is the winning provider error.
+	Err error
+}
+
+// Error renders the winning provider error unchanged.
+func (e *VotedRevertError) Error() string {
+	return e.Err.Error()
+}
+
+// Unwrap exposes the original provider error, so rpc.Error and rpc.DataError
+// inspection keeps working through the marker.
+func (e *VotedRevertError) Unwrap() error {
+	return e.Err
+}
+
+// IsVotedRevert reports whether err carries a majority-agreed revert verdict.
+func IsVotedRevert(err error) bool {
+	var voted *VotedRevertError
+	return errors.As(err, &voted)
+}
+
 // StateReadConflictError reports a state read (eth_call, eth_getCode,
 // eth_getTransactionCount pending) where a fixed majority of providers gave
 // comparable answers but no single answer reached the majority. It is distinct
@@ -84,68 +113,124 @@ func (p stateReadProbe) fingerprint() string {
 	return "s:" + hex.EncodeToString(sum[:])
 }
 
-// deterministicRevertIdentity extracts the RPC error code and revert data hex
-// that identify an EVM revert deterministically across providers.
-func deterministicRevertIdentity(err error) (int, string) {
-	code := 0
+// revertEvidence reports whether a provider error claims that the EVM itself
+// rejected the call, rather than reporting a node-level or transport failure.
+// Three admissible forms, covering the shapes the common clients emit:
+//
+//	geth / erigon:     code 3, or "execution reverted[: reason]"
+//	ganache / hardhat: "VM Exception while processing transaction: revert ..."
+//	nethermind:        "VM execution error." WITH canonical revert data
+//
+// Attached ErrorData is never evidence on its own: providers put opaque
+// diagnostics there (request ids, block hashes) under transient failures, and
+// a hex-shaped diagnostic must not establish a deterministic revert. The
+// Nethermind form therefore requires the execution claim AND validated ABI
+// revert bytes together — neither of which a transport failure carries.
+func revertEvidence(err error) bool {
 	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
-		code = rpcErr.ErrorCode()
+	if !errors.As(err, &rpcErr) {
+		return false
 	}
-	data := ""
-	var dataErr rpc.DataError
-	if errors.As(err, &dataErr) {
-		if payload := dataErr.ErrorData(); payload != nil {
-			data = fmt.Sprintf("%v", payload)
+	if rpcErr.ErrorCode() == 3 {
+		return true
+	}
+	message := strings.ToLower(rpcErr.Error())
+	if containsRevertWord(message) {
+		return true
+	}
+	if strings.Contains(message, "vm execution error") {
+		_, ok := canonicalRevertData(err)
+		return ok
+	}
+	return false
+}
+
+// containsRevertWord reports whether the message uses "revert" or "reverted"
+// as a standalone word — the only forms EVM clients emit in revert messages.
+// Matching the bare substring would admit unrelated wording ("reverting proxy
+// misconfigured"), while matching only "execution reverted" would drop the
+// ganache/hardhat and bare-"revert" shapes.
+func containsRevertWord(message string) bool {
+	for index := 0; ; {
+		offset := strings.Index(message[index:], "revert")
+		if offset < 0 {
+			return false
 		}
+		start := index + offset
+		end := start + len("revert")
+		for end < len(message) && isASCIILetter(message[end]) {
+			end++
+		}
+		suffix := message[start+len("revert") : end]
+		precededByLetter := start > 0 && isASCIILetter(message[start-1])
+		switch suffix {
+		case "", "ed":
+			if !precededByLetter {
+				return true
+			}
+		}
+		index = end
 	}
-	return code, data
+}
+
+func isASCIILetter(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z')
+}
+
+// canonicalRevertData extracts an EVM revert payload only when the provider
+// attached genuine ABI-encoded revert bytes: a 0x-prefixed even-length hex
+// string or a non-empty byte slice. It refines the identity of a probe that
+// already carries revert evidence; it never admits one on its own.
+func canonicalRevertData(err error) (string, bool) {
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) {
+		return "", false
+	}
+	switch payload := dataErr.ErrorData().(type) {
+	case string:
+		normalized := strings.ToLower(strings.TrimSpace(payload))
+		// "0x" alone carries no return data (a bare revert); fall through to
+		// the message identity rather than merging every bare revert.
+		if len(normalized) <= 2 || !strings.HasPrefix(normalized, "0x") {
+			return "", false
+		}
+		body := normalized[2:]
+		if len(body)%2 != 0 {
+			return "", false
+		}
+		if _, decodeErr := hex.DecodeString(body); decodeErr != nil {
+			return "", false
+		}
+		return normalized, true
+	case []byte:
+		if len(payload) == 0 {
+			return "", false
+		}
+		return "0x" + hex.EncodeToString(payload), true
+	default:
+		return "", false
+	}
 }
 
 // isDeterministicRevert reports whether a provider error is a comparable EVM
-// execution revert rather than a transport or availability failure. Three
-// shapes count: RPC error code 3 (execution reverted), an attached revert
-// data payload, or a message-only revert whose RPC error text carries
-// "execution reverted" (the shape geth-family endpoints return on some
-// call/estimate paths). Everything else stays non-comparable so a quorum
-// split can never masquerade as a deterministic revert downstream.
+// execution revert rather than a transport or availability failure. Only the
+// provider's own revert claim admits a probe — RPC error code 3, or an
+// "execution reverted" message (the shape geth-family endpoints return on
+// some call/estimate paths). An RPC error carrying ErrorData but no revert
+// claim stays non-comparable, so an opaque diagnostic can never masquerade as
+// a deterministic revert downstream.
 func isDeterministicRevert(err error) bool {
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == 3 {
-		return true
-	}
-	var dataErr rpc.DataError
-	if errors.As(err, &dataErr) && dataErr.ErrorData() != nil {
-		return true
-	}
-	_, messageOnly := revertMessageIdentity(err)
-	return messageOnly
+	return revertEvidence(err)
 }
 
-// revertMessageIdentity extracts the normalized revert text of a message-only
-// revert: an RPC error carrying "execution reverted" with neither the code-3
-// identity nor attached revert data. The full normalized message is the vote
-// identity, so differing revert reasons never merge.
-func revertMessageIdentity(err error) (string, bool) {
-	var rpcErr rpc.Error
-	if !errors.As(err, &rpcErr) {
-		return "", false
-	}
-	message := strings.ToLower(strings.TrimSpace(rpcErr.Error()))
-	if !strings.Contains(message, "execution reverted") {
-		return "", false
-	}
-	return message, true
-}
-
-// revertFingerprint keys a deterministic revert by what the EVM actually
-// returned: canonical revert data when present, the normalized provider
-// message otherwise. The RPC error code is deliberately excluded from the
-// identity — providers report semantically identical reverts under different
-// codes (3 vs -32000), and a shared code with no data must never merge
-// distinct revert reasons into a false majority.
+// revertFingerprint keys a probe that already carries revert evidence by what
+// the EVM actually returned: canonical revert data when present, the
+// normalized provider message otherwise. The RPC error code is deliberately
+// excluded from the identity — providers report semantically identical
+// reverts under different codes (3 vs -32000), and a shared code with no data
+// must never merge distinct revert reasons into a false majority.
 func revertFingerprint(err error) string {
-	if _, data := deterministicRevertIdentity(err); data != "" {
+	if data, ok := canonicalRevertData(err); ok {
 		return "rd:" + data
 	}
 	var rpcErr rpc.Error
@@ -231,7 +316,7 @@ func (c *Client) voteStateRead(ctx context.Context, operation string, read func(
 	if majorityFingerprint != "" {
 		winner := winners[majorityFingerprint]
 		if winner.revertErr != nil {
-			return nil, winner.revertErr
+			return nil, &VotedRevertError{Operation: operation, Err: winner.revertErr}
 		}
 		return winner.payload, nil
 	}
@@ -476,7 +561,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 	for fingerprint, count := range revertVotes {
 		if count >= quorum {
 			c.applyStateConflicts(classification, fingerprint)
-			return 0, revertWinners[fingerprint]
+			return 0, &VotedRevertError{Operation: "eth_estimateGas", Err: revertWinners[fingerprint]}
 		}
 	}
 	if len(successes) >= quorum {
