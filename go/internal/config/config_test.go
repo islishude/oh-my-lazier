@@ -163,6 +163,21 @@ func TestValidateRejectsInvalidRequiredDVNSets(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInsufficientPricingFreshnessMargin(t *testing.T) {
+	cfg := validConfig()
+	cfg.Pricing = validPricingConfig()
+	// heartbeat + interval < stale_after still holds, but the remaining margin
+	// (1800 - 1300 - 300 = 200) is below the enqueue/confirmation budget.
+	cfg.Pricing.HeartbeatSeconds = 1300
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want pricing freshness margin error")
+	}
+	if !strings.Contains(err.Error(), "by at least") {
+		t.Fatalf("Validate() error = %v, want pricing freshness margin error", err)
+	}
+}
+
 func TestValidateRejectsPathwaySourceConfirmationsBelowDestination(t *testing.T) {
 	cfg := validConfig()
 	cfg.Chains[0].Confirmations = 6

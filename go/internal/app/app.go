@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -201,7 +202,7 @@ func (a *App) Run(ctx context.Context) error {
 	runtimeMetrics := metrics.NewRegistry()
 	pathways := registry.Pathways()
 	indexerStreams := indexer.StreamsForRoles(a.cfg.ExecutorEnabled(), a.cfg.DVNEnabled())
-	txTargets, err := a.txTargets(ctx, registry)
+	txTargets, err := a.txTargets(ctx, registry, store)
 	if err != nil {
 		return err
 	}
@@ -223,6 +224,7 @@ func (a *App) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		priceBot.WithMetrics(runtimeMetrics)
 		feeReconciler, err = feeaccounting.New(store, priceSources, feeaccounting.Settings{
 			PriceSelection: a.priceSelectionPolicy(),
 		}, a.logger)
@@ -563,7 +565,7 @@ func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker,
 	return dvn.NewWithSettings(store, registry, settings, a.logger), nil
 }
 
-func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.Target, error) {
+func (a *App) txTargets(ctx context.Context, registry *chain.Registry, store *db.Store) ([]txmgr.Target, error) {
 	type targetKey struct {
 		chainEID uint32
 		signerID string
@@ -612,6 +614,30 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 				return nil, fmt.Errorf("chain %s pricing min native balance: %w", configuredChain.Name, err)
 			}
 			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
+			// Rows enqueued by a previously configured pricing signer must keep
+			// converging after a rotation: they gate their feed until they
+			// resolve, and without a target nothing would ever sign, broadcast,
+			// or receipt-poll them. The rotation runbook keeps the old signer
+			// configured until its rows drain; fail fast when it was removed
+			// too early instead of gating the feed forever.
+			if store == nil {
+				// Targets built without a database (config-only tests) cannot
+				// check the outbox; Run always passes the connected store.
+				continue
+			}
+			legacySigners, err := store.ListPendingPricingSigners(ctx, configuredChain.EID)
+			if err != nil {
+				return nil, err
+			}
+			for _, legacy := range legacySigners {
+				if strings.EqualFold(legacy, a.cfg.Pricing.Signer.Hex()) {
+					continue
+				}
+				if !a.signerConfigured(legacy) {
+					return nil, fmt.Errorf("chain %s has pending pricing txs from previous signer %s; keep that signer configured until they drain or resolve the rows manually", configuredChain.Name, legacy)
+				}
+				addPolicy(configuredChain.EID, legacy, pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
+			}
 		}
 	}
 	if a.cfg.DVNEnabled() {
@@ -666,6 +692,17 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry) ([]txmgr.
 		})
 	}
 	return targets, nil
+}
+
+// signerConfigured reports whether a signer address is present in the loaded
+// signers configuration, compared case-insensitively on the hex form.
+func (a *App) signerConfigured(signerID string) bool {
+	for _, cfg := range a.cfg.Signers {
+		if strings.EqualFold(cfg.ID.Hex(), signerID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) loadSigners(ctx context.Context) (map[string]signer.Signer, error) {

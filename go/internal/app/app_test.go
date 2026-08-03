@@ -44,7 +44,7 @@ func TestTxTargetsLoadsKeystoreSignerForEveryChain(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	targets, err := worker.txTargets(t.Context(), registry)
+	targets, err := worker.txTargets(t.Context(), registry, nil)
 	if err != nil {
 		t.Fatalf("txTargets() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestTxTargetsRejectsDynamicFeeChainWithoutPriorityCap(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	_, err = worker.txTargets(t.Context(), registry)
+	_, err = worker.txTargets(t.Context(), registry, nil)
 	if err == nil {
 		t.Fatal("txTargets() error = nil, want dynamic priority cap error")
 	}
@@ -169,7 +169,7 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 			if err != nil {
 				t.Fatalf("New() error = %v", err)
 			}
-			targets, err := worker.txTargets(t.Context(), registry)
+			targets, err := worker.txTargets(t.Context(), registry, nil)
 			if err != nil {
 				t.Fatalf("txTargets() error = %v", err)
 			}
@@ -217,7 +217,7 @@ func TestTxTargetsUsesPerChainPricingPolicies(t *testing.T) {
 		t.Fatalf("New() error = %v", err)
 	}
 
-	targets, err := worker.txTargets(t.Context(), registry)
+	targets, err := worker.txTargets(t.Context(), registry, nil)
 	if err != nil {
 		t.Fatalf("txTargets() error = %v", err)
 	}

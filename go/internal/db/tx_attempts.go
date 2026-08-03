@@ -848,11 +848,12 @@ func (s *Store) FinalizeAttemptReceipt(ctx context.Context, attemptID int64, fac
 	}
 
 	var attempts uint32
+	var purpose string
 	var pinnedOutcome *string
 	var pinnedAttemptID *int64
 	if err := tx.QueryRow(ctx, `
-		SELECT attempts, receipt_outcome, receipt_attempt_id FROM tx_outbox WHERE id = $1 FOR UPDATE
-	`, outboxID).Scan(&attempts, &pinnedOutcome, &pinnedAttemptID); errors.Is(err, pgx.ErrNoRows) {
+		SELECT attempts, purpose, receipt_outcome, receipt_attempt_id FROM tx_outbox WHERE id = $1 FOR UPDATE
+	`, outboxID).Scan(&attempts, &purpose, &pinnedOutcome, &pinnedAttemptID); errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("outbox tx %d not found", outboxID)
 	} else if err != nil {
 		return "", err
@@ -872,7 +873,9 @@ func (s *Store) FinalizeAttemptReceipt(ctx context.Context, attemptID int64, fac
 	case ReceiptOutcomeFailed:
 		status = TxStatusFailed
 		failureKindArg = TxFailureReceiptFailed
-		if attempts < TxAutoRetryMaxAttempts {
+		// A failed pricing row is terminal (its calldata carries a time-bound
+		// observation the retry paths refuse), so it never gets a retry window.
+		if attempts < TxAutoRetryMaxAttempts && purpose != TxPurposePricingSetPriceSnapshot {
 			retryAtArg = time.Now().UTC().Add(autoRetryDelay(attempts))
 		}
 		lastErrorArg = fmt.Sprintf("transaction receipt status %d", facts.Status)

@@ -303,10 +303,14 @@ func TestNonceReconciliationClaimReleaseAndExternalConsumption(t *testing.T) {
 		t.Fatal("RequestTxCancel(consumed) succeeded, want rejection")
 	}
 
-	// Operator resolution: retry terminates the row and clones a fresh task.
-	cloneID, err := h.store.ResolveExternalNonceRetry(h.ctx, transientID)
-	if err != nil {
-		t.Fatalf("ResolveExternalNonceRetry: %v", err)
+	// Operator resolution for a pricing row: retry is refused (its calldata is
+	// a time-bound observation); abandon terminates the evidence row and the
+	// bot rebuilds from a fresh observation on its next cycle.
+	if _, err := h.store.ResolveExternalNonceRetry(h.ctx, transientID); err == nil || !strings.Contains(err.Error(), "pricing observation") {
+		t.Fatalf("ResolveExternalNonceRetry(pricing) error = %v, want pricing refusal", err)
+	}
+	if err := h.store.ResolveExternalNonceAbandon(h.ctx, transientID); err != nil {
+		t.Fatalf("ResolveExternalNonceAbandon: %v", err)
 	}
 	terminal, err := h.store.GetOutboxTx(h.ctx, transientID)
 	if err != nil {
@@ -318,20 +322,14 @@ func TestNonceReconciliationClaimReleaseAndExternalConsumption(t *testing.T) {
 	if _, err := h.store.RetryFailedTx(h.ctx, transientID); err == nil {
 		t.Fatal("RetryFailedTx(consumed) succeeded, want rejection")
 	}
-	clone, err := h.store.GetOutboxTx(h.ctx, cloneID)
+	// Fresh work signs at the fast-forwarded cursor, past the consumed nonce.
+	freshID := h.enqueue()
+	claimed, err := h.store.ClaimOutboxForSigning(h.ctx, freshID, 40161, h.signerID, uuid.New(), 30*time.Second)
 	if err != nil {
-		t.Fatalf("GetOutboxTx(clone): %v", err)
-	}
-	if clone.Status != TxStatusQueued || clone.RetryOfID == nil || *clone.RetryOfID != transientID {
-		t.Fatalf("clone = %q retry_of=%v, want fresh queued clone of %d", clone.Status, clone.RetryOfID, transientID)
-	}
-	// The clone signs at the fast-forwarded cursor, past the consumed nonce.
-	claimed, err := h.store.ClaimOutboxForSigning(h.ctx, cloneID, 40161, h.signerID, uuid.New(), 30*time.Second)
-	if err != nil {
-		t.Fatalf("ClaimOutboxForSigning(clone): %v", err)
+		t.Fatalf("ClaimOutboxForSigning(fresh): %v", err)
 	}
 	if claimed.Nonce != 140 {
-		t.Fatalf("clone nonce = %d, want the fast-forwarded 140", claimed.Nonce)
+		t.Fatalf("fresh nonce = %d, want the fast-forwarded 140", claimed.Nonce)
 	}
 }
 
@@ -875,11 +873,18 @@ func TestCanceledRowReportsSupersededNotExhausted(t *testing.T) {
 }
 
 func TestResolveExternalNonceRetryRefusesInactiveScope(t *testing.T) {
+	// A packet-scoped row exercises the generic retry resolution: pricing rows
+	// refuse the retry resolution outright.
 	h := newAttemptHarness(t, "0x7373737373737373737373737373737373737373", 231)
 	restoreScopeFlags(t, h.store)
-	id := h.enqueue()
-	original := h.signAttempt(id, 231, common.HexToHash("0xa731"))
-	h.broadcastResult(original.ID, SendErrorNonceTooLow)
+	packet, id := seedScopedPacketRow(t, h, 231)
+	if _, err := h.store.pool.Exec(h.ctx, `
+		INSERT INTO executor_jobs (guid, assigned_fee, status) VALUES ($1, 1, 'COMMIT_TX_ENQUEUED')
+	`, packet.GUID.Bytes()); err != nil {
+		t.Fatalf("seed executor job: %v", err)
+	}
+	original := h.signAttemptOn(40449, id, 231, common.HexToHash("0xa731"))
+	h.broadcastResultOn(40449, original.ID, SendErrorNonceTooLow)
 	if _, err := h.store.pool.Exec(h.ctx, `
 		UPDATE tx_outbox SET held_reason = $1, last_error = 'evidence' WHERE id = $2
 	`, HeldNonceConsumedExternally, id); err != nil {
@@ -888,7 +893,7 @@ func TestResolveExternalNonceRetryRefusesInactiveScope(t *testing.T) {
 
 	// Cloning is new spend: a paused scope refuses the operator retry without
 	// terminalizing the evidence row or queueing anything.
-	setChainFlags(t, h, 40161, true, true)
+	setChainFlags(t, h, 40449, true, true)
 	if _, err := h.store.ResolveExternalNonceRetry(h.ctx, id); !errors.Is(err, ErrTxSendScopeInactive) {
 		t.Fatalf("ResolveExternalNonceRetry(paused chain) error = %v, want ErrTxSendScopeInactive", err)
 	}
@@ -905,7 +910,7 @@ func TestResolveExternalNonceRetryRefusesInactiveScope(t *testing.T) {
 	}
 
 	// Unpause: the retry clones normally.
-	setChainFlags(t, h, 40161, true, false)
+	setChainFlags(t, h, 40449, true, false)
 	cloneID, err := h.store.ResolveExternalNonceRetry(h.ctx, id)
 	if err != nil {
 		t.Fatalf("ResolveExternalNonceRetry(active) error = %v", err)
@@ -1081,5 +1086,161 @@ func TestRetryFailedTxRefusesPinnedResolutionWithFinalizedKind(t *testing.T) {
 	}
 	if _, err := h.store.PeekSendableTx(h.ctx, 40161, h.signerID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("PeekSendableTx(pinned queued row) error = %v, want pgx.ErrNoRows", err)
+	}
+}
+
+func TestResolveExternalNonceRetryRefusesPricingRows(t *testing.T) {
+	h := newAttemptHarness(t, "0x7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b", 160)
+	id := h.enqueue()
+
+	// A pricing clone would re-sign a time-bound observation; the operator must
+	// abandon instead and the bot rebuilds from a fresh observation.
+	if _, err := h.store.ResolveExternalNonceRetry(h.ctx, id); err == nil || !strings.Contains(err.Error(), "pricing observation") {
+		t.Fatalf("ResolveExternalNonceRetry(pricing) error = %v, want pricing refusal", err)
+	}
+}
+
+func TestRetryFailedTxRequeuesLegacyNonceBearingPricingRow(t *testing.T) {
+	h := newAttemptHarness(t, "0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c", 170)
+	// A feed address unique to this test: the per-feed in-flight check spans
+	// all signers, so the shared harness feed would collide with other tests'
+	// residue.
+	feed := common.HexToAddress("0x7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7c7cfeed")
+	enqueueOnFeed := func() int64 {
+		rowID, err := h.store.EnqueueTx(h.ctx, TxRequest{ChainEID: 40161, Purpose: TxPurposePricingSetPriceSnapshot, To: feed, Calldata: []byte{0x1}, Value: big.NewInt(0), SignerID: h.signerID})
+		if err != nil {
+			t.Fatalf("EnqueueTx(feed): %v", err)
+		}
+		return rowID
+	}
+	id := enqueueOnFeed()
+	h.signAttempt(id, 170, common.HexToHash("0x7c01"))
+
+	// An upgraded database can carry a pre-cutover failure kind on a pricing
+	// row that still holds its unconsumed nonce. Nothing else can fill that
+	// nonce, so the in-place requeue must stay available.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox
+		SET status = 'failed', failure_kind = 'broadcast_failed', next_retry_at = NULL,
+			lease_token = NULL, lease_until = NULL, updated_at = now()
+		WHERE id = $1
+	`, id); err != nil {
+		t.Fatalf("seed legacy failed row: %v", err)
+	}
+	// The gap row gates fresh enqueues for its feed: a later transaction could
+	// never mine before the unconsumed nonce, deadlocking both.
+	if _, err := h.store.EnqueuePricingSnapshotTx(h.ctx, TxRequest{ChainEID: 40161, Purpose: TxPurposePricingSetPriceSnapshot, To: feed, Calldata: []byte{0x2}, Value: big.NewInt(0), SignerID: h.signerID}); !errors.Is(err, ErrPricingPendingExists) {
+		t.Fatalf("EnqueuePricingSnapshotTx(over gap) error = %v, want ErrPricingPendingExists", err)
+	}
+
+	// Old-signer target discovery must include this retryable legacy shape, so
+	// an in-place requeue while the worker runs has a target to process it.
+	signers, err := h.store.ListPendingPricingSigners(h.ctx, 40161)
+	if err != nil {
+		t.Fatalf("ListPendingPricingSigners: %v", err)
+	}
+	foundSigner := false
+	for _, signer := range signers {
+		if signer == h.signerID {
+			foundSigner = true
+		}
+	}
+	if !foundSigner {
+		t.Fatalf("signers = %v, want the legacy row's signer %s", signers, h.signerID)
+	}
+
+	// While an un-nonced snapshot for the feed is in flight, the requeue is
+	// refused under the same per-feed invariant as the bot's enqueue.
+	blockerID := enqueueOnFeed()
+	if _, err := h.store.RetryFailedTx(h.ctx, id); err == nil || !strings.Contains(err.Error(), "in flight") {
+		t.Fatalf("RetryFailedTx(feed busy) error = %v, want in-flight refusal", err)
+	}
+	// A same-signer row already stuck at a HIGHER nonce does not block: it can
+	// never mine before the gap is filled, so the gap requeue must proceed.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = 'broadcast', nonce = 175, updated_at = now() WHERE id = $1
+	`, blockerID); err != nil {
+		t.Fatalf("promote blocker to higher nonce: %v", err)
+	}
+	if retryID, err := h.store.RetryFailedTx(h.ctx, id); err != nil || retryID != id {
+		t.Fatalf("RetryFailedTx(higher-nonce blocker) = (%d, %v), want in-place requeue", retryID, err)
+	}
+	// Reset the gap row back to its legacy failed shape for the remaining
+	// assertions, and clear the higher-nonce blocker.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox
+		SET status = 'failed', failure_kind = 'broadcast_failed', next_retry_at = NULL, attempts = 0, updated_at = now()
+		WHERE id = $1
+	`, id); err != nil {
+		t.Fatalf("restore legacy shape: %v", err)
+	}
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = 'confirmed', updated_at = now() WHERE id = $1
+	`, blockerID); err != nil {
+		t.Fatalf("resolve blocker: %v", err)
+	}
+
+	retryID, err := h.store.RetryFailedTx(h.ctx, id)
+	if err != nil {
+		t.Fatalf("RetryFailedTx(legacy pricing) error = %v", err)
+	}
+	if retryID != id {
+		t.Fatalf("retry id = %d, want in-place requeue of %d", retryID, id)
+	}
+	var status string
+	var nonce *int64
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT status, nonce FROM tx_outbox WHERE id = $1", id).Scan(&status, &nonce); err != nil {
+		t.Fatalf("read requeued row: %v", err)
+	}
+	if status != string(TxStatusQueued) || nonce == nil || *nonce != 170 {
+		t.Fatalf("requeued row = %s nonce=%v, want queued keeping nonce 170", status, nonce)
+	}
+
+	// A pre-cutover receipt failure retains its nonce with a NULL
+	// receipt_outcome, but that nonce was consumed when it mined: it must not
+	// keep the old signer required after rotation.
+	consumedID := enqueueOnFeed()
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox
+		SET status = 'failed', failure_kind = 'receipt_failed', nonce = 172, updated_at = now()
+		WHERE id = $1
+	`, consumedID); err != nil {
+		t.Fatalf("seed legacy receipt failure: %v", err)
+	}
+
+	// An abandoned externally-consumed row (terminal operator resolution that
+	// retains its nonce) must not resurrect signer discovery after rotation.
+	abandonedID := enqueueOnFeed()
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox
+		SET status = 'failed', failure_kind = 'nonce_consumed_externally', nonce = 171, updated_at = now()
+		WHERE id = $1
+	`, abandonedID); err != nil {
+		t.Fatalf("seed abandoned row: %v", err)
+	}
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = 'confirmed' WHERE id = $1
+	`, id); err != nil {
+		t.Fatalf("resolve requeued row: %v", err)
+	}
+	signersAfter, err := h.store.ListPendingPricingSigners(h.ctx, 40161)
+	if err != nil {
+		t.Fatalf("ListPendingPricingSigners(after abandon): %v", err)
+	}
+	for _, signer := range signersAfter {
+		if signer == h.signerID {
+			t.Fatalf("signers = %v, want the abandoned row's signer excluded", signersAfter)
+		}
+	}
+
+	// A nonce-less pricing failure keeps the fresh-rebuild refusal.
+	freshRefusal := enqueueOnFeed()
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = 'failed', failure_kind = 'estimate_gas_revert', updated_at = now() WHERE id = $1
+	`, freshRefusal); err != nil {
+		t.Fatalf("seed nonce-less failure: %v", err)
+	}
+	if _, err := h.store.RetryFailedTx(h.ctx, freshRefusal); err == nil || !strings.Contains(err.Error(), "pricing observation") {
+		t.Fatalf("RetryFailedTx(nonce-less pricing) error = %v, want refusal", err)
 	}
 }

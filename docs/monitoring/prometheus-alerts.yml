@@ -155,3 +155,27 @@ groups:
         annotations:
           summary: Worker indexer has not completed a poll within twice its configured interval
           runbook: docs/runbooks/monitoring.md
+
+      - alert: LazPricingSnapshotNearStale
+        expr: laz_pricing_snapshot_time_to_stale_seconds < 300
+        # No hold time: time-to-stale decreases monotonically between writes,
+        # so any delay here consumes the 300-second warning window and the
+        # alert would fire only once quotes are already failing closed.
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: On-chain price snapshot is close to its staleAfter cutoff; quotes fail closed once it crosses
+          runbook: docs/runbooks/price-bot.md
+
+      - alert: LazPricingPendingStalled
+        # Half the validated 600-second freshness margin: escalation must land
+        # while the on-chain snapshot still has headroom, even when the pending
+        # row was created at the very end of the write schedule.
+        expr: laz_pricing_pending_oldest_age_seconds > 300
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: A pending pricing transaction is stuck and gating new price writes while the snapshot ages
+          runbook: docs/runbooks/price-bot.md

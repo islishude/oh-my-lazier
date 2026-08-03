@@ -33,6 +33,14 @@ var environmentVariableNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 // MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
 const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
 
+// MinPricingFreshnessMarginSeconds is the minimum margin stale_after_seconds
+// must leave after heartbeat_seconds + interval_seconds. It is the enqueue,
+// signing, and confirmation budget for the worst healthy write schedule;
+// readiness and the pending-stall alert escalate a pending pricing
+// transaction at half this margin, so a stuck write turns red while the
+// on-chain snapshot still has headroom instead of after it expired.
+const MinPricingFreshnessMarginSeconds uint64 = 600
+
 // MinUniswapTWAPWindowSeconds is the shortest accepted Uniswap V3 sanity-price lookback.
 const MinUniswapTWAPWindowSeconds uint64 = 30 * 60
 
@@ -162,6 +170,9 @@ type PricingConfig struct {
 	// MinUpdateDeviationBps is the minimum change from the last written price that triggers an update; it defaults to 50.
 	MinUpdateDeviationBps uint64 `yaml:"min_update_deviation_bps"`
 	// HeartbeatSeconds is the maximum time between price writes in a quiet market; it defaults to half stale_after_seconds.
+	// stale_after_seconds must exceed heartbeat_seconds + interval_seconds by
+	// MinPricingFreshnessMarginSeconds so a pending write cannot silently let
+	// the snapshot expire before readiness escalates.
 	HeartbeatSeconds uint64 `yaml:"heartbeat_seconds"`
 	// SourceRequestTimeoutSeconds bounds one concurrent market-source read; it defaults to 10.
 	SourceRequestTimeoutSeconds uint64 `yaml:"source_request_timeout_seconds"`
@@ -850,6 +861,14 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	}
 	if c.Pricing.IntervalSeconds >= c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds {
 		return errors.New("pricing heartbeat_seconds plus interval_seconds must be less than stale_after_seconds")
+	}
+	// The margin left after the worst healthy write schedule is the budget for
+	// enqueue, signing, and confirmation. Readiness escalates a pending pricing
+	// transaction after the fixed stall threshold, so the margin must be at
+	// least that threshold or a stuck write could let the snapshot expire while
+	// readiness stays green.
+	if c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds-c.Pricing.IntervalSeconds < MinPricingFreshnessMarginSeconds {
+		return fmt.Errorf("pricing stale_after_seconds must exceed heartbeat_seconds plus interval_seconds by at least %d seconds", MinPricingFreshnessMarginSeconds)
 	}
 	if c.Pricing.SourceRequestTimeoutSeconds == 0 {
 		return errors.New("pricing source_request_timeout_seconds is required")

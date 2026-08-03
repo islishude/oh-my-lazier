@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/readiness"
@@ -32,10 +33,27 @@ type RuntimeProvider interface {
 
 // RuntimeSnapshot is a process-local worker metrics snapshot.
 type RuntimeSnapshot struct {
-	Indexers       []IndexerRuntimeStat
-	LoopRetries    []LoopRetryRuntimeStat
-	SignerBalances []SignerBalanceRuntimeStat
-	RPCProviders   []RPCProviderRuntimeStat
+	Indexers         []IndexerRuntimeStat
+	LoopRetries      []LoopRetryRuntimeStat
+	SignerBalances   []SignerBalanceRuntimeStat
+	RPCProviders     []RPCProviderRuntimeStat
+	PricingSnapshots []PricingSnapshotRuntimeStat
+}
+
+// PricingSnapshotRuntimeStat is the latest observed on-chain price snapshot
+// for one priced pathway, sampled when the bot reads its gate baseline. The
+// age is computed from the stored on-chain updatedAt at snapshot-render time,
+// so it keeps advancing even when later cycles skip the pathway (pending
+// write, market-source failure) and the near-stale alert still crosses its
+// threshold as the snapshot actually expires.
+type PricingSnapshotRuntimeStat struct {
+	SrcEID             uint32
+	DstEID             uint32
+	PriceFeed          string
+	UpdatedAtUnix      int64
+	StaleAfterSeconds  uint64
+	AgeSeconds         float64
+	TimeToStaleSeconds float64
 }
 
 // RPCProviderRuntimeStat is one RPC provider's latest quorum classification.
@@ -94,7 +112,14 @@ type Registry struct {
 	loopRetries    map[string]*LoopRetryRuntimeStat
 	signerBalances map[signerBalanceKey]*SignerBalanceRuntimeStat
 	rpcProviders   map[uint32][]RPCProviderRuntimeStat
+	pricing        map[pricingSnapshotKey]*PricingSnapshotRuntimeStat
 	now            func() time.Time
+}
+
+type pricingSnapshotKey struct {
+	srcEID    uint32
+	dstEID    uint32
+	priceFeed string
 }
 
 type indexerKey struct {
@@ -200,6 +225,31 @@ func (r *Registry) RecordRPCProviders(chainEID uint32, chainName string, provide
 	r.rpcProviders[chainEID] = stats
 }
 
+// RecordPricingSnapshot records the latest on-chain price snapshot facts for
+// one priced pathway, sampled when the pricing bot reads its gate baseline
+// from chain. The timestamp is the on-chain updatedAt, never a receipt time,
+// so a confirmed batch whose entries were superseded cannot fake freshness;
+// the age itself is derived at render time so it keeps advancing between
+// samples.
+func (r *Registry) RecordPricingSnapshot(srcEID, dstEID uint32, priceFeed common.Address, updatedAt time.Time, staleAfter time.Duration) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pricing == nil {
+		r.pricing = make(map[pricingSnapshotKey]*PricingSnapshotRuntimeStat)
+	}
+	key := pricingSnapshotKey{srcEID: srcEID, dstEID: dstEID, priceFeed: priceFeed.Hex()}
+	r.pricing[key] = &PricingSnapshotRuntimeStat{
+		SrcEID:            srcEID,
+		DstEID:            dstEID,
+		PriceFeed:         priceFeed.Hex(),
+		UpdatedAtUnix:     updatedAt.Unix(),
+		StaleAfterSeconds: uint64(staleAfter / time.Second),
+	}
+}
+
 // RecordLoopRetry records one supervisor retry after a worker loop returned an error.
 func (r *Registry) RecordLoopRetry(name string) {
 	if r == nil {
@@ -272,6 +322,26 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	for _, stats := range r.rpcProviders {
 		snapshot.RPCProviders = append(snapshot.RPCProviders, stats...)
 	}
+	nowUnix := r.now().Unix()
+	for _, stat := range r.pricing {
+		copied := *stat
+		copied.AgeSeconds = float64(nowUnix - copied.UpdatedAtUnix)
+		if copied.AgeSeconds < 0 {
+			copied.AgeSeconds = 0
+		}
+		copied.TimeToStaleSeconds = float64(copied.StaleAfterSeconds) - copied.AgeSeconds
+		snapshot.PricingSnapshots = append(snapshot.PricingSnapshots, copied)
+	}
+	sort.Slice(snapshot.PricingSnapshots, func(a, b int) bool {
+		left, right := snapshot.PricingSnapshots[a], snapshot.PricingSnapshots[b]
+		if left.SrcEID != right.SrcEID {
+			return left.SrcEID < right.SrcEID
+		}
+		if left.DstEID != right.DstEID {
+			return left.DstEID < right.DstEID
+		}
+		return left.PriceFeed < right.PriceFeed
+	})
 	sort.Slice(snapshot.Indexers, func(a, b int) bool {
 		if snapshot.Indexers[a].ChainEID != snapshot.Indexers[b].ChainEID {
 			return snapshot.Indexers[a].ChainEID < snapshot.Indexers[b].ChainEID
@@ -453,6 +523,16 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.WorkerFees {
 		fmt.Fprintf(output, "laz_worker_fee_unpriced_receipts{role=%s,src_eid=%q,dst_eid=%q} %d\n", label(stat.Role), uint32Label(stat.SrcEID), uint32Label(stat.DstEID), stat.UnpricedReceipts)
 	}
+	output.WriteString("# HELP laz_pricing_pending Pending pricing snapshot transactions that can still land on chain, by source chain.\n")
+	output.WriteString("# TYPE laz_pricing_pending gauge\n")
+	for _, stat := range snapshot.PricingPending {
+		fmt.Fprintf(output, "laz_pricing_pending{chain_eid=%q} %d\n", uint32Label(stat.ChainEID), stat.Count)
+	}
+	output.WriteString("# HELP laz_pricing_pending_oldest_age_seconds Age of the oldest pending pricing snapshot transaction by source chain.\n")
+	output.WriteString("# TYPE laz_pricing_pending_oldest_age_seconds gauge\n")
+	for _, stat := range snapshot.PricingPending {
+		fmt.Fprintf(output, "laz_pricing_pending_oldest_age_seconds{chain_eid=%q} %d\n", uint32Label(stat.ChainEID), stat.OldestAgeSeconds)
+	}
 	output.WriteString("# HELP laz_indexer_cursor_last_block Last indexed block by chain and stream.\n")
 	output.WriteString("# TYPE laz_indexer_cursor_last_block gauge\n")
 	for _, stat := range snapshot.IndexerCursors {
@@ -461,6 +541,16 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 }
 
 func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
+	output.WriteString("# HELP laz_pricing_snapshot_age_seconds Age of the on-chain price snapshot per priced pathway, from on-chain updatedAt.\n")
+	output.WriteString("# TYPE laz_pricing_snapshot_age_seconds gauge\n")
+	for _, stat := range snapshot.PricingSnapshots {
+		fmt.Fprintf(output, "laz_pricing_snapshot_age_seconds{src_eid=%q,dst_eid=%q,price_feed=%s} %.0f\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(stat.PriceFeed), stat.AgeSeconds)
+	}
+	output.WriteString("# HELP laz_pricing_snapshot_time_to_stale_seconds Seconds until the on-chain price snapshot crosses its staleAfter cutoff (negative when already stale).\n")
+	output.WriteString("# TYPE laz_pricing_snapshot_time_to_stale_seconds gauge\n")
+	for _, stat := range snapshot.PricingSnapshots {
+		fmt.Fprintf(output, "laz_pricing_snapshot_time_to_stale_seconds{src_eid=%q,dst_eid=%q,price_feed=%s} %.0f\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(stat.PriceFeed), stat.TimeToStaleSeconds)
+	}
 	output.WriteString("# HELP laz_rpc_provider_status RPC provider quorum head classification (1 for the current status).\n")
 	output.WriteString("# TYPE laz_rpc_provider_status gauge\n")
 	for _, stat := range snapshot.RPCProviders {

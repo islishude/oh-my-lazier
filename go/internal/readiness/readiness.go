@@ -13,6 +13,17 @@ const (
 	dvnSourceStream      = "dvn_source"
 	dvnDestStream        = "dvn_destination"
 
+	// pricingPendingStallSeconds is how long a pricing snapshot transaction may
+	// stay pending before readiness escalates. A pending write gates its feed
+	// against new snapshots, so one stuck behind a wedged lane or fee cap lets
+	// the on-chain price age toward the staleness cutoff. Config validation
+	// guarantees the schedule leaves at least a 600-second margin
+	// (MinPricingFreshnessMarginSeconds) between the worst healthy write
+	// evaluation and snapshot expiry; escalating at half that margin keeps a
+	// real operator window even when the pending row was created at the very
+	// end of the schedule.
+	pricingPendingStallSeconds = 5 * 60
+
 	// cancelHeldStallSeconds is how long a pending operator cancel may age
 	// before readiness escalates it. The cancel pipeline converges within a
 	// few defer cycles when it can outbid the active attempt; a cancel this
@@ -156,6 +167,23 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 					Message: fmt.Sprintf("chain %d signer %s has %d held(reprice_required) tx_outbox rows stalled for %ds, likely blocked by the fee cap", held.ChainEID, held.SignerID, held.Count, held.OldestAgeSeconds),
 				})
 			}
+		}
+	}
+	for _, pending := range snapshot.PricingPending {
+		if pending.Count == 0 {
+			continue
+		}
+		if _, ok := activeChains[pending.ChainEID]; !ok {
+			continue
+		}
+		// A fresh pending write is the normal enqueue-to-confirmation window;
+		// one this old is stuck (wedged lane, fee cap) while it gates the feed
+		// and the on-chain snapshot ages toward the staleness cutoff.
+		if pending.OldestAgeSeconds > pricingPendingStallSeconds {
+			issues = append(issues, Issue{
+				Code:    "pricing_pending_stalled",
+				Message: fmt.Sprintf("chain %d has %d pending pricing tx(s), oldest %ds old, gating price writes while the snapshot ages", pending.ChainEID, pending.Count, pending.OldestAgeSeconds),
+			})
 		}
 	}
 	for _, packet := range snapshot.Packets {

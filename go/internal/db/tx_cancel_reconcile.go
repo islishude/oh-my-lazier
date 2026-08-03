@@ -680,6 +680,12 @@ func (s *Store) ResolveExternalNonceRetry(ctx context.Context, id int64) (int64,
 	} else if err != nil {
 		return 0, err
 	}
+	// A pricing clone would re-sign a time-bound market observation whose
+	// updatedAt may already be past its own staleAfter; abandon the row instead
+	// and the bot rebuilds from a fresh observation on its next cycle.
+	if purpose == TxPurposePricingSetPriceSnapshot {
+		return 0, fmt.Errorf("outbox tx %d carries a pricing observation; use -resolution abandon and let the price bot rebuild", id)
+	}
 	// Cloning is new spend for the scope: while its pathway or chain is paused
 	// or disabled the operator command is refused without mutating anything —
 	// terminalizing the evidence row and queueing a clone here would schedule

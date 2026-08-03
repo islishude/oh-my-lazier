@@ -161,6 +161,21 @@ func TestEvaluateRejectsOperatorActionHeldLanes(t *testing.T) {
 	if !report.Ready {
 		t.Fatalf("ready = false for a held lane on an inactive chain, issues = %+v", report.Issues)
 	}
+
+	pricingStalled := base
+	pricingStalled.PricingPending = []db.PricingPendingStat{
+		// A fresh pending write is the normal confirmation window.
+		{ChainEID: 40161, Count: 1, OldestAgeSeconds: 60},
+		// A stalled one gates the feed while the snapshot ages toward stale.
+		{ChainEID: 40449, Count: 2, OldestAgeSeconds: 400},
+	}
+	report = Evaluate(pricingStalled)
+	if report.Ready {
+		t.Fatal("ready = true with a stalled pending pricing tx, want false")
+	}
+	if len(report.Issues) != 1 || report.Issues[0].Code != "pricing_pending_stalled" {
+		t.Fatalf("issues = %+v, want one pricing_pending_stalled issue", report.Issues)
+	}
 }
 
 func TestEvaluateRejectsMissingOrUnstartedRequiredIndexerCursors(t *testing.T) {
