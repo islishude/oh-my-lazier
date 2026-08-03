@@ -24,7 +24,8 @@ import {
   type PublicClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { addressToBytes32, jsonStringify, loadArtifact, optionalEnv } from "./lib.js";
+import { addressToBytes32, jsonStringify, loadArtifact } from "./lib.js";
+import { optionalEnv } from "./regtest-lib.js";
 
 const tmpDir = optionalEnv("REGTEST_TMP_DIR", "tmp/regtest");
 const deployerPrivateKey = normalizePrivateKey(

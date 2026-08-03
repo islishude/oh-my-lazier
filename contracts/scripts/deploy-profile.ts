@@ -2539,40 +2539,6 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
       `${pathLabel}.enforcedLzReceiveGas must be within [${pathLabel}.minLzReceiveGas, ${pathLabel}.maxLzReceiveGas]`
     );
   }
-  const enforcedLzReceiveGas = decimalField(
-    input,
-    "enforcedLzReceiveGas",
-    `${pathLabel}.enforcedLzReceiveGas`,
-  );
-  const minLzReceiveGas = decimalField(
-    input,
-    "minLzReceiveGas",
-    `${pathLabel}.minLzReceiveGas`,
-  );
-  const maxLzReceiveGas = decimalField(
-    input,
-    "maxLzReceiveGas",
-    `${pathLabel}.maxLzReceiveGas`,
-  );
-  if (BigInt(maxLzReceiveGas) === 0n) {
-    throw new Error(`${pathLabel}.maxLzReceiveGas must be positive`);
-  }
-  if (BigInt(minLzReceiveGas) > BigInt(maxLzReceiveGas)) {
-    throw new Error(
-      `${pathLabel}.minLzReceiveGas must not exceed ${pathLabel}.maxLzReceiveGas`,
-    );
-  }
-  // The enforced lzReceive gas is what the OApp actually sends; if it falls
-  // outside [min, max] the deployment still verifies green but OpenExecutor
-  // reverts InvalidGas on every quote/send, bricking the pathway.
-  if (
-    BigInt(enforcedLzReceiveGas) < BigInt(minLzReceiveGas) ||
-    BigInt(enforcedLzReceiveGas) > BigInt(maxLzReceiveGas)
-  ) {
-    throw new Error(
-      `${pathLabel}.enforcedLzReceiveGas must be within [${pathLabel}.minLzReceiveGas, ${pathLabel}.maxLzReceiveGas]`,
-    );
-  }
   return {
     maxMessageSize: integerField(
       input,
@@ -3418,19 +3384,6 @@ function optionalMarketDataBaseURL(
   if (!hostPort || hostPort.includes("%")) {
     throw new Error(
       `${label} must be an absolute HTTPS URL without query or fragment`
-    );
-  }
-  // Even a well-formed percent-escape is rejected by Go's net/url when it sits
-  // in the host/port (WHATWG decodes it, e.g. "%65" -> "e"). Userinfo may keep
-  // valid escapes, so only inspect the authority after the last "@".
-  const authority = baseURL.slice("https://".length).split(/[/?#]/)[0];
-  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
-  // WHATWG "repairs" an empty raw authority (https:///example.com parses with
-  // hostname example.com), but Go's net/url sees an empty host and rejects it
-  // at worker startup — the profile must fail here, not there.
-  if (!hostPort || hostPort.includes("%")) {
-    throw new Error(
-      `${label} must be an absolute HTTPS URL without query or fragment`,
     );
   }
   return baseURL;

@@ -67,13 +67,8 @@ import {
   requiredDVNsConfig,
   type UlnConfig,
 } from "./lz-config.js";
-import {
-  addressToBytes32,
-  jsonStringify,
-  loadArtifact,
-  optionalEnv,
-  waitForContract,
-} from "./lib.js";
+import { addressToBytes32, jsonStringify, loadArtifact } from "./lib.js";
+import { optionalEnv, waitForContract } from "./regtest-lib.js";
 
 type ChainSpec = {
   key: "a" | "b";

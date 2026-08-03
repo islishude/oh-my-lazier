@@ -7,6 +7,7 @@ import {
   encodeUlnConfig,
   requiredDVNsConfig,
 } from "./lz-config.js";
+import { jsonStringify, loadABIArtifact, waitForTx } from "./lib.js";
 import {
   assertConfiguredChain,
   createClients,
@@ -14,10 +15,7 @@ import {
   envAddressList,
   envBigInt,
   envUint32,
-  jsonStringify,
-  loadABIArtifact,
-  waitForTx,
-} from "./lib.js";
+} from "./regtest-lib.js";
 
 const endpointArtifact = loadABIArtifact(
   "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/interfaces/ILayerZeroEndpointV2.sol/ILayerZeroEndpointV2.json",
