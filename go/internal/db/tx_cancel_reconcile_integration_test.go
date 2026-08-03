@@ -3,11 +3,13 @@ package db
 import (
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestCancelRequestGatesOriginalTaskAndFinalizesCanceled(t *testing.T) {
@@ -956,23 +958,34 @@ func TestDeferCancelPushesDueRequestOutOfSelection(t *testing.T) {
 		t.Fatalf("candidate = %d, want %d", candidate.Outbox.ID, id)
 	}
 
+	var requestedBefore time.Time
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_requested_at FROM tx_outbox WHERE id = $1", id).Scan(&requestedBefore); err != nil {
+		t.Fatalf("select cancel_requested_at before defer: %v", err)
+	}
+
 	if err := h.store.DeferCancel(h.ctx, id); err != nil {
 		t.Fatalf("DeferCancel() error = %v", err)
 	}
 	if _, err := h.store.NextCancelCandidate(h.ctx, 40161, h.signerID); !errors.Is(err, ErrNoCancelWork) {
 		t.Fatalf("NextCancelCandidate(deferred) error = %v, want ErrNoCancelWork", err)
 	}
-	var requestInFuture bool
-	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_requested_at > now() FROM tx_outbox WHERE id = $1", id).Scan(&requestInFuture); err != nil {
-		t.Fatalf("select cancel_requested_at: %v", err)
+	// The request time is immutable observability state; only the pacing
+	// column moves, so the cancel age keeps measuring the operator's wait.
+	var requestedAfter time.Time
+	var deferInFuture bool
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_requested_at, cancel_defer_until > now() FROM tx_outbox WHERE id = $1", id).Scan(&requestedAfter, &deferInFuture); err != nil {
+		t.Fatalf("select cancel columns after defer: %v", err)
 	}
-	if !requestInFuture {
-		t.Fatal("DeferCancel() did not push cancel_requested_at into the future")
+	if !requestedAfter.Equal(requestedBefore) {
+		t.Fatalf("DeferCancel() changed cancel_requested_at from %v to %v", requestedBefore, requestedAfter)
+	}
+	if !deferInFuture {
+		t.Fatal("DeferCancel() did not push cancel_defer_until into the future")
 	}
 
 	// The deferral is a delay, not a drop: once due again the request re-selects.
-	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET cancel_requested_at = now() - interval '1 second' WHERE id = $1`, id); err != nil {
-		t.Fatalf("backdate cancel request: %v", err)
+	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET cancel_defer_until = now() - interval '1 second' WHERE id = $1`, id); err != nil {
+		t.Fatalf("backdate cancel defer: %v", err)
 	}
 	candidate, err = h.store.NextCancelCandidate(h.ctx, 40161, h.signerID)
 	if err != nil {
@@ -982,16 +995,91 @@ func TestDeferCancelPushesDueRequestOutOfSelection(t *testing.T) {
 		t.Fatalf("due-again candidate = %d, want %d", candidate.Outbox.ID, id)
 	}
 
+	// Re-requesting the cancel resets the pacing for an immediate attempt.
+	if err := h.store.DeferCancel(h.ctx, id); err != nil {
+		t.Fatalf("DeferCancel(again) error = %v", err)
+	}
+	if err := h.store.RequestTxCancel(h.ctx, id); err != nil {
+		t.Fatalf("RequestTxCancel(re-request) error = %v", err)
+	}
+	var deferAfterReRequest *time.Time
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_defer_until FROM tx_outbox WHERE id = $1", id).Scan(&deferAfterReRequest); err != nil {
+		t.Fatalf("select cancel_defer_until after re-request: %v", err)
+	}
+	if deferAfterReRequest != nil {
+		t.Fatalf("RequestTxCancel() kept cancel_defer_until = %v, want NULL", deferAfterReRequest)
+	}
+
 	// A row without cancel intent is untouched.
 	other := h.enqueue()
 	if err := h.store.DeferCancel(h.ctx, other); err != nil {
 		t.Fatalf("DeferCancel(no intent) error = %v", err)
 	}
-	var cancelRequestedAt *time.Time
-	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_requested_at FROM tx_outbox WHERE id = $1", other).Scan(&cancelRequestedAt); err != nil {
-		t.Fatalf("select no-intent cancel_requested_at: %v", err)
+	var cancelRequestedAt, cancelDeferUntil *time.Time
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT cancel_requested_at, cancel_defer_until FROM tx_outbox WHERE id = $1", other).Scan(&cancelRequestedAt, &cancelDeferUntil); err != nil {
+		t.Fatalf("select no-intent cancel columns: %v", err)
 	}
-	if cancelRequestedAt != nil {
-		t.Fatalf("DeferCancel(no intent) set cancel_requested_at = %v, want NULL", cancelRequestedAt)
+	if cancelRequestedAt != nil || cancelDeferUntil != nil {
+		t.Fatalf("DeferCancel(no intent) wrote cancel columns %v/%v, want NULL/NULL", cancelRequestedAt, cancelDeferUntil)
+	}
+}
+
+func TestRetryFailedTxRefusesPinnedResolutionWithFinalizedKind(t *testing.T) {
+	h := newAttemptHarness(t, "0x7979797979797979797979797979797979797979", 150)
+	id := h.enqueue()
+	original := h.signAttempt(id, 150, common.HexToHash("0x7401"))
+	h.broadcastResult(original.ID, SendErrorAccepted)
+
+	// The attempt mined with a failed status: receipt_failed with a pinned
+	// receipt resolution and consumed nonce.
+	facts := TxReceiptFacts{TxHash: original.TxHash, Status: 0, BlockNumber: 410, GasUsed: 21000, EffectiveGasPrice: big.NewInt(1_000_000_000), GasCostDstWei: new(big.Int).Mul(big.NewInt(21000), big.NewInt(1_000_000_000))}
+	if outcome, err := h.store.PrepareReceiptResolution(h.ctx, original.ID, facts); err != nil || outcome != ReceiptOutcomeFailed {
+		t.Fatalf("PrepareReceiptResolution = (%q, %v), want failed", outcome, err)
+	}
+	if outcome, err := h.store.FinalizeAttemptReceipt(h.ctx, original.ID, facts); err != nil || outcome != ReceiptOutcomeFailed {
+		t.Fatalf("FinalizeAttemptReceipt = (%q, %v), want failed", outcome, err)
+	}
+
+	// The workflow side finalized the row (for example the executor job already
+	// advanced or parked), clearing the failure kind so automatic retry stops
+	// selecting it. The row keeps its consumed nonce and pinned resolution.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET failure_kind = NULL, next_retry_at = NULL, updated_at = now()
+		WHERE id = $1 AND status = 'failed'
+	`, id); err != nil {
+		t.Fatalf("finalize failure kind: %v", err)
+	}
+
+	// The operator retry must refuse the in-place requeue: re-signing on the
+	// consumed nonce would wedge the signer lane behind an attempt the
+	// broadcast claim always refuses.
+	if _, err := h.store.RetryFailedTx(h.ctx, id); err == nil || !strings.Contains(err.Error(), "pinned receipt resolution") {
+		t.Fatalf("RetryFailedTx(pinned finalized row) error = %v, want pinned receipt resolution refusal", err)
+	}
+	var status string
+	if err := h.store.pool.QueryRow(h.ctx, "SELECT status FROM tx_outbox WHERE id = $1", id).Scan(&status); err != nil {
+		t.Fatalf("select status: %v", err)
+	}
+	if status != string(TxStatusFailed) {
+		t.Fatalf("status after refused retry = %s, want failed", status)
+	}
+
+	// The DB-level invariant refuses the in-place requeue even when reached
+	// directly, and the signing selector never picks a pinned row that was
+	// forced back to queued by out-of-band writes.
+	tx, err := h.store.pool.Begin(h.ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := requeueFailedTx(h.ctx, tx, id); err == nil || !strings.Contains(err.Error(), "pinned receipt resolution") {
+		t.Fatalf("requeueFailedTx(pinned row) error = %v, want pinned receipt resolution refusal", err)
+	}
+	_ = tx.Rollback(h.ctx)
+
+	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET status = 'queued' WHERE id = $1`, id); err != nil {
+		t.Fatalf("force queued: %v", err)
+	}
+	if _, err := h.store.PeekSendableTx(h.ctx, 40161, h.signerID); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("PeekSendableTx(pinned queued row) error = %v, want pgx.ErrNoRows", err)
 	}
 }

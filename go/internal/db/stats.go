@@ -271,6 +271,12 @@ func (s *Store) statusStats(ctx context.Context, table string) ([]StatusStat, er
 // or cancel-nonce) can move the lane — readiness treats it like a manual hold.
 const HeldRepriceExhausted = "reprice_exhausted"
 
+// HeldCancelRequested is a synthetic stats-only reason: a row with pending
+// operator cancel intent, regardless of its held reason. Its age counts from
+// the immutable cancel_requested_at, so deferrals (fee-cap blocks, receipts
+// awaiting confirmation depth) cannot hide a cancel that never converges.
+const HeldCancelRequested = "cancel_requested"
+
 // txOutboxHeldStats surfaces every blocked or cancel-pending signer lane. A
 // pending cancel is reported under the synthetic reason 'cancel_requested' in
 // addition to its held reason, because a cancel can also sit on non-held rows.

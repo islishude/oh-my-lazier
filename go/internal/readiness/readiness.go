@@ -13,6 +13,14 @@ const (
 	dvnSourceStream      = "dvn_source"
 	dvnDestStream        = "dvn_destination"
 
+	// cancelHeldStallSeconds is how long a pending operator cancel may age
+	// before readiness escalates it. The cancel pipeline converges within a
+	// few defer cycles when it can outbid the active attempt; a cancel this
+	// old is stalled — typically the mandatory bump exceeds the configured
+	// fee cap, deferring every attempt — and needs the operator (a cap fix,
+	// then the cancel proceeds automatically).
+	cancelHeldStallSeconds = 15 * 60
+
 	// repriceHeldStallSeconds is how long a held(reprice_required) lane may age
 	// before readiness treats it as stalled. Healthy automatic repricing cycles
 	// on a one-minute cooldown and escalates to reprice_exhausted within five
@@ -113,7 +121,7 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 		// signer lane so no higher nonce is signed until it is resolved.
 		// reprice_required (below the automatic replacement cap) and
 		// nonce_reconcile_required self-heal through the automatic replacement
-		// and nonce reconciliation loops, and cancel_requested is an
+		// and nonce reconciliation loops, and a fresh cancel_requested is an
 		// operator-initiated cancel already converging; a reprice hold past
 		// the cap surfaces as the synthetic reprice_exhausted reason and needs
 		// the operator.
@@ -123,6 +131,17 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 				Code:    "held_signer_lane",
 				Message: fmt.Sprintf("chain %d signer %s has %d held(%s) tx_outbox rows blocking the nonce lane", held.ChainEID, held.SignerID, held.Count, held.HeldReason),
 			})
+		case db.HeldCancelRequested:
+			// The cancel age counts from the immutable cancel_requested_at, so
+			// deferrals cannot reset it. A cancel this old cannot outbid the
+			// active attempt — typically the mandatory bump exceeds the
+			// configured fee cap and every attempt defers before signing.
+			if held.OldestAgeSeconds > cancelHeldStallSeconds {
+				issues = append(issues, Issue{
+					Code:    "held_signer_lane",
+					Message: fmt.Sprintf("chain %d signer %s has %d pending cancel(s) stalled for %ds, likely blocked by the fee cap", held.ChainEID, held.SignerID, held.Count, held.OldestAgeSeconds),
+				})
+			}
 		case db.HeldRepriceRequired:
 			// Self-healing only while the automatic reprice can actually land
 			// a bump. When the configured fee cap blocks the mandatory bump,

@@ -211,6 +211,9 @@ func (s *Store) peekSendableTx(ctx context.Context, chainEID uint32, signerID st
 			AND (o.next_sign_at IS NULL OR o.next_sign_at <= now())
 			AND (o.lease_until IS NULL OR o.lease_until <= now())
 			AND o.cancel_requested_at IS NULL
+			-- A pinned receipt resolution means the nonce is consumed; such a
+			-- row must never be selected for signing again.
+			AND o.receipt_outcome IS NULL
 			-- Rows without a nonce whose send scope is paused/disabled are held
 			-- back here so they cannot starve active work behind them; the
 			-- signing gate re-checks the scope under share locks.
@@ -447,12 +450,13 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 		Nonce       *int64
 		FailureKind string
 	}
+	var receiptOutcome *string
 	if err := tx.QueryRow(ctx, `
-		SELECT chain_eid, purpose, guid, nonce, COALESCE(failure_kind, '')
+		SELECT chain_eid, purpose, guid, nonce, COALESCE(failure_kind, ''), receipt_outcome
 		FROM tx_outbox
 		WHERE id = $1 AND status = $2
 		FOR UPDATE
-	`, id, TxStatusFailed).Scan(&row.ChainEID, &row.Purpose, &row.GUID, &row.Nonce, &row.FailureKind); errors.Is(err, pgx.ErrNoRows) {
+	`, id, TxStatusFailed).Scan(&row.ChainEID, &row.Purpose, &row.GUID, &row.Nonce, &row.FailureKind, &receiptOutcome); errors.Is(err, pgx.ErrNoRows) {
 		return 0, fmt.Errorf("outbox tx %d is not failed", id)
 	} else if err != nil {
 		return 0, err
@@ -463,6 +467,17 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 	// either in place would try to reuse a consumed nonce.
 	if row.FailureKind == TxFailureCanceled || row.FailureKind == TxFailureNonceConsumedExternally {
 		return 0, fmt.Errorf("outbox tx %d failure kind %s is not retryable", id, row.FailureKind)
+	}
+
+	// A pinned receipt resolution means an attempt of this row mined and its
+	// nonce is consumed. Rows whose failure kind was finalized to NULL (for
+	// example an lzReceive failure whose executor job already advanced or
+	// parked) would otherwise take the requeue-in-place branch below, re-sign
+	// on the consumed nonce, and wedge the signer lane with an attempt the
+	// broadcast claim always refuses. Only the receipt-failed clone branch may
+	// act on such evidence, and it leaves the original row terminal.
+	if receiptOutcome != nil && row.FailureKind != TxFailureReceiptFailed {
+		return 0, fmt.Errorf("outbox tx %d has a pinned receipt resolution and its nonce is consumed; the row cannot be requeued in place", id)
 	}
 
 	if row.Nonce == nil || row.FailureKind != TxFailureReceiptFailed {
@@ -681,6 +696,10 @@ func deferFailedTxRetry(ctx context.Context, tx pgx.Tx, id int64) error {
 }
 
 func requeueFailedTx(ctx context.Context, tx pgx.Tx, id int64) error {
+	// receipt_outcome IS NULL is a structural invariant, not just an entry
+	// guard: a pinned resolution means the nonce is consumed, and a requeued
+	// row would re-sign an attempt the broadcast claim always refuses,
+	// wedging the signer lane behind it.
 	tag, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
 		SET
@@ -690,13 +709,13 @@ func requeueFailedTx(ctx context.Context, tx pgx.Tx, id int64) error {
 			next_retry_at = NULL,
 			last_error = NULL,
 			updated_at = now()
-		WHERE id = $2 AND status = $3
+		WHERE id = $2 AND status = $3 AND receipt_outcome IS NULL
 	`, TxStatusQueued, id, TxStatusFailed)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() != 1 {
-		return fmt.Errorf("outbox tx %d is not failed", id)
+		return fmt.Errorf("outbox tx %d is not failed without a pinned receipt resolution", id)
 	}
 	return nil
 }

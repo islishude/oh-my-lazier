@@ -62,6 +62,7 @@ func (s *Store) RequestTxCancel(ctx context.Context, id int64) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox o
 		SET cancel_requested_at = now(),
+			cancel_defer_until = NULL,
 			pre_sign_failure_count = 0,
 			next_sign_at = NULL,
 			replace_requested_at = CASE WHEN EXISTS (
@@ -121,6 +122,7 @@ func (s *Store) NextCancelCandidate(ctx context.Context, chainEID uint32, signer
 		LEFT JOIN tx_attempts a ON a.outbox_id = o.id AND a.id = o.active_attempt_id
 		WHERE o.chain_eid = $1 AND o.signer_id = $2
 			AND o.cancel_requested_at IS NOT NULL AND o.cancel_requested_at <= now()
+			AND (o.cancel_defer_until IS NULL OR o.cancel_defer_until <= now())
 			AND o.nonce IS NOT NULL
 			AND o.status = ANY($3)
 			AND (o.held_reason IS NULL OR o.held_reason <> $4)
@@ -192,13 +194,16 @@ func (s *Store) attemptPollHashes(ctx context.Context, outboxID int64) ([]common
 // DeferCancel pushes a due cancel request back when its preflight defers (for
 // example one of the attempts already has a receipt awaiting confirmation depth,
 // or a fee cap blocks the cancel), so it is not retried on every manager pass.
+// Only the pacing column moves: cancel_requested_at stays immutable so the
+// cancel age surfaced by stats and readiness keeps measuring the operator's
+// real wait, which is what escalates a fee-cap-blocked cancel.
 func (s *Store) DeferCancel(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return errors.New("outbox tx id is required")
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
-		SET cancel_requested_at = now() + $1::interval, updated_at = now()
+		SET cancel_defer_until = now() + $1::interval, updated_at = now()
 		WHERE id = $2 AND cancel_requested_at IS NOT NULL
 			AND status NOT IN ('confirmed', 'failed')
 	`, pgInterval(txReplacementDeferDelay), id)
@@ -753,7 +758,7 @@ func terminalizeExternallyConsumed(ctx context.Context, tx pgx.Tx, id int64) err
 	tag, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
 		SET status = $1, held_reason = NULL, failure_kind = $2,
-			next_retry_at = NULL, cancel_requested_at = NULL,
+			next_retry_at = NULL, cancel_requested_at = NULL, cancel_defer_until = NULL,
 			lease_token = NULL, lease_until = NULL, updated_at = now()
 		WHERE id = $3 AND status = $4 AND held_reason = $5
 			AND receipt_outcome IS NULL

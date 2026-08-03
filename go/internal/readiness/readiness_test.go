@@ -125,13 +125,16 @@ func TestEvaluateRejectsOperatorActionHeldLanes(t *testing.T) {
 		// An aged reprice hold cannot be self-healing: the mandatory bump is
 		// blocked (typically the fee cap) or it would have escalated already.
 		{ChainEID: 40449, SignerID: "0x5555", HeldReason: db.HeldRepriceRequired, Count: 1, OldestAgeSeconds: 3600},
+		// The cancel age counts from the immutable request time, so an aged
+		// pending cancel is stalled (typically fee-cap blocked), not converging.
+		{ChainEID: 40449, SignerID: "0x6666", HeldReason: db.HeldCancelRequested, Count: 1, OldestAgeSeconds: 3600},
 	}
 	report := Evaluate(blocking)
 	if report.Ready {
 		t.Fatal("ready = true with operator-action held lanes, want false")
 	}
-	if len(report.Issues) != 5 {
-		t.Fatalf("issues = %+v, want 5 held_signer_lane issues", report.Issues)
+	if len(report.Issues) != 6 {
+		t.Fatalf("issues = %+v, want 6 held_signer_lane issues", report.Issues)
 	}
 	for _, issue := range report.Issues {
 		if issue.Code != "held_signer_lane" {
@@ -143,7 +146,7 @@ func TestEvaluateRejectsOperatorActionHeldLanes(t *testing.T) {
 	selfHealing.TxOutboxHeld = []db.TxOutboxHeldStat{
 		{ChainEID: 40449, SignerID: "0x1111", HeldReason: db.HeldRepriceRequired, Count: 1},
 		{ChainEID: 40449, SignerID: "0x1111", HeldReason: db.HeldNonceReconcileRequired, Count: 1},
-		{ChainEID: 40449, SignerID: "0x1111", HeldReason: "cancel_requested", Count: 1},
+		{ChainEID: 40449, SignerID: "0x1111", HeldReason: db.HeldCancelRequested, Count: 1, OldestAgeSeconds: 60},
 	}
 	report = Evaluate(selfHealing)
 	if !report.Ready {

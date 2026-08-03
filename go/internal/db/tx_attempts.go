@@ -171,6 +171,7 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 		WHERE id = $1 AND chain_eid = $2 AND signer_id = $3
 			AND (lease_until IS NULL OR lease_until <= now())
 			AND cancel_requested_at IS NULL
+			AND receipt_outcome IS NULL
 		FOR UPDATE
 	`, id, chainEID, signerID).Scan(&status, &purpose, &guid, &nonce)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -896,6 +897,7 @@ func (s *Store) FinalizeAttemptReceipt(ctx context.Context, attemptID int64, fac
 			lease_until = NULL,
 			replace_requested_at = NULL,
 			cancel_requested_at = NULL,
+			cancel_defer_until = NULL,
 			next_sign_at = NULL,
 			updated_at = now()
 		WHERE id = $8
@@ -1009,9 +1011,9 @@ func (s *Store) RecordPreSignFailure(ctx context.Context, id int64, leaseToken u
 					WHEN replace_requested_at IS NOT NULL THEN now() + $2::interval
 					ELSE NULL
 				END,
-				cancel_requested_at = CASE
+				cancel_defer_until = CASE
 					WHEN cancel_requested_at IS NOT NULL THEN now() + $2::interval
-					ELSE NULL
+					ELSE cancel_defer_until
 				END,
 				lease_token = NULL, lease_until = NULL, updated_at = now()
 			WHERE id = $3
