@@ -123,7 +123,7 @@ groups:
           runbook: docs/runbooks/monitoring.md
 
       - alert: LazRPCProviderConflict
-        expr: laz_rpc_provider_status{status="conflict"} == 1 or laz_rpc_provider_log_conflict == 1
+        expr: laz_rpc_provider_status{status="conflict"} == 1 or laz_rpc_provider_log_conflict == 1 or laz_rpc_provider_state_conflict == 1
         for: 5m
         labels:
           severity: page

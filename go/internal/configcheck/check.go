@@ -59,6 +59,43 @@ type chainIDValidator interface {
 	ValidateChainID(context.Context, *big.Int) error
 }
 
+// anchoredChainClient pins nil-block reads to one verified canonical anchor
+// so every read in a chain's config check shares a single consistent state
+// view. When the underlying client supports hash addressing, the anchor's
+// block hash pins the reads to the verified branch even across a tip reorg.
+type anchoredChainClient struct {
+	ChainClient
+	block *big.Int
+	hash  common.Hash
+}
+
+type hashAddressedClient interface {
+	CallContractAtHash(ctx context.Context, call ethereum.CallMsg, blockHash common.Hash) ([]byte, error)
+	CodeAtHash(ctx context.Context, account common.Address, blockHash common.Hash) ([]byte, error)
+}
+
+// CallContract substitutes the verified anchor for nil block numbers.
+func (a anchoredChainClient) CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	if blockNumber == nil {
+		if hashed, ok := a.ChainClient.(hashAddressedClient); ok && a.hash != (common.Hash{}) {
+			return hashed.CallContractAtHash(ctx, call, a.hash)
+		}
+		blockNumber = a.block
+	}
+	return a.ChainClient.CallContract(ctx, call, blockNumber)
+}
+
+// CodeAt substitutes the verified anchor for nil block numbers.
+func (a anchoredChainClient) CodeAt(ctx context.Context, account common.Address, blockNumber *big.Int) ([]byte, error) {
+	if blockNumber == nil {
+		if hashed, ok := a.ChainClient.(hashAddressedClient); ok && a.hash != (common.Hash{}) {
+			return hashed.CodeAtHash(ctx, account, a.hash)
+		}
+		blockNumber = a.block
+	}
+	return a.ChainClient.CodeAt(ctx, account, blockNumber)
+}
+
 // Issue describes one config mismatch against on-chain state.
 type Issue struct {
 	Path    string `json:"path"`
@@ -181,12 +218,21 @@ func (c *checker) checkChain(ctx context.Context, client ChainClient, configured
 	}
 	// Establish the quorum head before the first on-chain config read, so the
 	// provider trust state is set by the configured majority rather than by
-	// whichever provider happens to be listed first.
+	// whichever provider happens to be listed first. The verified head also
+	// anchors every subsequent read for this chain: dozens of serial config
+	// reads must not each re-establish a head quorum (a black-holed minority
+	// provider would charge every read a probe deadline), and one immutable
+	// height keeps the whole check a single consistent state view.
 	if headChecker, ok := client.(interface {
 		CheckHead(context.Context) (rpcquorum.HeadResult, error)
 	}); ok {
-		if _, err := headChecker.CheckHead(ctx); err != nil {
+		head, err := headChecker.CheckHead(ctx)
+		if err != nil {
 			return fmt.Errorf("check chain %d rpc head quorum: %w", configured.EID, err)
+		}
+		if head.Number != nil {
+			c.clients[configured.EID] = anchoredChainClient{ChainClient: client, block: new(big.Int).Set(head.Number), hash: common.HexToHash(head.Hash)}
+			client = c.clients[configured.EID]
 		}
 	}
 	actualChainID, err := client.ChainID(ctx)

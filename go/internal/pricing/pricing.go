@@ -21,6 +21,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
+	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
 
 const (
@@ -55,6 +56,10 @@ type Bot struct {
 	// local cache, so crash restarts and superseded (skipped) entries cannot
 	// desynchronize the deviation/heartbeat gate from chain truth.
 	cycleWritten map[string]cycleWrittenState
+	// cycleAnchors memoizes each source chain's verified canonical height for
+	// ONE evaluation cycle, so per-key snapshot reads share a single verified
+	// anchor instead of re-establishing a head quorum per read.
+	cycleAnchors map[uint32]cycleAnchorState
 	// pendingFeeds remembers which feeds were gated by a pending row on the
 	// previous check, so the first gas-spike check after a feed drains forces a
 	// full evaluation: a restart seeds gas baselines while a pending row is in
@@ -69,6 +74,53 @@ type Bot struct {
 type cycleWrittenState struct {
 	previous writtenPrice
 	exists   bool
+}
+
+type cycleAnchorState struct {
+	anchor *rpcquorum.StateAnchor
+	err    error
+}
+
+// anchoredSnapshotReader is the optional anchored read surface of a snapshot
+// reader; the on-chain reader implements it so cycle reads share one anchor.
+type anchoredSnapshotReader interface {
+	PriceSnapshotAt(ctx context.Context, srcEID uint32, priceFeed common.Address, dstEID uint32, anchor *rpcquorum.StateAnchor) (PriceSnapshot, error)
+}
+
+// snapshotAnchor resolves (once per cycle per source chain) the verified
+// canonical hash-pinned anchor used for that chain's snapshot reads.
+func (b *Bot) snapshotAnchor(ctx context.Context, srcEID uint32) (*rpcquorum.StateAnchor, error) {
+	if b.cycleAnchors == nil {
+		b.cycleAnchors = make(map[uint32]cycleAnchorState)
+	}
+	if state, ok := b.cycleAnchors[srcEID]; ok {
+		return state.anchor, state.err
+	}
+	srcChain, err := b.registry.Get(srcEID)
+	if err != nil {
+		b.cycleAnchors[srcEID] = cycleAnchorState{err: err}
+		return nil, err
+	}
+	if srcChain.RPC == nil {
+		b.cycleAnchors[srcEID] = cycleAnchorState{}
+		return nil, nil
+	}
+	head, err := srcChain.RPC.CheckHead(ctx)
+	if err != nil {
+		b.cycleAnchors[srcEID] = cycleAnchorState{err: err}
+		return nil, err
+	}
+	state := cycleAnchorState{}
+	if head.Number != nil {
+		anchor, err := rpcquorum.AnchorFromHead(head)
+		if err != nil {
+			b.cycleAnchors[srcEID] = cycleAnchorState{err: err}
+			return nil, err
+		}
+		state.anchor = anchor
+	}
+	b.cycleAnchors[srcEID] = state
+	return state.anchor, nil
 }
 
 // WithMetrics attaches a pricing metrics recorder.
@@ -187,6 +239,13 @@ func NewOnChainPriceSnapshotReader(registry *chain.Registry) PriceSnapshotReader
 }
 
 func (r *onChainPriceSnapshotReader) PriceSnapshot(ctx context.Context, srcEID uint32, priceFeed common.Address, dstEID uint32) (PriceSnapshot, error) {
+	return r.PriceSnapshotAt(ctx, srcEID, priceFeed, dstEID, nil)
+}
+
+// PriceSnapshotAt reads the stored snapshot at an explicit verified anchor so
+// one cycle's reads share a single hash-pinned state view; nil falls back to
+// the quorum client's own canonical anchoring.
+func (r *onChainPriceSnapshotReader) PriceSnapshotAt(ctx context.Context, srcEID uint32, priceFeed common.Address, dstEID uint32, anchor *rpcquorum.StateAnchor) (PriceSnapshot, error) {
 	if r == nil || r.registry == nil {
 		return PriceSnapshot{}, errors.New("pricing snapshot registry is required")
 	}
@@ -197,19 +256,19 @@ func (r *onChainPriceSnapshotReader) PriceSnapshot(ctx context.Context, srcEID u
 	if srcChain.RPC == nil {
 		return PriceSnapshot{}, fmt.Errorf("pricing snapshot RPC for chain %d is not configured", srcEID)
 	}
-	snapshot, err := readPriceSnapshot(ctx, srcChain.RPC, priceFeed, dstEID)
+	snapshot, err := readPriceSnapshot(ctx, srcChain.RPC, priceFeed, dstEID, anchor)
 	if err != nil {
 		return PriceSnapshot{}, fmt.Errorf("read price snapshot for %d -> %d: %w", srcEID, dstEID, err)
 	}
 	return snapshot, nil
 }
 
-func readPriceSnapshot(ctx context.Context, caller CallContractReader, priceFeed common.Address, dstEID uint32) (PriceSnapshot, error) {
+func readPriceSnapshot(ctx context.Context, caller CallContractReader, priceFeed common.Address, dstEID uint32, anchor *rpcquorum.StateAnchor) (PriceSnapshot, error) {
 	calldata, err := priceSnapshotABI.Pack("priceSnapshot", dstEID)
 	if err != nil {
 		return PriceSnapshot{}, err
 	}
-	result, err := caller.CallContract(ctx, ethereum.CallMsg{To: &priceFeed, Data: calldata}, nil)
+	result, err := rpcquorum.CallAtAnchor(ctx, caller, ethereum.CallMsg{To: &priceFeed, Data: calldata}, anchor)
 	if err != nil {
 		return PriceSnapshot{}, err
 	}
@@ -365,6 +424,7 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 	// batch never burns source quota, and the gate baseline is re-read from
 	// chain each cycle.
 	b.cycleWritten = make(map[string]cycleWrittenState)
+	b.cycleAnchors = make(map[uint32]cycleAnchorState)
 	pending, err := b.loadPendingUpdateKeys(ctx, updates)
 	if err != nil {
 		return err
@@ -492,6 +552,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	}
 	if len(spikes) > 0 {
 		b.cycleWritten = make(map[string]cycleWrittenState)
+		b.cycleAnchors = make(map[uint32]cycleAnchorState)
 	}
 	selectedUpdates := spikeUpdates(spikes)
 	cycle := b.newPriceCycle(gasPrices)
@@ -764,9 +825,28 @@ func (b *Bot) loadWrittenPrice(ctx context.Context, update pricedUpdate) (writte
 	if state, ok := b.cycleWritten[key]; ok {
 		return state.previous, state.exists, nil
 	}
-	readCtx, cancel := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
-	defer cancel()
-	snapshot, err := b.snapshots.PriceSnapshot(readCtx, update.SrcEID, update.PriceFeed, update.DstEID)
+	var snapshot PriceSnapshot
+	var err error
+	if anchored, ok := b.snapshots.(anchoredSnapshotReader); ok {
+		// The anchor gets its own SourceRequestTimeout budget, separate from
+		// the snapshot read's: the head quorum's per-provider deadline can
+		// exceed the configured request bound when a minority provider
+		// black-holes, and one slow anchor must neither consume the read's
+		// budget nor stretch past the configured bound.
+		anchorCtx, cancelAnchor := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
+		anchor, anchorErr := b.snapshotAnchor(anchorCtx, update.SrcEID)
+		cancelAnchor()
+		if anchorErr != nil {
+			return writtenPrice{}, false, anchorErr
+		}
+		readCtx, cancel := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
+		defer cancel()
+		snapshot, err = anchored.PriceSnapshotAt(readCtx, update.SrcEID, update.PriceFeed, update.DstEID, anchor)
+	} else {
+		readCtx, cancel := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
+		defer cancel()
+		snapshot, err = b.snapshots.PriceSnapshot(readCtx, update.SrcEID, update.PriceFeed, update.DstEID)
+	}
 	if err != nil {
 		return writtenPrice{}, false, err
 	}

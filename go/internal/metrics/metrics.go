@@ -58,11 +58,12 @@ type PricingSnapshotRuntimeStat struct {
 
 // RPCProviderRuntimeStat is one RPC provider's latest quorum classification.
 type RPCProviderRuntimeStat struct {
-	ChainEID    uint32
-	ChainName   string
-	ProviderID  string
-	Status      string
-	LogConflict bool
+	ChainEID      uint32
+	ChainName     string
+	ProviderID    string
+	Status        string
+	LogConflict   bool
+	StateConflict bool
 }
 
 // IndexerRuntimeStat summarizes one in-process indexer loop.
@@ -213,11 +214,12 @@ func (r *Registry) RecordRPCProviders(chainEID uint32, chainName string, provide
 	stats := make([]RPCProviderRuntimeStat, 0, len(providers))
 	for _, provider := range providers {
 		stats = append(stats, RPCProviderRuntimeStat{
-			ChainEID:    chainEID,
-			ChainName:   chainName,
-			ProviderID:  provider.ID,
-			Status:      string(provider.Status),
-			LogConflict: provider.LogConflict,
+			ChainEID:      chainEID,
+			ChainName:     chainName,
+			ProviderID:    provider.ID,
+			Status:        string(provider.Status),
+			LogConflict:   provider.LogConflict,
+			StateConflict: provider.StateConflict,
 		})
 	}
 	r.mu.Lock()
@@ -555,6 +557,11 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	output.WriteString("# TYPE laz_rpc_provider_status gauge\n")
 	for _, stat := range snapshot.RPCProviders {
 		fmt.Fprintf(output, "laz_rpc_provider_status{chain_eid=%q,provider=%s,status=%s} 1\n", uint32Label(stat.ChainEID), label(stat.ProviderID), label(stat.Status))
+	}
+	output.WriteString("# HELP laz_rpc_provider_state_conflict Whether the provider's last comparable state read disagreed with the state-read quorum (sticky until it agrees again).\n")
+	output.WriteString("# TYPE laz_rpc_provider_state_conflict gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_state_conflict{chain_eid=%q,provider=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ProviderID), boolGauge(stat.StateConflict))
 	}
 	output.WriteString("# HELP laz_rpc_provider_log_conflict Whether the provider's last log window disagreed with the log quorum (sticky until it agrees again).\n")
 	output.WriteString("# TYPE laz_rpc_provider_log_conflict gauge\n")

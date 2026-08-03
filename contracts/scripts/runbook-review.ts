@@ -69,6 +69,7 @@ const requiredDocs: RequiredDoc[] = [
       "laz_indexer_cursor_last_block",
       "laz_rpc_provider_status",
       "laz_rpc_provider_log_conflict",
+      "laz_rpc_provider_state_conflict",
       "laz_signer_native_balance_wei",
       "laz_worker_fee_negative_margin_jobs",
       "laz_worker_fee_unpriced_receipts",
@@ -269,7 +270,7 @@ const requiredAlertRules: RequiredAlertRule[] = [
   {
     alert: "LazRPCProviderConflict",
     anchors: [
-      'laz_rpc_provider_status{status="conflict"} == 1 or laz_rpc_provider_log_conflict == 1',
+      'laz_rpc_provider_status{status="conflict"} == 1 or laz_rpc_provider_log_conflict == 1 or laz_rpc_provider_state_conflict == 1',
       "severity: page",
     ],
   },
