@@ -169,6 +169,23 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			}
 		}
 	}
+	for _, orphaned := range snapshot.TxOutboxOrphaned {
+		if orphaned.Count == 0 {
+			continue
+		}
+		if _, ok := activeChains[orphaned.ChainEID]; !ok {
+			continue
+		}
+		// No age threshold: the signing path writes the active attempt and the
+		// status together, so this state is never produced by a healthy code
+		// path. A 'signed' row here blocks the nonce lane and a 'broadcast' one
+		// is invisible to receipt polling, and neither self-heals — the
+		// operator has to clear it with `txretry -action cancel-nonce`.
+		issues = append(issues, Issue{
+			Code:    "orphaned_outbox_row",
+			Message: fmt.Sprintf("chain %d signer %s has %d %s tx_outbox row(s) with no active attempt, oldest %ds old; durable send state was lost and the lane needs `txretry -action cancel-nonce`", orphaned.ChainEID, orphaned.SignerID, orphaned.Count, orphaned.Status, orphaned.OldestAgeSeconds),
+		})
+	}
 	for _, pending := range snapshot.PricingPending {
 		if pending.Count == 0 {
 			continue

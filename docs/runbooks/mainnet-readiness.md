@@ -95,6 +95,32 @@ Required runtime checks:
 - Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
+### Schema upgrade: drain the send side before applying 002
+
+`002_txmgr_attempts.sql` moves the transaction hash, gas limit, and fee caps
+off `tx_outbox` and onto the new `tx_attempts` rows, dropping those columns.
+It does not backfill an attempt for a row that is already in flight, so a
+`signed` or `broadcast` row that survives the upgrade loses its only hash and
+gets no `active_attempt_id`. Receipt polling joins the active attempt, so such
+a row is never polled or replaced even if its transaction lands, and a
+`signed` row keeps its nonce and blocks that signer lane.
+
+Before upgrading an already-initialized database across 002:
+
+- Stop the worker, then confirm no `tx_outbox` row on any active chain is in
+  `signed` or `broadcast`:
+
+```sql
+SELECT chain_eid, signer_id, status, count(*)
+FROM tx_outbox
+WHERE status IN ('signed', 'broadcast')
+GROUP BY 1, 2, 3;
+```
+
+- If any row is listed, restart the worker and let receipt polling terminalize
+  it (or resolve it with `txretry`) before applying the migration. A fresh
+  database is unaffected: it applies 001 + 002 with an empty outbox.
+
 ## Contract / LayerZero Checks
 
 Required commands:

@@ -275,6 +275,13 @@ const requiredAlertRules: RequiredAlertRule[] = [
     ],
   },
   {
+    alert: "LazTxOutboxOrphaned",
+    anchors: [
+      "laz_tx_outbox_orphaned_total > 0",
+      "severity: page",
+    ],
+  },
+  {
     alert: "LazPricingSnapshotNearStale",
     anchors: [
       "laz_pricing_snapshot_time_to_stale_seconds < 300",

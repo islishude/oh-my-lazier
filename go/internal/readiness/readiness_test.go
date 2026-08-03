@@ -142,6 +142,28 @@ func TestEvaluateRejectsOperatorActionHeldLanes(t *testing.T) {
 		}
 	}
 
+	orphaned := base
+	orphaned.TxOutboxOrphaned = []db.TxOutboxOrphanedStat{
+		// A send-state row with no active attempt is never produced by a
+		// healthy path, so it escalates immediately with no age threshold.
+		{ChainEID: 40449, SignerID: "0x7777", Status: db.TxStatusSigned, Count: 1, OldestAgeSeconds: 5},
+		{ChainEID: 40449, SignerID: "0x7777", Status: db.TxStatusBroadcast, Count: 2, OldestAgeSeconds: 5},
+		// A disabled chain's rows cannot be acted on and must not page.
+		{ChainEID: 50505, SignerID: "0x8888", Status: db.TxStatusSigned, Count: 1},
+	}
+	orphanedReport := Evaluate(orphaned)
+	if orphanedReport.Ready {
+		t.Fatal("ready = true with orphaned send-state rows, want false")
+	}
+	if len(orphanedReport.Issues) != 2 {
+		t.Fatalf("issues = %+v, want 2 orphaned_outbox_row issues", orphanedReport.Issues)
+	}
+	for _, issue := range orphanedReport.Issues {
+		if issue.Code != "orphaned_outbox_row" {
+			t.Fatalf("issue code = %q, want orphaned_outbox_row", issue.Code)
+		}
+	}
+
 	selfHealing := base
 	selfHealing.TxOutboxHeld = []db.TxOutboxHeldStat{
 		{ChainEID: 40449, SignerID: "0x1111", HeldReason: db.HeldRepriceRequired, Count: 1},

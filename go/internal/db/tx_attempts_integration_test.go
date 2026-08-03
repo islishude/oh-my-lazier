@@ -1135,3 +1135,96 @@ func TestDeferReplacementAndReceiptRefreshKeepRowOutOfStaleWindow(t *testing.T) 
 		t.Fatalf("refresh touched a confirmed row: updated_at %v -> %v", before, after)
 	}
 }
+
+// TestOrphanedOutboxStatsDetectSendStateWithoutAttempt pins the invariant
+// detector for rows the 002 schema upgrade can strand: a send-state row whose
+// active attempt is gone is invisible to receipt polling and (when signed)
+// blocks the nonce lane, so the stats surface must report it.
+func TestOrphanedOutboxStatsDetectSendStateWithoutAttempt(t *testing.T) {
+	h := newAttemptHarness(t, "0x7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e7e", 311)
+
+	orphaned := func(status string) (int64, uint64) {
+		h.t.Helper()
+		snapshot, err := h.store.Stats(h.ctx)
+		if err != nil {
+			h.t.Fatalf("Stats() error = %v", err)
+		}
+		for _, stat := range snapshot.TxOutboxOrphaned {
+			if stat.ChainEID == 40161 && stat.SignerID == h.signerID && stat.Status == status {
+				return stat.Count, stat.OldestAgeSeconds
+			}
+		}
+		return 0, 0
+	}
+
+	id := h.enqueue()
+	attempt := h.signAttempt(id, 311, common.HexToHash("0x7e31"))
+	if count, _ := orphaned(TxStatusSigned); count != 0 {
+		t.Fatalf("healthy signed row reported as orphaned (count = %d)", count)
+	}
+
+	// Reproduce what 002 leaves behind: the row keeps its send state and nonce
+	// while its only attempt is gone.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET active_attempt_id = NULL, updated_at = now() - interval '30 minutes' WHERE id = $1
+	`, id); err != nil {
+		t.Fatalf("detach active attempt: %v", err)
+	}
+	if _, err := h.store.pool.Exec(h.ctx, "DELETE FROM tx_attempts WHERE id = $1", attempt.ID); err != nil {
+		t.Fatalf("delete attempt: %v", err)
+	}
+	count, age := orphaned(TxStatusSigned)
+	if count != 1 {
+		t.Fatalf("orphaned signed rows = %d, want 1", count)
+	}
+	if age < 1500 {
+		t.Fatalf("orphaned age = %ds, want the stuck age from updated_at", age)
+	}
+	// Receipt polling can no longer see it, which is exactly why the stats
+	// surface has to.
+	tasks, err := h.store.ListReceiptPollTasks(h.ctx, 40161, h.signerID, 10)
+	if err != nil {
+		t.Fatalf("ListReceiptPollTasks() error = %v", err)
+	}
+	for _, task := range tasks {
+		if task.Outbox.ID == id {
+			t.Fatal("an orphaned row must not appear in receipt polling")
+		}
+	}
+
+	// A held row without an attempt is legitimate (exhausted pre-sign budget)
+	// and must not be reported.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = $1, held_reason = $2 WHERE id = $3
+	`, TxStatusHeld, HeldManual, id); err != nil {
+		t.Fatalf("park row as held: %v", err)
+	}
+	if count, _ := orphaned(TxStatusSigned); count != 0 {
+		t.Fatalf("held row without an attempt reported as orphaned (count = %d)", count)
+	}
+	if count, _ := orphaned(TxStatusHeld); count != 0 {
+		t.Fatalf("held status must never be counted (count = %d)", count)
+	}
+
+	// A retired chain's retained rows cannot be acted on: they are excluded so
+	// the metric matches the readiness escalation and cannot page forever.
+	if _, err := h.store.pool.Exec(h.ctx, `
+		UPDATE tx_outbox SET status = $1, held_reason = NULL WHERE id = $2
+	`, TxStatusSigned, id); err != nil {
+		t.Fatalf("restore signed status: %v", err)
+	}
+	if count, _ := orphaned(TxStatusSigned); count != 1 {
+		t.Fatalf("orphaned signed rows = %d, want 1 before disabling the chain", count)
+	}
+	if _, err := h.store.pool.Exec(h.ctx, "UPDATE chains SET enabled = false WHERE eid = 40161"); err != nil {
+		t.Fatalf("disable chain: %v", err)
+	}
+	h.t.Cleanup(func() {
+		if _, err := h.store.pool.Exec(context.Background(), "UPDATE chains SET enabled = true WHERE eid = 40161"); err != nil {
+			h.t.Errorf("restore chain: %v", err)
+		}
+	})
+	if count, _ := orphaned(TxStatusSigned); count != 0 {
+		t.Fatalf("disabled chain rows reported as orphaned (count = %d)", count)
+	}
+}

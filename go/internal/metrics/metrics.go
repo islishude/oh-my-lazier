@@ -495,6 +495,16 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.TxOutboxHeld {
 		fmt.Fprintf(output, "laz_tx_outbox_held_oldest_age_seconds{chain_eid=%q,signer=%s,reason=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), label(stat.HeldReason), stat.OldestAgeSeconds)
 	}
+	output.WriteString("# HELP laz_tx_outbox_orphaned_total Send-state rows with no active attempt (a broken invariant) by chain, signer, and status.\n")
+	output.WriteString("# TYPE laz_tx_outbox_orphaned_total gauge\n")
+	for _, stat := range snapshot.TxOutboxOrphaned {
+		fmt.Fprintf(output, "laz_tx_outbox_orphaned_total{chain_eid=%q,signer=%s,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), label(stat.Status), stat.Count)
+	}
+	output.WriteString("# HELP laz_tx_outbox_orphaned_oldest_age_seconds Age of the oldest send-state row with no active attempt by chain, signer, and status.\n")
+	output.WriteString("# TYPE laz_tx_outbox_orphaned_oldest_age_seconds gauge\n")
+	for _, stat := range snapshot.TxOutboxOrphaned {
+		fmt.Fprintf(output, "laz_tx_outbox_orphaned_oldest_age_seconds{chain_eid=%q,signer=%s,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), label(stat.Status), stat.OldestAgeSeconds)
+	}
 	output.WriteString("# HELP laz_tx_receipt_gas_cost_dst_wei Mined transaction receipt gas cost in destination-chain native wei by chain and outbox purpose.\n")
 	output.WriteString("# TYPE laz_tx_receipt_gas_cost_dst_wei gauge\n")
 	for _, stat := range snapshot.TxReceiptGasCosts {

@@ -156,6 +156,21 @@ groups:
           summary: Worker indexer has not completed a poll within twice its configured interval
           runbook: docs/runbooks/monitoring.md
 
+      - alert: LazTxOutboxOrphaned
+        # The signing path writes the active attempt and the send status in one
+        # statement, so this state is never produced by a healthy code path: a
+        # signed row here blocks its nonce lane and a broadcast row is invisible
+        # to receipt polling, and neither self-heals. Page on the first sample.
+        # The series already excludes disabled (retired) chains, matching the
+        # readiness escalation, so a retained row cannot page forever.
+        expr: laz_tx_outbox_orphaned_total > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: A send-state tx_outbox row lost its active attempt; the signer lane needs operator recovery
+          runbook: docs/runbooks/monitoring.md
+
       - alert: LazPricingSnapshotNearStale
         expr: laz_pricing_snapshot_time_to_stale_seconds < 300
         # No hold time: time-to-stale decreases monotonically between writes,
