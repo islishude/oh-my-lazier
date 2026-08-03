@@ -6,15 +6,33 @@ import {
 } from "../regtest-deploy.js";
 import { createApplyGate, loadScriptRunFile } from "../command-harness.js";
 import { jsonStringify } from "../lib.js";
-import { parseInputObject, stringField } from "../commands/input-parsers.js";
+import {
+  enumField,
+  optionalBigintField,
+  parseInputObject,
+  stringField,
+} from "../commands/input-parsers.js";
 import { requireApplyFlag } from "../commands/runtime.js";
 
 export function parseRegtestDeployCommandInput(
   value: unknown,
   label: string
 ): RegtestDeployBusinessInput {
-  const input = parseInputObject(value, label, ["tmpDir"]);
-  return { tmpDir: stringField(input, "tmpDir", label) };
+  const input = parseInputObject(value, label, [
+    "tmpDir",
+    "confirmations",
+    "initialSupply",
+    "dvnMode",
+  ]);
+  return {
+    tmpDir: stringField(input, "tmpDir", label),
+    confirmations: optionalBigintField(input, "confirmations", label),
+    initialSupply: optionalBigintField(input, "initialSupply", label),
+    dvnMode:
+      input.dvnMode === undefined
+        ? undefined
+        : enumField(input, "dvnMode", ["active", "shadow"] as const, label),
+  };
 }
 
 export async function runRegtestDeployCommand(

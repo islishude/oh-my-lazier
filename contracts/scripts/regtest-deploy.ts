@@ -109,6 +109,12 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 export type RegtestDeployBusinessInput = {
   tmpDir: string;
+  /** Source-chain confirmations per pathway; defaults to 1. */
+  confirmations?: bigint;
+  /** GOATED supply minted on chain A; defaults to 1,000,000e18. */
+  initialSupply?: bigint;
+  /** DVN operating mode for both workers; defaults to "active". */
+  dvnMode?: RegtestDVNMode;
 };
 
 export type RegtestDeployInput = RegtestDeployBusinessInput & {
@@ -139,9 +145,11 @@ export type RegtestDeployResult =
     };
 
 /**
- * Resolve infrastructure-only regtest settings from the environment without
- * putting RPC URLs or private keys in the command's JSON input. Worker signer
- * addresses come from the pre-generated keystore files in tmpDir.
+ * Resolve the deployment input: business settings (confirmations, supply,
+ * DVN mode) come only from the reviewed OML_SCRIPT_PARAMS envelope with
+ * explicit defaults, while RPC endpoints and other infrastructure resolve
+ * from the environment. Worker signer addresses come from the pre-generated
+ * keystore files in tmpDir.
  */
 export function resolveRegtestDeployInput(
   input: RegtestDeployBusinessInput,
@@ -158,17 +166,15 @@ export function resolveRegtestDeployInput(
   if (chainA === undefined || chainB === undefined || chains.length !== 2) {
     throw new Error("regtest requires exactly two chains");
   }
-  const confirmations = BigInt(resolve("REGTEST_CONFIRMATIONS", "1"));
+  const confirmations = input.confirmations ?? 1n;
   if (confirmations < 1n) {
-    throw new Error("REGTEST_CONFIRMATIONS must be at least 1");
+    throw new Error("confirmations must be at least 1");
   }
-  const initialSupply = BigInt(
-    resolve("REGTEST_INITIAL_SUPPLY", defaultInitialSupply.toString())
-  );
-  const dvnMode = resolve("REGTEST_DVN_MODE", "active");
-  if (dvnMode !== "active" && dvnMode !== "shadow") {
-    throw new Error(`REGTEST_DVN_MODE must be active or shadow: ${dvnMode}`);
+  const initialSupply = input.initialSupply ?? defaultInitialSupply;
+  if (initialSupply < 0n) {
+    throw new Error("initialSupply must not be negative");
   }
+  const dvnMode = input.dvnMode ?? "active";
   const workers = [1, 2].map((index) => {
     const infrastructure = regtestWorkerInfrastructure(
       index as 1 | 2,
@@ -712,7 +718,12 @@ ${chainList
     indexer_query_block_range: 500
     indexer_poll_interval_seconds: 5
     rpc_urls:
-      - ${rpcURL(chain)}
+      - ${rpcURL(chain)}${
+      chain.gasPrice === undefined
+        ? ""
+        : `
+    legacy_transactions: true`
+    }
     tx_roles:${
       executorEnabled
         ? `

@@ -204,12 +204,17 @@ E2E_WORKER_PRIVATE_KEY=0x5de4111a… REGTEST_KEYSTORE_PASSWORD=&lt;pw&gt; \
       <p class="li-t">Deploy + wire both chains via Ignition, emit configs</p>
       <pre><span class="c"># chain IDs are fixed by the regtest-a/regtest-b Hardhat networks (31337/31338);</span>
 <span class="c"># run goat-geth with network id 31338.</span>
+<span class="c"># REGTEST_B_GAS_PRICE forces legacy type-0 txs (deploy + send + workers)</span>
+<span class="c"># when goat-geth drops EIP-1559; confirmations/supply/DVN mode live in the</span>
+<span class="c"># reviewed params JSON. Rerunning an aged tmp/regtest (price snapshots expire</span>
+<span class="c"># after 24h) requires recreating it: rm -rf tmp/regtest, regenerate the</span>
+<span class="c"># keystores, and redeploy.</span>
 OML_SCRIPT_PARAMS=config/scripts/regtest-deploy.json OML_IGNITION_DIR=tmp/regtest/ignition \
 REGTEST_DEPLOYER_PRIVATE_KEY=0xac0974… \
 REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 \
 REGTEST_B_HOST_RPC_URL=http://127.0.0.1:8545 \
 REGTEST_B_CONTAINER_RPC_URL=http://goat-regtest-geth-node:8545 \
-REGTEST_B_GAS_PRICE=1000000000 <span class="c"># optional: force legacy type-0 txs if goat-geth drops EIP-1559</span> \
+REGTEST_B_GAS_PRICE=1000000000 \
 npm run regtest:deploy</pre>
     </li>
     <li>

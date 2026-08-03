@@ -23,6 +23,11 @@
 #   REGTEST_A_CONTAINER_RPC_URL=http://<chain-A-anvil-container>:8545
 #   REGTEST_B_CONTAINER_RPC_URL=http://goat-regtest-geth-node:8545   # goat-geth container_name
 #
+# The deployed price snapshots expire after 24h and nothing refreshes them
+# (worker pricing is disabled). To rerun an aged environment, recreate it:
+# stop this stack, `rm -rf tmp/regtest` (deployments, Ignition journals, and
+# ignition-parameters), regenerate the keystores, and run regtest:deploy again.
+#
 # Bring up:  docker compose -f deploy/regtest/docker-compose.regtest.yml up -d --build
 # The workers run with --skip-onchain-check (regtest ULN uses the 2 OpenDVN
 # instances; the startup check's independent-DVN heuristic is advisory here).

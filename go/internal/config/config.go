@@ -334,6 +334,10 @@ type ChainConfig struct {
 	IndexerPollIntervalSeconds uint64 `yaml:"indexer_poll_interval_seconds"`
 	// RPCURLs lists every RPC endpoint in the quorum; http(s), ws(s), and absolute IPC paths are supported.
 	RPCURLs []string `yaml:"rpc_urls"`
+	// LegacyTransactions forces type-0 (legacy) transactions on this chain even
+	// when it reports a base fee, for chains whose mempools drop EIP-1559
+	// transactions (for example a goat-geth regtest run with legacy tooling).
+	LegacyTransactions bool `yaml:"legacy_transactions"`
 	// TxRoles defines local send-time tx policies for worker submissions on this chain.
 	TxRoles ChainTxRolesConfig `yaml:"tx_roles"`
 }

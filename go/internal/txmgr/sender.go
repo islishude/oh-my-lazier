@@ -59,6 +59,10 @@ type ChainClient interface {
 type FeePolicy struct {
 	ConfiguredMaxFeePerGas         *big.Int
 	ConfiguredMaxPriorityFeePerGas *big.Int
+	// ForceLegacyTransactions quotes type-0 fees even when the chain reports
+	// a base fee: some mempools (goat-geth regtest) drop EIP-1559
+	// transactions, and a dropped worker write would stall the relay.
+	ForceLegacyTransactions bool
 }
 
 type feeQuote struct {
@@ -1183,7 +1187,7 @@ func quoteFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePolicy, c
 	if header == nil {
 		return feeQuote{}, errors.New("latest block header is required")
 	}
-	if header.BaseFee == nil {
+	if header.BaseFee == nil || policy.ForceLegacyTransactions {
 		return quoteLegacyFee(ctx, queued, policy, client)
 	}
 	return quoteDynamicFee(ctx, queued, policy, client, header.BaseFee)

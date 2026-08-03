@@ -1220,6 +1220,18 @@ func TestTransactionReceiptAtExcludesLaggingNegatives(t *testing.T) {
 	}
 }
 
+// testCodedRevertError is a data-carrying revert reported under an arbitrary
+// RPC error code (geth-family endpoints disagree on 3 vs -32000).
+type testCodedRevertError struct {
+	message string
+	code    int
+	data    any
+}
+
+func (e testCodedRevertError) Error() string  { return e.message }
+func (e testCodedRevertError) ErrorCode() int { return e.code }
+func (e testCodedRevertError) ErrorData() any { return e.data }
+
 type testRevertError struct {
 	message string
 	data    string
@@ -1347,6 +1359,42 @@ func TestCallContractMessageOnlyRevertMajorityWins(t *testing.T) {
 	var rpcErr rpc.Error
 	if !errors.As(err, &rpcErr) || !strings.Contains(strings.ToLower(rpcErr.Error()), "execution reverted") {
 		t.Fatalf("majority message-only revert lost its revert text: %v", err)
+	}
+}
+
+func TestCallContractDataLessCode3ReasonsDoNotMerge(t *testing.T) {
+	// Two data-less code-3 reverts with different reasons must not merge into
+	// a false revert majority over a successful answer: the identity is the
+	// normalized message, never the shared RPC code.
+	canonical := testHeaderAt(42, 0x01)
+	client := stateReadTestClient(t,
+		testEthService{header: canonical, callErr: testRPCError{message: "execution reverted: A", code: 3}},
+		testEthService{header: canonical, callErr: testRPCError{message: "execution reverted: B", code: 3}},
+		testEthService{header: canonical, callResult: []byte{0x01}},
+	)
+
+	_, err := client.CallContract(context.Background(), ethereum.CallMsg{}, big.NewInt(42))
+	if !IsStateReadConflict(err) {
+		t.Fatalf("CallContract() error = %v, want conflict (shared code 3 must not merge distinct reasons)", err)
+	}
+}
+
+func TestCallContractSameRevertDataMergesAcrossRPCCodes(t *testing.T) {
+	// The same canonical revert data reported under different RPC codes is one
+	// semantic answer and must reach the revert majority.
+	canonical := testHeaderAt(42, 0x01)
+	client := stateReadTestClient(t,
+		testEthService{header: canonical, callErr: testRevertError{message: "execution reverted: denied", data: "0x08c379a0"}},
+		testEthService{header: canonical, callErr: testCodedRevertError{message: "execution reverted: denied", code: -32000, data: "0x08c379a0"}},
+		testEthService{header: canonical, callResult: []byte{0x01}},
+	)
+
+	_, err := client.CallContract(context.Background(), ethereum.CallMsg{}, big.NewInt(42))
+	if err == nil {
+		t.Fatal("CallContract() error = nil, want the majority revert")
+	}
+	if IsStateReadConflict(err) || IsQuorumUnavailable(err) {
+		t.Fatalf("same revert data across rpc codes must merge into a revert majority, got %v", err)
 	}
 }
 

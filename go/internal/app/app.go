@@ -587,7 +587,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry, store *db
 	}
 	for _, configuredChain := range registry.All() {
 		if a.cfg.ExecutorEnabled() {
-			executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
+			executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei, configuredChain.LegacyTransactions)
 			if err != nil {
 				return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
 			}
@@ -605,7 +605,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry, store *db
 			if err != nil {
 				return nil, err
 			}
-			pricingPolicy, err := feePolicy(pricingChain.TxPolicy.MaxFeePerGasWei, pricingChain.TxPolicy.MaxPriorityFeePerGasWei)
+			pricingPolicy, err := feePolicy(pricingChain.TxPolicy.MaxFeePerGasWei, pricingChain.TxPolicy.MaxPriorityFeePerGasWei, configuredChain.LegacyTransactions)
 			if err != nil {
 				return nil, fmt.Errorf("chain %s pricing fee policy: %w", configuredChain.Name, err)
 			}
@@ -649,7 +649,7 @@ func (a *App) txTargets(ctx context.Context, registry *chain.Registry, store *db
 			if err != nil {
 				return nil, err
 			}
-			dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
+			dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei, dstChain.LegacyTransactions)
 			if err != nil {
 				return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
 			}
@@ -747,7 +747,7 @@ func loadKMSAWSConfig(ctx context.Context, cfg config.KMSSignerConfig) (aws.Conf
 	return awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(cfg.Region))
 }
 
-func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy, error) {
+func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string, legacyTransactions bool) (txmgr.FeePolicy, error) {
 	maxFeePerGas, err := bigutil.ParseDecimal("max_fee_per_gas_wei", maxFeePerGasWei)
 	if err != nil {
 		return txmgr.FeePolicy{}, err
@@ -762,6 +762,7 @@ func feePolicy(maxFeePerGasWei, maxPriorityFeePerGasWei string) (txmgr.FeePolicy
 	return txmgr.FeePolicy{
 		ConfiguredMaxFeePerGas:         maxFeePerGas,
 		ConfiguredMaxPriorityFeePerGas: maxPriorityFeePerGas,
+		ForceLegacyTransactions:        legacyTransactions,
 	}, nil
 }
 
@@ -770,7 +771,9 @@ func validateRuntimeFeePolicies(ctx context.Context, configuredChain chain.Chain
 	if err != nil {
 		return fmt.Errorf("read latest header for chain %s: %w", configuredChain.Name, err)
 	}
-	if header == nil || header.BaseFee == nil {
+	if header == nil || header.BaseFee == nil || configuredChain.LegacyTransactions {
+		// A legacy-forced chain never quotes dynamic fees, so it does not
+		// need a priority fee cap even when the header carries a base fee.
 		return nil
 	}
 	for purpose, policy := range policies {
@@ -787,6 +790,7 @@ func cloneFeePolicies(policies map[string]txmgr.FeePolicy) map[string]txmgr.FeeP
 		out[purpose] = txmgr.FeePolicy{
 			ConfiguredMaxFeePerGas:         bigutil.Clone(policy.ConfiguredMaxFeePerGas),
 			ConfiguredMaxPriorityFeePerGas: bigutil.Clone(policy.ConfiguredMaxPriorityFeePerGas),
+			ForceLegacyTransactions:        policy.ForceLegacyTransactions,
 		}
 	}
 	return out

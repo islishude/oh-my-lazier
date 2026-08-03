@@ -56,11 +56,10 @@ test("resolveRegtestDeployInput reads worker signers from keystores and rejects 
     JSON.stringify({ address: worker2.slice(2) })
   );
   const resolved = resolveRegtestDeployInput(
-    { tmpDir: directory },
+    { tmpDir: directory, confirmations: 2n },
     {
       REGTEST_A_HOST_RPC_URL: "http://127.0.0.1:38545",
       REGTEST_B_HOST_RPC_URL: "http://127.0.0.1:38546",
-      REGTEST_CONFIRMATIONS: "2",
     }
   );
   assert.equal(resolved.chains[0].name, "regtest-a");
@@ -79,6 +78,35 @@ test("resolveRegtestDeployInput reads worker signers from keystores and rejects 
   assert.throws(
     () => resolveRegtestDeployInput({ tmpDir: directory }, {}),
     /two distinct signer addresses/
+  );
+});
+
+test("regtest business settings live in the envelope, not the environment", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "oml-regtest-envelope-"));
+  writeFileSync(
+    path.join(directory, "worker-1-keystore.json"),
+    JSON.stringify({ address: worker1.slice(2) })
+  );
+  writeFileSync(
+    path.join(directory, "worker-2-keystore.json"),
+    JSON.stringify({ address: worker2.slice(2) })
+  );
+  // Ambient variables must not change the reviewed deployment.
+  const resolved = resolveRegtestDeployInput(
+    { tmpDir: directory, dvnMode: "shadow", initialSupply: 5n },
+    {
+      REGTEST_CONFIRMATIONS: "9",
+      REGTEST_INITIAL_SUPPLY: "7",
+      REGTEST_DVN_MODE: "active",
+    }
+  );
+  assert.equal(resolved.confirmations, 1n);
+  assert.equal(resolved.initialSupply, 5n);
+  assert.equal(resolved.dvnMode, "shadow");
+  assert.throws(
+    () =>
+      resolveRegtestDeployInput({ tmpDir: directory, confirmations: 0n }, {}),
+    /confirmations must be at least 1/
   );
 });
 
@@ -200,6 +228,32 @@ test("regtest worker configs split executor and DVN roles across workers", () =>
     assert.ok(config.includes(deployment.chains.a.secondaryOpenDVN));
   }
   assert.ok(config2.includes("postgres://laz_worker:laz_worker@postgres"));
+  // Without a pinned gas price the worker keeps default (EIP-1559) fees.
+  assert.ok(!config1.includes("legacy_transactions"));
+});
+
+test("a gas-price-pinned chain renders legacy_transactions for the workers", () => {
+  const deployment = regtestDeployment();
+  deployment.chains.b = { ...deployment.chains.b, gasPrice: 1_000_000_000n };
+  const [workerSpec1] = workers();
+  const config = regtestWorkerConfig(
+    deployment,
+    { keystorePasswordEnv: "REGTEST_KEYSTORE_PASSWORD", dvnMode: "active" },
+    workerSpec1,
+    "host"
+  );
+  // Only the pinned chain forces legacy transactions; the worker must send
+  // type-0 there too or its DVN/executor writes can be dropped.
+  const chainBlocks = config.split("  - eid: ");
+  const chainA = chainBlocks.find((block) =>
+    block.startsWith(`${deployment.chains.a.eid}`)
+  );
+  const chainB = chainBlocks.find((block) =>
+    block.startsWith(`${deployment.chains.b.eid}`)
+  );
+  assert.ok(chainA !== undefined && chainB !== undefined);
+  assert.ok(!chainA.includes("legacy_transactions"));
+  assert.match(chainB, /legacy_transactions: true/);
 });
 
 test("regtest deployment validation round-trips and send plans stay strict", () => {

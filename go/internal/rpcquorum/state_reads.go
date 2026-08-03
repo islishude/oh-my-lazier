@@ -138,18 +138,23 @@ func revertMessageIdentity(err error) (string, bool) {
 	return message, true
 }
 
-// revertFingerprint keys a deterministic revert: code-3 or data-carrying
-// reverts by RPC code plus canonical revert data, message-only reverts by
-// normalized text so a majority agreeing on the same revert reason still wins
-// the vote instead of degrading to quorum-unavailable.
+// revertFingerprint keys a deterministic revert by what the EVM actually
+// returned: canonical revert data when present, the normalized provider
+// message otherwise. The RPC error code is deliberately excluded from the
+// identity — providers report semantically identical reverts under different
+// codes (3 vs -32000), and a shared code with no data must never merge
+// distinct revert reasons into a false majority.
 func revertFingerprint(err error) string {
-	code, data := deterministicRevertIdentity(err)
-	if code != 3 && data == "" {
-		if message, ok := revertMessageIdentity(err); ok {
-			return "rm:" + message
-		}
+	if _, data := deterministicRevertIdentity(err); data != "" {
+		return "rd:" + data
 	}
-	return fmt.Sprintf("r:%d:%s", code, data)
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		return "rm:" + strings.ToLower(strings.TrimSpace(rpcErr.Error()))
+	}
+	// Not reachable for probes admitted by isDeterministicRevert; the wrapped
+	// message includes the provider index, so unknown shapes never merge.
+	return "rm:" + strings.ToLower(strings.TrimSpace(err.Error()))
 }
 
 // voteStateRead runs one comparable-result vote across every configured

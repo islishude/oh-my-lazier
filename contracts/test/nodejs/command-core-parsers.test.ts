@@ -351,7 +351,37 @@ test("canary and price check parsers preserve optional evidence and decimal valu
 test("regtest command parsers are strict", () => {
   assert.deepEqual(
     parseRegtestDeployCommandInput({ tmpDir: "tmp/regtest" }, "input"),
-    { tmpDir: "tmp/regtest" }
+    {
+      tmpDir: "tmp/regtest",
+      confirmations: undefined,
+      initialSupply: undefined,
+      dvnMode: undefined,
+    }
+  );
+  assert.deepEqual(
+    parseRegtestDeployCommandInput(
+      {
+        tmpDir: "tmp/regtest",
+        confirmations: "2",
+        initialSupply: "1000000",
+        dvnMode: "shadow",
+      },
+      "input"
+    ),
+    {
+      tmpDir: "tmp/regtest",
+      confirmations: 2n,
+      initialSupply: 1_000_000n,
+      dvnMode: "shadow",
+    }
+  );
+  assert.throws(
+    () =>
+      parseRegtestDeployCommandInput(
+        { tmpDir: "tmp/regtest", dvnMode: "off" },
+        "input"
+      ),
+    /input\.dvnMode/
   );
   assert.deepEqual(
     parseRegtestSendCommandInput(
