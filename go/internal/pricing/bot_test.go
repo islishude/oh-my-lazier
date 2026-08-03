@@ -3,6 +3,7 @@ package pricing
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -617,9 +618,13 @@ func (g fixedGas) SuggestGasPrice(context.Context) (*big.Int, error) {
 
 type mutableGas struct {
 	price *big.Int
+	err   error
 }
 
 func (g *mutableGas) SuggestGasPrice(context.Context) (*big.Int, error) {
+	if g.err != nil {
+		return nil, g.err
+	}
 	return new(big.Int).Set(g.price), nil
 }
 
@@ -1128,5 +1133,211 @@ func TestBotEnqueueOnGasSpikeForcesEvaluationAfterFastTerminalization(t *testing
 	}
 	if store.enqueueCalls <= seedCalls {
 		t.Fatalf("enqueue calls = %d, want a forced evaluation beyond the seed %d", store.enqueueCalls, seedCalls)
+	}
+}
+
+type blockingGas struct{}
+
+func (blockingGas) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type erroringGas struct{}
+
+func (erroringGas) SuggestGasPrice(context.Context) (*big.Int, error) {
+	return nil, errors.New("gas provider unavailable")
+}
+
+func TestBotEnqueueOnceBoundsBlackHoledChainReads(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	settings := testSettings()
+	settings.SourceRequestTimeout = 100 * time.Millisecond
+	sources := testSources()
+	sources[40449] = ChainSources{
+		Primary:           testConfiguredPrice("primary", big.NewRat(1000, 1)),
+		Gas:               blockingGas{},
+		DataFeePerByteWei: big.NewInt(0),
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, []config.PathwayConfig{pathways[0]}), settings, sources, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	// A black-holed gas provider must delay one bounded read, not hang the
+	// whole pricing loop with no supervisor recourse.
+	started := time.Now()
+	err = bot.EnqueueOnce(context.Background())
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("EnqueueOnce() error = nil, want bounded chain-read failure")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("EnqueueOnce() took %s, want bounded by the per-read deadline", elapsed)
+	}
+	if len(store.requests) != 0 {
+		t.Fatalf("stored requests = %d, want 0", len(store.requests))
+	}
+}
+
+func TestBotEnqueueOnceIsolatesFailingChainFromOtherFeeds(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	logger, logs := captureLogger(slog.LevelWarn)
+	sources := testSources()
+	// Pathway 40161->40449 needs 40449 gas (fails); pathway 40449->40161 needs
+	// 40161 gas (healthy) and both native prices.
+	sources[40449] = ChainSources{
+		Primary:           testConfiguredPrice("primary", big.NewRat(1000, 1)),
+		Gas:               erroringGas{},
+		DataFeePerByteWei: big.NewInt(0),
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, pathways), testSettings(), sources, emptySnapshotReader{}, logger)
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v, want partial success without error", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("stored requests = %d, want the healthy feed's write only", len(store.requests))
+	}
+	assertLogContains(t, logs.String(),
+		`msg="price update batch failed; continuing with remaining feeds"`,
+	)
+}
+
+func TestBotEnqueueOnceReturnsErrorWhenEveryFeedFails(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	sources := testSources()
+	sources[40449] = ChainSources{
+		Primary:           testConfiguredPrice("primary", big.NewRat(1000, 1)),
+		Gas:               erroringGas{},
+		DataFeePerByteWei: big.NewInt(0),
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, []config.PathwayConfig{pathways[0]}), testSettings(), sources, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	if err := bot.EnqueueOnce(context.Background()); err == nil {
+		t.Fatal("EnqueueOnce() error = nil, want total-failure error")
+	}
+	if len(store.requests) != 0 {
+		t.Fatalf("stored requests = %d, want 0", len(store.requests))
+	}
+}
+
+func TestBotEnqueueOnceMemoizesMarketReadsAcrossFeeds(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	price161 := &countingPrice{source: "counting", price: big.NewRat(2000, 1), observedAt: time.Unix(1_700_000_000, 0)}
+	price449 := &countingPrice{source: "counting", price: big.NewRat(1000, 1), observedAt: time.Unix(1_700_000_000, 0)}
+	sources := map[uint32]ChainSources{
+		40161: {
+			Primary:           ConfiguredPriceReader{Name: "counting", Reader: price161, MaxAge: time.Minute},
+			Gas:               fixedGas{price: big.NewInt(1_000_000_000)},
+			DataFeePerByteWei: big.NewInt(0),
+		},
+		40449: {
+			Primary:           ConfiguredPriceReader{Name: "counting", Reader: price449, MaxAge: time.Minute},
+			Gas:               fixedGas{price: big.NewInt(2_000_000_000)},
+			DataFeePerByteWei: big.NewInt(0),
+		},
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, pathways), testSettings(), sources, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	// Two feed batches share both chains; the memoizing cycle must ask each
+	// chain's market source exactly once.
+	if err := bot.EnqueueOnce(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnce() error = %v", err)
+	}
+	if len(store.requests) != 2 {
+		t.Fatalf("stored requests = %d, want 2", len(store.requests))
+	}
+	if price161.count.Load() != 1 || price449.count.Load() != 1 {
+		t.Fatalf("market calls = %d/%d, want exactly one per chain", price161.count.Load(), price449.count.Load())
+	}
+}
+
+func TestBotEnqueueOnGasSpikeCarriesDrainMarkerAcrossFailedGasRead(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	gas := &mutableGas{price: big.NewInt(2_300_000_000)}
+	sources := testSources()
+	sources[40449] = ChainSources{
+		Primary:           testConfiguredPrice("primary", big.NewRat(1000, 1)),
+		Gas:               gas,
+		DataFeePerByteWei: big.NewInt(0),
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, []config.PathwayConfig{pathways[0]}), testSettings(), sources, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	// The feed was pending-observed; the pending row drains, but the first
+	// check after the drain fails its gas read. The marker must survive.
+	bot.pendingFeeds = map[string]struct{}{pendingFeedKey(40161, pathways[0].SourceWorkers.PriceFeed.Common()): {}}
+	gas.err = errors.New("gas provider unavailable")
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike(failed gas) error = %v", err)
+	}
+	if store.enqueueCalls != 0 {
+		t.Fatalf("enqueue calls during failed gas read = %d, want 0", store.enqueueCalls)
+	}
+
+	// Gas recovers flat: the carried marker still forces the evaluation.
+	gas.err = nil
+	if err := bot.EnqueueOnGasSpike(context.Background()); err != nil {
+		t.Fatalf("EnqueueOnGasSpike(recovered) error = %v", err)
+	}
+	if len(store.requests) != 1 {
+		t.Fatalf("stored requests = %d, want the forced post-drain write", len(store.requests))
+	}
+}
+
+type cancellingGas struct {
+	cancel context.CancelFunc
+}
+
+func (g cancellingGas) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
+	g.cancel()
+	return nil, context.Canceled
+}
+
+func TestBotEnqueueOncePropagatesCancellationAfterPartialSuccess(t *testing.T) {
+	pathways := testPathways()
+	store := &fakeStore{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sources := testSources()
+	// Pathway 40449->40161 (healthy) enqueues first or second depending on
+	// batch order; the other batch's gas read cancels the caller context.
+	sources[40449] = ChainSources{
+		Primary:           testConfiguredPrice("primary", big.NewRat(1000, 1)),
+		Gas:               cancellingGas{cancel: cancel},
+		DataFeePerByteWei: big.NewInt(0),
+	}
+	bot, err := NewWithDependencies(store, testRegistryWithPathways(t, pathways), testSettings(), sources, emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	bot.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
+
+	// Whatever the batch order, a canceled caller context must surface as an
+	// error even when another feed batch already succeeded.
+	if err := bot.EnqueueOnce(ctx); err == nil {
+		t.Fatal("EnqueueOnce() error = nil, want propagated cancellation")
 	}
 }

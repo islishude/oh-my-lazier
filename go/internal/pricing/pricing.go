@@ -381,10 +381,14 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 		b.logger.Debug("skipped price update batch", "reason", "all_updates_pending")
 		return nil
 	}
-	cycle, err := b.preparePriceCycle(ctx, updates, nil)
-	if err != nil {
-		return err
-	}
+	// Each (srcEID, priceFeed) batch is evaluated independently: one chain's
+	// failing RPC or market source skips only the feeds that need it this
+	// cycle, and the memoizing cycle asks each chain exactly once so isolation
+	// cannot multiply market-source calls. The cycle only fails as a whole
+	// when every batch failed.
+	cycle := b.newPriceCycle(nil)
+	var batchErrs []error
+	succeeded := 0
 	for _, batch := range priceUpdateBatches(updates) {
 		_, _, err := b.enqueuePriceUpdateBatch(ctx, batch, cycle)
 		if errors.Is(err, errPendingRaceLost) {
@@ -393,11 +397,23 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 			// post-drain forced evaluation still happens for destinations the
 			// winner's batch did not carry.
 			b.rememberPendingFeed(batch.SrcEID, batch.PriceFeed)
+			succeeded++
 			continue
 		}
 		if err != nil {
-			return err
+			// Caller cancellation is never feed-local: an interrupted one-shot
+			// must not report success after skipping remaining feeds.
+			if ctx.Err() != nil {
+				return errors.Join(append(batchErrs, ctx.Err())...)
+			}
+			b.logger.Warn("price update batch failed; continuing with remaining feeds", "src_eid", batch.SrcEID, "price_feed", batch.PriceFeed, "error", err.Error())
+			batchErrs = append(batchErrs, fmt.Errorf("feed %d:%s: %w", batch.SrcEID, batch.PriceFeed, err))
+			continue
 		}
+		succeeded++
+	}
+	if len(batchErrs) > 0 && succeeded == 0 {
+		return errors.Join(batchErrs...)
 	}
 	return nil
 }
@@ -418,10 +434,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		b.logger.Debug("skipped price gas-spike check", "reason", "no_pathways")
 		return nil
 	}
-	gasPrices, err := b.readDestinationGasPrices(ctx, updates)
-	if err != nil {
-		return err
-	}
+	gasPrices := b.readDestinationGasPrices(ctx, updates)
 	// The pending set is loaded before baseline seeding: keys gated by a
 	// pending row are neither seeded nor evaluated (no source quota), and a
 	// feed observed pending on the previous check that has now drained gets a
@@ -433,10 +446,21 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		return err
 	}
 	spikes := make([]pricedGasSpike, 0, len(updates))
+	previousPending := b.pendingFeeds
+	carriedMarkers := make(map[string]struct{})
 	for _, update := range updates {
 		key := priceUpdateKey(update)
 		feedKey := pendingFeedKey(update.SrcEID, update.PriceFeed)
 		current := gasPrices[update.DstEID]
+		if current == nil {
+			// The key was not evaluated at all: keep any pending-observed
+			// marker alive so the post-drain forced evaluation survives the
+			// failed gas read instead of being consumed unseen.
+			if _, ok := previousPending[feedKey]; ok {
+				carriedMarkers[feedKey] = struct{}{}
+			}
+			continue
+		}
 		if _, isPending := pending[feedKey]; isPending {
 			b.logger.Debug("skipped gas-spike update", "reason", "pending", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "price_feed", update.PriceFeed)
 			continue
@@ -460,15 +484,20 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 		})
 	}
 	b.pendingFeeds = pending
+	if len(carriedMarkers) > 0 && b.pendingFeeds == nil {
+		b.pendingFeeds = make(map[string]struct{})
+	}
+	for feedKey := range carriedMarkers {
+		b.pendingFeeds[feedKey] = struct{}{}
+	}
 	if len(spikes) > 0 {
 		b.cycleWritten = make(map[string]cycleWrittenState)
 	}
 	selectedUpdates := spikeUpdates(spikes)
-	cycle, err := b.preparePriceCycle(ctx, selectedUpdates, gasPrices)
-	if err != nil {
-		return err
-	}
+	cycle := b.newPriceCycle(gasPrices)
 	raceLostFeeds := make(map[string]struct{})
+	failedFeeds := make(map[string]struct{})
+	var batchErrs []error
 	for _, batch := range priceUpdateBatches(selectedUpdates) {
 		txOutboxID, enqueued, err := b.enqueuePriceUpdateBatch(ctx, batch, cycle)
 		if errors.Is(err, errPendingRaceLost) {
@@ -479,7 +508,15 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return errors.Join(append(batchErrs, ctx.Err())...)
+			}
+			// A failed feed keeps its spike baselines so the spike re-fires
+			// on the next check instead of waiting for a further rise.
+			b.logger.Warn("gas-spike batch failed; continuing with remaining feeds", "src_eid", batch.SrcEID, "price_feed", batch.PriceFeed, "error", err.Error())
+			failedFeeds[pendingFeedKey(batch.SrcEID, batch.PriceFeed)] = struct{}{}
+			batchErrs = append(batchErrs, fmt.Errorf("feed %d:%s: %w", batch.SrcEID, batch.PriceFeed, err))
+			continue
 		}
 		if txOutboxID == 0 {
 			// Nothing was enqueued: the chain is paused/disabled, or every
@@ -505,10 +542,17 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	// these destinations, so their baselines stay put and the spike re-evaluates
 	// once the pending row resolves.
 	for _, selected := range spikes {
-		if _, ok := raceLostFeeds[pendingFeedKey(selected.update.SrcEID, selected.update.PriceFeed)]; ok {
+		feedKey := pendingFeedKey(selected.update.SrcEID, selected.update.PriceFeed)
+		if _, ok := raceLostFeeds[feedKey]; ok {
+			continue
+		}
+		if _, ok := failedFeeds[feedKey]; ok {
 			continue
 		}
 		b.lastGasPrices[priceUpdateKey(selected.update)] = bigutil.Clone(selected.current)
+	}
+	if len(batchErrs) > 0 && len(batchErrs) == len(priceUpdateBatches(selectedUpdates)) {
+		return errors.Join(batchErrs...)
 	}
 	return nil
 }
@@ -531,9 +575,58 @@ type pricedUpdateBatch struct {
 	Targets   []pricedUpdate
 }
 
-type priceCycleInputs struct {
-	nativeUSD map[uint32]*big.Rat
-	gasWei    map[uint32]*big.Int
+// priceCycle lazily resolves and memoizes per-chain market and gas inputs for
+// one evaluation cycle. Failures are memoized too, so per-feed isolation never
+// multiplies market-source calls: a failing chain is asked exactly once per
+// cycle no matter how many feed batches reference it.
+type priceCycle struct {
+	bot       *Bot
+	nativeUSD map[uint32]nativeUSDResult
+	gasWei    map[uint32]gasPriceResult
+}
+
+type nativeUSDResult struct {
+	price *big.Rat
+	err   error
+}
+
+type gasPriceResult struct {
+	price *big.Int
+	err   error
+}
+
+func (b *Bot) newPriceCycle(knownGas map[uint32]*big.Int) *priceCycle {
+	cycle := &priceCycle{bot: b, nativeUSD: make(map[uint32]nativeUSDResult), gasWei: make(map[uint32]gasPriceResult)}
+	for eid, gas := range knownGas {
+		if gas != nil {
+			cycle.gasWei[eid] = gasPriceResult{price: bigutil.Clone(gas)}
+		}
+	}
+	return cycle
+}
+
+func (c *priceCycle) nativePrice(ctx context.Context, eid uint32) (*big.Rat, error) {
+	if result, ok := c.nativeUSD[eid]; ok {
+		return result.price, result.err
+	}
+	policy := PriceSelectionPolicy{
+		MaxDeviationBps:      c.bot.settings.MaxDeviation,
+		SourceRequestTimeout: c.bot.settings.SourceRequestTimeout,
+		Now:                  c.bot.now,
+		OnSourceFailure:      c.bot.logSourceFailure,
+	}
+	price, err := ChainNativePrice(ctx, c.bot.sources, eid, policy)
+	c.nativeUSD[eid] = nativeUSDResult{price: price, err: err}
+	return price, err
+}
+
+func (c *priceCycle) gasPrice(ctx context.Context, eid uint32) (*big.Int, error) {
+	if result, ok := c.gasWei[eid]; ok {
+		return result.price, result.err
+	}
+	price, err := c.bot.currentDstGasPrice(ctx, eid)
+	c.gasWei[eid] = gasPriceResult{price: price, err: err}
+	return price, err
 }
 
 type writtenPrice struct {
@@ -541,7 +634,7 @@ type writtenPrice struct {
 	writtenAt time.Time
 }
 
-func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBatch, cycle priceCycleInputs) (int64, []pricedUpdate, error) {
+func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBatch, cycle *priceCycle) (int64, []pricedUpdate, error) {
 	srcChain, err := b.registry.Get(batch.SrcEID)
 	if err != nil {
 		return 0, nil, err
@@ -556,13 +649,13 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 		if err != nil {
 			return 0, nil, err
 		}
-		srcPrice, dstPrice, err := b.cyclePathwayPrices(cycle, target.SrcEID, target.DstEID)
+		srcPrice, dstPrice, err := b.cyclePathwayPrices(ctx, cycle, target.SrcEID, target.DstEID)
 		if err != nil {
 			return 0, nil, err
 		}
-		dstGasPrice := cycle.gasWei[target.DstEID]
-		if dstGasPrice == nil || dstGasPrice.Sign() <= 0 {
-			return 0, nil, fmt.Errorf("pricing gas source for chain %d is missing from prepared cycle", target.DstEID)
+		dstGasPrice, err := cycle.gasPrice(ctx, target.DstEID)
+		if err != nil {
+			return 0, nil, err
 		}
 		dstDataFeePerByte, err := b.currentDstDataFeePerByte(target.DstEID)
 		if err != nil {
@@ -671,7 +764,9 @@ func (b *Bot) loadWrittenPrice(ctx context.Context, update pricedUpdate) (writte
 	if state, ok := b.cycleWritten[key]; ok {
 		return state.previous, state.exists, nil
 	}
-	snapshot, err := b.snapshots.PriceSnapshot(ctx, update.SrcEID, update.PriceFeed, update.DstEID)
+	readCtx, cancel := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
+	defer cancel()
+	snapshot, err := b.snapshots.PriceSnapshot(readCtx, update.SrcEID, update.PriceFeed, update.DstEID)
 	if err != nil {
 		return writtenPrice{}, false, err
 	}
@@ -701,52 +796,6 @@ func (b *Bot) loadWrittenPrice(ctx context.Context, update pricedUpdate) (writte
 	return previous, true, nil
 }
 
-func (b *Bot) preparePriceCycle(ctx context.Context, updates []pricedUpdate, knownGas map[uint32]*big.Int) (priceCycleInputs, error) {
-	cycle := priceCycleInputs{nativeUSD: make(map[uint32]*big.Rat), gasWei: make(map[uint32]*big.Int)}
-	if len(updates) == 0 {
-		return cycle, nil
-	}
-	priceEIDs := make(map[uint32]struct{})
-	gasEIDs := make(map[uint32]struct{})
-	for _, update := range updates {
-		src, srcOK := b.sources[update.SrcEID]
-		dst, dstOK := b.sources[update.DstEID]
-		if !srcOK || !dstOK {
-			return priceCycleInputs{}, fmt.Errorf("pricing sources for pathway %d -> %d are not configured", update.SrcEID, update.DstEID)
-		}
-		if src.NativeAssetID == "" || src.NativeAssetID != dst.NativeAssetID {
-			priceEIDs[update.SrcEID] = struct{}{}
-			priceEIDs[update.DstEID] = struct{}{}
-		}
-		gasEIDs[update.DstEID] = struct{}{}
-	}
-	policy := PriceSelectionPolicy{
-		MaxDeviationBps:      b.settings.MaxDeviation,
-		SourceRequestTimeout: b.settings.SourceRequestTimeout,
-		Now:                  b.now,
-		OnSourceFailure:      b.logSourceFailure,
-	}
-	for eid := range priceEIDs {
-		price, err := ChainNativePrice(ctx, b.sources, eid, policy)
-		if err != nil {
-			return priceCycleInputs{}, err
-		}
-		cycle.nativeUSD[eid] = price
-	}
-	for eid := range gasEIDs {
-		if gas := knownGas[eid]; gas != nil {
-			cycle.gasWei[eid] = bigutil.Clone(gas)
-			continue
-		}
-		gas, err := b.currentDstGasPrice(ctx, eid)
-		if err != nil {
-			return priceCycleInputs{}, err
-		}
-		cycle.gasWei[eid] = gas
-	}
-	return cycle, nil
-}
-
 func (b *Bot) logSourceFailure(failure PriceSourceFailure) {
 	attributes := []any{
 		"eid", failure.EID,
@@ -763,7 +812,7 @@ func (b *Bot) logSourceFailure(failure PriceSourceFailure) {
 	b.logger.Warn("price source rejected", attributes...)
 }
 
-func (b *Bot) cyclePathwayPrices(cycle priceCycleInputs, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
+func (b *Bot) cyclePathwayPrices(ctx context.Context, cycle *priceCycle, srcEID, dstEID uint32) (*big.Rat, *big.Rat, error) {
 	src, srcOK := b.sources[srcEID]
 	dst, dstOK := b.sources[dstEID]
 	if !srcOK || !dstOK {
@@ -772,26 +821,39 @@ func (b *Bot) cyclePathwayPrices(cycle priceCycleInputs, srcEID, dstEID uint32) 
 	if src.NativeAssetID != "" && src.NativeAssetID == dst.NativeAssetID {
 		return big.NewRat(1, 1), big.NewRat(1, 1), nil
 	}
-	srcPrice, dstPrice := cycle.nativeUSD[srcEID], cycle.nativeUSD[dstEID]
-	if srcPrice == nil || dstPrice == nil {
-		return nil, nil, fmt.Errorf("pricing market inputs for pathway %d -> %d are missing from prepared cycle", srcEID, dstEID)
+	srcPrice, err := cycle.nativePrice(ctx, srcEID)
+	if err != nil {
+		return nil, nil, err
+	}
+	dstPrice, err := cycle.nativePrice(ctx, dstEID)
+	if err != nil {
+		return nil, nil, err
 	}
 	return bigutil.CloneRat(srcPrice), bigutil.CloneRat(dstPrice), nil
 }
 
-func (b *Bot) readDestinationGasPrices(ctx context.Context, updates []pricedUpdate) (map[uint32]*big.Int, error) {
+// readDestinationGasPrices reads each destination chain's gas price once,
+// skipping chains whose read fails (with a warning): a single failing chain
+// must not stop the spike check for every other chain.
+func (b *Bot) readDestinationGasPrices(ctx context.Context, updates []pricedUpdate) map[uint32]*big.Int {
 	prices := make(map[uint32]*big.Int)
+	failed := make(map[uint32]struct{})
 	for _, update := range updates {
 		if prices[update.DstEID] != nil {
 			continue
 		}
+		if _, ok := failed[update.DstEID]; ok {
+			continue
+		}
 		price, err := b.currentDstGasPrice(ctx, update.DstEID)
 		if err != nil {
-			return nil, err
+			b.logger.Warn("failed destination gas read; skipping its pathways this check", "dst_eid", update.DstEID, "error", err.Error())
+			failed[update.DstEID] = struct{}{}
+			continue
 		}
 		prices[update.DstEID] = price
 	}
-	return prices, nil
+	return prices
 }
 
 func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, error) {
@@ -799,7 +861,11 @@ func (b *Bot) currentDstGasPrice(ctx context.Context, dstEID uint32) (*big.Int, 
 	if !ok || dstSources.Gas == nil {
 		return nil, fmt.Errorf("pricing gas source for chain %d is not configured", dstEID)
 	}
-	dstGasPrice, err := dstSources.Gas.SuggestGasPrice(ctx)
+	// Every chain read carries its own deadline: a black-holed provider must
+	// delay one read, not freeze the whole pricing loop.
+	readCtx, cancel := context.WithTimeout(ctx, b.settings.SourceRequestTimeout)
+	defer cancel()
+	dstGasPrice, err := dstSources.Gas.SuggestGasPrice(readCtx)
 	if err != nil {
 		return nil, err
 	}
