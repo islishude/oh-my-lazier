@@ -1,0 +1,7 @@
+{
+  "input": {
+    "tmpDir": "tmp/regtest"
+  },
+  "apply": true,
+  "confirmation": "approved"
+}

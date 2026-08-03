@@ -4,14 +4,22 @@
 #   worker-2 = secondary OpenDVN  (the worker hard-requires >=2 required DVNs,
 #              and each worker process verifies exactly one DVN)
 #
-# Prereqs produced by `npm run regtest:deploy` (contracts/scripts/regtest-deploy.ts):
+# SINGLE TRUST DOMAIN: one deployer owns everything and both DVNs share one
+# OpenPriceFeed and one local infrastructure. This stack only exercises the
+# 2-of-2 required-DVN protocol flow; it proves nothing about operational, key,
+# price-source, or infrastructure independence and must not be copied as a
+# production topology.
+#
+# Prereqs: generate tmp/regtest/worker-{1,2}-keystore.json with
+# go/cmd/e2ekeystore, then run the regtest:deploy command
+# (contracts/scripts/commands/regtest-deploy.ts):
+#   OML_SCRIPT_PARAMS=config/scripts/regtest-deploy.json #   OML_IGNITION_DIR=tmp/regtest/ignition #   REGTEST_DEPLOYER_PRIVATE_KEY=... npm run regtest:deploy
+# It emits:
 #   ./tmp/regtest/worker-1.container.yaml
 #   ./tmp/regtest/worker-2.container.yaml
-#   ./tmp/regtest/worker-1-keystore.json
-#   ./tmp/regtest/worker-2-keystore.json
 #
-# The two workers must reach BOTH EVM chains. Set the container RPC URLs when you
-# run regtest-deploy so they resolve on `goat_network`:
+# The two workers must reach BOTH EVM chains. Set the container RPC URLs when
+# you run regtest:deploy so they resolve on `goat_network`:
 #   REGTEST_A_CONTAINER_RPC_URL=http://<chain-A-anvil-container>:8545
 #   REGTEST_B_CONTAINER_RPC_URL=http://goat-regtest-geth-node:8545   # goat-geth container_name
 #

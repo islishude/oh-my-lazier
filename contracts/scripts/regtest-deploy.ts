@@ -1,89 +1,79 @@
-// regtest-deploy.ts
-//
 // Deploys the GOATED LayerZero bridge on a LOCAL regtest across two EVM chains
-// and emits self-contained oh-my-lazier worker configs. Chain A is the source
-// (holds the OFT initial supply); chain B is the destination (e.g. goat-geth).
+// (chain A anvil, chain B e.g. goat-geth) and emits self-contained
+// oh-my-lazier worker configs for an AUTONOMOUS two-worker relay:
 //
-// Topology (mirrors the tested e2e-local-deploy, adapted for goat-geth + an
-// AUTONOMOUS worker-only relay):
-//   * OApp = oh-my-lazier's TestOFT used as "GOATED" (mirrors testnet3): premint
-//     on A, 0 on B, transfer A->B.
-//   * TWO required DVNs per pathway (primary + secondary OpenDVN). The
-//     oh-my-lazier worker HARD-REQUIRES >=2 required DVNs at runtime
-//     (go/internal/dvn/dvn.go) and each worker process verifies exactly ONE DVN,
-//     so an autonomous relay runs TWO worker instances:
-//       worker 1: OpenExecutor + primary OpenDVN   (signer = worker1 key)
-//       worker 2: secondary OpenDVN only           (signer = worker2 key)
-//     Each worker uses its OWN database. The executor waits for BOTH on-chain
-//     DVN verifications (read from chain state) before delivering, so the two
-//     workers coordinate purely through on-chain state.
-//   * keystore-only signers (no localstack/KMS). Fully env-driven so chain B can
-//     point at goat-geth's RPC/chainId.
+//   worker 1: OpenExecutor + primary OpenDVN   (signer = worker-1 keystore)
+//   worker 2: secondary OpenDVN only           (signer = worker-2 keystore)
 //
-// Emits into $REGTEST_TMP_DIR (default tmp/regtest):
-//   deployments.json          -- all addresses + params
-//   worker-1.yaml / worker-1.container.yaml   (executor + primary DVN)
-//   worker-2.yaml / worker-2.container.yaml   (secondary DVN)
+// Each worker uses its own database and verifies exactly one DVN; the executor
+// waits for both on-chain DVN verifications, so the workers coordinate purely
+// through on-chain state.
 //
-// Env (all optional; defaults shown):
-//   REGTEST_TMP_DIR=tmp/regtest
-//   REGTEST_DEPLOYER_PRIVATE_KEY=0xac0974...   (anvil[0]; MUST be funded on BOTH chains)
-//   REGTEST_WORKER1_PRIVATE_KEY=0x59c6995e...  (anvil[1]; executor + primary DVN; funded on BOTH chains)
-//   REGTEST_WORKER2_PRIVATE_KEY=0x5de4111a...  (anvil[2]; secondary DVN; funded on BOTH chains)
-//   REGTEST_CONFIRMATIONS=1
-//   REGTEST_INITIAL_SUPPLY=1000000000000000000000000  (1_000_000e18)
-//   REGTEST_DVN_MODE=active
-//   REGTEST_METRICS_ADDR_1=:9090   REGTEST_METRICS_ADDR_2=:9091
-//   REGTEST_KEYSTORE_PASSWORD_ENV=REGTEST_KEYSTORE_PASSWORD
-//   REGTEST_KEYSTORE1_PATH / REGTEST_KEYSTORE2_PATH (host keystore JSON paths)
-//   REGTEST_KEYSTORE1_CONTAINER_PATH / REGTEST_KEYSTORE2_CONTAINER_PATH
-//   REGTEST_HOST_DATABASE_URL_1 / REGTEST_HOST_DATABASE_URL_2
-//   REGTEST_CONTAINER_DATABASE_URL_1 / REGTEST_CONTAINER_DATABASE_URL_2
-//   Chain A: REGTEST_A_EID=90101 REGTEST_A_CHAIN_ID=31337 REGTEST_A_NAME=evm-regtest-a
-//            REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 REGTEST_A_CONTAINER_RPC_URL=http://anvil-a:8545
-//   Chain B: REGTEST_B_EID=90102 REGTEST_B_CHAIN_ID=31338 REGTEST_B_NAME=goat-regtest-b
-//            REGTEST_B_HOST_RPC_URL=http://127.0.0.1:18546 REGTEST_B_CONTAINER_RPC_URL=http://goat-geth:8545
+// SINGLE TRUST DOMAIN: one deployer owns everything and both DVNs share one
+// OpenPriceFeed and one local infrastructure. This layout only exercises the
+// 2-of-2 required-DVN protocol flow; it proves nothing about operational,
+// key, price-source, or infrastructure independence and must not be copied as
+// a production topology.
+//
+// Emits into tmpDir: deployments.json plus worker-1/worker-2 host and
+// container YAML configs. Worker keystores (worker-<n>-keystore.json) must
+// exist in tmpDir before deploying; generate them with go/cmd/e2ekeystore.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { HardhatRuntimeEnvironment } from "hardhat/types/hre";
+import { getAddress, type Address } from "viem";
+import LocalE2EChainModule from "../ignition/modules/LocalE2EChain.js";
+import LocalE2EPathwayModule from "../ignition/modules/LocalE2EPathway.js";
 import {
-  createPublicClient,
-  createWalletClient,
-  defineChain,
-  getAddress,
-  http,
-  type Abi,
-  type Address,
-  type Hex,
-  type PublicClient,
-  type WalletClient,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+  type ApplyGate,
+  type WriteNetworkContext,
+  withWriteConnection,
+} from "./command-harness.js";
 import {
   CONFIG_TYPE_EXECUTOR,
   CONFIG_TYPE_ULN,
   encodeExecutorConfig,
   encodeUlnConfig,
   requiredDVNsConfig,
-  type UlnConfig,
 } from "./lz-config.js";
-import { addressToBytes32, jsonStringify, loadArtifact } from "./lib.js";
-import { optionalEnv, waitForContract } from "./regtest-lib.js";
+import { addressToBytes32, jsonStringify } from "./lib.js";
+import { buildLzReceiveOption } from "./oft-canary.js";
+import { withIgnitionUiOnStderr } from "./ignition-ui-output.js";
+import {
+  deployedAddress,
+  readKeystoreAddress,
+  writeLocalE2EIgnitionParameters,
+} from "./e2e-local-deploy.js";
+import {
+  regtestChains,
+  regtestKeystorePasswordEnv,
+  regtestWorkerInfrastructure,
+  type RegtestChainSpec,
+  type RegtestWorkerInfrastructure,
+} from "./regtest-config.js";
 
-type ChainSpec = {
-  key: "a" | "b";
-  eid: number;
-  chainId: number;
-  name: string;
-  hostRpcUrl: string;
-  containerRpcUrl: string;
-  // When set, all txs on this chain are sent as LEGACY with this gasPrice (wei).
-  // goat-geth's own tooling deploys with --legacy; EIP-1559 txs can be dropped
-  // from its mempool. Set REGTEST_B_GAS_PRICE for chain B.
-  gasPrice?: bigint;
+const maxMessageSize = 10_000;
+const minLzReceiveGas = 100_000n;
+const lzReceiveGas = 250_000n;
+const maxLzReceiveGas = 1_000_000n;
+const priceStaleAfter = 86_400n;
+const defaultInitialSupply = 1_000_000n * 10n ** 18n;
+
+export const REGTEST_IGNITION_DEPLOYMENT_IDS = {
+  chainA: "regtest-chain-a",
+  chainB: "regtest-chain-b",
+  pathwayAToB: "regtest-pathway-a-to-b",
+  pathwayBToA: "regtest-pathway-b-to-a",
+} as const;
+
+export type RegtestDVNMode = "active" | "shadow";
+
+export type RegtestWorkerSpec = RegtestWorkerInfrastructure & {
+  address: Address;
 };
 
-type ChainDeployment = ChainSpec & {
+export type RegtestChainDeployment = RegtestChainSpec & {
   endpoint: Address;
   sendUln: Address;
   receiveUln: Address;
@@ -97,326 +87,603 @@ type ChainDeployment = ChainSpec & {
   executorSigner: Address;
 };
 
-type Clients = {
-  publicClient: PublicClient;
-  walletClient: WalletClient;
-  gasPrice?: bigint;
-};
-
-// goat-geth blocks are ~2s; give receipts generous headroom + polling.
-const receiptOpts = { timeout: 180_000, pollingInterval: 1_000 } as const;
-
-const tmpDir = optionalEnv("REGTEST_TMP_DIR", "tmp/regtest");
-const deployerPrivateKey = normalizePrivateKey(
-  optionalEnv(
-    "REGTEST_DEPLOYER_PRIVATE_KEY",
-    "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-  ),
-);
-const worker1PrivateKey = normalizePrivateKey(
-  optionalEnv(
-    "REGTEST_WORKER1_PRIVATE_KEY",
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  ),
-);
-const worker2PrivateKey = normalizePrivateKey(
-  optionalEnv(
-    "REGTEST_WORKER2_PRIVATE_KEY",
-    "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-  ),
-);
-const deployer = privateKeyToAccount(deployerPrivateKey);
-const worker1 = privateKeyToAccount(worker1PrivateKey);
-const worker2 = privateKeyToAccount(worker2PrivateKey);
-
-const confirmations = BigInt(optionalEnv("REGTEST_CONFIRMATIONS", "1"));
-const initialSupply = BigInt(
-  optionalEnv("REGTEST_INITIAL_SUPPLY", (1_000_000n * 10n ** 18n).toString()),
-);
-const dvnMode = optionalEnv("REGTEST_DVN_MODE", "active");
-const maxMessageSize = 10_000;
-const minLzReceiveGas = 100_000n;
-const lzReceiveGas = 250_000n;
-const maxLzReceiveGas = 1_000_000n;
-
-const endpointArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-protocol-v2/artifacts/contracts/EndpointV2.sol/EndpointV2.json",
-);
-const sendUlnArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/SendUln302.sol/SendUln302.json",
-);
-const receiveUlnArtifact = loadArtifact(
-  "node_modules/@layerzerolabs/lz-evm-messagelib-v2/artifacts/contracts/uln/uln302/ReceiveUln302.sol/ReceiveUln302.json",
-);
-const oftArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/oft/TestOFT.sol/TestOFT.json",
-);
-const openPriceFeedArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenPriceFeed.sol/OpenPriceFeed.json",
-);
-const openExecutorArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenExecutor.sol/OpenExecutor.json",
-);
-const openDVNArtifact = loadArtifact(
-  "contracts/artifacts/contracts/contracts/workers/OpenDVN.sol/OpenDVN.json",
-);
-
-const chainSpecs: readonly ChainSpec[] = [
-  {
-    key: "a",
-    eid: Number(optionalEnv("REGTEST_A_EID", "90101")),
-    chainId: Number(optionalEnv("REGTEST_A_CHAIN_ID", "31337")),
-    name: optionalEnv("REGTEST_A_NAME", "evm-regtest-a"),
-    hostRpcUrl: optionalEnv("REGTEST_A_HOST_RPC_URL", "http://127.0.0.1:18545"),
-    containerRpcUrl: optionalEnv("REGTEST_A_CONTAINER_RPC_URL", "http://anvil-a:8545"),
-    gasPrice: optionalGasPrice("REGTEST_A_GAS_PRICE"),
-  },
-  {
-    key: "b",
-    eid: Number(optionalEnv("REGTEST_B_EID", "90102")),
-    chainId: Number(optionalEnv("REGTEST_B_CHAIN_ID", "31338")),
-    name: optionalEnv("REGTEST_B_NAME", "goat-regtest-b"),
-    hostRpcUrl: optionalEnv("REGTEST_B_HOST_RPC_URL", "http://127.0.0.1:18546"),
-    containerRpcUrl: optionalEnv("REGTEST_B_CONTAINER_RPC_URL", "http://goat-geth:8545"),
-    gasPrice: optionalGasPrice("REGTEST_B_GAS_PRICE"),
-  },
-];
-
-function optionalGasPrice(name: string): bigint | undefined {
-  const v = optionalEnv(name, "");
-  return v === "" ? undefined : BigInt(v);
-}
-
-await mkdir(tmpDir, { recursive: true });
-
-const deployments = await Promise.all(chainSpecs.map((spec) => deployChain(spec)));
-const [chainA, chainB] = deployments;
-if (chainA === undefined || chainB === undefined) {
-  throw new Error("regtest requires exactly two chains");
-}
-
-await configureDirection(chainA, chainB);
-await configureDirection(chainB, chainA);
-
-const output = {
-  generatedAt: new Date().toISOString(),
-  deployer: getAddress(deployer.address),
-  workers: {
-    worker1: getAddress(worker1.address),
-    worker2: getAddress(worker2.address),
-  },
+export type RegtestDeployment = {
+  generatedAt: string;
+  deployer: Address;
+  workers: { worker1: Address; worker2: Address };
   parameters: {
-    confirmations: confirmations.toString(),
-    maxMessageSize,
-    minLzReceiveGas: minLzReceiveGas.toString(),
-    lzReceiveGas: lzReceiveGas.toString(),
-    maxLzReceiveGas: maxLzReceiveGas.toString(),
-    initialSupply: initialSupply.toString(),
-    dvnMode,
-    requiredDVNCount: 2,
-  },
-  chains: { a: chainA, b: chainB },
+    confirmations: string;
+    maxMessageSize: number;
+    minLzReceiveGas: string;
+    lzReceiveGas: string;
+    maxLzReceiveGas: string;
+    initialSupply: string;
+    dvnMode: RegtestDVNMode;
+    requiredDVNCount: number;
+  };
+  chains: { a: RegtestChainDeployment; b: RegtestChainDeployment };
 };
 
-await writeFile(path.join(tmpDir, "deployments.json"), `${jsonStringify(output)}\n`);
-await writeFile(path.join(tmpDir, "worker-1.yaml"), workerConfig(1, "host"));
-await writeFile(path.join(tmpDir, "worker-1.container.yaml"), workerConfig(1, "container"));
-await writeFile(path.join(tmpDir, "worker-2.yaml"), workerConfig(2, "host"));
-await writeFile(path.join(tmpDir, "worker-2.container.yaml"), workerConfig(2, "container"));
+type RegtestChainPair = readonly [RegtestChainSpec, RegtestChainSpec];
+type Environment = Readonly<Record<string, string | undefined>>;
 
-console.log(jsonStringify(output));
-console.error(
-  `[regtest-deploy] wrote deployments.json + worker-1/2.yaml (+ .container.yaml) into ${tmpDir}`,
-);
+export type RegtestDeployBusinessInput = {
+  tmpDir: string;
+};
 
-async function deployChain(spec: ChainSpec): Promise<ChainDeployment> {
-  const clients = clientsFor(spec);
-  await assertChainId(clients.publicClient, spec);
-  const label = spec.name;
+export type RegtestDeployInput = RegtestDeployBusinessInput & {
+  chains: RegtestChainPair;
+  confirmations: bigint;
+  initialSupply: bigint;
+  dvnMode: RegtestDVNMode;
+  keystorePasswordEnv: string;
+  workers: readonly [RegtestWorkerSpec, RegtestWorkerSpec];
+};
 
-  const endpoint = await deploy(clients, `${label} EndpointV2`, endpointArtifact, [spec.eid, deployer.address]);
-  const sendUln = await deploy(clients, `${label} SendUln302`, sendUlnArtifact, [endpoint, 0n, 0n]);
-  const receiveUln = await deploy(clients, `${label} ReceiveUln302`, receiveUlnArtifact, [endpoint]);
-  const oft = await deploy(clients, `${label} TestOFT (GOATED)`, oftArtifact, [
-    "Goat Network",
-    "GOATED",
-    endpoint,
-    deployer.address,
-    deployer.address,
-    spec.key === "a" ? initialSupply : 0n,
+export type RegtestDeployContext = {
+  hre: HardhatRuntimeEnvironment;
+  gate: Pick<ApplyGate, "authorize">;
+  displayUi?: boolean;
+  now?: () => Date;
+};
+
+export type RegtestDeployResult =
+  | {
+      applied: false;
+      deploymentIds: typeof REGTEST_IGNITION_DEPLOYMENT_IDS;
+    }
+  | {
+      applied: true;
+      deploymentIds: typeof REGTEST_IGNITION_DEPLOYMENT_IDS;
+      deployment: RegtestDeployment;
+    };
+
+/**
+ * Resolve infrastructure-only regtest settings from the environment without
+ * putting RPC URLs or private keys in the command's JSON input. Worker signer
+ * addresses come from the pre-generated keystore files in tmpDir.
+ */
+export function resolveRegtestDeployInput(
+  input: RegtestDeployBusinessInput,
+  environment: Environment = process.env
+): RegtestDeployInput {
+  if (input.tmpDir.trim() === "") {
+    throw new Error("tmpDir must not be empty");
+  }
+  const resolve = (name: string, fallback: string) =>
+    environment[name] ?? fallback;
+  const chains = regtestChains(resolve);
+  const chainA = chains[0];
+  const chainB = chains[1];
+  if (chainA === undefined || chainB === undefined || chains.length !== 2) {
+    throw new Error("regtest requires exactly two chains");
+  }
+  const confirmations = BigInt(resolve("REGTEST_CONFIRMATIONS", "1"));
+  if (confirmations < 1n) {
+    throw new Error("REGTEST_CONFIRMATIONS must be at least 1");
+  }
+  const initialSupply = BigInt(
+    resolve("REGTEST_INITIAL_SUPPLY", defaultInitialSupply.toString())
+  );
+  const dvnMode = resolve("REGTEST_DVN_MODE", "active");
+  if (dvnMode !== "active" && dvnMode !== "shadow") {
+    throw new Error(`REGTEST_DVN_MODE must be active or shadow: ${dvnMode}`);
+  }
+  const workers = [1, 2].map((index) => {
+    const infrastructure = regtestWorkerInfrastructure(
+      index as 1 | 2,
+      input.tmpDir,
+      resolve
+    );
+    return {
+      ...infrastructure,
+      address: readKeystoreAddress(infrastructure.keystorePaths.host),
+    };
+  }) as [RegtestWorkerSpec, RegtestWorkerSpec];
+  if (workers[0].address.toLowerCase() === workers[1].address.toLowerCase()) {
+    throw new Error(
+      "regtest worker keystores must hold two distinct signer addresses"
+    );
+  }
+  return {
+    tmpDir: input.tmpDir,
+    chains: [chainA, chainB],
+    confirmations,
+    initialSupply,
+    dvnMode,
+    keystorePasswordEnv: regtestKeystorePasswordEnv(resolve),
+    workers,
+  };
+}
+
+/** Require the Hardhat Ignition path to be isolated inside the regtest tmpDir. */
+export function assertRegtestIgnitionDirectory(
+  configuredIgnitionDir: string,
+  tmpDir: string
+): void {
+  const actual = path.resolve(configuredIgnitionDir);
+  const expected = path.resolve(tmpDir, "ignition");
+  if (actual !== expected) {
+    throw new Error(
+      `regtest requires Hardhat Ignition path ${expected}; configured ${actual}`
+    );
+  }
+}
+
+/** Deploy and configure both sides of the regtest topology with Ignition. */
+export async function runRegtestDeploy(
+  input: RegtestDeployInput,
+  context: RegtestDeployContext
+): Promise<RegtestDeployResult> {
+  assertRegtestIgnitionDirectory(
+    context.hre.config.paths.ignition,
+    input.tmpDir
+  );
+  const [chainASpec, chainBSpec] = input.chains;
+  const applied = await context.gate.authorize({
+    command: "regtest:deploy",
+    targets: [
+      {
+        network: chainASpec.name,
+        chainId: chainASpec.chainId,
+        deploymentIds: [
+          REGTEST_IGNITION_DEPLOYMENT_IDS.chainA,
+          REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayAToB,
+        ],
+      },
+      {
+        network: chainBSpec.name,
+        chainId: chainBSpec.chainId,
+        deploymentIds: [
+          REGTEST_IGNITION_DEPLOYMENT_IDS.chainB,
+          REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayBToA,
+        ],
+      },
+    ],
+    actions: [
+      "deploy regtest Endpoint, ULN, GOATED OFT, price feed, executor, and two DVNs on both chains",
+      "configure reciprocal LayerZero pathways and worker fee models",
+      "authorize the worker-1 and worker-2 DVN verifier roles",
+      "write deployments.json and worker-1/worker-2 host and container configs",
+    ],
+  });
+  if (!applied) {
+    return {
+      applied: false,
+      deploymentIds: REGTEST_IGNITION_DEPLOYMENT_IDS,
+    };
+  }
+  return await withWriteConnection(
+    context.hre,
+    { network: chainASpec.name, expectedChainId: chainASpec.chainId },
+    async (chainAContext) =>
+      await withWriteConnection(
+        context.hre,
+        { network: chainBSpec.name, expectedChainId: chainBSpec.chainId },
+        async (chainBContext) =>
+          await applyRegtestDeploy(input, context, chainAContext, chainBContext)
+      )
+  );
+}
+
+async function applyRegtestDeploy(
+  input: RegtestDeployInput,
+  context: RegtestDeployContext,
+  chainAContext: WriteNetworkContext,
+  chainBContext: WriteNetworkContext
+): Promise<RegtestDeployResult> {
+  const [chainASpec, chainBSpec] = input.chains;
+  const deployerAddress = getAddress(chainAContext.signerAddress);
+  if (
+    deployerAddress.toLowerCase() !== chainBContext.signerAddress.toLowerCase()
+  ) {
+    throw new Error(
+      `regtest networks use different deployers: ${deployerAddress} and ${chainBContext.signerAddress}`
+    );
+  }
+  const displayUi = context.displayUi ?? true;
+  forceLegacyFees(chainAContext, chainASpec);
+  forceLegacyFees(chainBContext, chainBSpec);
+  await mkdir(input.tmpDir, { recursive: true });
+
+  const [chainA, chainB] = await Promise.all([
+    deployChain(
+      chainASpec,
+      chainAContext,
+      input,
+      deployerAddress,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.chainA,
+      input.initialSupply,
+      displayUi
+    ),
+    deployChain(
+      chainBSpec,
+      chainBContext,
+      input,
+      deployerAddress,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.chainB,
+      0n,
+      displayUi
+    ),
   ]);
-  const priceFeed = await deploy(clients, `${label} OpenPriceFeed`, openPriceFeedArtifact, [
-    deployer.address,
-    [deployer.address, worker1.address, worker2.address],
-  ]);
-  const openExecutor = await deploy(clients, `${label} OpenExecutor`, openExecutorArtifact, [deployer.address, priceFeed]);
-  const primaryOpenDVN = await deploy(clients, `${label} OpenDVN primary`, openDVNArtifact, [deployer.address, priceFeed]);
-  const secondaryOpenDVN = await deploy(clients, `${label} OpenDVN secondary`, openDVNArtifact, [deployer.address, priceFeed]);
 
+  // Anchor the initial price snapshots to each source chain's CURRENT tip (a
+  // long-running goat-geth regtest has an old genesis, and a genesis-anchored
+  // snapshot would already be stale) — but reuse a previously persisted
+  // timestamp when this tmpDir already deployed the pathway: Ignition
+  // reconciliation rejects changed arguments for an executed Future, so a
+  // rerun or a resume after a partial failure must supply the original
+  // updatedAt. A stale-again snapshot on a much-later rerun means the
+  // environment should be recreated from a clean tmpDir instead.
+  const [chainATimestamp, chainBTimestamp] = await Promise.all([
+    pathwayTimestamp(
+      input.tmpDir,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayAToB,
+      chainAContext
+    ),
+    pathwayTimestamp(
+      input.tmpDir,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayBToA,
+      chainBContext
+    ),
+  ]);
+  await Promise.all([
+    deployPathway(
+      chainA,
+      chainB,
+      chainATimestamp,
+      input,
+      chainAContext,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayAToB,
+      displayUi
+    ),
+    deployPathway(
+      chainB,
+      chainA,
+      chainBTimestamp,
+      input,
+      chainBContext,
+      REGTEST_IGNITION_DEPLOYMENT_IDS.pathwayBToA,
+      displayUi
+    ),
+  ]);
+
+  const [worker1, worker2] = input.workers;
+  const deployment: RegtestDeployment = {
+    generatedAt: (context.now ?? (() => new Date()))().toISOString(),
+    deployer: deployerAddress,
+    workers: { worker1: worker1.address, worker2: worker2.address },
+    parameters: {
+      confirmations: input.confirmations.toString(),
+      maxMessageSize,
+      minLzReceiveGas: minLzReceiveGas.toString(),
+      lzReceiveGas: lzReceiveGas.toString(),
+      maxLzReceiveGas: maxLzReceiveGas.toString(),
+      initialSupply: input.initialSupply.toString(),
+      dvnMode: input.dvnMode,
+      requiredDVNCount: 2,
+    },
+    chains: { a: chainA, b: chainB },
+  };
+
+  await Promise.all([
+    writeFile(
+      path.join(input.tmpDir, "deployments.json"),
+      `${jsonStringify(deployment)}\n`
+    ),
+    ...input.workers.flatMap((worker) =>
+      (["host", "container"] as const).map((mode) =>
+        writeFile(
+          path.join(
+            input.tmpDir,
+            mode === "host"
+              ? `worker-${worker.index}.yaml`
+              : `worker-${worker.index}.container.yaml`
+          ),
+          regtestWorkerConfig(deployment, input, worker, mode)
+        )
+      )
+    ),
+  ]);
+  console.error(
+    `[regtest:deploy] wrote deployments.json + worker-1/2.yaml (+ .container.yaml) into ${input.tmpDir}`
+  );
+  return {
+    applied: true,
+    deploymentIds: REGTEST_IGNITION_DEPLOYMENT_IDS,
+    deployment,
+  };
+}
+
+async function deployChain(
+  spec: RegtestChainSpec,
+  context: WriteNetworkContext,
+  input: RegtestDeployInput,
+  deployerAddress: Address,
+  deploymentId: string,
+  supply: bigint,
+  displayUi: boolean
+): Promise<RegtestChainDeployment> {
+  const parameters = await writeLocalE2EIgnitionParameters(
+    input.tmpDir,
+    deploymentId,
+    buildRegtestChainParameters(spec, input, deployerAddress, supply)
+  );
+  const deployed = await withIgnitionUiOnStderr(() =>
+    context.connection.ignition.deploy(LocalE2EChainModule, {
+      deploymentId,
+      displayUi,
+      parameters,
+    })
+  );
+  const [worker1, worker2] = input.workers;
   return {
     ...spec,
-    endpoint,
-    sendUln,
-    receiveUln,
-    oft,
-    priceFeed,
-    openExecutor,
-    primaryOpenDVN,
-    secondaryOpenDVN,
-    primaryDVNSigner: getAddress(worker1.address),
-    secondaryDVNSigner: getAddress(worker2.address),
-    executorSigner: getAddress(worker1.address),
+    endpoint: deployedAddress(deployed, "endpoint"),
+    sendUln: deployedAddress(deployed, "sendUln"),
+    receiveUln: deployedAddress(deployed, "receiveUln"),
+    oft: deployedAddress(deployed, "oft"),
+    priceFeed: deployedAddress(deployed, "priceFeed"),
+    openExecutor: deployedAddress(deployed, "openExecutor"),
+    primaryOpenDVN: deployedAddress(deployed, "primaryOpenDVN"),
+    secondaryOpenDVN: deployedAddress(deployed, "secondaryOpenDVN"),
+    primaryDVNSigner: worker1.address,
+    secondaryDVNSigner: worker2.address,
+    executorSigner: worker1.address,
   };
 }
 
-async function configureDirection(source: ChainDeployment, destination: ChainDeployment) {
-  const src = clientsFor(source);
-  const dst = clientsFor(destination);
-  // Two required DVNs (sorted) -- matches the tested e2e flow and satisfies the
-  // worker's runtime >=2 required-DVN rule.
-  const sourceDVNs = [source.primaryOpenDVN, source.secondaryOpenDVN];
-  const ulnOApp = requiredDVNsConfig(confirmations, sourceDVNs); // optionalDVNCount = NIL (255)
-  const ulnDefault = defaultUlnConfig(ulnOApp); // optionalDVNCount = 0
-  const executorConfig = { maxMessageSize, executor: source.openExecutor };
-
-  await tx(src, `${source.name} Endpoint.registerLibrary SendUln302`, source.endpoint, endpointArtifact.abi, "registerLibrary", [source.sendUln]);
-  await tx(src, `${source.name} Endpoint.registerLibrary ReceiveUln302`, source.endpoint, endpointArtifact.abi, "registerLibrary", [source.receiveUln]);
-  await tx(src, `${source.name} SendUln302.setDefaultUlnConfigs`, source.sendUln, sendUlnArtifact.abi, "setDefaultUlnConfigs", [[{ eid: destination.eid, config: ulnDefault }]]);
-  await tx(src, `${source.name} ReceiveUln302.setDefaultUlnConfigs`, source.receiveUln, receiveUlnArtifact.abi, "setDefaultUlnConfigs", [[{ eid: destination.eid, config: ulnDefault }]]);
-  await tx(src, `${source.name} SendUln302.setDefaultExecutorConfigs`, source.sendUln, sendUlnArtifact.abi, "setDefaultExecutorConfigs", [[{ eid: destination.eid, config: executorConfig }]]);
-  await tx(src, `${source.name} Endpoint.setDefaultSendLibrary`, source.endpoint, endpointArtifact.abi, "setDefaultSendLibrary", [destination.eid, source.sendUln]);
-  await tx(src, `${source.name} Endpoint.setDefaultReceiveLibrary`, source.endpoint, endpointArtifact.abi, "setDefaultReceiveLibrary", [destination.eid, source.receiveUln, 0n]);
-  await tx(src, `${source.name} TestOFT.setPeer`, source.oft, oftArtifact.abi, "setPeer", [destination.eid, addressToBytes32(destination.oft)]);
-  await tx(src, `${source.name} TestOFT.setEnforcedOptions`, source.oft, oftArtifact.abi, "setEnforcedOptions", [[{ eid: destination.eid, msgType: 1, options: enforcedLzReceiveOption(lzReceiveGas) }]]);
-  await tx(src, `${source.name} Endpoint.setConfig SendUln302`, source.endpoint, endpointArtifact.abi, "setConfig", [
-    source.oft,
-    source.sendUln,
-    [
-      { eid: destination.eid, configType: CONFIG_TYPE_EXECUTOR, config: encodeExecutorConfig(executorConfig) },
-      { eid: destination.eid, configType: CONFIG_TYPE_ULN, config: encodeUlnConfig(ulnOApp) },
-    ],
-  ]);
-  await tx(src, `${source.name} Endpoint.setConfig ReceiveUln302`, source.endpoint, endpointArtifact.abi, "setConfig", [
-    source.oft,
-    source.receiveUln,
-    [{ eid: destination.eid, configType: CONFIG_TYPE_ULN, config: encodeUlnConfig(ulnOApp) }],
-  ]);
-
-  await configureSourceWorkers(src, source, destination);
-
-  // Each DVN verifies on the DESTINATION ReceiveUln, so authorize each worker's
-  // signer on the DESTINATION OpenDVN it drives.
-  await tx(dst, `${destination.name} primary OpenDVN.setVerifier ${destination.primaryDVNSigner}`, destination.primaryOpenDVN, openDVNArtifact.abi, "setVerifier", [destination.primaryDVNSigner, true]);
-  await tx(dst, `${destination.name} secondary OpenDVN.setVerifier ${destination.secondaryDVNSigner}`, destination.secondaryOpenDVN, openDVNArtifact.abi, "setVerifier", [destination.secondaryDVNSigner, true]);
+async function deployPathway(
+  source: RegtestChainDeployment,
+  destination: RegtestChainDeployment,
+  updatedAt: bigint,
+  input: RegtestDeployInput,
+  context: WriteNetworkContext,
+  deploymentId: string,
+  displayUi: boolean
+): Promise<void> {
+  const parameters = await writeLocalE2EIgnitionParameters(
+    input.tmpDir,
+    deploymentId,
+    buildRegtestPathwayParameters(
+      source,
+      destination,
+      updatedAt,
+      input.confirmations
+    )
+  );
+  await withIgnitionUiOnStderr(() =>
+    context.connection.ignition.deploy(LocalE2EPathwayModule, {
+      deploymentId,
+      displayUi,
+      parameters,
+    })
+  );
 }
 
-async function configureSourceWorkers(clients: Clients, source: ChainDeployment, destination: ChainDeployment) {
-  const pathwayConfig = { enabled: true, maxMessageSize: BigInt(maxMessageSize), minLzReceiveGas, maxLzReceiveGas };
-  const timestamp = (await clients.publicClient.getBlock()).timestamp;
-  const priceSnapshot = { dstGasPriceInSrcToken: 1n, dstDataFeePerByteInSrcToken: 0n, updatedAt: timestamp, staleAfter: 86_400n };
-  const feeModel = { baseFee: 1n, dstGasOverhead: 0n, dataSizeOverheadBytes: 0n, marginBps: 0 };
-  await tx(clients, `${source.name} OpenPriceFeed.setPriceSnapshot`, source.priceFeed, openPriceFeedArtifact.abi, "setPriceSnapshot", [[{ dstEid: destination.eid, snapshot: priceSnapshot }]]);
-  for (const workerAddress of [source.openExecutor, source.primaryOpenDVN, source.secondaryOpenDVN]) {
-    const abi = workerAddress === source.openExecutor ? openExecutorArtifact.abi : openDVNArtifact.abi;
-    await tx(clients, `${source.name} worker.setAllowedSendLib ${workerAddress}`, workerAddress, abi, "setAllowedSendLib", [source.sendUln, true]);
-    await tx(clients, `${source.name} worker.setPathwayConfig ${workerAddress}`, workerAddress, abi, "setPathwayConfig", [destination.eid, source.oft, pathwayConfig]);
-    await tx(clients, `${source.name} worker.setFeeModel ${workerAddress}`, workerAddress, abi, "setFeeModel", [destination.eid, feeModel]);
-  }
-}
-
-function defaultUlnConfig(config: UlnConfig): UlnConfig {
-  return { ...config, optionalDVNCount: 0 };
-}
-
-function enforcedLzReceiveOption(gas: bigint): Hex {
-  // OptionsBuilder.newOptions().addExecutorLzReceiveOption(gas, 0):
-  //   0x0003  TYPE_3 header | 01 WORKER_ID(executor) | 0011 len(17) | 01 optType(LZRECEIVE) | <16-byte gas>
-  const gasHex = gas.toString(16).padStart(32, "0");
-  return `0x000301001101${gasHex}` as Hex;
-}
-
-async function deploy(clients: Clients, label: string, artifact: { abi: Abi; bytecode: Hex }, args: readonly unknown[]): Promise<Address> {
-  const hash = await clients.walletClient.deployContract({
-    abi: artifact.abi,
-    bytecode: artifact.bytecode,
-    args: [...args],
-    account: deployer,
-    chain: clients.walletClient.chain,
-    ...(clients.gasPrice === undefined ? {} : { gasPrice: clients.gasPrice }),
-  });
-  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash, ...receiptOpts });
-  if (receipt.status !== "success" || receipt.contractAddress == null) {
-    throw new Error(`${label} deploy ${hash} failed`);
-  }
-  await waitForContract(clients.publicClient, hash);
-  console.error(`[regtest-deploy] ${label}: ${receipt.contractAddress}`);
-  return getAddress(receipt.contractAddress);
-}
-
-async function tx(clients: Clients, label: string, address: Address, abi: Abi, functionName: string, args: readonly unknown[]): Promise<void> {
-  const hash = await clients.walletClient.writeContract({
-    address,
-    abi,
-    functionName,
-    args: [...args],
-    account: deployer,
-    chain: clients.walletClient.chain,
-    ...(clients.gasPrice === undefined ? {} : { gasPrice: clients.gasPrice }),
-  });
-  const receipt = await clients.publicClient.waitForTransactionReceipt({ hash, ...receiptOpts });
-  if (receipt.status !== "success") {
-    throw new Error(`${label} transaction ${hash} failed`);
-  }
-  console.error(`[regtest-deploy] ${label}: ${hash}`);
-}
-
-function clientsFor(spec: ChainSpec): Clients {
-  const chain = defineChain({
-    id: spec.chainId,
-    name: spec.name,
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    rpcUrls: { default: { http: [spec.hostRpcUrl] } },
-  });
-  const transport = http(spec.hostRpcUrl);
+export function buildRegtestChainParameters(
+  spec: RegtestChainSpec,
+  input: Pick<RegtestDeployInput, "workers">,
+  deployerAddress: Address,
+  supply: bigint
+) {
+  const [worker1, worker2] = input.workers;
   return {
-    publicClient: createPublicClient({ chain, transport }),
-    walletClient: createWalletClient({ account: deployer, chain, transport }),
-    gasPrice: spec.gasPrice,
+    LocalE2EChain: {
+      eid: spec.eid,
+      owner: deployerAddress,
+      tokenName: "Goat Network",
+      tokenSymbol: "GOATED",
+      delegate: deployerAddress,
+      initialRecipient: deployerAddress,
+      initialSupply: supply,
+      priceFeedSubmitters: [deployerAddress, worker1.address, worker2.address],
+    },
   };
 }
 
-async function assertChainId(publicClient: PublicClient, spec: ChainSpec) {
-  const chainId = await publicClient.getChainId();
-  if (chainId !== spec.chainId) {
-    throw new Error(`${spec.name} chain_id ${chainId} does not match expected ${spec.chainId} (set REGTEST_${spec.key.toUpperCase()}_CHAIN_ID)`);
-  }
+export function buildRegtestPathwayParameters(
+  source: RegtestChainDeployment,
+  destination: RegtestChainDeployment,
+  updatedAt: bigint,
+  confirmations: bigint
+) {
+  const ulnConfig = requiredDVNsConfig(confirmations, [
+    source.primaryOpenDVN,
+    source.secondaryOpenDVN,
+  ]);
+  const defaultUlnConfig = { ...ulnConfig, optionalDVNCount: 0 };
+  const executorConfig = {
+    maxMessageSize,
+    executor: source.openExecutor,
+  };
+  const encodedUlnConfig = encodeUlnConfig(ulnConfig);
+  return {
+    LocalE2EPathway: {
+      endpoint: source.endpoint,
+      sendUln: source.sendUln,
+      receiveUln: source.receiveUln,
+      oft: source.oft,
+      priceFeed: source.priceFeed,
+      openExecutor: source.openExecutor,
+      primaryOpenDVN: source.primaryOpenDVN,
+      secondaryOpenDVN: source.secondaryOpenDVN,
+      remoteEid: destination.eid,
+      remotePeer: addressToBytes32(destination.oft),
+      receiveLibraryGracePeriod: 0n,
+      defaultUlnConfig,
+      defaultExecutorConfig: executorConfig,
+      sendConfig: [
+        {
+          eid: destination.eid,
+          configType: CONFIG_TYPE_EXECUTOR,
+          config: encodeExecutorConfig(executorConfig),
+        },
+        {
+          eid: destination.eid,
+          configType: CONFIG_TYPE_ULN,
+          config: encodedUlnConfig,
+        },
+      ],
+      receiveConfig: [
+        {
+          eid: destination.eid,
+          configType: CONFIG_TYPE_ULN,
+          config: encodedUlnConfig,
+        },
+      ],
+      enforcedOptions: [
+        {
+          eid: destination.eid,
+          msgType: 1,
+          options: buildLzReceiveOption(lzReceiveGas),
+        },
+      ],
+      workerPathwayConfig: {
+        enabled: true,
+        maxMessageSize: BigInt(maxMessageSize),
+        minLzReceiveGas,
+        maxLzReceiveGas,
+      },
+      priceSnapshot: {
+        dstGasPriceInSrcToken: 1n,
+        dstDataFeePerByteInSrcToken: 0n,
+        updatedAt,
+        staleAfter: priceStaleAfter,
+      },
+      executorFeeModel: regtestFeeModel(),
+      dvnFeeModel: regtestFeeModel(),
+      primaryDVNVerifier: source.primaryDVNSigner,
+      secondaryDVNVerifier: source.secondaryDVNSigner,
+    },
+  };
 }
 
-// worker=1 -> executor + primary DVN; worker=2 -> secondary DVN only.
-function workerConfig(workerIndex: 1 | 2, mode: "host" | "container"): string {
-  const primary = workerIndex === 1;
-  const signer = primary ? getAddress(worker1.address) : getAddress(worker2.address);
+// forceLegacyFees interposes on the connection's EIP-1193 provider when the
+// chain pins a legacy gas price: goat-geth's mempool can drop EIP-1559
+// transactions, and Ignition offers no supported switch to type-0 fees on a
+// chain that reports baseFeePerGas. Hiding baseFeePerGas from
+// eth_getBlockByNumber steers both Ignition and viem onto their legacy fee
+// paths, and the pinned eth_gasPrice answer fixes the price — mirroring the
+// pre-Ignition behavior where every transaction on that chain went out as
+// type 0 with REGTEST_<X>_GAS_PRICE.
+export function forceLegacyFees(
+  context: WriteNetworkContext,
+  spec: Pick<RegtestChainSpec, "gasPrice">
+): void {
+  const gasPrice = spec.gasPrice;
+  if (gasPrice === undefined) {
+    return;
+  }
+  const provider = context.connection.provider;
+  const originalRequest = provider.request.bind(provider);
+  provider.request = async (args) => {
+    if (args.method === "eth_gasPrice") {
+      return `0x${gasPrice.toString(16)}`;
+    }
+    const result = await originalRequest(args);
+    if (
+      args.method === "eth_getBlockByNumber" &&
+      typeof result === "object" &&
+      result !== null &&
+      "baseFeePerGas" in result
+    ) {
+      const { baseFeePerGas: _dropped, ...legacyBlock } = result as Record<
+        string,
+        unknown
+      >;
+      return legacyBlock;
+    }
+    return result;
+  };
+}
+
+function regtestFeeModel() {
+  return {
+    baseFee: 1n,
+    dstGasOverhead: 0n,
+    dataSizeOverheadBytes: 0n,
+    marginBps: 0,
+  };
+}
+
+async function latestTimestamp(context: WriteNetworkContext): Promise<bigint> {
+  return (await context.publicClient.getBlock()).timestamp;
+}
+
+async function pathwayTimestamp(
+  tmpDir: string,
+  deploymentId: string,
+  context: WriteNetworkContext
+): Promise<bigint> {
+  const persisted = await persistedPathwayUpdatedAt(tmpDir, deploymentId);
+  if (persisted !== undefined) {
+    return persisted;
+  }
+  return latestTimestamp(context);
+}
+
+/**
+ * Read the price snapshot updatedAt from a previously written Ignition
+ * parameters file, so reruns replay the exact Future arguments. Returns
+ * undefined when no prior run persisted parameters for this deployment.
+ */
+export async function persistedPathwayUpdatedAt(
+  tmpDir: string,
+  deploymentId: string
+): Promise<bigint | undefined> {
+  const parametersPath = path.resolve(
+    tmpDir,
+    "ignition-parameters",
+    `${deploymentId}.json`
+  );
+  let raw: string;
+  try {
+    raw = await readFile(parametersPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(
+      `regtest ignition parameters are not valid JSON: ${parametersPath}`
+    );
+  }
+  const updatedAt = (
+    (value as { LocalE2EPathway?: { priceSnapshot?: { updatedAt?: unknown } } })
+      .LocalE2EPathway?.priceSnapshot?.updatedAt
+  );
+  if (typeof updatedAt !== "string" || !/^[0-9]+n$/.test(updatedAt)) {
+    throw new Error(
+      `regtest ignition parameters have no priceSnapshot.updatedAt bigint: ${parametersPath}`
+    );
+  }
+  return BigInt(updatedAt.slice(0, -1));
+}
+
+/** Render one worker's YAML config (worker 1 = executor + primary DVN). */
+export function regtestWorkerConfig(
+  deployment: RegtestDeployment,
+  input: Pick<RegtestDeployInput, "keystorePasswordEnv" | "dvnMode">,
+  worker: RegtestWorkerSpec,
+  mode: "host" | "container"
+): string {
+  const primary = worker.index === 1;
   const executorEnabled = primary;
-  const metricsAddr = optionalEnv(`REGTEST_METRICS_ADDR_${workerIndex}`, primary ? ":9090" : ":9091");
-  const rpc = (c: ChainDeployment) => (mode === "host" ? c.hostRpcUrl : c.containerRpcUrl);
-  const keystorePath =
-    mode === "host"
-      ? optionalEnv(`REGTEST_KEYSTORE${workerIndex}_PATH`, path.join(tmpDir, `worker-${workerIndex}-keystore.json`))
-      : optionalEnv(`REGTEST_KEYSTORE${workerIndex}_CONTAINER_PATH`, `/app/tmp/regtest/worker-${workerIndex}-keystore.json`);
-  const databaseUrl =
-    mode === "host"
-      ? optionalEnv(`REGTEST_HOST_DATABASE_URL_${workerIndex}`, `postgres://laz_worker:laz_worker@127.0.0.1:55433/laz_worker_${workerIndex}?sslmode=disable`)
-      : optionalEnv(`REGTEST_CONTAINER_DATABASE_URL_${workerIndex}`, `postgres://laz_worker:laz_worker@postgres:5432/laz_worker_${workerIndex}?sslmode=disable`);
-  const passwordEnv = optionalEnv("REGTEST_KEYSTORE_PASSWORD_ENV", "REGTEST_KEYSTORE_PASSWORD");
-  const srcDVN = (c: ChainDeployment) => (primary ? c.primaryOpenDVN : c.secondaryOpenDVN);
-  const chains = [chainA, chainB] as const;
+  const rpcURL = (chain: RegtestChainDeployment) =>
+    mode === "host" ? chain.hostRpcUrl : chain.containerRpcUrl;
+  const workerDVN = (chain: RegtestChainDeployment) =>
+    primary ? chain.primaryOpenDVN : chain.secondaryOpenDVN;
+  const chainList = [deployment.chains.a, deployment.chains.b];
   const pathways = [
-    [chainA, chainB],
-    [chainB, chainA],
+    [deployment.chains.a, deployment.chains.b],
+    [deployment.chains.b, deployment.chains.a],
   ] as const;
-  return `database_url: ${databaseUrl}
+  return `database_url: ${worker.databaseURLs[mode]}
 metrics:
-  listen_address: ${metricsAddr}
+  listen_address: ${worker.metricsAddress}
 services:
   executor:
     enabled: ${executorEnabled}
@@ -425,42 +692,42 @@ services:
 tx_manager:
   stale_broadcast_replacement_after_seconds: 2
 signers:
-  - id: "${signer}"
+  - id: "${worker.address}"
     type: keystore
     keystore:
-      path: ${keystorePath}
-      password_env: ${passwordEnv}
+      path: ${worker.keystorePaths[mode]}
+      password_env: ${input.keystorePasswordEnv}
 pricing:
   enabled: false
 chains:
-${chains
+${chainList
   .map(
-    (c) => `  - eid: ${c.eid}
-    name: ${c.name}
+    (chain) => `  - eid: ${chain.eid}
+    name: ${chain.name}
     family: evm
-    chain_id: ${c.chainId}
-    endpoint_address: "${c.endpoint}"
-    confirmations: ${confirmations}
+    chain_id: ${chain.chainId}
+    endpoint_address: "${chain.endpoint}"
+    confirmations: ${deployment.parameters.confirmations}
     start_block_number: 0
     indexer_query_block_range: 500
     indexer_poll_interval_seconds: 5
     rpc_urls:
-      - ${rpc(c)}
+      - ${rpcURL(chain)}
     tx_roles:${
       executorEnabled
         ? `
       executor:
-        signer: "${signer}"
+        signer: "${worker.address}"
         max_fee_per_gas_wei: "100000000000"
         max_priority_fee_per_gas_wei: "2000000000"
         min_native_balance_wei: "1000000000000000000"`
         : ""
     }
       dvn:
-        signer: "${signer}"
+        signer: "${worker.address}"
         max_fee_per_gas_wei: "100000000000"
         max_priority_fee_per_gas_wei: "2000000000"
-        min_native_balance_wei: "1000000000000000000"`,
+        min_native_balance_wei: "1000000000000000000"`
   )
   .join("\n")}
 pathways:
@@ -474,10 +741,10 @@ ${pathways
     receive_lib: "${destination.receiveUln}"
     source_workers:
       open_executor: "${source.openExecutor}"
-      open_dvn: "${srcDVN(source)}"
+      open_dvn: "${workerDVN(source)}"
       price_feed: "${source.priceFeed}"
     destination_workers:
-      open_dvn: "${srcDVN(destination)}"
+      open_dvn: "${workerDVN(destination)}"
     send_required_dvns:
       - "${source.primaryOpenDVN}"
       - "${source.secondaryOpenDVN}"
@@ -485,20 +752,166 @@ ${pathways
       - "${destination.primaryOpenDVN}"
       - "${destination.secondaryOpenDVN}"
     dvn:
-      mode: ${dvnMode}
+      mode: ${input.dvnMode}
     enabled: true
-    max_message_size: ${maxMessageSize}
-    min_lz_receive_gas: ${minLzReceiveGas}
-    max_lz_receive_gas: ${maxLzReceiveGas}`,
+    max_message_size: ${deployment.parameters.maxMessageSize}
+    min_lz_receive_gas: ${deployment.parameters.minLzReceiveGas}
+    max_lz_receive_gas: ${deployment.parameters.maxLzReceiveGas}`
   )
   .join("\n")}
 `;
 }
 
-function normalizePrivateKey(value: string): Hex {
-  const normalized = value.startsWith("0x") ? value : `0x${value}`;
-  if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
-    throw new Error("private key must be a 32-byte hex value");
+/** Load and validate a regtest deployments.json produced by regtest:deploy. */
+export async function loadRegtestDeployment(
+  tmpDir: string
+): Promise<RegtestDeployment> {
+  const deploymentPath = path.join(tmpDir, "deployments.json");
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(deploymentPath, "utf8")) as unknown;
+  } catch {
+    throw new Error(
+      `regtest deployment could not be read: ${deploymentPath} (run regtest:deploy first)`
+    );
   }
-  return normalized as Hex;
+  return validateRegtestDeployment(value);
+}
+
+export function validateRegtestDeployment(value: unknown): RegtestDeployment {
+  const record = expectRecord(value, "deployment");
+  const chains = expectRecord(record.chains, "deployment.chains");
+  const parameters = expectRecord(record.parameters, "deployment.parameters");
+  const workers = expectRecord(record.workers, "deployment.workers");
+  const dvnMode = parameters.dvnMode;
+  if (dvnMode !== "active" && dvnMode !== "shadow") {
+    throw new Error("deployment.parameters.dvnMode must be active or shadow");
+  }
+  return {
+    generatedAt: expectString(record.generatedAt, "deployment.generatedAt"),
+    deployer: expectAddress(record.deployer, "deployment.deployer"),
+    workers: {
+      worker1: expectAddress(workers.worker1, "deployment.workers.worker1"),
+      worker2: expectAddress(workers.worker2, "deployment.workers.worker2"),
+    },
+    parameters: {
+      confirmations: expectString(
+        parameters.confirmations,
+        "deployment.parameters.confirmations"
+      ),
+      maxMessageSize: expectNumber(
+        parameters.maxMessageSize,
+        "deployment.parameters.maxMessageSize"
+      ),
+      minLzReceiveGas: expectString(
+        parameters.minLzReceiveGas,
+        "deployment.parameters.minLzReceiveGas"
+      ),
+      lzReceiveGas: expectString(
+        parameters.lzReceiveGas,
+        "deployment.parameters.lzReceiveGas"
+      ),
+      maxLzReceiveGas: expectString(
+        parameters.maxLzReceiveGas,
+        "deployment.parameters.maxLzReceiveGas"
+      ),
+      initialSupply: expectString(
+        parameters.initialSupply,
+        "deployment.parameters.initialSupply"
+      ),
+      dvnMode,
+      requiredDVNCount: expectNumber(
+        parameters.requiredDVNCount,
+        "deployment.parameters.requiredDVNCount"
+      ),
+    },
+    chains: {
+      a: validateChainDeployment(chains.a, "deployment.chains.a", "a"),
+      b: validateChainDeployment(chains.b, "deployment.chains.b", "b"),
+    },
+  };
+}
+
+function validateChainDeployment(
+  value: unknown,
+  label: string,
+  key: "a" | "b"
+): RegtestChainDeployment {
+  const record = expectRecord(value, label);
+  if (record.key !== key) {
+    throw new Error(`${label}.key must be ${key}`);
+  }
+  const gasPrice = record.gasPrice;
+  if (
+    gasPrice !== undefined &&
+    (typeof gasPrice !== "string" || !/^[0-9]+$/.test(gasPrice))
+  ) {
+    throw new Error(`${label}.gasPrice must be an unsigned wei integer string`);
+  }
+  return {
+    key,
+    name: expectString(record.name, `${label}.name`),
+    eid: expectNumber(record.eid, `${label}.eid`),
+    chainId: expectNumber(record.chainId, `${label}.chainId`),
+    ...(gasPrice === undefined ? {} : { gasPrice: BigInt(gasPrice) }),
+    hostRpcUrl: expectString(record.hostRpcUrl, `${label}.hostRpcUrl`),
+    containerRpcUrl: expectString(
+      record.containerRpcUrl,
+      `${label}.containerRpcUrl`
+    ),
+    endpoint: expectAddress(record.endpoint, `${label}.endpoint`),
+    sendUln: expectAddress(record.sendUln, `${label}.sendUln`),
+    receiveUln: expectAddress(record.receiveUln, `${label}.receiveUln`),
+    oft: expectAddress(record.oft, `${label}.oft`),
+    priceFeed: expectAddress(record.priceFeed, `${label}.priceFeed`),
+    openExecutor: expectAddress(record.openExecutor, `${label}.openExecutor`),
+    primaryOpenDVN: expectAddress(
+      record.primaryOpenDVN,
+      `${label}.primaryOpenDVN`
+    ),
+    secondaryOpenDVN: expectAddress(
+      record.secondaryOpenDVN,
+      `${label}.secondaryOpenDVN`
+    ),
+    primaryDVNSigner: expectAddress(
+      record.primaryDVNSigner,
+      `${label}.primaryDVNSigner`
+    ),
+    secondaryDVNSigner: expectAddress(
+      record.secondaryDVNSigner,
+      `${label}.secondaryDVNSigner`
+    ),
+    executorSigner: expectAddress(
+      record.executorSigner,
+      `${label}.executorSigner`
+    ),
+  };
+}
+
+function expectRecord(
+  value: unknown,
+  label: string
+): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function expectNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return value;
+}
+
+function expectAddress(value: unknown, label: string): Address {
+  return getAddress(expectString(value, label));
 }

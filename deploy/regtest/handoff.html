@@ -194,18 +194,23 @@ cast send 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --value 100ether \
 <span class="c"># repeat for 0x7099…79C8 (worker-1) and 0x3C44…93BC (worker-2)</span></pre>
     </li>
     <li>
-      <p class="li-t">Deploy + wire both chains, emit configs</p>
-      <pre>REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 REGTEST_A_CHAIN_ID=31337 \
-REGTEST_B_HOST_RPC_URL=http://127.0.0.1:8545  REGTEST_B_CHAIN_ID=<span class="c">&lt;goat-geth chainId&gt;</span> \
-REGTEST_B_CONTAINER_RPC_URL=http://goat-regtest-geth-node:8545 \
-npm run regtest:deploy</pre>
-    </li>
-    <li>
-      <p class="li-t">Generate the two worker keystores</p>
+      <p class="li-t">Generate the two worker keystores (deploy reads signer addresses from them)</p>
       <pre>E2E_WORKER_PRIVATE_KEY=0x59c6995e… REGTEST_KEYSTORE_PASSWORD=&lt;pw&gt; \
   go run ./go/cmd/e2ekeystore -out tmp/regtest/worker-1-keystore.json -password-env REGTEST_KEYSTORE_PASSWORD
 E2E_WORKER_PRIVATE_KEY=0x5de4111a… REGTEST_KEYSTORE_PASSWORD=&lt;pw&gt; \
   go run ./go/cmd/e2ekeystore -out tmp/regtest/worker-2-keystore.json -password-env REGTEST_KEYSTORE_PASSWORD</pre>
+    </li>
+    <li>
+      <p class="li-t">Deploy + wire both chains via Ignition, emit configs</p>
+      <pre><span class="c"># chain IDs are fixed by the regtest-a/regtest-b Hardhat networks (31337/31338);</span>
+<span class="c"># run goat-geth with network id 31338.</span>
+OML_SCRIPT_PARAMS=config/scripts/regtest-deploy.json OML_IGNITION_DIR=tmp/regtest/ignition \
+REGTEST_DEPLOYER_PRIVATE_KEY=0xac0974… \
+REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 \
+REGTEST_B_HOST_RPC_URL=http://127.0.0.1:8545 \
+REGTEST_B_CONTAINER_RPC_URL=http://goat-regtest-geth-node:8545 \
+REGTEST_B_GAS_PRICE=1000000000 <span class="c"># optional: force legacy type-0 txs if goat-geth drops EIP-1559</span> \
+npm run regtest:deploy</pre>
     </li>
     <li>
       <p class="li-t">Start Postgres (2 DBs) + both workers</p>
@@ -214,9 +219,11 @@ E2E_WORKER_PRIVATE_KEY=0x5de4111a… REGTEST_KEYSTORE_PASSWORD=&lt;pw&gt; \
     </li>
     <li>
       <p class="li-t">Smoke test a GOATED transfer</p>
-      <pre>REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 \
+      <pre>OML_SCRIPT_PARAMS=config/scripts/regtest-send.json \
+REGTEST_DEPLOYER_PRIVATE_KEY=0xac0974… \
+REGTEST_A_HOST_RPC_URL=http://127.0.0.1:18545 \
 REGTEST_B_HOST_RPC_URL=http://127.0.0.1:8545 \
-npm run regtest:send            <span class="c"># A→B ; add REGTEST_SEND_DIRECTION=ba for reverse</span></pre>
+npm run regtest:send            <span class="c"># direction lives in the params JSON ("ab" / "ba")</span></pre>
     </li>
   </ol>
 
@@ -248,15 +255,15 @@ npm run regtest:send            <span class="c"># A→B ; add REGTEST_SEND_DIREC
 
   <h2><span class="n">06</span>What we need from regtest-ops</h2>
   <ul class="tight">
-    <li>goat-geth live <code>eth_chainId</code> → fill <code>REGTEST_B_CHAIN_ID</code>.</li>
+    <li>goat-geth must run network id <code>31338</code> (the fixed <code>regtest-b</code> Hardhat network chain id).</li>
     <li>Confirm goat-geth host RPC (<code>http://127.0.0.1:8545</code>) and container name (<code>goat-regtest-geth-node</code>) on <code>goat_network</code>.</li>
     <li>A source EVM for chain&nbsp;A (anvil, chainId 31337, <code>--block-time 2</code>, on <code>goat_network</code>) — or say the word and dev-bugfix runs it.</li>
     <li>Run the three chain-B funding sends (step&nbsp;2), or authorize dev-bugfix to.</li>
   </ul>
 
   <footer>
-    <span class="kv"><span class="k">deploy</span><span class="v">contracts/scripts/regtest-deploy.ts</span></span>
-    <span class="kv"><span class="k">send</span><span class="v">contracts/scripts/regtest-send.ts</span></span>
+    <span class="kv"><span class="k">deploy</span><span class="v">contracts/scripts/commands/regtest-deploy.ts</span></span>
+    <span class="kv"><span class="k">send</span><span class="v">contracts/scripts/commands/regtest-send.ts</span></span>
     <span class="kv"><span class="k">compose</span><span class="v">deploy/regtest/docker-compose.regtest.yml</span></span>
     <span class="kv"><span class="k">status</span><span class="v">_coord/dev-bugfix.status.json</span></span>
   </footer>

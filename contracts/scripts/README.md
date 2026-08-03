@@ -316,6 +316,23 @@ The E2E command input files contain public paths and URLs only; deployer keys,
 keystore passwords, KMS settings, database credentials, and other
 infrastructure secrets remain in the existing test infrastructure environment.
 
+## Local GOATED regtest
+
+`regtest:deploy` and `regtest:send` reuse the same `LocalE2EChain` and
+`LocalE2EPathway` Ignition modules on the `regtest-a`/`regtest-b` Hardhat
+networks (chain ids 31337/31338) to stand up the two-chain GOATED topology
+with an autonomous two-worker relay: worker 1 runs OpenExecutor plus the
+primary OpenDVN, worker 2 runs the secondary OpenDVN, and each worker signs
+with its own pre-generated keystore (`go/cmd/e2ekeystore`) and uses its own
+database. Both take the strict `OML_SCRIPT_PARAMS` envelope
+(`config/scripts/regtest-deploy.json`, `config/scripts/regtest-send.json`),
+resolve infrastructure endpoints from `REGTEST_*` environment variables, and
+keep Ignition journals under `tmp/regtest/ignition` via `OML_IGNITION_DIR`.
+The regtest is a single trust domain (one deployer, shared price feed and
+infrastructure): it exercises the 2-of-2 required-DVN protocol flow only and
+is not a production topology template. The worker compose stack lives at
+`deploy/regtest/docker-compose.regtest.yml`.
+
 ## Tests
 
 Script tests live under `contracts/test/nodejs` and import command cores, not
