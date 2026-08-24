@@ -144,6 +144,11 @@ type headSnapshot struct {
 type HeadResult struct {
 	Number *big.Int
 	Hash   string
+	// Time is the canonical head block's timestamp (unix seconds); zero when
+	// the winning header is unavailable. Consumers that stamp on-chain
+	// payloads against a chain-side `block.timestamp` guard must not use a
+	// wall clock ahead of this value.
+	Time uint64
 }
 
 // HeadConflictError reports a same-height block hash disagreement between RPC providers.
@@ -432,6 +437,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 		// the historical header concurrently into per-slot results, merged
 		// only after Wait).
 		votes := make(map[int]common.Hash, len(tips))
+		voteHeaders := make(map[int]*gethtypes.Header, len(tips))
 		var levelFailures []string
 		var fetchIndices []int
 		for index, tip := range tips {
@@ -439,6 +445,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 			case -1:
 			case 0:
 				votes[index] = tipHashes[index]
+				voteHeaders[index] = probes[index].header
 			default:
 				fetchIndices = append(fetchIndices, index)
 			}
@@ -462,6 +469,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 				continue
 			}
 			votes[index] = fetchedHeaders[slot].Hash()
+			voteHeaders[index] = fetchedHeaders[slot]
 		}
 		if level == 0 {
 			firstLevelVotes = votes
@@ -519,7 +527,14 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 		}
 		c.applyProviderStatuses(statuses)
 		c.storeHeadSnapshot(&headSnapshot{number: new(big.Int).Set(height), hash: canonicalHash, tips: tips})
-		return HeadResult{Number: new(big.Int).Set(height), Hash: canonicalHash.Hex()}, nil
+		var headTime uint64
+		for index, hash := range votes {
+			if hash == canonicalHash && voteHeaders[index] != nil {
+				headTime = voteHeaders[index].Time
+				break
+			}
+		}
+		return HeadResult{Number: new(big.Int).Set(height), Hash: canonicalHash.Hex(), Time: headTime}, nil
 	}
 
 	if len(firstLevelVotes) < quorum {

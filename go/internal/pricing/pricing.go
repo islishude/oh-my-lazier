@@ -78,7 +78,10 @@ type cycleWrittenState struct {
 
 type cycleAnchorState struct {
 	anchor *rpcquorum.StateAnchor
-	err    error
+	// headTimeUnix is the source chain's verified head timestamp for the
+	// cycle; zero when the chain has no RPC or the head carried no time.
+	headTimeUnix uint64
+	err          error
 }
 
 // anchoredSnapshotReader is the optional anchored read surface of a snapshot
@@ -110,7 +113,7 @@ func (b *Bot) snapshotAnchor(ctx context.Context, srcEID uint32) (*rpcquorum.Sta
 		b.cycleAnchors[srcEID] = cycleAnchorState{err: err}
 		return nil, err
 	}
-	state := cycleAnchorState{}
+	state := cycleAnchorState{headTimeUnix: head.Time}
 	if head.Number != nil {
 		anchor, err := rpcquorum.AnchorFromHead(head)
 		if err != nil {
@@ -121,6 +124,25 @@ func (b *Bot) snapshotAnchor(ctx context.Context, srcEID uint32) (*rpcquorum.Sta
 	}
 	b.cycleAnchors[srcEID] = state
 	return state.anchor, nil
+}
+
+// snapshotUpdatedAt returns the timestamp to stamp into a price snapshot for
+// the given source chain: the wall clock, clamped down to the chain's verified
+// head timestamp when that is older. OpenPriceFeed.setPriceSnapshot reverts on
+// `snapshot.updatedAt > block.timestamp`, and eth_estimateGas executes against
+// the latest block — so on chains whose head time lags the wall clock (slow or
+// irregular block production) an unclamped stamp fails estimation and the
+// write never lands. When no head time is available the wall clock is used
+// unchanged.
+func (b *Bot) snapshotUpdatedAt(ctx context.Context, srcEID uint32) uint64 {
+	updatedAt := uint64(b.now().Unix())
+	if _, err := b.snapshotAnchor(ctx, srcEID); err != nil {
+		return updatedAt
+	}
+	if headTime := b.cycleAnchors[srcEID].headTimeUnix; headTime > 0 && headTime < updatedAt {
+		return headTime
+	}
+	return updatedAt
 }
 
 // WithMetrics attaches a pricing metrics recorder.
@@ -705,6 +727,7 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 	snapshotsByKey := make(map[string]PriceSnapshot, len(batch.Targets))
 	enqueuedTargets := make([]pricedUpdate, 0, len(batch.Targets))
 	dstEIDs := make([]uint32, 0, len(batch.Targets))
+	updatedAt := b.snapshotUpdatedAt(ctx, batch.SrcEID)
 	for _, target := range batch.Targets {
 		dstChain, err := b.registry.Get(target.DstEID)
 		if err != nil {
@@ -727,7 +750,7 @@ func (b *Bot) enqueuePriceUpdateBatch(ctx context.Context, batch pricedUpdateBat
 			DstNativeUSD:         dstPrice,
 			DstGasPriceWei:       dstGasPrice,
 			DstDataFeePerByteWei: dstDataFeePerByte,
-			UpdatedAtUnix:        uint64(b.now().Unix()),
+			UpdatedAtUnix:        updatedAt,
 			StaleAfterSeconds:    uint64(b.settings.StaleAfter.Seconds()),
 		})
 		if err != nil {

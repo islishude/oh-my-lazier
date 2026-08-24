@@ -576,3 +576,27 @@ func (blockingSourceConfigurationReader) validateSourceConfiguration(ctx context
 	<-ctx.Done()
 	return ctx.Err()
 }
+
+func TestNewCoinGeckoClientSelectsAPIKeyHeaderByHost(t *testing.T) {
+	t.Setenv("TEST_COINGECKO_KEY", "CG-test")
+	cases := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{"public host uses demo header", "https://api.coingecko.com", "x-cg-demo-api-key"},
+		{"pro host uses pro header", "https://pro-api.coingecko.com", "x-cg-pro-api-key"},
+		{"custom host keeps pro header", "https://coingecko-proxy.internal", "x-cg-pro-api-key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := NewCoinGeckoClient(tc.baseURL, "TEST_COINGECKO_KEY", nil)
+			if err != nil {
+				t.Fatalf("NewCoinGeckoClient() error = %v", err)
+			}
+			if client.apiKeyHeader != tc.want {
+				t.Fatalf("apiKeyHeader = %q, want %q", client.apiKeyHeader, tc.want)
+			}
+		})
+	}
+}
