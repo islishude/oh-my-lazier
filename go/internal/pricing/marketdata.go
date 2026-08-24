@@ -38,8 +38,8 @@ type CoinMarketCapPriceReader struct {
 
 // CoinGeckoClient reads public USD prices from CoinGecko simple price.
 type CoinGeckoClient struct {
-	baseURL    string
-	apiKey     string
+	baseURL string
+	apiKey  string
 	// apiKeyHeader is the authentication header for baseURL's host: the
 	// public host only accepts Demo keys via x-cg-demo-api-key (a pro
 	// header there is ignored on /simple/price and the request is counted

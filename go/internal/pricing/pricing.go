@@ -81,7 +81,7 @@ type cycleAnchorState struct {
 	// headTimeUnix is the source chain's verified head timestamp for the
 	// cycle; zero when the chain has no RPC or the head carried no time.
 	headTimeUnix uint64
-	err    error
+	err          error
 }
 
 // anchoredSnapshotReader is the optional anchored read surface of a snapshot
