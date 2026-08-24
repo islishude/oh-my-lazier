@@ -769,6 +769,34 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 	}
 }
 
+func TestSnapshotUpdatedAtClampsToVerifiedHeadTime(t *testing.T) {
+	registry := testRegistry(t)
+	bot, err := NewWithDependencies(&fakeStore{}, registry, testSettings(), testSources(), emptySnapshotReader{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewWithDependencies() error = %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0)
+	bot.now = func() time.Time { return now }
+
+	cases := []struct {
+		name     string
+		headTime uint64
+		want     uint64
+	}{
+		{"head behind wall clock clamps down", uint64(now.Unix()) - 21, uint64(now.Unix()) - 21},
+		{"head ahead of wall clock keeps wall clock", uint64(now.Unix()) + 4, uint64(now.Unix())},
+		{"head time unavailable keeps wall clock", 0, uint64(now.Unix())},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bot.cycleAnchors = map[uint32]cycleAnchorState{40161: {headTimeUnix: tc.headTime}}
+			if got := bot.snapshotUpdatedAt(context.Background(), 40161); got != tc.want {
+				t.Fatalf("snapshotUpdatedAt() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
