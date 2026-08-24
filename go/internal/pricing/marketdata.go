@@ -40,7 +40,13 @@ type CoinMarketCapPriceReader struct {
 type CoinGeckoClient struct {
 	baseURL    string
 	apiKey     string
-	httpClient *http.Client
+	// apiKeyHeader is the authentication header for baseURL's host: the
+	// public host only accepts Demo keys via x-cg-demo-api-key (a pro
+	// header there is ignored on /simple/price and the request is counted
+	// against the anonymous per-IP limit), while pro-api requires
+	// x-cg-pro-api-key.
+	apiKeyHeader string
+	httpClient   *http.Client
 }
 
 // CoinGeckoPriceReader binds a CoinGecko coin id to a reusable client.
@@ -208,7 +214,11 @@ func NewCoinGeckoClient(baseURL, apiKeyEnv string, httpClient *http.Client) (*Co
 		}
 	}
 	httpClient = marketDataHTTPClient(normalizedBaseURL, httpClient)
-	return &CoinGeckoClient{baseURL: normalizedBaseURL, apiKey: apiKey, httpClient: httpClient}, nil
+	apiKeyHeader := "x-cg-pro-api-key"
+	if parsed, err := url.Parse(normalizedBaseURL); err == nil && strings.EqualFold(parsed.Hostname(), "api.coingecko.com") {
+		apiKeyHeader = "x-cg-demo-api-key"
+	}
+	return &CoinGeckoClient{baseURL: normalizedBaseURL, apiKey: apiKey, apiKeyHeader: apiKeyHeader, httpClient: httpClient}, nil
 }
 
 func normalizeMarketDataBaseURL(source, baseURL string) (string, error) {
@@ -314,7 +324,7 @@ func (c *CoinGeckoClient) PriceUSD(ctx context.Context, coinID string) (SourcePr
 		return SourcePrice{}, wrapPriceSourceRequestError("coingecko", "build", err)
 	}
 	if c.apiKey != "" {
-		request.Header.Set("x-cg-pro-api-key", c.apiKey)
+		request.Header.Set(c.apiKeyHeader, c.apiKey)
 	}
 	response, err := c.httpClient.Do(request)
 	if err != nil {
