@@ -564,12 +564,14 @@ func TestSyncConfigConcurrentFirstStartupDoesNotDeadlock(t *testing.T) {
 	}
 	freshPathways := []config.PathwayConfig{
 		{
-			SrcEID:     52161,
-			DstEID:     52449,
-			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SrcEID:                  52161,
+			DstEID:                  52449,
+			SrcOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+			DstOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+			SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

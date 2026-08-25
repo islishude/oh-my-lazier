@@ -945,12 +945,14 @@ func testRegistry(t *testing.T) *chain.Registry {
 		},
 	}, []config.PathwayConfig{
 		{
-			SrcEID:     40161,
-			DstEID:     40449,
-			SrcOApp:    config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
-			DstOApp:    config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
-			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SrcEID:                  40161,
+			DstEID:                  40449,
+			SrcOApp:                 config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
+			DstOApp:                 config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
+			SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

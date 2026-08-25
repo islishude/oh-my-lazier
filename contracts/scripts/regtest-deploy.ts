@@ -109,7 +109,7 @@ type Environment = Readonly<Record<string, string | undefined>>;
 
 export type RegtestDeployBusinessInput = {
   tmpDir: string;
-  /** Source-chain confirmations per pathway; defaults to 1. */
+  /** Shared local-finality and ULN confirmations for the regtest fixture; defaults to 1. */
   confirmations?: bigint;
   /** GOATED supply minted on chain A; defaults to 1,000,000e18. */
   initialSupply?: bigint;
@@ -750,6 +750,8 @@ ${pathways
     dst_oapp: "${destination.oft}"
     send_lib: "${source.sendUln}"
     receive_lib: "${destination.receiveUln}"
+    send_uln_confirmations: ${deployment.parameters.confirmations}
+    receive_uln_confirmations: ${deployment.parameters.confirmations}
     source_workers:
       open_executor: "${source.openExecutor}"
       open_dvn: "${workerDVN(source)}"

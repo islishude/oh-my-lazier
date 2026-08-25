@@ -64,6 +64,7 @@ type RPCProviderRuntimeStat struct {
 	Status        string
 	LogConflict   bool
 	StateConflict bool
+	SafeConflict  bool
 }
 
 // IndexerRuntimeStat summarizes one in-process indexer loop.
@@ -81,7 +82,7 @@ type IndexerRuntimeStat struct {
 	LastErrorUnix           int64
 	LastPollDurationSeconds float64
 	ObservedHeadBlock       uint64
-	ConfirmedToBlock        uint64
+	SafeToBlock             uint64
 	SourceTransactions      uint64
 	DVNTransactions         uint64
 	DestinationLogs         uint64
@@ -156,7 +157,7 @@ func (r *Registry) RegisterIndexer(chainEID uint32, chainName string, pollInterv
 }
 
 // RecordIndexerPoll records one indexer polling attempt.
-func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, confirmedToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
+func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
 	if r == nil {
 		return
 	}
@@ -168,7 +169,7 @@ func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInte
 	stat.LastPollDurationSeconds = duration.Seconds()
 	stat.LastPollUnix = now
 	stat.ObservedHeadBlock = observedHeadBlock
-	stat.ConfirmedToBlock = confirmedToBlock
+	stat.SafeToBlock = safeToBlock
 	if err != nil {
 		stat.PollSuccess = false
 		stat.ErrorPolls++
@@ -220,6 +221,7 @@ func (r *Registry) RecordRPCProviders(chainEID uint32, chainName string, provide
 			Status:        string(provider.Status),
 			LogConflict:   provider.LogConflict,
 			StateConflict: provider.StateConflict,
+			SafeConflict:  provider.SafeConflict,
 		})
 	}
 	r.mu.Lock()
@@ -578,6 +580,11 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	for _, stat := range snapshot.RPCProviders {
 		fmt.Fprintf(output, "laz_rpc_provider_log_conflict{chain_eid=%q,provider=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ProviderID), boolGauge(stat.LogConflict))
 	}
+	output.WriteString("# HELP laz_rpc_provider_safe_conflict Whether the provider's safe-block answer disagreed with the safe-block quorum (sticky until it agrees again).\n")
+	output.WriteString("# TYPE laz_rpc_provider_safe_conflict gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_safe_conflict{chain_eid=%q,provider=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ProviderID), boolGauge(stat.SafeConflict))
+	}
 	output.WriteString("# HELP laz_worker_loop_retries_total Worker loop restart attempts after returned errors.\n")
 	output.WriteString("# TYPE laz_worker_loop_retries_total counter\n")
 	for _, stat := range snapshot.LoopRetries {
@@ -639,10 +646,10 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	for _, stat := range snapshot.Indexers {
 		fmt.Fprintf(output, "laz_indexer_observed_head_block{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.ObservedHeadBlock)
 	}
-	output.WriteString("# HELP laz_indexer_confirmed_to_block Most recent confirmed block upper bound used by an indexer poll.\n")
-	output.WriteString("# TYPE laz_indexer_confirmed_to_block gauge\n")
+	output.WriteString("# HELP laz_indexer_safe_to_block Most recent safe block upper bound used by an indexer poll.\n")
+	output.WriteString("# TYPE laz_indexer_safe_to_block gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_confirmed_to_block{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.ConfirmedToBlock)
+		fmt.Fprintf(output, "laz_indexer_safe_to_block{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SafeToBlock)
 	}
 	output.WriteString("# HELP laz_indexer_processed_total Items processed by indexer polls.\n")
 	output.WriteString("# TYPE laz_indexer_processed_total counter\n")

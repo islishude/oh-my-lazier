@@ -1986,7 +1986,7 @@ func TestNonceReconciliationReleasesAndParksExternally(t *testing.T) {
 
 	// Transient case: the confirmed nonce has not passed the held nonce, so the
 	// hold releases back to broadcast and the raw keeps replaying. The confirmed
-	// nonce must be read at head - confirmations, the indexer's confirmed window.
+	// The nonce must be read at the local head-minus-confirmations boundary.
 	client.header = &types.Header{Number: big.NewInt(5_000_000), BaseFee: big.NewInt(500_000_000)}
 	client.confirmedNonce = held.Nonce
 	confirmedTarget := target
@@ -3873,12 +3873,14 @@ func (e fakeRPCDataError) ErrorData() any {
 func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
-			SrcEID:     40161,
-			DstEID:     40449,
-			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SrcEID:                  40161,
+			DstEID:                  40449,
+			SrcOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+			DstOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+			SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

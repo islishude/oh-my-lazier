@@ -206,7 +206,7 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	registry.RecordSignerBalance(40449, "0x8888888888888888888888888888888888888888", nil, big.NewInt(1_000_000_000_000_000_000), 125*time.Millisecond, errors.New("balance rpc unavailable"))
 	registry.RecordRPCProviders(40161, "ethereum-sepolia", []rpcquorum.Provider{
 		{ID: "provider-0", Status: rpcquorum.ProviderHealthy},
-		{ID: "provider-1", Status: rpcquorum.ProviderConflict, LogConflict: true},
+		{ID: "provider-1", Status: rpcquorum.ProviderConflict, LogConflict: true, SafeConflict: true},
 	})
 	handler := Handler(fakeProvider{err: errors.New("database down")}, registry)
 	recorder := httptest.NewRecorder()
@@ -234,6 +234,7 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 		`laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000030`,
 		`laz_indexer_last_error_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000030`,
 		`laz_indexer_last_poll_duration_seconds{chain_eid="40161",name="ethereum-sepolia"} 0.250000`,
+		`laz_indexer_safe_to_block{chain_eid="40161",name="ethereum-sepolia"} 0`,
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="source_transactions"} 2`,
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="dvn_transactions"} 1`,
 		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="destination_logs"} 3`,
@@ -249,6 +250,8 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 		`laz_rpc_provider_status{chain_eid="40161",provider="provider-1",status="conflict"} 1`,
 		`laz_rpc_provider_log_conflict{chain_eid="40161",provider="provider-0"} 0`,
 		`laz_rpc_provider_log_conflict{chain_eid="40161",provider="provider-1"} 1`,
+		`laz_rpc_provider_safe_conflict{chain_eid="40161",provider="provider-0"} 0`,
+		`laz_rpc_provider_safe_conflict{chain_eid="40161",provider="provider-1"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -256,6 +259,9 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	}
 	if strings.Contains(body, "database down") || strings.Contains(body, "rpc unavailable") || strings.Contains(body, "balance rpc unavailable") {
 		t.Fatalf("metrics body exposes raw error text:\n%s", body)
+	}
+	if strings.Contains(body, "laz_indexer_confirmed_to_block") {
+		t.Fatalf("metrics body still exposes retired confirmed-to metric:\n%s", body)
 	}
 }
 

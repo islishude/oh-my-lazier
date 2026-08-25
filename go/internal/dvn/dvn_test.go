@@ -152,7 +152,7 @@ func TestProcessConfirmationsOnceActivePausesPathwayOnInsufficientAssignedConfir
 	ulnConfig.Confirmations = 15
 	worker := NewWithClientsSettingsAndCallers(
 		store,
-		testRegistry(t, packet, config.DVNModeActive),
+		testRegistry(t, packet, config.DVNModeActive, 15),
 		nil,
 		map[uint32]HeadReader{packet.DstEID: fakeHead{head: 1_000_000}},
 		nil,
@@ -385,7 +385,7 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTxWithAsymmetricConfirmatio
 			},
 		}},
 	}
-	registry := testRegistry(t, packet, config.DVNModeActive)
+	registry := testRegistry(t, packet, config.DVNModeActive, 15)
 	worker := NewWithClientsSettingsAndCallers(
 		store,
 		registry,
@@ -460,6 +460,47 @@ func TestProcessReadyToVerifyOnceActiveEnqueuesVerifyTxWithAsymmetricConfirmatio
 		`to_status=VERIFY_TX_ENQUEUED`,
 		`tx_outbox_id=42`,
 	)
+}
+
+func TestProcessReadyToVerifyOnceActivePausesPathwayOnReceiveConfirmationsDrift(t *testing.T) {
+	packet := testDVNPacket()
+	store := &fakeStore{work: []db.DVNWorkItem{{
+		Packet: packet,
+		Job: db.DVNJobRecord{
+			GUID:                  packet.GUID,
+			ConfirmationsRequired: 20,
+			Status:                string(packets.DVNReadyToVerify),
+			QuorumResult:          []byte(`{"status":"ready"}`),
+		},
+	}}}
+	ulnConfig := defaultReceiveUlnConfig()
+	ulnConfig.Confirmations = 15
+	worker := NewWithClientsSettingsAndCallers(
+		store,
+		testRegistry(t, packet, config.DVNModeActive),
+		map[uint32]Settings{packet.DstEID: {SignerID: "0x8888888888888888888888888888888888888888"}},
+		map[uint32]HeadReader{packet.DstEID: fakeHead{head: 1_000_000}},
+		nil,
+		map[uint32]ContractCaller{packet.DstEID: fakeDVNReconcileCaller{ulnConfig: ulnConfig}},
+		discardLogger(),
+	)
+
+	processed, err := worker.ProcessReadyToVerifyOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessReadyToVerifyOnce() error = %v", err)
+	}
+	if !processed {
+		t.Fatal("processed = false, want true")
+	}
+	if !strings.Contains(store.manualReviewReason, "receive uln confirmations 15 do not match configured 12") {
+		t.Fatalf("manual review reason = %q, want receive confirmations drift", store.manualReviewReason)
+	}
+	if store.pausedPathwayGUID != packet.GUID {
+		t.Fatalf("paused pathway guid = %s, want %s", store.pausedPathwayGUID, packet.GUID)
+	}
+	if store.verifyRequest.Purpose != "" {
+		t.Fatalf("unexpected verify enqueue purpose %q", store.verifyRequest.Purpose)
+	}
 }
 
 // fakeDVNDriftAtConfirmedCaller reports the configured receive library at the
@@ -606,7 +647,7 @@ func TestProcessReadyToVerifyOnceActivePausesPathwayOnInsufficientAssignedConfir
 	ulnConfig.Confirmations = 15
 	worker := NewWithClientsSettingsAndCallers(
 		store,
-		testRegistry(t, packet, config.DVNModeActive),
+		testRegistry(t, packet, config.DVNModeActive, 15),
 		map[uint32]Settings{
 			packet.DstEID: {
 				SignerID: "0x8888888888888888888888888888888888888888",
@@ -1138,8 +1179,12 @@ func (s *fakeStore) DeferDVNJob(_ context.Context, guid common.Hash, expectedSta
 	return nil
 }
 
-func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *chain.Registry {
+func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode, receiveConfirmationsOverride ...uint64) *chain.Registry {
 	t.Helper()
+	receiveConfirmations := uint64(12)
+	if len(receiveConfirmationsOverride) > 0 {
+		receiveConfirmations = receiveConfirmationsOverride[0]
+	}
 	registry, err := chain.NewRegistry(
 		[]config.ChainConfig{
 			{
@@ -1191,12 +1236,14 @@ func testRegistry(t *testing.T, packet db.PacketRecord, mode config.DVNMode) *ch
 		},
 		[]config.PathwayConfig{
 			{
-				SrcEID:     packet.SrcEID,
-				DstEID:     packet.DstEID,
-				SrcOApp:    config.EVMAddressFromCommon(packet.Sender),
-				DstOApp:    config.EVMAddressFromCommon(packet.Receiver),
-				SendLib:    config.EVMAddressFromCommon(packet.SendLib),
-				ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SrcEID:                  packet.SrcEID,
+				DstEID:                  packet.DstEID,
+				SrcOApp:                 config.EVMAddressFromCommon(packet.Sender),
+				DstOApp:                 config.EVMAddressFromCommon(packet.Receiver),
+				SendLib:                 config.EVMAddressFromCommon(packet.SendLib),
+				ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SendULNConfirmations:    12,
+				ReceiveULNConfirmations: receiveConfirmations,
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

@@ -33,10 +33,14 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{
 		head:       200,
+		safe:       188,
+		safeSet:    true,
 		sourceLogs: sourceLogs,
 	}
+	configuredChain := testIndexerChain(40161, "ethereum-sepolia", executor)
+	configuredChain.Confirmations = 99
 	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", executor),
+		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
@@ -50,6 +54,9 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	}
 	if result.SourceFromBlock != 0 || result.SourceToBlock != 188 {
 		t.Fatalf("source window = %d..%d, want 0..188", result.SourceFromBlock, result.SourceToBlock)
+	}
+	if result.ObservedHeadBlock != 200 || result.SafeToBlock != 188 {
+		t.Fatalf("head/safe = %d/%d, want 200/188", result.ObservedHeadBlock, result.SafeToBlock)
 	}
 	if result.SourceTransactions != 1 {
 		t.Fatalf("SourceTransactions = %d, want 1", result.SourceTransactions)
@@ -267,8 +274,8 @@ func TestIndexerProcessOnceIgnoresUnrelatedInvalidPacketRoute(t *testing.T) {
 			if len(store.packets) != 0 || len(store.jobs) != 0 || len(store.dvnJobs) != 0 || len(store.sourceSkips) != 0 {
 				t.Fatalf("stored packets/executor jobs/dvn jobs/skips = %d/%d/%d/%d, want 0/0/0/0", len(store.packets), len(store.jobs), len(store.dvnJobs), len(store.sourceSkips))
 			}
-			if got := store.cursors[cursorKey(pathway.SrcEID, test.stream)]; got != 188 {
-				t.Fatalf("%s cursor = %d, want 188", test.stream, got)
+			if got := store.cursors[cursorKey(pathway.SrcEID, test.stream)]; got != 200 {
+				t.Fatalf("%s cursor = %d, want 200", test.stream, got)
 			}
 		})
 	}
@@ -470,8 +477,8 @@ func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *te
 	if result.DestinationLogs != 1 {
 		t.Fatalf("second DestinationLogs = %d, want 1", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 200 {
+		t.Fatalf("destination cursor = %d, want 200", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -507,8 +514,8 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForSkippedSourcePacket(t *te
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 200 {
+		t.Fatalf("destination cursor = %d, want 200", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -535,8 +542,8 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForExternalMissingPacket(t *
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
 	}
-	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
+	if store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)] != 200 {
+		t.Fatalf("destination cursor = %d, want 200", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
 	}
 }
 
@@ -648,29 +655,118 @@ func TestIndexerProcessOnceFiltersUnexpectedDVNWorker(t *testing.T) {
 	}
 }
 
-func TestIndexerProcessOnceWaitsForConfirmations(t *testing.T) {
-	client := &fakeLogClient{head: 11}
+func TestIndexerProcessOnceUsesSafeGenesisBlock(t *testing.T) {
+	client := &fakeLogClient{head: 11, safe: 0, safeSet: true}
+	store := newFakeIndexerStore()
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
-		newFakeIndexerStore(),
+		store,
 		client,
 		discardLogger(),
-	)
+	).WithStreams(StreamSet{ExecutorSource: true})
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.ObservedHeadBlock != 11 {
-		t.Fatalf("ObservedHeadBlock = %d, want 11", result.ObservedHeadBlock)
+	if result.ObservedHeadBlock != 11 || result.SafeToBlock != 0 {
+		t.Fatalf("head/safe = %d/%d, want 11/0", result.ObservedHeadBlock, result.SafeToBlock)
 	}
-	result.ObservedHeadBlock = 0
-	if result != (ProcessResult{}) {
-		t.Fatalf("result = %+v, want no indexed windows", result)
+	if result.SourceFromBlock != 0 || result.SourceToBlock != 0 {
+		t.Fatalf("source window = %d..%d, want genesis only", result.SourceFromBlock, result.SourceToBlock)
+	}
+	if got := store.cursors[cursorKey(40161, ExecutorSourceStream)]; got != 0 {
+		t.Fatalf("source cursor = %d, want 0", got)
+	}
+}
+
+func TestIndexerProcessOnceSafeFailureDoesNotQueryOrAdvance(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 11, safeErr: errors.New("safe unavailable")}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "safe unavailable") {
+		t.Fatalf("ProcessOnce() error = %v, want safe failure", err)
+	}
+	if result.ObservedHeadBlock != 0 || result.SafeToBlock != 0 {
+		t.Fatalf("result head/safe = %d/%d, want 0/0 after safe failure", result.ObservedHeadBlock, result.SafeToBlock)
+	}
+	if len(client.queries) != 0 || len(store.cursors) != 0 {
+		t.Fatalf("queries/cursors = %d/%d, want 0/0", len(client.queries), len(store.cursors))
+	}
+}
+
+func TestIndexerProcessOnceRejectsSafeAboveHead(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 11, safe: 12, safeSet: true}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+
+	if _, err := indexer.ProcessOnce(context.Background()); err == nil || !strings.Contains(err.Error(), "above quorum head") {
+		t.Fatalf("ProcessOnce() error = %v, want safe-above-head error", err)
+	}
+	if len(client.queries) != 0 || len(store.cursors) != 0 {
+		t.Fatalf("queries/cursors = %d/%d, want 0/0", len(client.queries), len(store.cursors))
+	}
+}
+
+func TestIndexerProcessOnceRefreshesHeadAfterSafeAdvances(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 11, safe: 12, safeSet: true}
+	client.onBlock = func() { client.head = 12 }
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorSource: true})
+
+	result, err := indexer.ProcessOnce(context.Background())
+	if err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if result.ObservedHeadBlock != 12 || result.SafeToBlock != 12 {
+		t.Fatalf("head/safe = %d/%d, want 12/12", result.ObservedHeadBlock, result.SafeToBlock)
+	}
+	if got := store.cursors[cursorKey(40161, ExecutorSourceStream)]; got != 12 {
+		t.Fatalf("source cursor = %d, want 12", got)
+	}
+}
+
+func TestIndexerProcessOnceDoesNotRewindCursorAheadOfSafe(t *testing.T) {
+	store := newFakeIndexerStore()
+	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
+	client := &fakeLogClient{head: 65, safe: 30, safeSet: true}
+	indexer := NewWithClient(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).WithStreams(StreamSet{ExecutorSource: true})
+
+	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	if got := store.cursors[cursorKey(40161, ExecutorSourceStream)]; got != 40 {
+		t.Fatalf("source cursor = %d, want preserved 40", got)
 	}
 	if len(client.queries) != 0 {
-		t.Fatalf("queries = %d, want none before confirmations", len(client.queries))
+		t.Fatalf("queries = %d, want none while cursor is ahead of safe", len(client.queries))
 	}
 }
 
@@ -678,7 +774,7 @@ func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
-	client := &fakeLogClient{head: 65}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
@@ -708,7 +804,7 @@ func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 
 func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 	store := newFakeIndexerStore()
-	client := &fakeLogClient{head: 37}
+	client := &fakeLogClient{head: 37, safe: 25, safeSet: true}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
 	configuredChain.IndexerQueryBlockRange = 10
 	indexer := NewWithClient(
@@ -743,7 +839,7 @@ func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 
 func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.T) {
 	store := newFakeIndexerStore()
-	client := &fakeLogClient{head: 37}
+	client := &fakeLogClient{head: 37, safe: 25, safeSet: true}
 	configuredChain := testIndexerChain(40449, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555"))
 	configuredChain.IndexerQueryBlockRange = 10
 	indexer := NewWithClient(
@@ -869,17 +965,17 @@ func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 150 || result.SourceToBlock != 188 {
-		t.Fatalf("source window = %d..%d, want 150..188", result.SourceFromBlock, result.SourceToBlock)
+	if result.SourceFromBlock != 150 || result.SourceToBlock != 200 {
+		t.Fatalf("source window = %d..%d, want 150..200", result.SourceFromBlock, result.SourceToBlock)
 	}
-	if result.DestinationFromBlock != 150 || result.DestinationToBlock != 188 {
-		t.Fatalf("destination window = %d..%d, want 150..188", result.DestinationFromBlock, result.DestinationToBlock)
+	if result.DestinationFromBlock != 150 || result.DestinationToBlock != 200 {
+		t.Fatalf("destination window = %d..%d, want 150..200", result.DestinationFromBlock, result.DestinationToBlock)
 	}
-	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
+		t.Fatalf("source cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 200 {
+		t.Fatalf("destination cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 }
 
@@ -909,11 +1005,11 @@ func TestIndexerProcessOnceExecutorOnlyStreamsDoNotWriteDVNJobs(t *testing.T) {
 	if len(store.dvnJobs) != 0 {
 		t.Fatalf("dvn jobs = %d, want 0", len(store.dvnJobs))
 	}
-	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
-		t.Fatalf("executor source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
+		t.Fatalf("executor source cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("executor destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
+	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 200 {
+		t.Fatalf("executor destination cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 	if _, ok := store.cursors[cursorKey(40161, DVNSourceStream)]; ok {
 		t.Fatal("dvn source cursor advanced in executor-only mode")
@@ -949,11 +1045,11 @@ func TestIndexerProcessOnceDVNOnlyStreamsDoNotWriteExecutorJobs(t *testing.T) {
 	if len(store.jobs) != 0 {
 		t.Fatalf("executor jobs = %d, want 0", len(store.jobs))
 	}
-	if store.cursors[cursorKey(40161, DVNSourceStream)] != 188 {
-		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, DVNSourceStream)])
+	if store.cursors[cursorKey(40161, DVNSourceStream)] != 200 {
+		t.Fatalf("dvn source cursor = %d, want 200", store.cursors[cursorKey(40161, DVNSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, DVNDestinationStream)] != 188 {
-		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, DVNDestinationStream)])
+	if store.cursors[cursorKey(40161, DVNDestinationStream)] != 200 {
+		t.Fatalf("dvn destination cursor = %d, want 200", store.cursors[cursorKey(40161, DVNDestinationStream)])
 	}
 	if _, ok := store.cursors[cursorKey(40161, ExecutorSourceStream)]; ok {
 		t.Fatal("executor source cursor advanced in dvn-only mode")
@@ -963,7 +1059,7 @@ func TestIndexerProcessOnceDVNOnlyStreamsDoNotWriteExecutorJobs(t *testing.T) {
 	}
 }
 
-func TestIndexerProcessOnceSkipsUntilStartBlockIsConfirmed(t *testing.T) {
+func TestIndexerProcessOnceSkipsUntilStartBlockIsSafe(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 200}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
@@ -984,10 +1080,10 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsConfirmed(t *testing.T) {
 		t.Fatalf("result windows = %+v, want no indexed windows", result)
 	}
 	if len(client.queries) != 0 {
-		t.Fatalf("queries = %d, want none before configured start block is confirmed", len(client.queries))
+		t.Fatalf("queries = %d, want none before configured start block is safe", len(client.queries))
 	}
 	if len(store.cursors) != 0 {
-		t.Fatalf("cursors = %d, want none before configured start block is confirmed", len(store.cursors))
+		t.Fatalf("cursors = %d, want none before configured start block is safe", len(store.cursors))
 	}
 }
 
@@ -1014,7 +1110,7 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	client := &fakeLogClient{head: 65}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
@@ -1037,7 +1133,7 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 		`streams=executor_source`,
 		`from_block=41`,
 		`to_block=50`,
-		`confirmed_to_block=53`,
+		`safe_to_block=53`,
 		`lag_blocks=3`,
 		`duration=`,
 	)
@@ -1054,7 +1150,7 @@ func TestIndexerPartialWindowFailureReplaysIdempotently(t *testing.T) {
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	client := &fakeLogClient{head: 65, sourceLogs: testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42))}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true, sourceLogs: testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42))}
 	calls := 0
 	client.onFilter = func(ethereum.FilterQuery) error {
 		calls++
@@ -1107,7 +1203,7 @@ func TestIndexerPollOnceReportsProviderStatuses(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &quorumStatusLogClient{
-		fakeLogClient: &fakeLogClient{head: 65},
+		fakeLogClient: &fakeLogClient{head: 65, safe: 53, safeSet: true},
 		providers:     providers,
 	}
 	recorder := &providerStatusRecorder{}
@@ -1150,7 +1246,7 @@ func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
 	store.cursors[cursorKey(40161, DVNSourceStream)] = 40
 	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
 	store.cursors[cursorKey(40161, DVNDestinationStream)] = 40
-	client := &fakeLogClient{head: 65}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
@@ -1185,7 +1281,7 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelDebug)
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	client := &fakeLogClient{head: 65}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
@@ -1202,6 +1298,7 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 	}
 	logs.Reset()
 	client.head = 75
+	client.safe = 63
 	now = now.Add(10 * time.Second)
 
 	if err := indexer.pollOnce(context.Background()); err != nil {
@@ -1224,7 +1321,7 @@ func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelDebug)
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	client := &fakeLogClient{head: 65}
+	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
 	indexer := NewWithClient(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
@@ -1246,41 +1343,6 @@ func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
 		strings.Contains(output, `level=INFO msg="indexer stream advanced"`) ||
 		strings.Contains(output, `level=INFO msg="indexer poll completed"`) {
 		t.Fatalf("progress info logs emitted with interval 0:\n%s", output)
-	}
-}
-
-func TestIndexerPollOnceThrottlesWaitingForConfirmations(t *testing.T) {
-	logger, logs := captureLogger(slog.LevelDebug)
-	client := &fakeLogClient{head: 11}
-	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
-		[]chain.Pathway{testIndexerPathway()},
-		newFakeIndexerStore(),
-		client,
-		logger,
-	).WithProgressLogInterval(time.Minute)
-	now := time.Unix(1_700_000_000, 0)
-	indexer.now = func() time.Time { return now }
-
-	if err := indexer.pollOnce(context.Background()); err != nil {
-		t.Fatalf("first pollOnce() error = %v", err)
-	}
-	assertLogContains(t, logs.String(),
-		`level=DEBUG msg="indexer poll waiting for confirmations"`,
-		`level=INFO msg="indexer progress"`,
-		`status=waiting_for_confirmations`,
-	)
-	logs.Reset()
-	now = now.Add(10 * time.Second)
-
-	if err := indexer.pollOnce(context.Background()); err != nil {
-		t.Fatalf("second pollOnce() error = %v", err)
-	}
-	output := logs.String()
-	assertLogContains(t, output, `level=DEBUG msg="indexer poll waiting for confirmations"`)
-	if strings.Contains(output, `level=INFO msg="indexer progress"`) ||
-		strings.Contains(output, `level=INFO msg="indexer poll waiting for confirmations"`) {
-		t.Fatalf("waiting confirmation progress logged at info level before interval:\n%s", output)
 	}
 }
 
@@ -1330,8 +1392,8 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	if got := blockCalls.Load(); got < 2 {
 		t.Fatalf("BlockNumber calls = %d, want at least 2", got)
 	}
-	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
+		t.Fatalf("source cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 	if metricRecorder.registerCalls != 1 || metricRecorder.pollStartedBeforeRegister || metricRecorder.pollsBeforeRegister {
 		t.Fatalf("metric registration state = %#v", metricRecorder)
@@ -1385,21 +1447,21 @@ func TestIndexerRunRetriesAfterPollError(t *testing.T) {
 	if got := blockCalls.Load(); got < 3 {
 		t.Fatalf("BlockNumber calls = %d, want at least 3", got)
 	}
-	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want retry to advance to 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
+		t.Fatalf("source cursor = %d, want retry to advance to 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 
-func TestIndexerRunContinuesPollingAfterImmatureHead(t *testing.T) {
+func TestIndexerRunContinuesPollingAfterSafeUnavailable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var blockCalls atomic.Int32
+	var safeCalls atomic.Int32
 	store := newFakeIndexerStore()
-	client := &fakeLogClient{head: 5}
-	client.onBlock = func() {
-		switch blockCalls.Add(1) {
+	client := &fakeLogClient{head: 200, safe: 200, safeSet: true, safeErr: errors.New("safe unavailable")}
+	client.onSafe = func() {
+		switch safeCalls.Add(1) {
 		case 2:
-			client.head = 200
+			client.safeErr = nil
 		case 3:
 			cancel()
 		}
@@ -1424,13 +1486,16 @@ func TestIndexerRunContinuesPollingAfterImmatureHead(t *testing.T) {
 			t.Fatalf("Run() error = %v, want context.Canceled", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Run() did not continue polling after immature head")
+		t.Fatal("Run() did not continue polling after safe became available")
+	}
+	if got := safeCalls.Load(); got < 3 {
+		t.Fatalf("SafeBlockNumber calls = %d, want at least 3", got)
 	}
 	if len(client.queries) == 0 {
-		t.Fatal("queries = 0, want polling to resume after the configured confirmations are available")
+		t.Fatal("queries = 0, want polling to resume after safe became available")
 	}
-	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
-		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
+	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
+		t.Fatalf("source cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
 }
 
@@ -1493,12 +1558,16 @@ func TestIndexerRunFailsFastForLocalSetupErrors(t *testing.T) {
 
 type fakeLogClient struct {
 	head            uint64
+	safe            uint64
+	safeSet         bool
 	blockErr        error
+	safeErr         error
 	filterErr       error
 	sourceLogs      []gethtypes.Log
 	destinationLogs []gethtypes.Log
 	queries         []ethereum.FilterQuery
 	onBlock         func()
+	onSafe          func()
 	onFilter        func(query ethereum.FilterQuery) error
 }
 
@@ -1532,6 +1601,19 @@ func (c *fakeLogClient) BlockNumber(context.Context) (uint64, error) {
 	}
 	if c.blockErr != nil {
 		return 0, c.blockErr
+	}
+	return c.head, nil
+}
+
+func (c *fakeLogClient) SafeBlockNumber(context.Context) (uint64, error) {
+	if c.onSafe != nil {
+		c.onSafe()
+	}
+	if c.safeErr != nil {
+		return 0, c.safeErr
+	}
+	if c.safeSet {
+		return c.safe, nil
 	}
 	return c.head, nil
 }
@@ -1741,12 +1823,14 @@ func testIndexerChain(eid uint32, name string, executor common.Address) chain.Ch
 
 func testIndexerPathway() chain.Pathway {
 	return chain.Pathway{
-		SrcEID:     40161,
-		DstEID:     40449,
-		SrcOApp:    common.HexToAddress("0x7777777777777777777777777777777777777777"),
-		DstOApp:    common.HexToAddress("0x8888888888888888888888888888888888888888"),
-		SendLib:    common.HexToAddress("0x9999999999999999999999999999999999999999"),
-		ReceiveLib: common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		SrcEID:                  40161,
+		DstEID:                  40449,
+		SrcOApp:                 common.HexToAddress("0x7777777777777777777777777777777777777777"),
+		DstOApp:                 common.HexToAddress("0x8888888888888888888888888888888888888888"),
+		SendLib:                 common.HexToAddress("0x9999999999999999999999999999999999999999"),
+		ReceiveLib:              common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		SendULNConfirmations:    12,
+		ReceiveULNConfirmations: 12,
 		SourceWorkers: chain.WorkerContracts{
 			OpenExecutor: common.HexToAddress("0x2222222222222222222222222222222222222222"),
 			OpenDVN:      common.HexToAddress("0x3333333333333333333333333333333333333333"),

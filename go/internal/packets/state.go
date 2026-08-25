@@ -36,7 +36,7 @@ const (
 	DVNNew DVNState = "NEW"
 	// DVNAssigned records that OpenDVN was assigned for the packet.
 	DVNAssigned DVNState = "ASSIGNED"
-	// DVNWaitingConfirmations waits for the configured source-chain confirmations.
+	// DVNWaitingConfirmations waits for the source confirmations assigned in DVNJobAssigned.
 	DVNWaitingConfirmations DVNState = "WAITING_CONFIRMATIONS"
 	// DVNQuorumChecking records that RPC quorum verification is in progress.
 	DVNQuorumChecking DVNState = "QUORUM_CHECKING"

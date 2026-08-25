@@ -324,7 +324,9 @@ type ChainConfig struct {
 	ChainID uint64 `yaml:"chain_id"`
 	// EndpointAddress is the LayerZero EndpointV2 contract address on this chain.
 	EndpointAddress EVMAddress `yaml:"endpoint_address"`
-	// Confirmations is the minimum confirmation depth before indexed source events are trusted.
+	// Confirmations is the local confirmation depth used before mined receipts or
+	// destination state observations become durable workflow state. Indexers use
+	// the chain's quorum safe block instead.
 	Confirmations uint64 `yaml:"confirmations"`
 	// StartBlockNumber seeds the first indexer backfill when no durable cursor exists; omitted means 0.
 	StartBlockNumber uint64 `yaml:"start_block_number"`
@@ -386,6 +388,10 @@ type PathwayConfig struct {
 	SendLib EVMAddress `yaml:"send_lib"`
 	// ReceiveLib is the destination-chain LayerZero receive library expected for this pathway.
 	ReceiveLib EVMAddress `yaml:"receive_lib"`
+	// SendULNConfirmations is the exact confirmations value expected on the source Send ULN.
+	SendULNConfirmations uint64 `yaml:"send_uln_confirmations"`
+	// ReceiveULNConfirmations is the exact confirmations value expected on the destination Receive ULN.
+	ReceiveULNConfirmations uint64 `yaml:"receive_uln_confirmations"`
 	// SourceWorkers selects the source-chain OpenExecutor and OpenDVN contracts for this route.
 	SourceWorkers WorkerContractsConfig `yaml:"source_workers"`
 	// DestinationWorkers selects destination-side worker contracts used for verification checks.
@@ -585,14 +591,20 @@ func (c Config) Validate() error {
 		if pathway.SrcEID == pathway.DstEID {
 			return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
 		}
-		// The send ULN assigns the source chain's confirmations to every DVN job while the
-		// receive ULN enforces the destination chain's value, so a lower source value is a
-		// deterministic misconfiguration that would reject every verification at runtime.
-		if chains[pathway.SrcEID].Confirmations < chains[pathway.DstEID].Confirmations {
+		if pathway.SendULNConfirmations == 0 {
+			return fmt.Errorf("pathway %d -> %d send_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
+		}
+		if pathway.ReceiveULNConfirmations == 0 {
+			return fmt.Errorf("pathway %d -> %d receive_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
+		}
+		// SendUln302 assigns the send-side value to every DVN job while
+		// ReceiveUln302 enforces the receive-side threshold. A lower assignment
+		// value would make every packet on the pathway unverifiable.
+		if pathway.SendULNConfirmations < pathway.ReceiveULNConfirmations {
 			return fmt.Errorf(
-				"pathway %d -> %d source chain confirmations %d are below destination chain confirmations %d",
+				"pathway %d -> %d send uln confirmations %d are below receive uln confirmations %d",
 				pathway.SrcEID, pathway.DstEID,
-				chains[pathway.SrcEID].Confirmations, chains[pathway.DstEID].Confirmations,
+				pathway.SendULNConfirmations, pathway.ReceiveULNConfirmations,
 			)
 		}
 		for label, value := range map[string]EVMAddress{

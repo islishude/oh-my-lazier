@@ -669,10 +669,9 @@ func (m *Manager) ProcessNonceReconciliation(ctx context.Context, target Target)
 	if head == nil || head.Number == nil || !head.Number.IsUint64() {
 		return 0, errors.New("latest header block number is unavailable")
 	}
-	// The confirmed block matches the receipt gate arithmetic
+	// The confirmed block matches the local receipt gate arithmetic
 	// (head - receipt >= confirmations): with confirmations c > 0 the newest
-	// confirmed block is head - c, mirroring the indexer's confirmed window;
-	// zero disables the gate and reads latest.
+	// confirmed block is head - c; zero disables the gate and reads latest.
 	confirmedBlockNumber := head.Number.Uint64()
 	var confirmedBlock *big.Int
 	if target.Confirmations > 0 {
@@ -978,8 +977,8 @@ func (m *Manager) receiptOnCanonicalChain(ctx context.Context, target Target, re
 
 // receiptConfirmed reports whether a receipt is buried under at least
 // confirmations blocks beyond its own: block B is trusted only once
-// head >= B + confirmations, matching the indexer's confirmed window
-// (head - confirmations).
+// head >= B + confirmations. Indexer cursors use the quorum safe block instead
+// of this local receipt-depth policy.
 func receiptConfirmed(head *types.Header, receipt *types.Receipt, confirmations uint64) (bool, error) {
 	if head == nil || head.Number == nil || !head.Number.IsUint64() {
 		return false, errors.New("latest header block number is unavailable")

@@ -201,13 +201,23 @@ test("normalizeProfile rejects Hardhat network and EID mismatches with custom La
   );
 });
 
-test("normalizeProfile rejects unequal chain confirmations", () => {
+test("normalizeProfile accepts unequal local chain confirmations", () => {
   const input = baseProfile();
   (input.chains[0] as Record<string, unknown>).confirmations = 6;
 
+  const profile = normalizeProfile(input);
+  assert.equal(profile.chains[0].confirmations, 6);
+  assert.equal(profile.chains[1].confirmations, 12);
+  assert.equal(profile.pathway.ulnConfirmations, 12);
+});
+
+test("normalizeProfile requires pathway ULN confirmations", () => {
+  const input = baseProfile();
+  delete (input.pathway as Record<string, unknown>).ulnConfirmations;
+
   assert.throws(
     () => normalizeProfile(input),
-    /profile\.chains confirmations must match for reciprocal pathways/
+    /profile\.pathway\.ulnConfirmations must be an integer/
   );
 });
 
@@ -870,7 +880,10 @@ test("buildDeploymentState uses profile OApps in external mode without TestOFT s
 });
 
 test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config surfaces", () => {
-  const profile = normalizeProfile(baseProfile());
+  const input = baseProfile();
+  input.chains[0].confirmations = 6;
+  input.pathway.ulnConfirmations = 15;
+  const profile = normalizeProfile(input);
   const state = stateWithPriceFeeds(profile);
   const source = profile.chains[0];
   const destination = profile.chains[1];
@@ -899,7 +912,7 @@ test("oappEndpointParameterFile and openWorkersPathwayParameterFile split config
   });
   assert.equal(oapp.sendConfig[1].configType, CONFIG_TYPE_ULN);
   const uln = decodeUlnConfig(oapp.sendConfig[1].config);
-  assert.equal(uln.confirmations, 12n);
+  assert.equal(uln.confirmations, 15n);
   assert.equal(uln.requiredDVNCount, 2);
   assert.equal(uln.optionalDVNCount, NIL_DVN_COUNT);
   assert.deepEqual(
@@ -1009,6 +1022,8 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
     yaml,
     /destination_workers:\n      open_dvn: "0x2222222222222222222222222222222222222223"/
   );
+  assert.match(yaml, /send_uln_confirmations: 12/);
+  assert.match(yaml, /receive_uln_confirmations: 12/);
   assert.match(
     yaml,
     /send_required_dvns:\n      - "0x1111111111111111111111111111111111111113"\n      - "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa"/
@@ -2069,6 +2084,7 @@ function baseProfile() {
       },
     ],
     pathway: {
+      ulnConfirmations: 12,
       maxMessageSize: 10000,
       enforcedLzReceiveGas: "200000",
       minLzReceiveGas: "200000",

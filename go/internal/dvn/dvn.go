@@ -563,7 +563,7 @@ func validateDestinationVerificationConfig(ctx context.Context, caller ContractC
 	if err != nil {
 		return err
 	}
-	if err := validateReceiveUlnConfig(config, confirmations, pathway.ReceiveRequiredDVNs); err != nil {
+	if err := validateReceiveUlnConfig(config, confirmations, pathway.ReceiveULNConfirmations, pathway.ReceiveRequiredDVNs); err != nil {
 		return fmt.Errorf("%w: %w", errDestinationVerificationConfigMismatch, err)
 	}
 	return nil
@@ -687,10 +687,16 @@ func receiveUlnConfigFromABI(value any) (receiveUlnConfig, error) {
 	}, nil
 }
 
-func validateReceiveUlnConfig(config receiveUlnConfig, confirmations uint64, requiredDVNs []common.Address) error {
+func validateReceiveUlnConfig(config receiveUlnConfig, assignedConfirmations, expectedConfirmations uint64, requiredDVNs []common.Address) error {
+	if expectedConfirmations == 0 {
+		return errors.New("configured receive uln confirmations is required")
+	}
+	if config.Confirmations != expectedConfirmations {
+		return fmt.Errorf("receive uln confirmations %d do not match configured %d", config.Confirmations, expectedConfirmations)
+	}
 	// ReceiveUln302 accepts a DVN verification whose submitted confirmations meet or exceed this threshold.
-	if confirmations < config.Confirmations {
-		return fmt.Errorf("assigned confirmations %d are below receive uln required confirmations %d", confirmations, config.Confirmations)
+	if assignedConfirmations < config.Confirmations {
+		return fmt.Errorf("assigned confirmations %d are below receive uln required confirmations %d", assignedConfirmations, config.Confirmations)
 	}
 	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
 		return fmt.Errorf("receive uln requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))

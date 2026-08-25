@@ -368,12 +368,12 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".send_uln_config", sendULNConfig, srcChain.Confirmations, pathway.SendRequiredDVNs)
+	c.compareULNConfig(base+".send_uln_config", sendULNConfig, pathway.SendULNConfirmations, pathway.SendRequiredDVNs)
 	receiveULNConfig, err := c.readULNConfig(ctx, dstClient, dstChain.EndpointAddress, pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID, base+".receive_uln_config")
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, dstChain.Confirmations, pathway.ReceiveRequiredDVNs)
+	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, pathway.ReceiveULNConfirmations, pathway.ReceiveRequiredDVNs)
 	// ReceiveUln302 rejects verifications whose assigned confirmations fall below its own
 	// threshold, and DVN jobs are assigned the send-side value, so this relationship must
 	// hold on chain regardless of what either side was configured to match.

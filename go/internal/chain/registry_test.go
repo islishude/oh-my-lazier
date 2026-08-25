@@ -60,6 +60,9 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if pathway.DVNMode != config.DVNModeShadow {
 		t.Fatalf("pathway dvn mode = %q", pathway.DVNMode)
 	}
+	if pathway.SendULNConfirmations != 12 || pathway.ReceiveULNConfirmations != 12 {
+		t.Fatalf("pathway send/receive ULN confirmations = %d/%d, want 12/12", pathway.SendULNConfirmations, pathway.ReceiveULNConfirmations)
+	}
 }
 
 func TestRegistryRejectsUnknownPathway(t *testing.T) {
@@ -135,12 +138,14 @@ func testExecutorRole() config.ExecutorTxRoleConfig {
 func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
-			SrcEID:     40161,
-			DstEID:     40449,
-			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SrcEID:                  40161,
+			DstEID:                  40449,
+			SrcOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+			DstOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+			SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),

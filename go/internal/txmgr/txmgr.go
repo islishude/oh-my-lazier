@@ -63,9 +63,9 @@ type Target struct {
 	Signer    signer.Signer
 	Client    ChainClient
 	// Confirmations is the number of blocks a receipt must be buried under
-	// before its terminal workflow state is applied, mirroring the indexer's
-	// confirmation gate so a short reorg cannot leave the database in a terminal
-	// state for a transaction the chain rolled back. Zero disables the gate.
+	// before its terminal workflow state is applied, so a short reorg cannot
+	// leave the database terminal for a transaction the chain rolled back. The
+	// indexer independently uses the quorum safe block. Zero disables this gate.
 	Confirmations       uint64
 	FeePolicies         map[string]FeePolicy
 	MinNativeBalanceWei *big.Int
