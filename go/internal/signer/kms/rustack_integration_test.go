@@ -48,7 +48,7 @@ func TestRustackKMSIntegrationSignsEthereumTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPublicKey() error = %v", err)
 	}
-	publicKey, err := parseKMSPublicKey(publicKeyOut.PublicKey)
+	publicKey, err := ParseKMSPublicKey(publicKeyOut.PublicKey)
 	if err != nil {
 		t.Fatalf("parse public key: %v", err)
 	}

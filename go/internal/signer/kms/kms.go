@@ -97,7 +97,7 @@ func (s *Signer) ValidateKey(ctx context.Context) error {
 	if spec != kmstypes.KeySpecEccSecgP256k1 {
 		return fmt.Errorf("kms key %s has key spec %s, want %s", s.keyID, spec, kmstypes.KeySpecEccSecgP256k1)
 	}
-	publicKey, err := parseKMSPublicKey(der)
+	publicKey, err := ParseKMSPublicKey(der)
 	if err != nil {
 		return fmt.Errorf("kms key %s has an invalid public key: %w", s.keyID, err)
 	}
@@ -112,9 +112,9 @@ type subjectPublicKeyInfo struct {
 	SubjectPublicKey asn1.BitString
 }
 
-// parseKMSPublicKey extracts the secp256k1 public key from a DER-encoded
+// ParseKMSPublicKey extracts the secp256k1 public key from a DER-encoded
 // SubjectPublicKeyInfo as returned by AWS KMS GetPublicKey.
-func parseKMSPublicKey(der []byte) (*ecdsa.PublicKey, error) {
+func ParseKMSPublicKey(der []byte) (*ecdsa.PublicKey, error) {
 	var spki subjectPublicKeyInfo
 	rest, err := asn1.Unmarshal(der, &spki)
 	if err != nil {

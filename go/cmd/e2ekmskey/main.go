@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"encoding/asn1"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +15,7 @@ import (
 	awskms "github.com/aws/aws-sdk-go-v2/service/kms"
 	kmstypes "github.com/aws/aws-sdk-go-v2/service/kms/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/islishude/oh-my-lazier/go/internal/signer/kms"
 )
 
 type kmsKeyFile struct {
@@ -62,7 +61,7 @@ func main() {
 	if err != nil {
 		fatal("get KMS public key: %v", err)
 	}
-	parsedPublicKey, err := parseKMSPublicKey(rawPublicKey)
+	parsedPublicKey, err := kms.ParseKMSPublicKey(rawPublicKey)
 	if err != nil {
 		fatal("parse KMS public key: %v", err)
 	}
@@ -120,26 +119,6 @@ func publicKey(ctx context.Context, client *awskms.Client, keyID string) ([]byte
 		return nil, fmt.Errorf("KMS key %s has key spec %s, want %s", keyID, out.KeySpec, kmstypes.KeySpecEccSecgP256k1)
 	}
 	return out.PublicKey, nil
-}
-
-type subjectPublicKeyInfo struct {
-	Algorithm        asn1.RawValue
-	SubjectPublicKey asn1.BitString
-}
-
-func parseKMSPublicKey(der []byte) (*ecdsa.PublicKey, error) {
-	var spki subjectPublicKeyInfo
-	rest, err := asn1.Unmarshal(der, &spki)
-	if err != nil {
-		return nil, err
-	}
-	if len(rest) != 0 {
-		return nil, errors.New("public key has trailing DER bytes")
-	}
-	if len(spki.SubjectPublicKey.Bytes) == 0 {
-		return nil, errors.New("public key is empty")
-	}
-	return crypto.UnmarshalPubkey(spki.SubjectPublicKey.Bytes)
 }
 
 func envOrDefault(name, fallback string) string {

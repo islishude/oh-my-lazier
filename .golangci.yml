@@ -12,8 +12,13 @@ linters:
     - revive
     - unconvert
     - unparam
-
+    - dupl
+    - gocognit
   settings:
+    dupl:
+      threshold: 150
+    gocognit:
+      min-complexity: 150
     revive:
       rules:
         - name: exported
@@ -22,6 +27,13 @@ linters:
         - name: error-return
         - name: error-strings
         - name: var-naming
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - unparam
+          - dupl
+          - gocognit
 
 formatters:
   enable:
