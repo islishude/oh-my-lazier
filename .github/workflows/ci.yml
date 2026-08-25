@@ -114,7 +114,7 @@ jobs:
         command: >-
           --host 0.0.0.0 --port 8545 --chain-id 31337 --mnemonic
           "test test test test test test test test test test test junk"
-          --accounts 10 --balance 10000
+          --accounts 10 --balance 10000  --slots-in-an-epoch 1
         ports: ["18545:8545"]
         options: >-
           --health-cmd="cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1"
@@ -126,7 +126,7 @@ jobs:
         command: >-
           --host 0.0.0.0 --port 8545 --chain-id 31338 --mnemonic
           "test test test test test test test test test test test junk"
-          --accounts 10 --balance 10000
+          --accounts 10 --balance 10000 --slots-in-an-epoch 1
         ports: ["18546:8545"]
         options: >-
           --health-cmd="cast block-number --rpc-url http://127.0.0.1:8545 >/dev/null 2>&1"
