@@ -692,6 +692,8 @@ ${pathways
     dst_oapp: "${destination.oft}"
     send_lib: "${source.sendUln}"
     receive_lib: "${destination.receiveUln}"
+    send_uln_confirmations: ${output.parameters.confirmations}
+    receive_uln_confirmations: ${output.parameters.confirmations}
     source_workers:
       open_executor: "${source.openExecutor}"
       open_dvn: "${source.primaryOpenDVN}"

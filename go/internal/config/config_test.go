@@ -112,15 +112,26 @@ func TestValidateRejectsInvalidPathwayGasBounds(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsConfiguredConfirmations(t *testing.T) {
-	// A source may assign more confirmations than the destination requires. Keep only
-	// the 40161 -> 40449 direction: with both directions configured the relationship
-	// forces equal values, which the default fixture already covers.
+func TestValidateAcceptsDifferentLocalConfirmationDepths(t *testing.T) {
 	cfg := validConfig()
-	cfg.Pathways = cfg.Pathways[:1]
 	cfg.Chains[1].Confirmations = 6
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsMissingPathwayULNConfirmations(t *testing.T) {
+	for name, mutate := range map[string]func(*PathwayConfig){
+		"send":    func(pathway *PathwayConfig) { pathway.SendULNConfirmations = 0 },
+		"receive": func(pathway *PathwayConfig) { pathway.ReceiveULNConfirmations = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := validConfig()
+			mutate(&cfg.Pathways[0])
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() error = nil, want missing pathway ULN confirmations error")
+			}
+		})
 	}
 }
 
@@ -178,14 +189,14 @@ func TestValidateRejectsInsufficientPricingFreshnessMargin(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsPathwaySourceConfirmationsBelowDestination(t *testing.T) {
+func TestValidateRejectsPathwaySendULNConfirmationsBelowReceive(t *testing.T) {
 	cfg := validConfig()
-	cfg.Chains[0].Confirmations = 6
+	cfg.Pathways[0].SendULNConfirmations = 6
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("Validate() error = nil, want pathway confirmations relationship error")
 	}
-	if !strings.Contains(err.Error(), "below destination chain confirmations") {
+	if !strings.Contains(err.Error(), "send uln confirmations 6 are below receive uln confirmations 12") {
 		t.Fatalf("Validate() error = %v, want pathway confirmations relationship error", err)
 	}
 }
@@ -1108,6 +1119,8 @@ pathways:
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    send_uln_confirmations: 12
+    receive_uln_confirmations: 12
     source_workers:
       open_executor: "0x2222222222222222222222222222222222222222"
       open_dvn: "0x3333333333333333333333333333333333333333"
@@ -1373,12 +1386,14 @@ func validConfig() Config {
 		},
 		Pathways: []PathwayConfig{
 			{
-				SrcEID:     40161,
-				DstEID:     40449,
-				SrcOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
-				DstOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
-				SendLib:    MustEVMAddress("0x9999999999999999999999999999999999999999"),
-				ReceiveLib: MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SrcEID:                  40161,
+				DstEID:                  40449,
+				SrcOApp:                 MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				DstOApp:                 MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				SendLib:                 MustEVMAddress("0x9999999999999999999999999999999999999999"),
+				ReceiveLib:              MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SendULNConfirmations:    12,
+				ReceiveULNConfirmations: 12,
 				SourceWorkers: WorkerContractsConfig{
 					OpenExecutor: MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      MustEVMAddress("0x3333333333333333333333333333333333333333"),
@@ -1403,12 +1418,14 @@ func validConfig() Config {
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:     40449,
-				DstEID:     40161,
-				SrcOApp:    MustEVMAddress("0x8888888888888888888888888888888888888888"),
-				DstOApp:    MustEVMAddress("0x7777777777777777777777777777777777777777"),
-				SendLib:    MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-				ReceiveLib: MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+				SrcEID:                  40449,
+				DstEID:                  40161,
+				SrcOApp:                 MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				DstOApp:                 MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				SendLib:                 MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+				ReceiveLib:              MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+				SendULNConfirmations:    12,
+				ReceiveULNConfirmations: 12,
 				SourceWorkers: WorkerContractsConfig{
 					OpenExecutor: MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      MustEVMAddress("0x6666666666666666666666666666666666666666"),

@@ -76,6 +76,7 @@ chains:
     family: evm
     chain_id: 11155111
     endpoint_address: "0x1111111111111111111111111111111111111111"
+    # Local receipt and destination-state terminalization depth; the indexer uses RPC safe.
     confirmations: 12
     start_block_number: 0
     indexer_query_block_range: 500
@@ -126,6 +127,9 @@ pathways:
     dst_oapp: "0x8888888888888888888888888888888888888888"
     send_lib: "0x9999999999999999999999999999999999999999"
     receive_lib: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    # Exact approved LayerZero Send/Receive ULN values for this direction.
+    send_uln_confirmations: 12
+    receive_uln_confirmations: 12
     source_workers:
       open_executor: "0x2222222222222222222222222222222222222222"
       open_dvn: "0x3333333333333333333333333333333333333333"
@@ -163,6 +167,8 @@ pathways:
     dst_oapp: "0x7777777777777777777777777777777777777777"
     send_lib: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     receive_lib: "0xcccccccccccccccccccccccccccccccccccccccc"
+    send_uln_confirmations: 12
+    receive_uln_confirmations: 12
     source_workers:
       open_executor: "0x5555555555555555555555555555555555555555"
       open_dvn: "0x6666666666666666666666666666666666666666"

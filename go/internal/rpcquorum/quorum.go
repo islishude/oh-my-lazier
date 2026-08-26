@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	gethrpc "github.com/ethereum/go-ethereum/rpc"
 )
 
 // defaultProbeTimeout bounds every per-provider request made inside a quorum
@@ -37,6 +38,7 @@ var _ interface {
 	HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error)
 	NonceAt(context.Context, common.Address, *big.Int) (uint64, error)
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
+	SafeBlockNumber(context.Context) (uint64, error)
 	SendTransaction(context.Context, *gethtypes.Transaction) error
 	SuggestGasPrice(context.Context) (*big.Int, error)
 	SuggestGasTipCap(context.Context) (*big.Int, error)
@@ -73,6 +75,10 @@ type Provider struct {
 	// disagreed with the state-read quorum; only a later agreeing state read
 	// clears it.
 	StateConflict bool
+	// SafeConflict marks a provider whose safe-block answer disagreed with the
+	// last successful safe-block quorum. It is independent from head health and
+	// clears only after a later safe-block round verifies the provider again.
+	SafeConflict bool
 }
 
 type configuredProvider struct {
@@ -85,7 +91,10 @@ type configuredProvider struct {
 	// State reads never touch the head status, so a historical read agreeing
 	// across providers cannot re-promote a lagging or forked provider.
 	stateConflict bool
-	client        *ethclient.Client
+	// safeConflict is a separate sticky dimension from the head status. Safe
+	// block checks never reclassify providers used by unrelated latest reads.
+	safeConflict bool
+	client       *ethclient.Client
 }
 
 type providerOperationError struct {
@@ -128,6 +137,11 @@ type Client struct {
 	// snapshot; head is the latest successful quorum snapshot.
 	headMu sync.Mutex
 	head   *headSnapshot
+	// safeMu serializes safe-block checks so an older round cannot overwrite the
+	// accepted safe snapshot or per-provider safe-conflict classification from a
+	// newer round.
+	safeMu sync.Mutex
+	safe   *safeSnapshot
 	// probeTimeout is the per-provider deadline inside quorum rounds.
 	probeTimeout time.Duration
 }
@@ -138,6 +152,16 @@ type headSnapshot struct {
 	hash   common.Hash
 	// tips are the observed tip numbers of the providers that responded.
 	tips map[int]*big.Int
+}
+
+// safeSnapshot binds one accepted safe height and hash to the exact providers
+// that voted for it. Log windows use only these voters, so an equivocating
+// provider cannot bridge two otherwise-disjoint majorities across safe and log
+// rounds.
+type safeSnapshot struct {
+	number *big.Int
+	hash   common.Hash
+	voters map[int]struct{}
 }
 
 // HeadResult is the canonical head selected by quorum checks.
@@ -156,6 +180,35 @@ type HeadConflictError struct {
 	ChainName string
 	Number    *big.Int
 	Details   []string
+}
+
+// SafeBlockConflictError reports that RPC providers could not form a fixed
+// configured majority on a block hash at any quorum-reported safe height.
+type SafeBlockConflictError struct {
+	ChainName string
+	Number    *big.Int
+	Details   []string
+}
+
+// Error returns the safe-block disagreement details.
+func (e *SafeBlockConflictError) Error() string {
+	if e == nil {
+		return "rpc safe block quorum conflict"
+	}
+	number := "<unknown>"
+	if e.Number != nil {
+		number = e.Number.String()
+	}
+	if len(e.Details) == 0 {
+		return fmt.Sprintf("rpc safe block quorum conflict for chain %s at block %s", e.ChainName, number)
+	}
+	return fmt.Sprintf("rpc safe block quorum conflict for chain %s at block %s: %s", e.ChainName, number, strings.Join(e.Details, "; "))
+}
+
+// IsSafeBlockConflict reports whether err is a safe-block quorum conflict.
+func IsSafeBlockConflict(err error) bool {
+	var conflict *SafeBlockConflictError
+	return errors.As(err, &conflict)
 }
 
 // Error returns the provider disagreement details.
@@ -321,7 +374,13 @@ func (c *Client) Providers() []Provider {
 	defer c.mu.Unlock()
 	out := make([]Provider, len(c.providers))
 	for index, provider := range c.providers {
-		out[index] = Provider{ID: providerID(index), Status: provider.status, LogConflict: provider.logConflict, StateConflict: provider.stateConflict}
+		out[index] = Provider{
+			ID:            providerID(index),
+			Status:        provider.status,
+			LogConflict:   provider.logConflict,
+			StateConflict: provider.stateConflict,
+			SafeConflict:  provider.safeConflict,
+		}
 	}
 	return out
 }
@@ -366,23 +425,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	// Tip probe: every configured provider concurrently, each under its own
 	// deadline; goroutines only fill their own slot, all aggregation happens
 	// single-threaded after Wait.
-	type tipProbe struct {
-		header *gethtypes.Header
-		err    error
-	}
-	probes := make([]tipProbe, total)
-	var wg sync.WaitGroup
-	for index := range providers {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			probeCtx, cancel := c.probeContext(ctx)
-			defer cancel()
-			header, err := c.headerByNumberFromProvider(probeCtx, index, nil)
-			probes[index] = tipProbe{header: header, err: err}
-		}(index)
-	}
-	wg.Wait()
+	probes := c.probeHeaders(ctx, total, nil)
 
 	statuses := make(map[int]ProviderStatus, total)
 	tips := make(map[int]*big.Int, total)
@@ -415,17 +458,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	// block. Honest same-chain providers always agree at their lowest common
 	// tip — a member of this candidate set — so stepping down finds every
 	// recoverable agreement without weakening the hash-quorum requirement.
-	numbers := make([]*big.Int, 0, len(tips))
-	for _, tip := range tips {
-		numbers = append(numbers, tip)
-	}
-	sort.Slice(numbers, func(i, j int) bool { return numbers[i].Cmp(numbers[j]) > 0 })
-	var candidateHeights []*big.Int
-	for _, number := range numbers[quorum-1:] {
-		if len(candidateHeights) == 0 || candidateHeights[len(candidateHeights)-1].Cmp(number) != 0 {
-			candidateHeights = append(candidateHeights, new(big.Int).Set(number))
-		}
-	}
+	candidateHeights := quorumCandidateHeights(tips, quorum)
 
 	// Availability and conflict classification stay anchored at the first
 	// candidate height, matching the pre-step-down semantics.
@@ -436,41 +469,11 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 		// exactly this height (tips reuse the probe header; higher tips fetch
 		// the historical header concurrently into per-slot results, merged
 		// only after Wait).
-		votes := make(map[int]common.Hash, len(tips))
-		voteHeaders := make(map[int]*gethtypes.Header, len(tips))
-		var levelFailures []string
-		var fetchIndices []int
-		for index, tip := range tips {
-			switch tip.Cmp(height) {
-			case -1:
-			case 0:
-				votes[index] = tipHashes[index]
-				voteHeaders[index] = probes[index].header
-			default:
-				fetchIndices = append(fetchIndices, index)
-			}
-		}
-		fetchedHeaders := make([]*gethtypes.Header, len(fetchIndices))
-		fetchedErrs := make([]error, len(fetchIndices))
-		var voteWG sync.WaitGroup
-		for slot, index := range fetchIndices {
-			voteWG.Add(1)
-			go func(slot, index int) {
-				defer voteWG.Done()
-				probeCtx, cancel := c.probeContext(ctx)
-				defer cancel()
-				fetchedHeaders[slot], fetchedErrs[slot] = c.headerByNumberFromProvider(probeCtx, index, height)
-			}(slot, index)
-		}
-		voteWG.Wait()
-		for slot, index := range fetchIndices {
-			if fetchedErrs[slot] != nil || fetchedHeaders[slot] == nil {
-				levelFailures = append(levelFailures, fmt.Sprintf("%s canonical header unavailable", providerID(index)))
-				continue
-			}
-			votes[index] = fetchedHeaders[slot].Hash()
-			voteHeaders[index] = fetchedHeaders[slot]
-		}
+		vote := c.voteAtHeight(ctx, probes, tips, tipHashes, height)
+		votes := vote.hashes
+		voteHeaders := vote.headers
+		levelFailures := vote.failures
+		fetchIndices := vote.fetchIndices
 		if level == 0 {
 			firstLevelVotes = votes
 			firstLevelFailures = levelFailures
@@ -478,18 +481,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 		if len(votes) < quorum {
 			continue
 		}
-		voteCounts := make(map[common.Hash]int, len(votes))
-		for _, hash := range votes {
-			voteCounts[hash]++
-		}
-		var canonicalHash common.Hash
-		best := 0
-		for hash, count := range voteCounts {
-			if count > best {
-				best = count
-				canonicalHash = hash
-			}
-		}
+		canonicalHash, best := majorityBlockHash(votes)
 		if best < quorum {
 			continue
 		}
@@ -564,6 +556,114 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	}
 }
 
+type headerProbe struct {
+	header *gethtypes.Header
+	err    error
+}
+
+// probeHeaders reads one block reference from every configured provider under
+// independent deadlines. number may be nil (latest) or a negative EVM block
+// tag encoded as a big.Int, including rpc.SafeBlockNumber.
+func (c *Client) probeHeaders(ctx context.Context, total int, number *big.Int) []headerProbe {
+	probes := make([]headerProbe, total)
+	var wg sync.WaitGroup
+	for index := 0; index < total; index++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			probeCtx, cancel := c.probeContext(ctx)
+			defer cancel()
+			header, err := c.headerByNumberFromProvider(probeCtx, index, number)
+			probes[index] = headerProbe{header: header, err: err}
+		}(index)
+	}
+	wg.Wait()
+	return probes
+}
+
+// quorumCandidateHeights returns the highest height reached by at least quorum
+// providers followed by lower distinct responder heights for step-down voting.
+func quorumCandidateHeights(tips map[int]*big.Int, quorum int) []*big.Int {
+	numbers := make([]*big.Int, 0, len(tips))
+	for _, tip := range tips {
+		numbers = append(numbers, tip)
+	}
+	sort.Slice(numbers, func(i, j int) bool { return numbers[i].Cmp(numbers[j]) > 0 })
+	candidates := make([]*big.Int, 0, len(numbers)-quorum+1)
+	for _, number := range numbers[quorum-1:] {
+		if len(candidates) == 0 || candidates[len(candidates)-1].Cmp(number) != 0 {
+			candidates = append(candidates, new(big.Int).Set(number))
+		}
+	}
+	return candidates
+}
+
+type blockHeightVote struct {
+	hashes       map[int]common.Hash
+	headers      map[int]*gethtypes.Header
+	failures     []string
+	fetchIndices []int
+}
+
+// voteAtHeight asks only providers whose reported tag height reached the
+// candidate to vote on its exact block hash. Providers at the candidate reuse
+// their tag response; providers above it fetch the historical header.
+func (c *Client) voteAtHeight(ctx context.Context, probes []headerProbe, tips map[int]*big.Int, tipHashes map[int]common.Hash, height *big.Int) blockHeightVote {
+	vote := blockHeightVote{
+		hashes:  make(map[int]common.Hash, len(tips)),
+		headers: make(map[int]*gethtypes.Header, len(tips)),
+	}
+	for index, tip := range tips {
+		switch tip.Cmp(height) {
+		case -1:
+		case 0:
+			vote.hashes[index] = tipHashes[index]
+			vote.headers[index] = probes[index].header
+		default:
+			vote.fetchIndices = append(vote.fetchIndices, index)
+		}
+	}
+	sort.Ints(vote.fetchIndices)
+	fetchedHeaders := make([]*gethtypes.Header, len(vote.fetchIndices))
+	fetchedErrs := make([]error, len(vote.fetchIndices))
+	var wg sync.WaitGroup
+	for slot, index := range vote.fetchIndices {
+		wg.Add(1)
+		go func(slot, index int) {
+			defer wg.Done()
+			probeCtx, cancel := c.probeContext(ctx)
+			defer cancel()
+			fetchedHeaders[slot], fetchedErrs[slot] = c.headerByNumberFromProvider(probeCtx, index, height)
+		}(slot, index)
+	}
+	wg.Wait()
+	for slot, index := range vote.fetchIndices {
+		if fetchedErrs[slot] != nil || fetchedHeaders[slot] == nil {
+			vote.failures = append(vote.failures, fmt.Sprintf("%s canonical header unavailable", providerID(index)))
+			continue
+		}
+		vote.hashes[index] = fetchedHeaders[slot].Hash()
+		vote.headers[index] = fetchedHeaders[slot]
+	}
+	return vote
+}
+
+func majorityBlockHash(votes map[int]common.Hash) (common.Hash, int) {
+	counts := make(map[common.Hash]int, len(votes))
+	for _, hash := range votes {
+		counts[hash]++
+	}
+	var canonical common.Hash
+	best := 0
+	for hash, count := range counts {
+		if count > best {
+			best = count
+			canonical = hash
+		}
+	}
+	return canonical, best
+}
+
 // markUnverifiedUnavailable downgrades every provider a failed quorum round
 // left unclassified: a responder whose answer was never majority-verified must
 // not keep a stale healthy status and serve single-source reads afterwards.
@@ -608,6 +708,18 @@ func (c *Client) headSnapshotRef() *headSnapshot {
 	return c.head
 }
 
+func (c *Client) storeSafeSnapshot(snapshot *safeSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.safe = snapshot
+}
+
+func (c *Client) safeSnapshotRef() *safeSnapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.safe
+}
+
 // BlockNumber returns the quorum canonical head number: the height a fixed
 // configured majority of providers has reached. Confirmation-depth gates built
 // on it can no longer be lifted by a single provider's inflated tip.
@@ -620,6 +732,126 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 		return 0, fmt.Errorf("quorum head number for chain %s is not a uint64", c.chainName)
 	}
 	return head.Number.Uint64(), nil
+}
+
+// SafeBlockNumber returns the highest EVM safe block supported by a fixed
+// configured majority. A provider claiming a higher safe tip cannot lift the
+// result: at least quorum providers must have reached the selected height and
+// the same providers must form a majority on its exact block hash. Ordinary
+// provider lag is handled by stepping down through lower reported safe tips.
+// This check does not replace the latest quorum head snapshot used by log reads
+// and does not reclassify provider head health.
+func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
+	c.safeMu.Lock()
+	defer c.safeMu.Unlock()
+	providers := c.snapshotProviders()
+	total := len(providers)
+	if total == 0 {
+		return 0, errors.New("no rpc providers configured")
+	}
+	quorum := total/2 + 1
+	safeTag := big.NewInt(int64(gethrpc.SafeBlockNumber))
+	probes := c.probeHeaders(ctx, total, safeTag)
+	tips := make(map[int]*big.Int, total)
+	tipHashes := make(map[int]common.Hash, total)
+	failureDetails := make([]string, 0, total)
+	for index, probe := range probes {
+		if probe.err != nil || probe.header == nil || probe.header.Number == nil {
+			failureDetails = append(failureDetails, fmt.Sprintf("%s safe block unavailable", providerID(index)))
+			continue
+		}
+		tips[index] = new(big.Int).Set(probe.header.Number)
+		tipHashes[index] = probe.header.Hash()
+	}
+	if len(tips) < quorum {
+		return 0, &QuorumUnavailableError{
+			ChainName: c.chainName,
+			Details:   append(failureDetails, fmt.Sprintf("%d of %d configured providers returned a safe block, quorum is %d", len(tips), total, quorum)),
+		}
+	}
+
+	candidates := quorumCandidateHeights(tips, quorum)
+	var firstVotes map[int]common.Hash
+	var firstFailures []string
+	for level, height := range candidates {
+		vote := c.voteAtHeight(ctx, probes, tips, tipHashes, height)
+		if level == 0 {
+			firstVotes = vote.hashes
+			firstFailures = vote.failures
+		}
+		if len(vote.hashes) < quorum {
+			continue
+		}
+		canonicalHash, best := majorityBlockHash(vote.hashes)
+		if best < quorum {
+			continue
+		}
+		if !height.IsUint64() {
+			return 0, fmt.Errorf("quorum safe block number for chain %s is not a uint64", c.chainName)
+		}
+		voters := make(map[int]struct{}, best)
+		for index, hash := range vote.hashes {
+			if hash == canonicalHash {
+				voters[index] = struct{}{}
+			}
+		}
+		c.storeSafeSnapshot(&safeSnapshot{
+			number: new(big.Int).Set(height),
+			hash:   canonicalHash,
+			voters: voters,
+		})
+		c.applySafeQuorum(tips, vote.hashes, canonicalHash, height, level > 0)
+		return height.Uint64(), nil
+	}
+
+	if len(firstVotes) < quorum {
+		return 0, &QuorumUnavailableError{
+			ChainName: c.chainName,
+			Details: append(
+				append(failureDetails, firstFailures...),
+				fmt.Sprintf("%d of %d configured providers served the quorum safe height, quorum is %d", len(firstVotes), total, quorum),
+			),
+		}
+	}
+	details := make([]string, 0, len(firstVotes))
+	for index, hash := range firstVotes {
+		details = append(details, fmt.Sprintf("%s returned %s", providerID(index), hash))
+	}
+	sort.Strings(details)
+	c.applySafeConflict(firstVotes)
+	return 0, &SafeBlockConflictError{
+		ChainName: c.chainName,
+		Number:    new(big.Int).Set(candidates[0]),
+		Details:   details,
+	}
+}
+
+func (c *Client) applySafeQuorum(tips map[int]*big.Int, votes map[int]common.Hash, canonicalHash common.Hash, height *big.Int, steppedDown bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index, hash := range votes {
+		if index < 0 || index >= len(c.providers) {
+			continue
+		}
+		c.providers[index].safeConflict = hash != canonicalHash
+	}
+	if steppedDown {
+		for index, tip := range tips {
+			if index >= 0 && index < len(c.providers) && tip.Cmp(height) > 0 {
+				c.providers[index].safeConflict = true
+			}
+		}
+	}
+}
+
+func (c *Client) applySafeConflict(votes map[int]common.Hash) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index := range votes {
+		if index >= 0 && index < len(c.providers) {
+			c.providers[index].safeConflict = true
+		}
+	}
 }
 
 // ChainID returns the first healthy provider's native EVM chain ID.
@@ -671,41 +903,39 @@ func (c *Client) ValidateChainID(ctx context.Context, expected *big.Int) error {
 }
 
 // FilterLogs returns a bounded log window only when a fixed configured
-// majority of the providers that had reached the window end (per the latest
-// quorum head snapshot) return the exact same normalized log sequence. The
-// minority is marked with a sticky log-conflict flag (a separate dimension a
-// later head check never clears); fewer than quorum usable responses is a
-// QuorumUnavailableError and no majority sequence is a LogConflictError, so a
-// single provider that fabricates or silently drops logs stalls the consumer
-// instead of poisoning or losing indexed state. Callers must run CheckHead
-// first (the indexer's head read does) and stay at or below its canonical head.
+// majority of the providers that agreed on the latest safe snapshot return the
+// exact same normalized log sequence. Binding both rounds to the same provider
+// set prevents one equivocating provider from bridging different safe and log
+// majorities. The minority is marked with a sticky log-conflict flag (a
+// separate dimension a later head check never clears); fewer than quorum usable
+// responses is a QuorumUnavailableError and no majority sequence is a
+// LogConflictError. Callers must run SafeBlockNumber first and stay at or below
+// the accepted safe height.
 func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
 	if query.FromBlock == nil || query.ToBlock == nil {
 		return nil, errors.New("filter logs requires a bounded from/to block range")
 	}
-	snapshot := c.headSnapshotRef()
+	snapshot := c.safeSnapshotRef()
 	if snapshot == nil {
-		return nil, fmt.Errorf("no quorum head snapshot for chain %s; CheckHead must precede FilterLogs", c.chainName)
+		return nil, fmt.Errorf("no quorum safe snapshot for chain %s; SafeBlockNumber must precede FilterLogs", c.chainName)
 	}
 	if query.ToBlock.Cmp(snapshot.number) > 0 {
-		return nil, fmt.Errorf("filter logs to block %s is beyond the quorum head %s for chain %s", query.ToBlock, snapshot.number, c.chainName)
+		return nil, fmt.Errorf("filter logs to block %s is beyond the quorum safe block %s for chain %s", query.ToBlock, snapshot.number, c.chainName)
 	}
 	total := len(c.snapshotProviders())
 	if total == 0 {
 		return nil, errors.New("no rpc providers configured")
 	}
 	quorum := total/2 + 1
-	participants := make([]int, 0, total)
-	for index, tip := range snapshot.tips {
-		if tip != nil && tip.Cmp(query.ToBlock) >= 0 {
-			participants = append(participants, index)
-		}
+	participants := make([]int, 0, len(snapshot.voters))
+	for index := range snapshot.voters {
+		participants = append(participants, index)
 	}
 	sort.Ints(participants)
 	if len(participants) < quorum {
 		return nil, &QuorumUnavailableError{
 			ChainName: c.chainName,
-			Details:   []string{fmt.Sprintf("%d of %d configured providers had reached block %s at the last head check, quorum is %d", len(participants), total, query.ToBlock, quorum)},
+			Details:   []string{fmt.Sprintf("%d of %d configured providers agreed on safe block %s (%s), quorum is %d", len(participants), total, snapshot.number, snapshot.hash, quorum)},
 		}
 	}
 

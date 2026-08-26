@@ -30,6 +30,8 @@ services:
       - "10"
       - "--balance"
       - "10000"
+      - "--slots-in-an-epoch"
+      - "1"
     ports:
       - "18545:8545"
     healthcheck:
@@ -59,6 +61,8 @@ services:
       - "10"
       - "--balance"
       - "10000"
+      - "--slots-in-an-epoch"
+      - "1"
     ports:
       - "18546:8545"
     healthcheck:

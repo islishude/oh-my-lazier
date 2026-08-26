@@ -121,6 +121,16 @@ test("local E2E runner no longer constructs raw Viem clients or private-key acco
   assert.match(source, /network: LOCAL_E2E_RUN_NETWORKS\.chainA/);
   assert.match(source, /network: LOCAL_E2E_RUN_NETWORKS\.chainB/);
   assert.match(source, /clients\.provider\.request/);
+  assert.match(source, /Object\.values\(state\.clients\)/);
+  assert.match(source, /async \(client\) => await mine\(client\)/);
+});
+
+test("local Anvil chains use one-slot epochs for short safe distance", async () => {
+  const compose = await readFile("docker-compose.e2e.yml", "utf8");
+  assert.equal(
+    (compose.match(/"--slots-in-an-epoch"\s*\n\s*- "1"/g) ?? []).length,
+    2
+  );
 });
 
 function localDeployment(): LocalE2EDeployment {

@@ -265,6 +265,14 @@ export async function runLocalE2E(
             deployment.chains.b,
             multiSendAmountsAB
           );
+          await Promise.all(
+            Object.values(state.clients).map(
+              async (client) => await mine(client)
+            )
+          );
+          logStep("safe settlement blocks mined", {
+            blocks_per_chain: 1,
+          });
           return { applied: true, ok: true, directions };
         }
       )
@@ -460,6 +468,7 @@ async function runDirection(
   if (options.exerciseRBF) {
     await submitSecondaryVerificationAndExerciseRBF(
       state,
+      sourceClients,
       destinationClients,
       destination,
       packet
@@ -719,7 +728,8 @@ async function sendSecondaryVerification(
 
 async function submitSecondaryVerificationAndExerciseRBF(
   state: LocalE2ERunState,
-  clients: Clients,
+  sourceClients: Clients,
+  destinationClients: Clients,
   destination: ChainDeployment,
   packet: PacketDetails
 ) {
@@ -729,27 +739,28 @@ async function submitSecondaryVerificationAndExerciseRBF(
     executor_signer: destination.executorSigner,
     payload_hash: packet.payloadHash,
   });
-  await setAutomine(clients, false);
+  await setAutomine(destinationClients, false);
   try {
     const secondaryHash = await sendSecondaryVerification(
       state,
-      clients,
+      destinationClients,
       destination,
       packet
     );
     await waitForSecondaryAndPrimaryVerifications(
-      clients,
+      sourceClients,
+      destinationClients,
       destination,
       packet,
       secondaryHash
     );
     const original = await waitForPendingCommitVerification(
-      clients,
+      destinationClients,
       destination,
       packet
     );
     const replacement = await waitForPendingCommitVerificationReplacement(
-      clients,
+      destinationClients,
       destination,
       packet,
       original
@@ -766,13 +777,14 @@ async function submitSecondaryVerificationAndExerciseRBF(
       replacement_max_priority_fee_per_gas: replacement.maxPriorityFeePerGas,
     });
   } finally {
-    await setAutomine(clients, true);
+    await setAutomine(destinationClients, true);
   }
-  await mine(clients);
+  await mine(destinationClients);
 }
 
 async function waitForSecondaryAndPrimaryVerifications(
-  clients: Clients,
+  sourceClients: Clients,
+  destinationClients: Clients,
   destination: ChainDeployment,
   packet: PacketDetails,
   secondaryHash: Hex
@@ -780,11 +792,11 @@ async function waitForSecondaryAndPrimaryVerifications(
   const started = Date.now();
   let secondaryConfirmed = false;
   while (Date.now() - started < 60_000) {
-    await mine(clients);
+    await Promise.all([mine(sourceClients), mine(destinationClients)]);
     if (!secondaryConfirmed) {
       let receipt: TransactionReceipt | undefined;
       try {
-        receipt = await clients.publicClient.getTransactionReceipt({
+        receipt = await destinationClients.publicClient.getTransactionReceipt({
           hash: secondaryHash,
         });
       } catch {
@@ -806,7 +818,7 @@ async function waitForSecondaryAndPrimaryVerifications(
       }
     }
     const verified = await verifiedDVNs(
-      clients.publicClient,
+      destinationClients.publicClient,
       destination,
       packet
     );

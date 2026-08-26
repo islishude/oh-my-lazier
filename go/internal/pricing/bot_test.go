@@ -696,12 +696,14 @@ func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *ch
 func testPathways() []config.PathwayConfig {
 	return []config.PathwayConfig{
 		{
-			SrcEID:     40161,
-			DstEID:     40449,
-			SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-			DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-			SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-			ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SrcEID:                  40161,
+			DstEID:                  40449,
+			SrcOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+			DstOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+			SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+			ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 				OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
@@ -716,12 +718,14 @@ func testPathways() []config.PathwayConfig {
 			MaxMessageSize: 10000,
 		},
 		{
-			SrcEID:     40449,
-			DstEID:     40161,
-			SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-			DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-			SendLib:    config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-			ReceiveLib: config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+			SrcEID:                  40449,
+			DstEID:                  40161,
+			SrcOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+			DstOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+			SendLib:                 config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+			ReceiveLib:              config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+			SendULNConfirmations:    12,
+			ReceiveULNConfirmations: 12,
 			SourceWorkers: config.WorkerContractsConfig{
 				OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 				OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),

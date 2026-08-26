@@ -63,14 +63,18 @@ type DestinationWorkerContracts struct {
 
 // Pathway is one configured source-to-destination OApp pathway.
 type Pathway struct {
-	SrcEID             uint32
-	DstEID             uint32
-	SrcOApp            common.Address
-	DstOApp            common.Address
-	SendLib            common.Address
-	ReceiveLib         common.Address
-	SourceWorkers      WorkerContracts
-	DestinationWorkers DestinationWorkerContracts
+	SrcEID     uint32
+	DstEID     uint32
+	SrcOApp    common.Address
+	DstOApp    common.Address
+	SendLib    common.Address
+	ReceiveLib common.Address
+	// SendULNConfirmations is the approved source Send ULN confirmations value.
+	SendULNConfirmations uint64
+	// ReceiveULNConfirmations is the approved destination Receive ULN threshold.
+	ReceiveULNConfirmations uint64
+	SourceWorkers           WorkerContracts
+	DestinationWorkers      DestinationWorkerContracts
 	// SendRequiredDVNs is the exact required DVN set expected on the source chain's send ULN.
 	SendRequiredDVNs []common.Address
 	// ReceiveRequiredDVNs is the exact required DVN set expected on the destination chain's receive ULN.
@@ -139,14 +143,16 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			DestinationWorkers: DestinationWorkerContracts{
 				OpenDVN: cfg.DestinationWorkers.OpenDVN.Common(),
 			},
-			SendRequiredDVNs:    commonAddresses(cfg.SendRequiredDVNs),
-			ReceiveRequiredDVNs: commonAddresses(cfg.ReceiveRequiredDVNs),
-			DVNMode:             cfg.DVN.Mode,
-			Pricing:             cfg.Pricing,
-			Enabled:             cfg.Enabled,
-			MaxMessageSize:      cfg.MaxMessageSize,
-			MinLzReceiveGas:     cfg.MinLzReceiveGas,
-			MaxLzReceiveGas:     cfg.MaxLzReceiveGas,
+			SendULNConfirmations:    cfg.SendULNConfirmations,
+			ReceiveULNConfirmations: cfg.ReceiveULNConfirmations,
+			SendRequiredDVNs:        commonAddresses(cfg.SendRequiredDVNs),
+			ReceiveRequiredDVNs:     commonAddresses(cfg.ReceiveRequiredDVNs),
+			DVNMode:                 cfg.DVN.Mode,
+			Pricing:                 cfg.Pricing,
+			Enabled:                 cfg.Enabled,
+			MaxMessageSize:          cfg.MaxMessageSize,
+			MinLzReceiveGas:         cfg.MinLzReceiveGas,
+			MaxLzReceiveGas:         cfg.MaxLzReceiveGas,
 		}
 		registry.pathways[pathwayKey(pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)] = pathway
 	}

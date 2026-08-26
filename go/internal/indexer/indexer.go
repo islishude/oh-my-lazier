@@ -50,8 +50,8 @@ const (
 type cursorSkipReason string
 
 const (
-	cursorSkipCaughtUp               cursorSkipReason = "cursor_caught_up"
-	cursorSkipStartBlockNotConfirmed cursorSkipReason = "start_block_not_confirmed"
+	cursorSkipCaughtUp          cursorSkipReason = "cursor_caught_up"
+	cursorSkipStartBlockNotSafe cursorSkipReason = "start_block_not_safe"
 )
 
 // StreamSet selects the durable indexer streams this process advances.
@@ -100,13 +100,14 @@ type Store interface {
 // LogClient reads chain heads and historical EVM logs.
 type LogClient interface {
 	BlockNumber(ctx context.Context) (uint64, error)
+	SafeBlockNumber(ctx context.Context) (uint64, error)
 	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error)
 }
 
 // MetricsRecorder records process-local indexer lifecycle and polling outcomes.
 type MetricsRecorder interface {
 	RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration)
-	RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, confirmedToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error)
+	RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error)
 }
 
 // Indexer watches one chain for LayerZero and worker contract events.
@@ -196,7 +197,7 @@ func (i *Indexer) Run(ctx context.Context) error {
 	return i.runPollingLoop(ctx)
 }
 
-// ProcessOnce backfills one confirmed log window for source and destination executor events.
+// ProcessOnce backfills one safe log window for source and destination worker events.
 func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	if i.store == nil {
 		return ProcessResult{}, errors.New("indexer store is required")
@@ -204,24 +205,31 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	if i.client == nil {
 		return ProcessResult{}, errors.New("indexer log client is required")
 	}
-	head, err := i.client.BlockNumber(ctx)
+	safeTo, err := i.client.SafeBlockNumber(ctx)
 	if err != nil {
 		return ProcessResult{}, err
 	}
-	if head < i.chain.Confirmations {
-		return ProcessResult{ObservedHeadBlock: head}, nil
+	result := ProcessResult{SafeToBlock: safeTo}
+	// Establish the head snapshot after the safe read: on chains where safe
+	// advances with latest, the reverse order can compare a fresh safe height to
+	// a stale head and reject two individually valid observations.
+	head, err := i.client.BlockNumber(ctx)
+	if err != nil {
+		return result, err
 	}
-	confirmedTo := head - i.chain.Confirmations
-	result := ProcessResult{ConfirmedToBlock: confirmedTo, ObservedHeadBlock: head}
+	result.ObservedHeadBlock = head
+	if safeTo > head {
+		return result, fmt.Errorf("safe block %d is above quorum head %d for chain %s", safeTo, head, i.chain.Name)
+	}
 	sourceWindowSet := false
 	destinationWindowSet := false
 	if i.streams.ExecutorSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorSourceStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorSourceStream, safeTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(ExecutorSourceStream, skipReason, confirmedTo)
+			i.logCursorSkip(ExecutorSourceStream, skipReason, safeTo)
 		} else {
 			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleExecutor)
 			if err != nil {
@@ -239,12 +247,12 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 		}
 	}
 	if i.streams.DVNSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNSourceStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNSourceStream, safeTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(DVNSourceStream, skipReason, confirmedTo)
+			i.logCursorSkip(DVNSourceStream, skipReason, safeTo)
 		} else {
 			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleDVN)
 			if err != nil {
@@ -263,12 +271,12 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 		}
 	}
 	if i.streams.ExecutorDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorDestinationStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorDestinationStream, safeTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(ExecutorDestinationStream, skipReason, confirmedTo)
+			i.logCursorSkip(ExecutorDestinationStream, skipReason, safeTo)
 		} else {
 			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleExecutor)
 			if err != nil {
@@ -289,12 +297,12 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 		}
 	}
 	if i.streams.DVNDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNDestinationStream, confirmedTo)
+		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNDestinationStream, safeTo)
 		if err != nil {
 			return ProcessResult{}, err
 		}
 		if !ok {
-			i.logCursorSkip(DVNDestinationStream, skipReason, confirmedTo)
+			i.logCursorSkip(DVNDestinationStream, skipReason, safeTo)
 		} else {
 			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleDVN)
 			if err != nil {
@@ -320,7 +328,7 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 
 // ProcessResult summarizes one indexer polling pass.
 type ProcessResult struct {
-	ConfirmedToBlock     uint64
+	SafeToBlock          uint64
 	ObservedHeadBlock    uint64
 	SourceFromBlock      uint64
 	SourceToBlock        uint64
@@ -844,7 +852,7 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 			i.chain.Name,
 			i.pollInterval,
 			result.ObservedHeadBlock,
-			result.ConfirmedToBlock,
+			result.SafeToBlock,
 			result.SourceTransactions,
 			result.DVNTransactions,
 			result.DestinationLogs,
@@ -873,36 +881,14 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 	return nil
 }
 
-func (i *Indexer) logCursorSkip(stream string, reason cursorSkipReason, confirmedTo uint64) {
+func (i *Indexer) logCursorSkip(stream string, reason cursorSkipReason, safeTo uint64) {
 	if reason == "" {
 		return
 	}
-	i.logger.Debug("skipped indexer stream", "chain", i.chain.Name, "eid", i.chain.EID, "stream", stream, "reason", string(reason), "confirmed_to_block", confirmedTo)
+	i.logger.Debug("skipped indexer stream", "chain", i.chain.Name, "eid", i.chain.EID, "stream", stream, "reason", string(reason), "safe_to_block", safeTo)
 }
 
 func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
-	if result.ObservedHeadBlock < i.chain.Confirmations {
-		i.logger.Debug(
-			"indexer poll waiting for confirmations",
-			"chain", i.chain.Name,
-			"eid", i.chain.EID,
-			"observed_head_block", result.ObservedHeadBlock,
-			"confirmations", i.chain.Confirmations,
-			"duration", duration,
-		)
-		if i.shouldLogProgressInfo() {
-			i.logger.Info(
-				"indexer progress",
-				"chain", i.chain.Name,
-				"eid", i.chain.EID,
-				"status", "waiting_for_confirmations",
-				"observed_head_block", result.ObservedHeadBlock,
-				"confirmations", i.chain.Confirmations,
-				"duration", duration,
-			)
-		}
-		return
-	}
 	for _, progress := range result.streamProgress[:result.streamProgressCount] {
 		i.logger.Debug(
 			"indexer stream advanced",
@@ -911,8 +897,8 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 			"stream", progress.stream,
 			"from_block", progress.fromBlock,
 			"to_block", progress.toBlock,
-			"confirmed_to_block", result.ConfirmedToBlock,
-			"lag_blocks", lagBlocks(result.ConfirmedToBlock, progress.toBlock),
+			"safe_to_block", result.SafeToBlock,
+			"lag_blocks", lagBlocks(result.SafeToBlock, progress.toBlock),
 			"source_transactions", progress.sourceTransactions,
 			"dvn_transactions", progress.dvnTransactions,
 			"destination_logs", progress.destinationLogs,
@@ -924,7 +910,7 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
 		"observed_head_block", result.ObservedHeadBlock,
-		"confirmed_to_block", result.ConfirmedToBlock,
+		"safe_to_block", result.SafeToBlock,
 		"streams_advanced", result.streamProgressCount,
 		"source_transactions", result.SourceTransactions,
 		"dvn_transactions", result.DVNTransactions,
@@ -965,7 +951,7 @@ func (i *Indexer) logProgressSummary(result ProcessResult, duration time.Duratio
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
 		"observed_head_block", result.ObservedHeadBlock,
-		"confirmed_to_block", result.ConfirmedToBlock,
+		"safe_to_block", result.SafeToBlock,
 		"streams_advanced", result.streamProgressCount,
 		"source_transactions", result.SourceTransactions,
 		"dvn_transactions", result.DVNTransactions,
@@ -985,7 +971,7 @@ func (i *Indexer) logProgressSummary(result ProcessResult, duration time.Duratio
 			if progress.toBlock > toBlock {
 				toBlock = progress.toBlock
 			}
-			if progressLag := lagBlocks(result.ConfirmedToBlock, progress.toBlock); progressLag > lag {
+			if progressLag := lagBlocks(result.SafeToBlock, progress.toBlock); progressLag > lag {
 				lag = progressLag
 			}
 		}
@@ -999,11 +985,11 @@ func (i *Indexer) logProgressSummary(result ProcessResult, duration time.Duratio
 	i.logger.Info("indexer progress", args...)
 }
 
-func lagBlocks(confirmedTo, indexedTo uint64) uint64 {
-	if indexedTo >= confirmedTo {
+func lagBlocks(safeTo, indexedTo uint64) uint64 {
+	if indexedTo >= safeTo {
 		return 0
 	}
-	return confirmedTo - indexedTo
+	return safeTo - indexedTo
 }
 
 func (i *Indexer) destinationAddresses(role string) []common.Address {
@@ -1098,7 +1084,7 @@ func (i *Indexer) sourcePathwayIdentity(srcEID, dstEID uint32, sender, receiver 
 	return chain.Pathway{}, false
 }
 
-func (i *Indexer) cursorWindow(ctx context.Context, stream string, confirmedTo uint64) (uint64, uint64, bool, cursorSkipReason, error) {
+func (i *Indexer) cursorWindow(ctx context.Context, stream string, safeTo uint64) (uint64, uint64, bool, cursorSkipReason, error) {
 	cursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, stream)
 	cursorExists := true
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -1108,17 +1094,17 @@ func (i *Indexer) cursorWindow(ctx context.Context, stream string, confirmedTo u
 	}
 	from := uint64(0)
 	if cursorExists {
-		if cursor >= confirmedTo {
+		if cursor >= safeTo {
 			return 0, 0, false, cursorSkipCaughtUp, nil
 		}
 		from = cursor + 1
 	} else {
 		from = i.chain.StartBlockNumber
-		if from > confirmedTo {
-			return 0, 0, false, cursorSkipStartBlockNotConfirmed, nil
+		if from > safeTo {
+			return 0, 0, false, cursorSkipStartBlockNotSafe, nil
 		}
 	}
-	to := confirmedTo
+	to := safeTo
 	if i.backfillRange > 0 && to-from+1 > i.backfillRange {
 		to = from + i.backfillRange - 1
 	}

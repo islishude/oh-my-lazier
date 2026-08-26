@@ -107,6 +107,7 @@
     }
   ],
   "pathway": {
+    "ulnConfirmations": 12,
     "maxMessageSize": 10000,
     "enforcedLzReceiveGas": "200000",
     "minLzReceiveGas": "200000",

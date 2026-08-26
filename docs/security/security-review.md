@@ -86,12 +86,16 @@ LayerZero phase-1 boundary:
   one independent external DVN. LayerZero Labs DVN is an optional external DVN
   choice, not a required provider; deployment profiles can opt into the
   repo-known Sepolia/Hoodi address with `chains[].includeLayerZeroLabsDVN`.
-- Confirmations are fixed at 12 unless the maintained scope documentation is updated.
+- LayerZero ULN confirmations are fixed at 12 through the maintained pathway
+  profile unless the maintained scope documentation is updated. Per-chain
+  `confirmations` independently governs local receipt and state terminalization.
 
 RPC quorum and safety:
 
 - Source head conflicts pause chains.
 - Receipt and log conflicts pause pathways.
+- Indexer cursors advance only through a fixed-majority `safe` block and stall
+  without fallback when that quorum is unavailable or conflicting.
 - Pause state is exposed through `/metrics`.
 - Readiness checks reject paused chains/pathways, failed active outbox rows, and
   missing or unstarted indexer cursors required by the process's enabled

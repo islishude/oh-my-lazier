@@ -111,6 +111,7 @@ export type ChainProfile = {
   oapp?: Address;
   initialSupply: string;
   minCanaryTokenBalance: string;
+  /** Local receipt and destination-state terminalization depth. */
   confirmations: number;
   startBlockNumber?: number;
   indexerQueryBlockRange: number;
@@ -181,6 +182,8 @@ export type TxPolicyProfile = {
 };
 
 export type PathwayProfile = {
+  /** LayerZero ULN confirmations applied to both maintained directions. */
+  ulnConfirmations: number;
   maxMessageSize: number;
   enforcedLzReceiveGas: string;
   minLzReceiveGas: string;
@@ -648,7 +651,7 @@ export function pathwayInput(input: {
     priceFeed: sourceState.workers.priceFeed,
     bootstrapPriceSubmitter: input.profile.owner,
     requiredDVNs: requiredDVNsForPathway(input.source, sourceState),
-    confirmations: BigInt(input.source.confirmations),
+    confirmations: BigInt(input.profile.pathway.ulnConfirmations),
     maxMessageSize: input.profile.pathway.maxMessageSize,
     minLzReceiveGas: BigInt(input.profile.pathway.minLzReceiveGas),
     maxLzReceiveGas: BigInt(input.profile.pathway.maxLzReceiveGas),
@@ -2508,6 +2511,7 @@ function normalizeTxPolicy(
 
 function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
   const input = object(value, pathLabel, [
+    "ulnConfirmations",
     "maxMessageSize",
     "enforcedLzReceiveGas",
     "minLzReceiveGas",
@@ -2571,6 +2575,11 @@ function normalizePathway(value: unknown, pathLabel: string): PathwayProfile {
     );
   }
   return {
+    ulnConfirmations: integerField(
+      input,
+      "ulnConfirmations",
+      `${pathLabel}.ulnConfirmations`
+    ),
     maxMessageSize: integerField(
       input,
       "maxMessageSize",
@@ -2780,6 +2789,8 @@ function renderWorkerPathway(
     dst_oapp: "${direction.dstOApp}"
     send_lib: "${direction.sendLib}"
     receive_lib: "${direction.receiveLib}"
+    send_uln_confirmations: ${profile.pathway.ulnConfirmations}
+    receive_uln_confirmations: ${profile.pathway.ulnConfirmations}
     source_workers:
       open_executor: "${direction.sourceWorkers.openExecutor}"
       open_dvn: "${direction.sourceWorkers.openDVN}"
@@ -3180,17 +3191,6 @@ function validateTwoChainPair(chains: readonly ChainProfile[]) {
   const eids = new Set(chains.map((chain) => chain.eid));
   if (eids.size !== 2) {
     throw new Error("profile.chains eids must be unique");
-  }
-  // The profile deploys both reciprocal directions, and each direction's send
-  // ULN carries the source chain's confirmations while the receive ULN enforces
-  // the destination chain's value. Unequal values would deploy one direction
-  // whose verifications the receive ULN always rejects, and the worker config
-  // generated from this profile would fail the same validation at startup --
-  // after the chain mutations already ran. Reject before any deployment phase.
-  if (chains[0].confirmations !== chains[1].confirmations) {
-    throw new Error(
-      `profile.chains confirmations must match for reciprocal pathways: ${chains[0].key} uses ${chains[0].confirmations}, ${chains[1].key} uses ${chains[1].confirmations}`
-    );
   }
 }
 

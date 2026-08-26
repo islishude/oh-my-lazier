@@ -56,8 +56,8 @@ Review checklist:
 - Confirm unsigned numeric values are non-negative YAML integers rather than decimals or quoted numeric strings; second-based runtime durations must remain within the worker's accepted range.
 - Confirm `services.executor.enabled` and `services.dvn.enabled` changes are intentional. These are process-level switches for loops, signer requirements, tx targets, and indexer streams; pathway worker contract addresses still remain required in every config.
 - Confirm `tx_manager.stale_broadcast_replacement_after_seconds` changes are intentional.
-- Confirm chain `eid`, `family`, `chain_id`, endpoint, transaction roles, and RPC changes are intentional. Phase-1 configs must use `family: evm`.
-- Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, source worker contracts, DVN mode, enablement, and max message size changes are intentional.
+- Confirm chain `eid`, `family`, `chain_id`, endpoint, local receipt/state `confirmations`, transaction roles, and RPC changes are intentional. Phase-1 configs must use `family: evm`; indexer cursors independently stop at the RPC quorum `safe` block.
+- Confirm pathway `src_eid`, `dst_eid`, OApp, SendLib, ReceiveLib, `send_uln_confirmations`, `receive_uln_confirmations`, source worker contracts, DVN mode, enablement, and max message size changes are intentional.
 - Confirm pathway `min_lz_receive_gas` and `max_lz_receive_gas` changes match the OpenExecutor/OpenDVN on-chain pathway settings.
 - Confirm signer changes are expected and do not point to unapproved keys. Review same-address backend, KMS key and region, keystore path, and password-source changes; KMS endpoint and password-file values are redacted in the artifact.
 - Confirm pricing `native_asset_id`, source request timeout, primary source, declared sanity sources, per-source freshness, market-data BaseURL, pathway-scoped worker fee model, stale threshold, gas spike threshold, and each `pricing.chains[eid].tx_policy` fee cap and signer balance threshold are expected. Pricing fee caps have no repository-wide absolute ceiling and therefore require explicit per-chain operator approval. Market-data BaseURL values are redacted in the artifact. Pathways that share a source worker and destination EID must keep that worker role's fee model identical. Outer transaction gas is estimated by the tx manager at send time.
@@ -75,7 +75,8 @@ The check compares the YAML with live chain state, including chain ID, Endpoint
 EID, deployed code, OApp peers, send/receive libraries, ULN required DVNs
 (each side must match the pathway's `send_required_dvns` /
 `receive_required_dvns` exactly, so an unapproved, stale, or extra required DVN
-fails the check), send-versus-receive ULN confirmations, and
+fails the check), each side's exact pathway-pinned ULN confirmations plus the
+send-versus-receive relationship, and
 the configured `pathways[].source_workers` pathway configuration. Every
 configured RPC URL must return the configured `chain_id` from `eth_chainId`.
 Worker startup and `price-once` run the same check before database sync.

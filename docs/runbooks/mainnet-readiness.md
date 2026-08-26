@@ -31,7 +31,7 @@ This runbook is the final review index before any mainnet deployment proposal. P
   LayerZero Labs DVN is an optional external DVN choice, not a required
   provider; deployment profiles can opt into repo-known metadata with
   `chains[].includeLayerZeroLabsDVN` when it exists for the local chain.
-- Confirmations must be explicitly configured per chain and match the approved LayerZero ULN configuration.
+- Local receipt/state confirmation depths must be explicitly configured per chain; LayerZero ULN confirmations must be explicitly configured per pathway and match the approved on-chain configuration.
 
 ## Contract Script Boundary
 
@@ -92,7 +92,7 @@ Required runtime checks:
 - Every active transaction signer reports `laz_signer_native_balance_wei >= laz_signer_min_native_balance_wei`.
 - For deployments with `services.dvn.enabled: true`, no DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
 - For deployments with `services.executor.enabled: true`, no executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
-- Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`.
+- Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`. `laz_indexer_safe_to_block` must advance, and no `laz_rpc_provider_safe_conflict` may remain active.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
 ### Schema upgrade: drain the send side before applying 002
@@ -137,8 +137,8 @@ Required state:
 - OpenExecutor and OpenDVN allow only intended SendLib addresses.
 - Worker pathway config is enabled only for approved OApps.
 - Endpoint executor config points to each pathway's configured `source_workers.open_executor` only after the executor migration step.
-- Source SendUln config matches each pathway's configured `send_required_dvns` exactly (the pathway's `source_workers.open_dvn` plus every approved independently operated DVN, no extras) only during the DVN join step.
-- Destination ReceiveUln config matches each pathway's configured `receive_required_dvns` exactly (the pathway's `destination_workers.open_dvn` plus every approved independently operated DVN, no extras) only during the DVN join step.
+- Source SendUln config matches each pathway's configured `send_uln_confirmations` and `send_required_dvns` exactly (the pathway's `source_workers.open_dvn` plus every approved independently operated DVN, no extras) only during the DVN join step.
+- Destination ReceiveUln config matches each pathway's configured `receive_uln_confirmations` and `receive_required_dvns` exactly (the pathway's `destination_workers.open_dvn` plus every approved independently operated DVN, no extras) only during the DVN join step.
 - Destination OpenDVN authorizes the active destination `tx_roles.dvn` signer before active DVN mode is enabled.
 - Optional DVNs are explicitly disabled for the first-phase required-DVN migration.
 - Source OpenPriceFeed `priceSnapshot(dstEid)` is fresh, the pricing signer is an authorized PriceFeed submitter, OpenExecutor/OpenDVN `priceFeed()` both point to the configured feed, and each worker's `feeModel(dstEid)` matches the approved price evidence. Same-native pathways document the 1:1 route; cross-asset pathways document the selected primary, explicit freshness limit, optional sanity set, and deviation threshold. Chainlink and Uniswap are required only when explicitly referenced, and Uniswap may only be sanity.

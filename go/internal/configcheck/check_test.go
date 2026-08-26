@@ -134,6 +134,17 @@ func TestCheckWithClientsReportsSendConfirmationsBelowReceive(t *testing.T) {
 	}
 }
 
+func TestCheckWithClientsUsesPathwayULNConfirmationsNotLocalDepth(t *testing.T) {
+	cfg := testConfig()
+	cfg.Chains[0].Confirmations = 6
+	cfg.Pathways[0].SendULNConfirmations = 15
+	cfg.Pathways[0].ReceiveULNConfirmations = 12
+	// The helper provisions fake on-chain ULN state from the pathway values and
+	// asserts the baseline report is clean. A checker still coupled to either
+	// chain's local depth would report 6 instead of the approved 15/12.
+	testRegistryAndClientsForConfig(t, cfg)
+}
+
 func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
 	registry, clients := testRegistryAndClients(t)
 	genericClients := chainClients(clients)
@@ -298,8 +309,8 @@ func testRegistryAndClientsForConfig(t *testing.T, cfg config.Config) (*chain.Re
 			MaxMessageSize: uint32(pathway.MaxMessageSize),
 			Executor:       pathway.SourceWorkers.OpenExecutor,
 		}
-		src.ulnConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = expectedULNConfig(srcChain, pathway.SourceWorkers.OpenDVN)
-		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(dstChain, pathway.DestinationWorkers.OpenDVN)
+		src.ulnConfigs[configKey(pathway.SrcOApp, pathway.SendLib, pathway.DstEID)] = expectedULNConfig(pathway.SendULNConfirmations, srcChain.EID, pathway.SourceWorkers.OpenDVN)
+		dst.ulnConfigs[configKey(pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID)] = expectedULNConfig(pathway.ReceiveULNConfirmations, dstChain.EID, pathway.DestinationWorkers.OpenDVN)
 		for _, worker := range []common.Address{pathway.SourceWorkers.OpenExecutor, pathway.SourceWorkers.OpenDVN} {
 			src.code[worker] = true
 			src.priceFeeds[worker] = pathway.SourceWorkers.PriceFeed
@@ -495,13 +506,13 @@ func (f *fakeChainClient) addOApp(oapp, endpoint common.Address, remoteEID uint3
 	f.peers[oapp][remoteEID] = common.BytesToHash(remoteOApp.Bytes())
 }
 
-func expectedULNConfig(configured chain.Chain, openDVN common.Address) ulnConfig {
+func expectedULNConfig(confirmations uint64, chainEID uint32, openDVN common.Address) ulnConfig {
 	return ulnConfig{
-		Confirmations:        configured.Confirmations,
+		Confirmations:        confirmations,
 		RequiredDVNCount:     2,
 		OptionalDVNCount:     nilDVNCount,
 		OptionalDVNThreshold: 0,
-		RequiredDVNs:         []common.Address{openDVN, externalDVN(configured.EID)},
+		RequiredDVNs:         []common.Address{openDVN, externalDVN(chainEID)},
 	}
 }
 
@@ -548,12 +559,14 @@ func testConfig() config.Config {
 		},
 		Pathways: []config.PathwayConfig{
 			{
-				SrcEID:     40161,
-				DstEID:     40449,
-				SrcOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-				DstOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-				SendLib:    config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
-				ReceiveLib: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SrcEID:                  40161,
+				DstEID:                  40449,
+				SrcOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				DstOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				SendLib:                 config.MustEVMAddress("0x9999999999999999999999999999999999999999"),
+				ReceiveLib:              config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+				SendULNConfirmations:    12,
+				ReceiveULNConfirmations: 12,
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x2222222222222222222222222222222222222222"),
 					OpenDVN:      config.MustEVMAddress("0x3333333333333333333333333333333333333333"),
@@ -578,12 +591,14 @@ func testConfig() config.Config {
 				MaxLzReceiveGas: 300000,
 			},
 			{
-				SrcEID:     40449,
-				DstEID:     40161,
-				SrcOApp:    config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
-				DstOApp:    config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
-				SendLib:    config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-				ReceiveLib: config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+				SrcEID:                  40449,
+				DstEID:                  40161,
+				SrcOApp:                 config.MustEVMAddress("0x8888888888888888888888888888888888888888"),
+				DstOApp:                 config.MustEVMAddress("0x7777777777777777777777777777777777777777"),
+				SendLib:                 config.MustEVMAddress("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+				ReceiveLib:              config.MustEVMAddress("0xcccccccccccccccccccccccccccccccccccccccc"),
+				SendULNConfirmations:    12,
+				ReceiveULNConfirmations: 12,
 				SourceWorkers: config.WorkerContractsConfig{
 					OpenExecutor: config.MustEVMAddress("0x5555555555555555555555555555555555555555"),
 					OpenDVN:      config.MustEVMAddress("0x6666666666666666666666666666666666666666"),
