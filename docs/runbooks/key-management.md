@@ -32,6 +32,100 @@ Required controls:
 - key rotation plan uses a staged worker config change and `configdiff`
 - signer address recovery is validated before first use
 
+## AWS KMS Permissions
+
+The worker uses the AWS SDK default credential chain. Attach the runtime policy
+to the role or identity used by the worker process, and keep that identity
+separate from the KMS provisioning and break-glass identities.
+
+The worker has only two AWS KMS API dependencies:
+
+| Worker operation | AWS KMS API | Required IAM action |
+| --- | --- | --- |
+| Startup key-spec and Ethereum-address validation | `GetPublicKey` | `kms:GetPublicKey` |
+| Signing each Ethereum transaction digest | `Sign` with `MessageType=DIGEST` and `SigningAlgorithm=ECDSA_SHA_256` | `kms:Sign` |
+
+Use the exact KMS key ARN in `Resource`; replace the placeholders below before
+attaching the policy to the worker role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadConfiguredEthereumSignerPublicKey",
+      "Effect": "Allow",
+      "Action": "kms:GetPublicKey",
+      "Resource": "arn:aws:kms:<region>:<account-id>:key/<key-id>",
+      "Condition": {
+        "StringEquals": {
+          "kms:KeySpec": "ECC_SECG_P256K1",
+          "kms:KeyUsage": "SIGN_VERIFY"
+        }
+      }
+    },
+    {
+      "Sid": "SignEthereumDigests",
+      "Effect": "Allow",
+      "Action": "kms:Sign",
+      "Resource": "arn:aws:kms:<region>:<account-id>:key/<key-id>",
+      "Condition": {
+        "StringEquals": {
+          "kms:KeySpec": "ECC_SECG_P256K1",
+          "kms:KeyUsage": "SIGN_VERIFY",
+          "kms:MessageType": "DIGEST",
+          "kms:SigningAlgorithm": "ECDSA_SHA_256"
+        }
+      }
+    }
+  ]
+}
+```
+
+The KMS key policy must also authorize this worker role. Either name the role
+directly in the key policy, granting each action in its own statement with the
+conditions shown above, or retain the account statement that enables IAM
+policies for the account and attach the identity policy above. A role policy
+alone is insufficient when the key policy does not delegate permission to IAM
+policies. Keep the key-policy administrator and break-glass principal separate
+from the worker role, and require the approved emergency controls for policy
+changes.
+
+The worker does not need `kms:Decrypt`, `kms:Encrypt`, `kms:GenerateDataKey`,
+`kms:DescribeKey`, `kms:CreateKey`, `kms:PutKeyPolicy`, or key deletion and
+administration permissions. Do not attach `kms:*` or an administrator-managed
+policy to the worker role. Native gas funding for the EVM signer is a chain
+operation and is not an AWS IAM permission.
+
+### Provisioning and rotation permissions
+
+Provisioning is a separate operator workflow. The repository's
+`go/cmd/e2ekmskey` helper creates a key and reads its public key for local/E2E
+use; a production operator should create and administer the key through the
+approved infrastructure workflow. That workflow normally needs:
+
+- `kms:CreateKey`, constrained by `kms:KeySpec = ECC_SECG_P256K1` and
+  `kms:KeyUsage = SIGN_VERIFY`.
+- `kms:PutKeyPolicy` on the new key to install the worker and break-glass
+  principals. Do not bypass KMS policy lockout safety.
+- `kms:GetPublicKey` to derive and independently record the EVM signer address.
+- `kms:TagResource` only when the provisioning request applies tags.
+- `kms:CreateAlias` or `kms:UpdateAlias` only when the approved workflow uses
+  an alias; keep alias permissions separate from the worker role.
+
+For staged rotation, create and authorize the new key first, read its public
+key, verify the derived address, update the worker signer inventory, run
+`configdiff`, and switch the worker only after the new signer is funded. Keep
+the old key and its worker access until all old-signer transactions are
+confirmed or explicitly abandoned. After the drain, revoke the old worker
+grant and handle disablement or deletion through a separately approved
+break-glass/admin workflow.
+
+For AWS IAM policy and KMS condition-key semantics, see the [KMS API
+permissions reference](https://docs.aws.amazon.com/kms/latest/developerguide/kms-api-permissions-reference.html),
+[KMS condition keys](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html),
+and [customer-managed IAM policy examples](https://docs.aws.amazon.com/kms/latest/developerguide/customer-managed-policies.html).
+
 Implementation evidence:
 
 - `go/internal/config.Config.Validate` rejects unknown signer references only for roles enabled in this process: executor, active DVN, and pricing.

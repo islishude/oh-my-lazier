@@ -95,6 +95,11 @@ const requiredDocs: RequiredDoc[] = [
     path: "docs/runbooks/key-management.md",
     anchors: [
       "AWS KMS `ECC_SECG_P256K1`",
+      "## AWS KMS Permissions",
+      "`kms:GetPublicKey`",
+      "`kms:Sign`",
+      "kms:SigningAlgorithm",
+      "Provisioning and rotation permissions",
       "local geth keystore JSON",
       "Never infer approval from a successful transaction alone.",
       "Run `make test-integration` when Docker is available",
