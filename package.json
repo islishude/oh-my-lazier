@@ -71,7 +71,7 @@
     "@uniswap/v3-core": "1.0.1",
     "hardhat": "3.14.0",
     "typescript": "6.0.3",
-    "viem": "2.55.19"
+    "viem": "2.56.0"
   },
   "overrides": {
     "axios": "1.18.1",
