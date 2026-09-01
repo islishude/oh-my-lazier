@@ -61,8 +61,8 @@ type FeePolicy struct {
 	ConfiguredMaxFeePerGas         *big.Int
 	ConfiguredMaxPriorityFeePerGas *big.Int
 	// ForceLegacyTransactions quotes type-0 fees even when the chain reports
-	// a base fee: some mempools (goat-geth regtest) drop EIP-1559
-	// transactions, and a dropped worker write would stall the relay.
+	// a base fee: some mempools drop EIP-1559 transactions, and a dropped
+	// worker write would stall the relay.
 	ForceLegacyTransactions bool
 }
 
