@@ -30,6 +30,9 @@ func TestRegistryIndexesChainsAndPathways(t *testing.T) {
 	if ethereum.IndexerQueryBlockRange != 250 {
 		t.Fatalf("IndexerQueryBlockRange = %d, want 250", ethereum.IndexerQueryBlockRange)
 	}
+	if ethereum.IndexerBackfillBlockRange != 25_000 {
+		t.Fatalf("IndexerBackfillBlockRange = %d, want 25000", ethereum.IndexerBackfillBlockRange)
+	}
 	if ethereum.IndexerPollInterval != 7*time.Second {
 		t.Fatalf("IndexerPollInterval = %s, want 7s", ethereum.IndexerPollInterval)
 	}
@@ -92,6 +95,7 @@ func testChains() []config.ChainConfig {
 			Confirmations:              12,
 			StartBlockNumber:           12345,
 			IndexerQueryBlockRange:     250,
+			IndexerBackfillBlockRange:  25_000,
 			IndexerPollIntervalSeconds: 7,
 			RPCURLs:                    []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{

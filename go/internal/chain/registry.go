@@ -12,14 +12,15 @@ import (
 
 // Chain is a configured LayerZero endpoint chain plus its RPC quorum client.
 type Chain struct {
-	EID                    uint32
-	Name                   string
-	ChainID                *big.Int
-	EndpointAddress        common.Address
-	Confirmations          uint64
-	StartBlockNumber       uint64
-	IndexerQueryBlockRange uint64
-	IndexerPollInterval    time.Duration
+	EID                       uint32
+	Name                      string
+	ChainID                   *big.Int
+	EndpointAddress           common.Address
+	Confirmations             uint64
+	StartBlockNumber          uint64
+	IndexerQueryBlockRange    uint64
+	IndexerBackfillBlockRange uint64
+	IndexerPollInterval       time.Duration
 	// LegacyTransactions forces type-0 transactions on this chain even when
 	// it reports a base fee (its mempool drops EIP-1559 transactions).
 	LegacyTransactions bool
@@ -101,15 +102,16 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 	}
 	for _, cfg := range chains {
 		registry.byEID[cfg.EID] = Chain{
-			EID:                    cfg.EID,
-			Name:                   cfg.Name,
-			ChainID:                new(big.Int).SetUint64(cfg.ChainID),
-			EndpointAddress:        cfg.EndpointAddress.Common(),
-			Confirmations:          cfg.Confirmations,
-			StartBlockNumber:       cfg.StartBlockNumber,
-			IndexerQueryBlockRange: cfg.IndexerQueryBlockRange,
-			IndexerPollInterval:    time.Duration(cfg.IndexerPollIntervalSeconds) * time.Second,
-			LegacyTransactions:     cfg.LegacyTransactions,
+			EID:                       cfg.EID,
+			Name:                      cfg.Name,
+			ChainID:                   new(big.Int).SetUint64(cfg.ChainID),
+			EndpointAddress:           cfg.EndpointAddress.Common(),
+			Confirmations:             cfg.Confirmations,
+			StartBlockNumber:          cfg.StartBlockNumber,
+			IndexerQueryBlockRange:    cfg.IndexerQueryBlockRange,
+			IndexerBackfillBlockRange: cfg.IndexerBackfillBlockRange,
+			IndexerPollInterval:       time.Duration(cfg.IndexerPollIntervalSeconds) * time.Second,
+			LegacyTransactions:        cfg.LegacyTransactions,
 			TxRoles: TxRoles{
 				Executor: ExecutorTxRole{
 					SignerID:                cfg.TxRoles.Executor.Signer.Hex(),

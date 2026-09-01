@@ -1156,6 +1156,9 @@ pathways:
 	if staticConfig.Chains[0].IndexerQueryBlockRange != 500 {
 		t.Fatalf("LoadStatic() indexer_query_block_range = %d, want default 500", staticConfig.Chains[0].IndexerQueryBlockRange)
 	}
+	if staticConfig.Chains[0].IndexerBackfillBlockRange != 10_000 {
+		t.Fatalf("LoadStatic() indexer_backfill_block_range = %d, want default 10000", staticConfig.Chains[0].IndexerBackfillBlockRange)
+	}
 	if staticConfig.Chains[0].IndexerPollIntervalSeconds != 5 {
 		t.Fatalf("LoadStatic() indexer_poll_interval_seconds = %d, want default 5", staticConfig.Chains[0].IndexerPollIntervalSeconds)
 	}
@@ -1199,6 +1202,31 @@ func TestLoadStaticDefaultsAndAcceptsIndexerPollIntervalSeconds(t *testing.T) {
 	}
 	if loaded.Chains[1].IndexerPollIntervalSeconds != 17 {
 		t.Fatalf("custom indexer poll interval = %d, want 17", loaded.Chains[1].IndexerPollIntervalSeconds)
+	}
+}
+
+func TestLoadStaticDefaultsAndAcceptsIndexerBackfillBlockRange(t *testing.T) {
+	cfg := validConfig()
+	cfg.Chains[0].IndexerBackfillBlockRange = 0
+	cfg.Chains[1].IndexerBackfillBlockRange = 25_000
+	body, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := LoadStatic(path)
+	if err != nil {
+		t.Fatalf("LoadStatic() error = %v", err)
+	}
+	if loaded.Chains[0].IndexerBackfillBlockRange != 10_000 {
+		t.Fatalf("default indexer backfill range = %d, want 10000", loaded.Chains[0].IndexerBackfillBlockRange)
+	}
+	if loaded.Chains[1].IndexerBackfillBlockRange != 25_000 {
+		t.Fatalf("custom indexer backfill range = %d, want 25000", loaded.Chains[1].IndexerBackfillBlockRange)
 	}
 }
 
@@ -1361,6 +1389,7 @@ func validConfig() Config {
 				EndpointAddress:            MustEVMAddress("0x1111111111111111111111111111111111111111"),
 				Confirmations:              12,
 				IndexerQueryBlockRange:     500,
+				IndexerBackfillBlockRange:  10_000,
 				IndexerPollIntervalSeconds: 5,
 				RPCURLs:                    []string{"http://localhost:8545"},
 				TxRoles: ChainTxRolesConfig{
@@ -1376,6 +1405,7 @@ func validConfig() Config {
 				EndpointAddress:            MustEVMAddress("0x4444444444444444444444444444444444444444"),
 				Confirmations:              12,
 				IndexerQueryBlockRange:     500,
+				IndexerBackfillBlockRange:  10_000,
 				IndexerPollIntervalSeconds: 5,
 				RPCURLs:                    []string{"http://localhost:8546"},
 				TxRoles: ChainTxRolesConfig{

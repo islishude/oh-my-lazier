@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"math/big"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -24,23 +23,40 @@ import (
 )
 
 const (
-	defaultBackfillRange   = uint64(500)
+	defaultBackfillRange   = uint64(10_000)
 	defaultQueryBlockRange = uint64(500)
 )
 
 // DefaultProgressLogInterval is the default minimum interval between indexer progress Info logs.
 const DefaultProgressLogInterval = time.Minute
 
+// Stream identifies one independently synchronized durable indexer cursor.
+type Stream string
+
 const (
 	// ExecutorSourceStream tracks source-chain OpenExecutor assignments.
-	ExecutorSourceStream = "executor_source"
+	ExecutorSourceStream Stream = "executor_source"
 	// ExecutorDestinationStream tracks destination-chain executor outcomes.
-	ExecutorDestinationStream = "executor_destination"
+	ExecutorDestinationStream Stream = "executor_destination"
 	// DVNSourceStream tracks source-chain OpenDVN assignments.
-	DVNSourceStream = "dvn_source"
+	DVNSourceStream Stream = "dvn_source"
 	// DVNDestinationStream tracks destination-chain OpenDVN verification outcomes.
-	DVNDestinationStream = "dvn_destination"
+	DVNDestinationStream Stream = "dvn_destination"
 )
+
+// String returns the durable and metric label for the stream.
+func (s Stream) String() string {
+	return string(s)
+}
+
+func (s Stream) valid() bool {
+	switch s {
+	case ExecutorSourceStream, ExecutorDestinationStream, DVNSourceStream, DVNDestinationStream:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	sourceRoleExecutor = "executor"
@@ -54,36 +70,16 @@ const (
 	cursorSkipStartBlockNotSafe cursorSkipReason = "start_block_not_safe"
 )
 
-// StreamSet selects the durable indexer streams this process advances.
-type StreamSet struct {
-	ExecutorSource      bool
-	ExecutorDestination bool
-	DVNSource           bool
-	DVNDestination      bool
-}
-
-// StreamsForRoles returns the indexer streams required by enabled worker roles.
-func StreamsForRoles(executorEnabled, dvnEnabled bool) StreamSet {
-	return StreamSet{
-		ExecutorSource:      executorEnabled,
-		ExecutorDestination: executorEnabled,
-		DVNSource:           dvnEnabled,
-		DVNDestination:      dvnEnabled,
+// StreamsForRoles returns the independent indexer streams required by enabled worker roles.
+func StreamsForRoles(executorEnabled, dvnEnabled bool) []Stream {
+	streams := make([]Stream, 0, 4)
+	if executorEnabled {
+		streams = append(streams, ExecutorSourceStream, ExecutorDestinationStream)
 	}
-}
-
-// Empty reports whether no indexer stream is enabled.
-func (s StreamSet) Empty() bool {
-	return !s.ExecutorSource && !s.ExecutorDestination && !s.DVNSource && !s.DVNDestination
-}
-
-func allStreams() StreamSet {
-	return StreamSet{
-		ExecutorSource:      true,
-		ExecutorDestination: true,
-		DVNSource:           true,
-		DVNDestination:      true,
+	if dvnEnabled {
+		streams = append(streams, DVNSourceStream, DVNDestinationStream)
 	}
+	return streams
 }
 
 // Store persists indexed executor source records and destination outcomes.
@@ -92,22 +88,20 @@ type Store interface {
 	GetIndexerCursor(ctx context.Context, chainEID uint32, stream string) (uint64, error)
 	UpdateIndexerCursor(ctx context.Context, chainEID uint32, stream string, lastBlock uint64) error
 	RecordSourcePacketSkip(ctx context.Context, skip db.SourcePacketSkip) error
-	UpsertPacket(ctx context.Context, packet db.PacketRecord) error
-	UpsertExecutorJob(ctx context.Context, job db.ExecutorJobRecord) error
-	UpsertDVNJob(ctx context.Context, job db.DVNJobRecord) error
+	UpsertExecutorAssignment(ctx context.Context, packet db.PacketRecord, job db.ExecutorJobRecord) error
+	UpsertDVNAssignment(ctx context.Context, packet db.PacketRecord, job db.DVNJobRecord) error
 }
 
 // LogClient reads chain heads and historical EVM logs.
 type LogClient interface {
 	BlockNumber(ctx context.Context) (uint64, error)
-	SafeBlockNumber(ctx context.Context) (uint64, error)
-	FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error)
+	SafeLogSnapshot(ctx context.Context) (rpcquorum.SafeLogSnapshot, error)
 }
 
 // MetricsRecorder records process-local indexer lifecycle and polling outcomes.
 type MetricsRecorder interface {
-	RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration)
-	RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error)
+	RegisterIndexer(chainEID uint32, chainName, stream string, pollInterval time.Duration)
+	RecordIndexerPoll(chainEID uint32, chainName, stream string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error)
 }
 
 // Indexer watches one chain for LayerZero and worker contract events.
@@ -118,6 +112,7 @@ type Indexer struct {
 	destinationEID      uint32
 	store               Store
 	client              LogClient
+	stream              Stream
 	pollInterval        time.Duration
 	backfillRange       uint64
 	queryBlockRange     uint64
@@ -125,17 +120,16 @@ type Indexer struct {
 	lastProgressLogs    map[string]time.Time
 	logger              *slog.Logger
 	metrics             MetricsRecorder
-	streams             StreamSet
 	now                 func() time.Time
 }
 
 // New creates an indexer for one configured chain.
-func New(configuredChain chain.Chain, pathways []chain.Pathway, store Store, logger *slog.Logger) *Indexer {
-	return NewWithClient(configuredChain, pathways, store, configuredChain.RPC, logger)
+func New(configuredChain chain.Chain, pathways []chain.Pathway, stream Stream, store Store, logger *slog.Logger) *Indexer {
+	return NewWithClient(configuredChain, pathways, stream, store, configuredChain.RPC, logger)
 }
 
 // NewWithClient creates an indexer with an explicit log client for tests.
-func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store Store, client LogClient, logger *slog.Logger) *Indexer {
+func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, stream Stream, store Store, client LogClient, logger *slog.Logger) *Indexer {
 	sourcePathways := make([]chain.Pathway, 0)
 	destinationPathways := make([]chain.Pathway, 0)
 	for _, pathway := range pathways {
@@ -150,6 +144,10 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 	if queryBlockRange == 0 {
 		queryBlockRange = defaultQueryBlockRange
 	}
+	backfillRange := configuredChain.IndexerBackfillBlockRange
+	if backfillRange == 0 {
+		backfillRange = defaultBackfillRange
+	}
 	return &Indexer{
 		chain:               configuredChain,
 		sourcePathways:      sourcePathways,
@@ -157,21 +155,15 @@ func NewWithClient(configuredChain chain.Chain, pathways []chain.Pathway, store 
 		destinationEID:      configuredChain.EID,
 		store:               store,
 		client:              client,
+		stream:              stream,
 		pollInterval:        configuredChain.IndexerPollInterval,
-		backfillRange:       defaultBackfillRange,
+		backfillRange:       backfillRange,
 		queryBlockRange:     queryBlockRange,
 		progressLogInterval: DefaultProgressLogInterval,
 		lastProgressLogs:    make(map[string]time.Time),
 		logger:              logger,
-		streams:             allStreams(),
 		now:                 time.Now,
 	}
-}
-
-// WithStreams selects the durable streams this indexer advances.
-func (i *Indexer) WithStreams(streams StreamSet) *Indexer {
-	i.streams = streams
-	return i
 }
 
 // WithMetrics records process-local indexer polling metrics.
@@ -192,12 +184,13 @@ func (i *Indexer) Run(ctx context.Context) error {
 		"indexer loop started",
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
+		"stream", i.stream,
 		"poll_interval", i.pollInterval,
 	)
 	return i.runPollingLoop(ctx)
 }
 
-// ProcessOnce backfills one safe log window for source and destination worker events.
+// ProcessOnce advances only this indexer's configured stream by at most one backfill range.
 func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	if i.store == nil {
 		return ProcessResult{}, errors.New("indexer store is required")
@@ -205,11 +198,15 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	if i.client == nil {
 		return ProcessResult{}, errors.New("indexer log client is required")
 	}
-	safeTo, err := i.client.SafeBlockNumber(ctx)
+	if !i.stream.valid() {
+		return ProcessResult{}, fmt.Errorf("unsupported indexer stream %q", i.stream)
+	}
+	snapshot, err := i.client.SafeLogSnapshot(ctx)
 	if err != nil {
 		return ProcessResult{}, err
 	}
-	result := ProcessResult{SafeToBlock: safeTo}
+	safeTo := snapshot.Number()
+	result := ProcessResult{Stream: i.stream, SafeToBlock: safeTo}
 	// Establish the head snapshot after the safe read: on chains where safe
 	// advances with latest, the reverse order can compare a fresh safe height to
 	// a stale head and reject two individually valid observations.
@@ -221,182 +218,116 @@ func (i *Indexer) ProcessOnce(ctx context.Context) (ProcessResult, error) {
 	if safeTo > head {
 		return result, fmt.Errorf("safe block %d is above quorum head %d for chain %s", safeTo, head, i.chain.Name)
 	}
-	sourceWindowSet := false
-	destinationWindowSet := false
-	if i.streams.ExecutorSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorSourceStream, safeTo)
-		if err != nil {
-			return ProcessResult{}, err
-		}
-		if !ok {
-			i.logCursorSkip(ExecutorSourceStream, skipReason, safeTo)
-		} else {
-			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleExecutor)
-			if err != nil {
-				return ProcessResult{}, err
-			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, ExecutorSourceStream, to); err != nil {
-				return ProcessResult{}, err
-			}
-			result.SourceFromBlock = from
-			result.SourceToBlock = to
-			sourceWindowSet = true
-			result.SourceTransactions += source
-			result.DVNTransactions += dvn
-			result.addStreamProgress(ExecutorSourceStream, from, to, source, dvn, 0)
-		}
+	from, to, ok, skipReason, err := i.cursorWindow(ctx, safeTo)
+	if err != nil {
+		return result, err
 	}
-	if i.streams.DVNSource {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNSourceStream, safeTo)
-		if err != nil {
-			return ProcessResult{}, err
-		}
-		if !ok {
-			i.logCursorSkip(DVNSourceStream, skipReason, safeTo)
-		} else {
-			source, dvn, err := i.processSourceWindow(ctx, from, to, sourceRoleDVN)
-			if err != nil {
-				return ProcessResult{}, err
-			}
-			if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, DVNSourceStream, to); err != nil {
-				return ProcessResult{}, err
-			}
-			if !sourceWindowSet {
-				result.SourceFromBlock = from
-				result.SourceToBlock = to
-			}
-			result.SourceTransactions += source
-			result.DVNTransactions += dvn
-			result.addStreamProgress(DVNSourceStream, from, to, source, dvn, 0)
-		}
+	if !ok {
+		i.logCursorSkip(skipReason, safeTo)
+		return result, nil
 	}
-	if i.streams.ExecutorDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, ExecutorDestinationStream, safeTo)
-		if err != nil {
-			return ProcessResult{}, err
-		}
-		if !ok {
-			i.logCursorSkip(ExecutorDestinationStream, skipReason, safeTo)
-		} else {
-			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleExecutor)
-			if err != nil {
-				return ProcessResult{}, err
-			}
-			result.DestinationFromBlock = from
-			result.DestinationToBlock = to
-			destinationWindowSet = true
-			result.DestinationLogs += destination.applied
-			if destination.pending {
-				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", ExecutorDestinationStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
-			} else {
-				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, ExecutorDestinationStream, to); err != nil {
-					return ProcessResult{}, err
-				}
-				result.addStreamProgress(ExecutorDestinationStream, from, to, 0, 0, destination.applied)
-			}
-		}
+	result.FromBlock = from
+	if err := i.processStreamWindow(ctx, snapshot, from, to, &result); err != nil {
+		return result, err
 	}
-	if i.streams.DVNDestination {
-		from, to, ok, skipReason, err := i.cursorWindow(ctx, DVNDestinationStream, safeTo)
-		if err != nil {
-			return ProcessResult{}, err
-		}
-		if !ok {
-			i.logCursorSkip(DVNDestinationStream, skipReason, safeTo)
-		} else {
-			destination, err := i.processDestinationWindow(ctx, from, to, sourceRoleDVN)
-			if err != nil {
-				return ProcessResult{}, err
-			}
-			if !destinationWindowSet {
-				result.DestinationFromBlock = from
-				result.DestinationToBlock = to
-			}
-			result.DestinationLogs += destination.applied
-			if destination.pending {
-				i.logger.Debug("deferred indexer destination cursor", "chain", i.chain.Name, "eid", i.chain.EID, "stream", DVNDestinationStream, "reason", "pending_source_state", "from_block", from, "to_block", to)
-			} else {
-				if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, DVNDestinationStream, to); err != nil {
-					return ProcessResult{}, err
-				}
-				result.addStreamProgress(DVNDestinationStream, from, to, 0, 0, destination.applied)
-			}
-		}
-	}
+	result.HasMore = result.Advanced && !result.Pending && result.ToBlock == to && to < safeTo
 	return result, nil
 }
 
 // ProcessResult summarizes one indexer polling pass.
 type ProcessResult struct {
-	SafeToBlock          uint64
-	ObservedHeadBlock    uint64
-	SourceFromBlock      uint64
-	SourceToBlock        uint64
-	DestinationFromBlock uint64
-	DestinationToBlock   uint64
-	SourceTransactions   int
-	DVNTransactions      int
-	DestinationLogs      int
-	streamProgress       [4]streamProgress
-	streamProgressCount  int
+	Stream             Stream
+	SafeToBlock        uint64
+	ObservedHeadBlock  uint64
+	FromBlock          uint64
+	ToBlock            uint64
+	Advanced           bool
+	Pending            bool
+	HasMore            bool
+	SourceTransactions int
+	DVNTransactions    int
+	DestinationLogs    int
 }
 
-type streamProgress struct {
-	stream             string
-	fromBlock          uint64
-	toBlock            uint64
-	sourceTransactions int
-	dvnTransactions    int
-	destinationLogs    int
-}
-
-func (r *ProcessResult) addStreamProgress(stream string, from, to uint64, sourceTransactions, dvnTransactions, destinationLogs int) {
-	if r.streamProgressCount >= len(r.streamProgress) {
-		return
-	}
-	r.streamProgress[r.streamProgressCount] = streamProgress{
-		stream:             stream,
-		fromBlock:          from,
-		toBlock:            to,
-		sourceTransactions: sourceTransactions,
-		dvnTransactions:    dvnTransactions,
-		destinationLogs:    destinationLogs,
-	}
-	r.streamProgressCount++
-}
-
-func (i *Indexer) processSourceWindow(ctx context.Context, from, to uint64, role string) (int, int, error) {
-	if len(i.sourcePathways) == 0 {
-		return 0, 0, nil
-	}
-	executorProcessed := 0
-	dvnProcessed := 0
+func (i *Indexer) processStreamWindow(ctx context.Context, snapshot rpcquorum.SafeLogSnapshot, from, to uint64, result *ProcessResult) error {
 	for chunkFrom := from; chunkFrom <= to; {
 		if err := ctx.Err(); err != nil {
-			return 0, 0, err
+			return err
 		}
 		chunkTo := i.chunkToBlock(chunkFrom, to)
-		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: blockNumber(chunkFrom),
-			ToBlock:   blockNumber(chunkTo),
-			Addresses: i.sourceAddresses(role),
-			Topics:    [][]common.Hash{i.sourceTopics(role)},
-		})
-		if err != nil {
-			return executorProcessed, dvnProcessed, err
+		var pending bool
+		switch i.stream {
+		case ExecutorSourceStream:
+			source, dvn, err := i.processSourceWindow(ctx, snapshot, chunkFrom, chunkTo, sourceRoleExecutor)
+			if err != nil {
+				return err
+			}
+			result.SourceTransactions += source
+			result.DVNTransactions += dvn
+		case DVNSourceStream:
+			source, dvn, err := i.processSourceWindow(ctx, snapshot, chunkFrom, chunkTo, sourceRoleDVN)
+			if err != nil {
+				return err
+			}
+			result.SourceTransactions += source
+			result.DVNTransactions += dvn
+		case ExecutorDestinationStream:
+			destination, err := i.processDestinationWindow(ctx, snapshot, chunkFrom, chunkTo, sourceRoleExecutor)
+			if err != nil {
+				return err
+			}
+			result.DestinationLogs += destination.applied
+			pending = destination.pending
+		case DVNDestinationStream:
+			destination, err := i.processDestinationWindow(ctx, snapshot, chunkFrom, chunkTo, sourceRoleDVN)
+			if err != nil {
+				return err
+			}
+			result.DestinationLogs += destination.applied
+			pending = destination.pending
+		default:
+			return fmt.Errorf("unsupported indexer stream %q", i.stream)
 		}
-		executor, dvn, err := i.processSourceLogs(ctx, logs, role)
-		if err != nil {
-			return executorProcessed, dvnProcessed, err
+		if pending {
+			result.Pending = true
+			i.logger.Debug(
+				"deferred indexer destination cursor",
+				"chain", i.chain.Name,
+				"eid", i.chain.EID,
+				"stream", i.stream,
+				"reason", "pending_source_state",
+				"from_block", chunkFrom,
+				"to_block", chunkTo,
+			)
+			return nil
 		}
-		executorProcessed += executor
-		dvnProcessed += dvn
+		if err := i.store.UpdateIndexerCursor(ctx, i.chain.EID, i.stream.String(), chunkTo); err != nil {
+			return err
+		}
+		result.ToBlock = chunkTo
+		result.Advanced = true
 		if chunkTo == to {
-			break
+			return nil
 		}
 		chunkFrom = chunkTo + 1
 	}
-	return executorProcessed, dvnProcessed, nil
+	return nil
+}
+
+func (i *Indexer) processSourceWindow(ctx context.Context, snapshot rpcquorum.SafeLogSnapshot, from, to uint64, role string) (int, int, error) {
+	if len(i.sourcePathways) == 0 {
+		return 0, 0, nil
+	}
+	logs, err := snapshot.FilterLogs(ctx, ethereum.FilterQuery{
+		FromBlock: blockNumber(from),
+		ToBlock:   blockNumber(to),
+		Addresses: i.sourceAddresses(role),
+		Topics:    [][]common.Hash{i.sourceTopics(role)},
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return i.processSourceLogs(ctx, logs, role)
 }
 
 func (i *Indexer) processSourceLogs(ctx context.Context, logs []gethtypes.Log, role string) (int, int, error) {
@@ -567,10 +498,7 @@ func (i *Indexer) processExecutorSourceTx(ctx context.Context, txLogs []gethtype
 			continue
 		}
 		record.Packet.Status = record.ExecutorJob.Status
-		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
-			return processed, err
-		}
-		if err := i.store.UpsertExecutorJob(ctx, record.ExecutorJob); err != nil {
+		if err := i.store.UpsertExecutorAssignment(ctx, record.Packet, record.ExecutorJob); err != nil {
 			return processed, err
 		}
 		i.logger.Info("indexed executor source assignment", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "block_number", record.Packet.SrcBlockNumber, "log_index", record.Packet.SrcLogIndex, "status", record.ExecutorJob.Status)
@@ -636,10 +564,7 @@ func (i *Indexer) processDVNSourceTx(ctx context.Context, txLogs []gethtypes.Log
 			i.logger.Debug("skipped dvn source assignment", "reason", "unexpected_worker", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "worker", record.DVN, "expected_worker", pathway.SourceWorkers.OpenDVN)
 			continue
 		}
-		if err := i.store.UpsertPacket(ctx, record.Packet); err != nil {
-			return processed, err
-		}
-		if err := i.store.UpsertDVNJob(ctx, record.DVNJob); err != nil {
+		if err := i.store.UpsertDVNAssignment(ctx, record.Packet, record.DVNJob); err != nil {
 			return processed, err
 		}
 		i.logger.Info("indexed dvn source assignment", "guid", record.Packet.GUID, "src_eid", record.Packet.SrcEID, "dst_eid", record.Packet.DstEID, "tx_hash", record.Packet.SrcTxHash, "block_number", record.Packet.SrcBlockNumber, "log_index", record.Packet.SrcLogIndex, "status", record.DVNJob.Status)
@@ -715,41 +640,24 @@ func (i *Indexer) recordSourcePacketSkip(ctx context.Context, role string, packe
 	})
 }
 
-func (i *Indexer) processDestinationWindow(ctx context.Context, from, to uint64, role string) (destinationApplyResult, error) {
-	result := destinationApplyResult{}
-	for chunkFrom := from; chunkFrom <= to; {
-		chunkTo := i.chunkToBlock(chunkFrom, to)
-		logs, err := i.client.FilterLogs(ctx, ethereum.FilterQuery{
-			FromBlock: blockNumber(chunkFrom),
-			ToBlock:   blockNumber(chunkTo),
-			Addresses: i.destinationAddresses(role),
-			Topics:    [][]common.Hash{i.destinationTopics(role)},
-		})
-		if err != nil {
-			return result, err
-		}
-		switch role {
-		case sourceRoleExecutor:
-			executorApplied, err := i.applyExecutorDestinationLogs(ctx, logs)
-			result.applied += executorApplied.applied
-			result.pending = result.pending || executorApplied.pending
-			if err != nil {
-				return result, err
-			}
-		case sourceRoleDVN:
-			dvnApplied, err := i.applyDVNDestinationLogs(ctx, logs)
-			result.applied += dvnApplied.applied
-			result.pending = result.pending || dvnApplied.pending
-			if err != nil {
-				return result, err
-			}
-		}
-		if chunkTo == to {
-			break
-		}
-		chunkFrom = chunkTo + 1
+func (i *Indexer) processDestinationWindow(ctx context.Context, snapshot rpcquorum.SafeLogSnapshot, from, to uint64, role string) (destinationApplyResult, error) {
+	logs, err := snapshot.FilterLogs(ctx, ethereum.FilterQuery{
+		FromBlock: blockNumber(from),
+		ToBlock:   blockNumber(to),
+		Addresses: i.destinationAddresses(role),
+		Topics:    [][]common.Hash{i.destinationTopics(role)},
+	})
+	if err != nil {
+		return destinationApplyResult{}, err
 	}
-	return result, nil
+	switch role {
+	case sourceRoleExecutor:
+		return i.applyExecutorDestinationLogs(ctx, logs)
+	case sourceRoleDVN:
+		return i.applyDVNDestinationLogs(ctx, logs)
+	default:
+		return destinationApplyResult{}, fmt.Errorf("unsupported destination role %q", role)
+	}
 }
 
 func (i *Indexer) applyExecutorDestinationLogs(ctx context.Context, logs []gethtypes.Log) (destinationApplyResult, error) {
@@ -816,6 +724,15 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 	if i.pollInterval <= 0 {
 		return workerloop.Fatal(errors.New("indexer poll interval must be positive"))
 	}
+	if i.backfillRange == 0 {
+		return workerloop.Fatal(errors.New("indexer backfill range must be positive"))
+	}
+	if i.queryBlockRange == 0 {
+		return workerloop.Fatal(errors.New("indexer query block range must be positive"))
+	}
+	if !i.stream.valid() {
+		return workerloop.Fatal(fmt.Errorf("unsupported indexer stream %q", i.stream))
+	}
 	if i.store == nil {
 		return workerloop.Fatal(errors.New("indexer store is required"))
 	}
@@ -823,26 +740,39 @@ func (i *Indexer) runPollingLoop(ctx context.Context) error {
 		return workerloop.Fatal(errors.New("indexer log client is required"))
 	}
 	if i.metrics != nil {
-		i.metrics.RegisterIndexer(i.chain.EID, i.chain.Name, i.pollInterval)
+		i.metrics.RegisterIndexer(i.chain.EID, i.chain.Name, i.stream.String(), i.pollInterval)
 	}
-	if err := i.pollOnce(ctx); err != nil {
+	if err := i.pollUntilPaused(ctx); err != nil {
 		return err
 	}
-	ticker := time.NewTicker(i.pollInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(i.pollInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if err := i.pollOnce(ctx); err != nil {
+		case <-timer.C:
+			if err := i.pollUntilPaused(ctx); err != nil {
 				return err
 			}
+			timer.Reset(i.pollInterval)
 		}
 	}
 }
 
-func (i *Indexer) pollOnce(ctx context.Context) error {
+func (i *Indexer) pollUntilPaused(ctx context.Context) error {
+	for {
+		hasMore, err := i.pollOnce(ctx)
+		if err != nil {
+			return err
+		}
+		if !hasMore {
+			return nil
+		}
+	}
+}
+
+func (i *Indexer) pollOnce(ctx context.Context) (bool, error) {
 	start := time.Now()
 	result, err := i.ProcessOnce(ctx)
 	duration := time.Since(start)
@@ -850,6 +780,7 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 		i.metrics.RecordIndexerPoll(
 			i.chain.EID,
 			i.chain.Name,
+			i.stream.String(),
 			i.pollInterval,
 			result.ObservedHeadBlock,
 			result.SafeToBlock,
@@ -872,36 +803,36 @@ func (i *Indexer) pollOnce(ctx context.Context) error {
 	}
 	if err == nil {
 		i.logPollSuccess(result, duration)
-		return nil
+		return result.HasMore, nil
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
+		return false, ctxErr
 	}
-	i.logger.Warn("indexer poll failed; retrying on next interval", "chain", i.chain.Name, "eid", i.chain.EID, "duration", duration, "error", err)
-	return nil
+	i.logger.Warn("indexer poll failed; retrying on next interval", "chain", i.chain.Name, "eid", i.chain.EID, "stream", i.stream, "duration", duration, "error", err)
+	return false, nil
 }
 
-func (i *Indexer) logCursorSkip(stream string, reason cursorSkipReason, safeTo uint64) {
+func (i *Indexer) logCursorSkip(reason cursorSkipReason, safeTo uint64) {
 	if reason == "" {
 		return
 	}
-	i.logger.Debug("skipped indexer stream", "chain", i.chain.Name, "eid", i.chain.EID, "stream", stream, "reason", string(reason), "safe_to_block", safeTo)
+	i.logger.Debug("skipped indexer stream", "chain", i.chain.Name, "eid", i.chain.EID, "stream", i.stream, "reason", string(reason), "safe_to_block", safeTo)
 }
 
 func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
-	for _, progress := range result.streamProgress[:result.streamProgressCount] {
+	if result.Advanced {
 		i.logger.Debug(
 			"indexer stream advanced",
 			"chain", i.chain.Name,
 			"eid", i.chain.EID,
-			"stream", progress.stream,
-			"from_block", progress.fromBlock,
-			"to_block", progress.toBlock,
+			"stream", i.stream,
+			"from_block", result.FromBlock,
+			"to_block", result.ToBlock,
 			"safe_to_block", result.SafeToBlock,
-			"lag_blocks", lagBlocks(result.SafeToBlock, progress.toBlock),
-			"source_transactions", progress.sourceTransactions,
-			"dvn_transactions", progress.dvnTransactions,
-			"destination_logs", progress.destinationLogs,
+			"lag_blocks", lagBlocks(result.SafeToBlock, result.ToBlock),
+			"source_transactions", result.SourceTransactions,
+			"dvn_transactions", result.DVNTransactions,
+			"destination_logs", result.DestinationLogs,
 			"duration", duration,
 		)
 	}
@@ -909,9 +840,12 @@ func (i *Indexer) logPollSuccess(result ProcessResult, duration time.Duration) {
 		"indexer poll completed",
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
+		"stream", i.stream,
 		"observed_head_block", result.ObservedHeadBlock,
 		"safe_to_block", result.SafeToBlock,
-		"streams_advanced", result.streamProgressCount,
+		"advanced", result.Advanced,
+		"pending", result.Pending,
+		"has_more", result.HasMore,
 		"source_transactions", result.SourceTransactions,
 		"dvn_transactions", result.DVNTransactions,
 		"destination_logs", result.DestinationLogs,
@@ -950,36 +884,21 @@ func (i *Indexer) logProgressSummary(result ProcessResult, duration time.Duratio
 	args := []any{
 		"chain", i.chain.Name,
 		"eid", i.chain.EID,
+		"stream", i.stream,
 		"observed_head_block", result.ObservedHeadBlock,
 		"safe_to_block", result.SafeToBlock,
-		"streams_advanced", result.streamProgressCount,
+		"advanced", result.Advanced,
+		"pending", result.Pending,
 		"source_transactions", result.SourceTransactions,
 		"dvn_transactions", result.DVNTransactions,
 		"destination_logs", result.DestinationLogs,
 		"duration", duration,
 	}
-	if result.streamProgressCount > 0 {
-		streams := make([]string, 0, result.streamProgressCount)
-		var fromBlock uint64
-		var toBlock uint64
-		var lag uint64
-		for index, progress := range result.streamProgress[:result.streamProgressCount] {
-			streams = append(streams, progress.stream)
-			if index == 0 || progress.fromBlock < fromBlock {
-				fromBlock = progress.fromBlock
-			}
-			if progress.toBlock > toBlock {
-				toBlock = progress.toBlock
-			}
-			if progressLag := lagBlocks(result.SafeToBlock, progress.toBlock); progressLag > lag {
-				lag = progressLag
-			}
-		}
+	if result.Advanced {
 		args = append(args,
-			"streams", strings.Join(streams, ","),
-			"from_block", fromBlock,
-			"to_block", toBlock,
-			"lag_blocks", lag,
+			"from_block", result.FromBlock,
+			"to_block", result.ToBlock,
+			"lag_blocks", lagBlocks(result.SafeToBlock, result.ToBlock),
 		)
 	}
 	i.logger.Info("indexer progress", args...)
@@ -1084,8 +1003,8 @@ func (i *Indexer) sourcePathwayIdentity(srcEID, dstEID uint32, sender, receiver 
 	return chain.Pathway{}, false
 }
 
-func (i *Indexer) cursorWindow(ctx context.Context, stream string, safeTo uint64) (uint64, uint64, bool, cursorSkipReason, error) {
-	cursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, stream)
+func (i *Indexer) cursorWindow(ctx context.Context, safeTo uint64) (uint64, uint64, bool, cursorSkipReason, error) {
+	cursor, err := i.store.GetIndexerCursor(ctx, i.chain.EID, i.stream.String())
 	cursorExists := true
 	if errors.Is(err, pgx.ErrNoRows) {
 		cursorExists = false
@@ -1105,7 +1024,7 @@ func (i *Indexer) cursorWindow(ctx context.Context, stream string, safeTo uint64
 		}
 	}
 	to := safeTo
-	if i.backfillRange > 0 && to-from+1 > i.backfillRange {
+	if i.backfillRange > 0 && safeTo-from >= i.backfillRange {
 		to = from + i.backfillRange - 1
 	}
 	return from, to, true, "", nil

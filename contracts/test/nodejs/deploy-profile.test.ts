@@ -49,6 +49,7 @@ test("normalizeProfile validates rehearsal mode and generic external DVNs", () =
   assert.equal(profile.chains[0].eid, 40161);
   assert.equal(profile.chains[0].nativeAssetId, "eth");
   assert.equal(profile.chains[0].startBlockNumber, undefined);
+  assert.equal(profile.chains[0].indexerBackfillBlockRange, 10000);
   assert.equal(profile.chains[0].indexerPollIntervalSeconds, 5);
   assert.deepEqual(profile.chains[0].externalDVNs, [
     "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa",
@@ -128,6 +129,19 @@ test("normalizeProfile rejects non-positive or non-integer indexer poll interval
     assert.throws(
       () => normalizeProfile(input),
       /profile\.chains\[0\]\.indexerPollIntervalSeconds must be (?:an integer|a safe integer|>= 1|<= 9223372036)/
+    );
+  }
+});
+
+test("normalizeProfile rejects invalid indexer backfill ranges", () => {
+  for (const value of [undefined, 0, -1, 1.5, "10000", Number.MAX_SAFE_INTEGER + 1]) {
+    const input = baseProfile();
+    (input.chains[0] as Record<string, unknown>).indexerBackfillBlockRange =
+      value;
+
+    assert.throws(
+      () => normalizeProfile(input),
+      /profile\.chains\[0\]\.indexerBackfillBlockRange must be (?:an integer|a safe integer|>= 1)/
     );
   }
 });
@@ -1045,6 +1059,7 @@ test("renderWorkerConfig emits external OApps, active DVN signer, and worker con
   assert.match(yaml, /source_request_timeout_seconds: 10/);
   assert.match(yaml, /start_block_number: 123456/);
   assert.match(yaml, /start_block_number: 654321/);
+  assert.match(yaml, /indexer_backfill_block_range: 10000/);
   assert.match(yaml, /indexer_poll_interval_seconds: 5/);
 });
 
@@ -2026,6 +2041,7 @@ function baseProfile() {
         minCanaryTokenBalance: "1000000000000000",
         confirmations: 12,
         indexerQueryBlockRange: 500,
+        indexerBackfillBlockRange: 10000,
         indexerPollIntervalSeconds: 5,
         externalDVNs: ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
         pricingTxPolicy: {
@@ -2060,6 +2076,7 @@ function baseProfile() {
         minCanaryTokenBalance: "0",
         confirmations: 12,
         indexerQueryBlockRange: 500,
+        indexerBackfillBlockRange: 10000,
         indexerPollIntervalSeconds: 5,
         externalDVNs: ["0x9999999999999999999999999999999999999999"],
         pricingTxPolicy: {

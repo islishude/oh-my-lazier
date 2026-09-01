@@ -25,6 +25,36 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func newExecutorSourceIndexer(configuredChain chain.Chain, pathways []chain.Pathway, store Store, client LogClient, logger *slog.Logger) *Indexer {
+	return NewWithClient(configuredChain, pathways, ExecutorSourceStream, store, client, logger)
+}
+
+func (i *Indexer) withTestStream(stream Stream) *Indexer {
+	i.stream = stream
+	return i
+}
+
+func TestStreamsForRoles(t *testing.T) {
+	tests := []struct {
+		name     string
+		executor bool
+		dvn      bool
+		want     []Stream
+	}{
+		{name: "none"},
+		{name: "executor", executor: true, want: []Stream{ExecutorSourceStream, ExecutorDestinationStream}},
+		{name: "dvn", dvn: true, want: []Stream{DVNSourceStream, DVNDestinationStream}},
+		{name: "both", executor: true, dvn: true, want: []Stream{ExecutorSourceStream, ExecutorDestinationStream, DVNSourceStream, DVNDestinationStream}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := StreamsForRoles(test.executor, test.dvn); !slices.Equal(got, test.want) {
+				t.Fatalf("StreamsForRoles() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
@@ -39,7 +69,7 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", executor)
 	configuredChain.Confirmations = 99
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -52,8 +82,8 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 0 || result.SourceToBlock != 188 {
-		t.Fatalf("source window = %d..%d, want 0..188", result.SourceFromBlock, result.SourceToBlock)
+	if result.FromBlock != 0 || result.ToBlock != 188 {
+		t.Fatalf("source window = %d..%d, want 0..188", result.FromBlock, result.ToBlock)
 	}
 	if result.ObservedHeadBlock != 200 || result.SafeToBlock != 188 {
 		t.Fatalf("head/safe = %d/%d, want 200/188", result.ObservedHeadBlock, result.SafeToBlock)
@@ -72,20 +102,16 @@ func TestIndexerProcessOnceBackfillsSourceExecutorAssignment(t *testing.T) {
 			t.Fatalf("assigned fee = %s, want 42", store.jobs[guid].AssignedFee)
 		}
 	}
-	if len(client.queries) != 4 {
-		t.Fatalf("queries = %d, want four role-specific queries", len(client.queries))
+	if len(client.queries) != 1 {
+		t.Fatalf("queries = %d, want one stream-specific query", len(client.queries))
 	}
 	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 188 {
 		t.Fatalf("source cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorSourceStream)])
 	}
-	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 188 {
-		t.Fatalf("destination cursor = %d, want 188", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
-	}
-	if store.cursors[cursorKey(40161, DVNSourceStream)] != 188 {
-		t.Fatalf("dvn source cursor = %d, want 188", store.cursors[cursorKey(40161, DVNSourceStream)])
-	}
-	if store.cursors[cursorKey(40161, DVNDestinationStream)] != 188 {
-		t.Fatalf("dvn destination cursor = %d, want 188", store.cursors[cursorKey(40161, DVNDestinationStream)])
+	for _, stream := range []Stream{ExecutorDestinationStream, DVNSourceStream, DVNDestinationStream} {
+		if _, ok := store.cursors[cursorKey(40161, stream)]; ok {
+			t.Fatalf("unconfigured stream %s cursor advanced", stream)
+		}
 	}
 	assertLogContains(t, logs.String(),
 		`msg="indexed executor source assignment"`,
@@ -113,7 +139,7 @@ func TestIndexerProcessOnceMarksUnsupportedExecutorOptionsManualReview(t *testin
 		head:       200,
 		sourceLogs: sourceLogs,
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", executor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -151,13 +177,13 @@ func TestIndexerProcessOnceFiltersUnexpectedExecutorWorker(t *testing.T) {
 		head:       200,
 		sourceLogs: testExecutorSourceLogs(t, otherExecutor, sendLib, big.NewInt(42)),
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", configuredExecutor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	)
+	).withTestStream(ExecutorSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -198,13 +224,13 @@ func TestIndexerProcessOnceRecordsExternalExecutorWithoutAssignmentLog(t *testin
 			testPacketSentLog(t, txHash, sendLib, 2),
 		},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.SrcEID, "ethereum-sepolia", configuredExecutor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
@@ -224,23 +250,20 @@ func TestIndexerProcessOnceRecordsExternalExecutorWithoutAssignmentLog(t *testin
 func TestIndexerProcessOnceIgnoresUnrelatedInvalidPacketRoute(t *testing.T) {
 	pathway := testIndexerPathway()
 	tests := []struct {
-		name    string
-		streams StreamSet
-		stream  string
-		feeLog  func(*testing.T, common.Hash) gethtypes.Log
+		name   string
+		stream Stream
+		feeLog func(*testing.T, common.Hash) gethtypes.Log
 	}{
 		{
-			name:    "executor source",
-			streams: StreamSet{ExecutorSource: true},
-			stream:  ExecutorSourceStream,
+			name:   "executor source",
+			stream: ExecutorSourceStream,
 			feeLog: func(t *testing.T, txHash common.Hash) gethtypes.Log {
 				return testExecutorFeePaidLog(t, txHash, pathway.SendLib, pathway.SourceWorkers.OpenExecutor, big.NewInt(1), 0)
 			},
 		},
 		{
-			name:    "dvn source",
-			streams: StreamSet{DVNSource: true},
-			stream:  DVNSourceStream,
+			name:   "dvn source",
+			stream: DVNSourceStream,
 			feeLog: func(t *testing.T, txHash common.Hash) gethtypes.Log {
 				return testDVNFeePaidLog(t, txHash, pathway.SendLib, pathway.SourceWorkers.OpenDVN, big.NewInt(1), 0)
 			},
@@ -260,13 +283,13 @@ func TestIndexerProcessOnceIgnoresUnrelatedInvalidPacketRoute(t *testing.T) {
 					testPacketSentLogWithPacket(t, txHash, pathway.SendLib, encoded, 1),
 				},
 			}
-			indexer := NewWithClient(
+			indexer := newExecutorSourceIndexer(
 				testIndexerChain(pathway.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
 				[]chain.Pathway{pathway},
 				store,
 				client,
 				discardLogger(),
-			).WithStreams(test.streams)
+			).withTestStream(test.stream)
 
 			if _, err := indexer.ProcessOnce(context.Background()); err != nil {
 				t.Fatalf("ProcessOnce() error = %v", err)
@@ -291,16 +314,17 @@ func TestIndexerProcessOnceRecordsSendLibraryMismatchForBothRoles(t *testing.T) 
 	}
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 200, sourceLogs: []gethtypes.Log{testPacketSentLog(t, txHash, oldSendLib, 0)}}
-	indexer := NewWithClient(
-		testIndexerChain(packet.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
-		[]chain.Pathway{pathway},
-		store,
-		client,
-		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true, DVNSource: true})
-
-	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
-		t.Fatalf("ProcessOnce() error = %v", err)
+	for _, stream := range []Stream{ExecutorSourceStream, DVNSourceStream} {
+		indexer := newExecutorSourceIndexer(
+			testIndexerChain(packet.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
+			[]chain.Pathway{pathway},
+			store,
+			client,
+			discardLogger(),
+		).withTestStream(stream)
+		if _, err := indexer.ProcessOnce(context.Background()); err != nil {
+			t.Fatalf("ProcessOnce(%s) error = %v", stream, err)
+		}
 	}
 	for _, role := range []string{sourceRoleExecutor, sourceRoleDVN} {
 		skip, ok := store.sourceSkips[sourceSkipLookupKey(role, packet.SrcEID, packet.DstEID, packet.Sender, packet.Receiver, packet.Nonce.Uint64())]
@@ -326,13 +350,13 @@ func TestIndexerProcessOnceRecordsExternalDVNWithoutAssignmentLog(t *testing.T) 
 			testPacketSentLog(t, txHash, pathway.SendLib, 1),
 		},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
 		[]chain.Pathway{pathway},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{DVNSource: true})
+	).withTestStream(DVNSourceStream)
 
 	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
@@ -354,13 +378,13 @@ func TestIndexerProcessOnceRejectsMissingConfiguredDVNAssignmentLog(t *testing.T
 			testPacketSentLog(t, txHash, pathway.SendLib, 1),
 		},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(pathway.SrcEID, "ethereum-sepolia", pathway.SourceWorkers.OpenExecutor),
 		[]chain.Pathway{pathway},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{DVNSource: true})
+	).withTestStream(DVNSourceStream)
 
 	_, err := indexer.ProcessOnce(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "assignment log is missing") {
@@ -383,13 +407,13 @@ func TestIndexerProcessOnceRejectsMissingConfiguredExecutorAssignmentLog(t *test
 			testPacketSentLog(t, txHash, sendLib, 2),
 		},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", configuredExecutor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	_, err := indexer.ProcessOnce(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "assignment log is missing") {
@@ -414,13 +438,13 @@ func TestIndexerProcessOnceBackfillsDestinationEvents(t *testing.T) {
 		head:            200,
 		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	)
+	).withTestStream(ExecutorDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -449,13 +473,13 @@ func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *te
 		head:            200,
 		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorDestination: true})
+	).withTestStream(ExecutorDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -463,6 +487,9 @@ func TestIndexerProcessOnceDefersDestinationCursorUntilSourcePacketAppears(t *te
 	}
 	if result.DestinationLogs != 0 {
 		t.Fatalf("DestinationLogs = %d, want 0", result.DestinationLogs)
+	}
+	if !result.Pending || result.HasMore {
+		t.Fatalf("pending/hasMore = %t/%t, want true/false", result.Pending, result.HasMore)
 	}
 	if _, ok := store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)]; ok {
 		t.Fatalf("destination cursor advanced to %d, want missing", store.cursors[cursorKey(packet.DstEID, ExecutorDestinationStream)])
@@ -499,13 +526,13 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForSkippedSourcePacket(t *te
 		head:            200,
 		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorDestination: true})
+	).withTestStream(ExecutorDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -527,13 +554,13 @@ func TestIndexerProcessOnceAdvancesDestinationCursorForExternalMissingPacket(t *
 		head:            200,
 		destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorDestination: true})
+	).withTestStream(ExecutorDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -561,13 +588,13 @@ func TestIndexerProcessOnceBackfillsDVNVerification(t *testing.T) {
 		head:            200,
 		destinationLogs: []gethtypes.Log{testPayloadVerifiedLog(t, packet, common.HexToAddress("0x6666666666666666666666666666666666666666"))},
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	)
+	).withTestStream(DVNDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -598,13 +625,13 @@ func TestIndexerProcessOnceBackfillsDVNAssignment(t *testing.T) {
 		head:       200,
 		sourceLogs: testDVNSourceLogs(t, dvn, sendLib, big.NewInt(42)),
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	)
+	).withTestStream(DVNSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -635,13 +662,13 @@ func TestIndexerProcessOnceFiltersUnexpectedDVNWorker(t *testing.T) {
 		head:       200,
 		sourceLogs: testDVNSourceLogs(t, otherDVN, sendLib, big.NewInt(42)),
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -658,13 +685,13 @@ func TestIndexerProcessOnceFiltersUnexpectedDVNWorker(t *testing.T) {
 func TestIndexerProcessOnceUsesSafeGenesisBlock(t *testing.T) {
 	client := &fakeLogClient{head: 11, safe: 0, safeSet: true}
 	store := newFakeIndexerStore()
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -673,8 +700,8 @@ func TestIndexerProcessOnceUsesSafeGenesisBlock(t *testing.T) {
 	if result.ObservedHeadBlock != 11 || result.SafeToBlock != 0 {
 		t.Fatalf("head/safe = %d/%d, want 11/0", result.ObservedHeadBlock, result.SafeToBlock)
 	}
-	if result.SourceFromBlock != 0 || result.SourceToBlock != 0 {
-		t.Fatalf("source window = %d..%d, want genesis only", result.SourceFromBlock, result.SourceToBlock)
+	if result.FromBlock != 0 || result.ToBlock != 0 {
+		t.Fatalf("source window = %d..%d, want genesis only", result.FromBlock, result.ToBlock)
 	}
 	if got := store.cursors[cursorKey(40161, ExecutorSourceStream)]; got != 0 {
 		t.Fatalf("source cursor = %d, want 0", got)
@@ -684,7 +711,7 @@ func TestIndexerProcessOnceUsesSafeGenesisBlock(t *testing.T) {
 func TestIndexerProcessOnceSafeFailureDoesNotQueryOrAdvance(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 11, safeErr: errors.New("safe unavailable")}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -707,7 +734,7 @@ func TestIndexerProcessOnceSafeFailureDoesNotQueryOrAdvance(t *testing.T) {
 func TestIndexerProcessOnceRejectsSafeAboveHead(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 11, safe: 12, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -727,13 +754,13 @@ func TestIndexerProcessOnceRefreshesHeadAfterSafeAdvances(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 11, safe: 12, safeSet: true}
 	client.onBlock = func() { client.head = 12 }
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
@@ -751,13 +778,13 @@ func TestIndexerProcessOnceDoesNotRewindCursorAheadOfSafe(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 30, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
@@ -773,32 +800,29 @@ func TestIndexerProcessOnceDoesNotRewindCursorAheadOfSafe(t *testing.T) {
 func TestIndexerProcessOnceUsesPersistedCursor(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
-	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
+	configuredChain.IndexerBackfillBlockRange = 10
+	indexer := newExecutorSourceIndexer(
+		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
 	)
-	indexer.backfillRange = 10
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 41 || result.SourceToBlock != 50 {
-		t.Fatalf("source window = %d..%d, want 41..50", result.SourceFromBlock, result.SourceToBlock)
+	if result.FromBlock != 41 || result.ToBlock != 50 {
+		t.Fatalf("source window = %d..%d, want 41..50", result.FromBlock, result.ToBlock)
 	}
-	if result.DestinationFromBlock != 41 || result.DestinationToBlock != 50 {
-		t.Fatalf("destination window = %d..%d, want 41..50", result.DestinationFromBlock, result.DestinationToBlock)
+	if !result.HasMore {
+		t.Fatal("ProcessOnce() HasMore = false, want configured backfill window to continue immediately")
 	}
 	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 50 {
 		t.Fatalf("source cursor = %d, want 50", store.cursors[cursorKey(40161, ExecutorSourceStream)])
-	}
-	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 50 {
-		t.Fatalf("destination cursor = %d, want 50", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 }
 
@@ -807,20 +831,20 @@ func TestIndexerProcessOnceSplitsSourceQueriesByConfiguredRange(t *testing.T) {
 	client := &fakeLogClient{head: 37, safe: 25, safeSet: true}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
 	configuredChain.IndexerQueryBlockRange = 10
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 0 || result.SourceToBlock != 25 {
-		t.Fatalf("source window = %d..%d, want 0..25", result.SourceFromBlock, result.SourceToBlock)
+	if result.FromBlock != 0 || result.ToBlock != 25 {
+		t.Fatalf("source window = %d..%d, want 0..25", result.FromBlock, result.ToBlock)
 	}
 	var got [][2]uint64
 	for _, query := range client.queries {
@@ -842,20 +866,20 @@ func TestIndexerProcessOnceSplitsDestinationQueriesByConfiguredRange(t *testing.
 	client := &fakeLogClient{head: 37, safe: 25, safeSet: true}
 	configuredChain := testIndexerChain(40449, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555"))
 	configuredChain.IndexerQueryBlockRange = 10
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorDestination: true})
+	).withTestStream(ExecutorDestinationStream)
 
 	result, err := indexer.ProcessOnce(context.Background())
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.DestinationFromBlock != 0 || result.DestinationToBlock != 25 {
-		t.Fatalf("destination window = %d..%d, want 0..25", result.DestinationFromBlock, result.DestinationToBlock)
+	if result.FromBlock != 0 || result.ToBlock != 25 {
+		t.Fatalf("destination window = %d..%d, want 0..25", result.FromBlock, result.ToBlock)
 	}
 	var got [][2]uint64
 	for _, query := range client.queries {
@@ -890,7 +914,7 @@ func TestIndexerProcessOnceProcessesSourceLogsAsContiguousTransactions(t *testin
 		head:       200,
 		sourceLogs: sourceLogs,
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", executor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -925,7 +949,7 @@ func TestIndexerProcessOnceProcessesMultipleSourceSendsInOneTransaction(t *testi
 		head:       200,
 		sourceLogs: sourceLogs,
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", executor),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -953,7 +977,7 @@ func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.
 	client := &fakeLogClient{head: 200}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
 	configuredChain.StartBlockNumber = 150
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -965,17 +989,11 @@ func TestIndexerProcessOnceUsesConfiguredStartBlockWhenCursorMissing(t *testing.
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 150 || result.SourceToBlock != 200 {
-		t.Fatalf("source window = %d..%d, want 150..200", result.SourceFromBlock, result.SourceToBlock)
-	}
-	if result.DestinationFromBlock != 150 || result.DestinationToBlock != 200 {
-		t.Fatalf("destination window = %d..%d, want 150..200", result.DestinationFromBlock, result.DestinationToBlock)
+	if result.FromBlock != 150 || result.ToBlock != 200 {
+		t.Fatalf("source window = %d..%d, want 150..200", result.FromBlock, result.ToBlock)
 	}
 	if store.cursors[cursorKey(40161, ExecutorSourceStream)] != 200 {
 		t.Fatalf("source cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorSourceStream)])
-	}
-	if store.cursors[cursorKey(40161, ExecutorDestinationStream)] != 200 {
-		t.Fatalf("destination cursor = %d, want 200", store.cursors[cursorKey(40161, ExecutorDestinationStream)])
 	}
 }
 
@@ -987,20 +1005,21 @@ func TestIndexerProcessOnceExecutorOnlyStreamsDoNotWriteDVNJobs(t *testing.T) {
 		head:       200,
 		sourceLogs: testDVNSourceLogs(t, dvn, sendLib, big.NewInt(42)),
 	}
-	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
-		[]chain.Pathway{testIndexerPathway()},
-		store,
-		client,
-		discardLogger(),
-	).WithStreams(StreamsForRoles(true, false))
-
-	result, err := indexer.ProcessOnce(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessOnce() error = %v", err)
-	}
-	if result.DVNTransactions != 0 {
-		t.Fatalf("DVNTransactions = %d, want 0", result.DVNTransactions)
+	for _, stream := range StreamsForRoles(true, false) {
+		indexer := newExecutorSourceIndexer(
+			testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+			[]chain.Pathway{testIndexerPathway()},
+			store,
+			client,
+			discardLogger(),
+		).withTestStream(stream)
+		result, err := indexer.ProcessOnce(context.Background())
+		if err != nil {
+			t.Fatalf("ProcessOnce(%s) error = %v", stream, err)
+		}
+		if result.DVNTransactions != 0 {
+			t.Fatalf("DVNTransactions(%s) = %d, want 0", stream, result.DVNTransactions)
+		}
 	}
 	if len(store.dvnJobs) != 0 {
 		t.Fatalf("dvn jobs = %d, want 0", len(store.dvnJobs))
@@ -1027,20 +1046,21 @@ func TestIndexerProcessOnceDVNOnlyStreamsDoNotWriteExecutorJobs(t *testing.T) {
 		head:       200,
 		sourceLogs: testExecutorSourceLogs(t, executor, sendLib, big.NewInt(42)),
 	}
-	indexer := NewWithClient(
-		testIndexerChain(40161, "ethereum-sepolia", executor),
-		[]chain.Pathway{testIndexerPathway()},
-		store,
-		client,
-		discardLogger(),
-	).WithStreams(StreamsForRoles(false, true))
-
-	result, err := indexer.ProcessOnce(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessOnce() error = %v", err)
-	}
-	if result.SourceTransactions != 0 {
-		t.Fatalf("SourceTransactions = %d, want 0", result.SourceTransactions)
+	for _, stream := range StreamsForRoles(false, true) {
+		indexer := newExecutorSourceIndexer(
+			testIndexerChain(40161, "ethereum-sepolia", executor),
+			[]chain.Pathway{testIndexerPathway()},
+			store,
+			client,
+			discardLogger(),
+		).withTestStream(stream)
+		result, err := indexer.ProcessOnce(context.Background())
+		if err != nil {
+			t.Fatalf("ProcessOnce(%s) error = %v", stream, err)
+		}
+		if result.SourceTransactions != 0 {
+			t.Fatalf("SourceTransactions(%s) = %d, want 0", stream, result.SourceTransactions)
+		}
 	}
 	if len(store.jobs) != 0 {
 		t.Fatalf("executor jobs = %d, want 0", len(store.jobs))
@@ -1064,7 +1084,7 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsSafe(t *testing.T) {
 	client := &fakeLogClient{head: 200}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
 	configuredChain.StartBlockNumber = 250
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1076,7 +1096,7 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessOnce() error = %v", err)
 	}
-	if result.SourceFromBlock != 0 || result.SourceToBlock != 0 || result.DestinationFromBlock != 0 || result.DestinationToBlock != 0 {
+	if result.FromBlock != 0 || result.ToBlock != 0 || result.Advanced {
 		t.Fatalf("result windows = %+v, want no indexed windows", result)
 	}
 	if len(client.queries) != 0 {
@@ -1090,7 +1110,7 @@ func TestIndexerProcessOnceSkipsUntilStartBlockIsSafe(t *testing.T) {
 func TestIndexerProcessOnceFailureDoesNotAdvanceCursor(t *testing.T) {
 	store := newFakeIndexerStore()
 	client := &fakeLogClient{head: 200, filterErr: errors.New("filter unavailable")}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1111,17 +1131,17 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 	indexer.backfillRange = 10
 	indexer.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
 	output := logs.String()
@@ -1129,8 +1149,8 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 		`msg="indexer progress"`,
 		`chain=ethereum-sepolia`,
 		`eid=40161`,
-		`streams_advanced=1`,
-		`streams=executor_source`,
+		`stream=executor_source`,
+		`advanced=true`,
 		`from_block=41`,
 		`to_block=50`,
 		`safe_to_block=53`,
@@ -1145,7 +1165,7 @@ func TestIndexerPollOnceLogsSyncProgress(t *testing.T) {
 	}
 }
 
-func TestIndexerPartialWindowFailureReplaysIdempotently(t *testing.T) {
+func TestIndexerChunkFailureResumesFromLastCheckpoint(t *testing.T) {
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	sendLib := common.HexToAddress("0x9999999999999999999999999999999999999999")
 	store := newFakeIndexerStore()
@@ -1159,13 +1179,13 @@ func TestIndexerPartialWindowFailureReplaysIdempotently(t *testing.T) {
 		}
 		return nil
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true})
+	).withTestStream(ExecutorSourceStream)
 	indexer.backfillRange = 10
 	indexer.queryBlockRange = 5
 
@@ -1174,21 +1194,28 @@ func TestIndexerPartialWindowFailureReplaysIdempotently(t *testing.T) {
 	if _, err := indexer.ProcessOnce(context.Background()); err == nil {
 		t.Fatal("ProcessOnce() error = nil, want second-chunk failure")
 	}
-	if cursor := store.cursors[cursorKey(40161, ExecutorSourceStream)]; cursor != 40 {
-		t.Fatalf("cursor after partial window = %d, want unmoved 40", cursor)
+	if cursor := store.cursors[cursorKey(40161, ExecutorSourceStream)]; cursor != 45 {
+		t.Fatalf("cursor after partial window = %d, want completed chunk checkpoint 45", cursor)
 	}
 	if len(store.packets) != 1 || len(store.jobs) != 1 {
 		t.Fatalf("partial window wrote %d packets / %d jobs, want the first chunk's 1/1", len(store.packets), len(store.jobs))
 	}
 
-	// The replay re-reads the whole window; upserts stay idempotent and the
-	// cursor advances only now.
+	// The retry resumes at 46 instead of replaying the completed 41..45 chunk.
 	client.onFilter = nil
 	if _, err := indexer.ProcessOnce(context.Background()); err != nil {
 		t.Fatalf("ProcessOnce(replay) error = %v", err)
 	}
-	if cursor := store.cursors[cursorKey(40161, ExecutorSourceStream)]; cursor != 50 {
-		t.Fatalf("cursor after replay = %d, want 50", cursor)
+	if cursor := store.cursors[cursorKey(40161, ExecutorSourceStream)]; cursor != 53 {
+		t.Fatalf("cursor after retry = %d, want safe block 53", cursor)
+	}
+	wantQueries := [][2]uint64{{41, 45}, {46, 50}, {51, 53}}
+	var gotQueries [][2]uint64
+	for _, query := range client.queries {
+		gotQueries = append(gotQueries, [2]uint64{query.FromBlock.Uint64(), query.ToBlock.Uint64()})
+	}
+	if !slices.Equal(gotQueries, wantQueries) {
+		t.Fatalf("successful query checkpoints = %v, want %v", gotQueries, wantQueries)
 	}
 	if len(store.packets) != 1 || len(store.jobs) != 1 {
 		t.Fatalf("replay duplicated rows: %d packets / %d jobs, want 1/1", len(store.packets), len(store.jobs))
@@ -1207,16 +1234,16 @@ func TestIndexerPollOnceReportsProviderStatuses(t *testing.T) {
 		providers:     providers,
 	}
 	recorder := &providerStatusRecorder{}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		discardLogger(),
-	).WithStreams(StreamSet{ExecutorSource: true}).WithMetrics(recorder)
+	).withTestStream(ExecutorSourceStream).WithMetrics(recorder)
 	indexer.backfillRange = 10
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
 	if len(recorder.reports) != 1 {
@@ -1231,7 +1258,7 @@ func TestIndexerPollOnceReportsProviderStatuses(t *testing.T) {
 	}
 
 	client.filterErr = errors.New("log quorum conflict")
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v, want swallowed poll failure", err)
 	}
 	if len(recorder.reports) != 2 {
@@ -1239,15 +1266,12 @@ func TestIndexerPollOnceReportsProviderStatuses(t *testing.T) {
 	}
 }
 
-func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
+func TestIndexerPollOnceReportsPerStreamProgressInfo(t *testing.T) {
 	logger, logs := captureLogger(slog.LevelInfo)
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
-	store.cursors[cursorKey(40161, DVNSourceStream)] = 40
-	store.cursors[cursorKey(40161, ExecutorDestinationStream)] = 40
-	store.cursors[cursorKey(40161, DVNDestinationStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1257,7 +1281,7 @@ func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
 	indexer.backfillRange = 10
 	indexer.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
 	output := logs.String()
@@ -1265,8 +1289,8 @@ func TestIndexerPollOnceAggregatesStreamProgressInfo(t *testing.T) {
 		t.Fatalf("indexer progress logs = %d, want 1:\n%s", count, output)
 	}
 	assertLogContains(t, output,
-		`streams_advanced=4`,
-		`streams=executor_source,dvn_source,executor_destination,dvn_destination`,
+		`stream=executor_source`,
+		`advanced=true`,
 		`from_block=41`,
 		`to_block=50`,
 		`lag_blocks=3`,
@@ -1282,18 +1306,18 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	).WithStreams(StreamSet{ExecutorSource: true}).WithProgressLogInterval(time.Minute)
+	).withTestStream(ExecutorSourceStream).WithProgressLogInterval(time.Minute)
 	indexer.backfillRange = 10
 	now := time.Unix(1_700_000_000, 0)
 	indexer.now = func() time.Time { return now }
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("first pollOnce() error = %v", err)
 	}
 	logs.Reset()
@@ -1301,7 +1325,7 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 	client.safe = 63
 	now = now.Add(10 * time.Second)
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("second pollOnce() error = %v", err)
 	}
 	output := logs.String()
@@ -1310,7 +1334,7 @@ func TestIndexerPollOnceThrottlesSyncProgressInfo(t *testing.T) {
 		`from_block=51`,
 		`to_block=60`,
 		`level=DEBUG msg="indexer poll completed"`,
-		`streams_advanced=1`,
+		`advanced=true`,
 	)
 	if strings.Contains(output, `level=INFO msg="indexer progress"`) {
 		t.Fatalf("throttled progress logged at info level:\n%s", output)
@@ -1322,16 +1346,16 @@ func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
 	store := newFakeIndexerStore()
 	store.cursors[cursorKey(40161, ExecutorSourceStream)] = 40
 	client := &fakeLogClient{head: 65, safe: 53, safeSet: true}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
 		client,
 		logger,
-	).WithStreams(StreamSet{ExecutorSource: true}).WithProgressLogInterval(0)
+	).withTestStream(ExecutorSourceStream).WithProgressLogInterval(0)
 	indexer.backfillRange = 10
 
-	if err := indexer.pollOnce(context.Background()); err != nil {
+	if _, err := indexer.pollOnce(context.Background()); err != nil {
 		t.Fatalf("pollOnce() error = %v", err)
 	}
 	output := logs.String()
@@ -1343,6 +1367,73 @@ func TestIndexerPollOnceDisablesPeriodicProgressInfo(t *testing.T) {
 		strings.Contains(output, `level=INFO msg="indexer stream advanced"`) ||
 		strings.Contains(output, `level=INFO msg="indexer poll completed"`) {
 		t.Fatalf("progress info logs emitted with interval 0:\n%s", output)
+	}
+}
+
+func TestIndexerPollUntilPausedCatchesUpWithoutWaitingBetweenBackfillRanges(t *testing.T) {
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 35, safe: 25, safeSet: true}
+	safeCalls := 0
+	client.onSafe = func() {
+		safeCalls++
+		if safeCalls >= 2 {
+			client.safe = 35
+		}
+	}
+	indexer := newExecutorSourceIndexer(
+		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	)
+	indexer.backfillRange = 10
+	indexer.queryBlockRange = 5
+	indexer.pollInterval = time.Hour
+
+	if err := indexer.pollUntilPaused(context.Background()); err != nil {
+		t.Fatalf("pollUntilPaused() error = %v", err)
+	}
+	if cursor := store.cursors[cursorKey(40161, ExecutorSourceStream)]; cursor != 35 {
+		t.Fatalf("source cursor = %d, want moving safe block 35", cursor)
+	}
+	if safeCalls != 4 {
+		t.Fatalf("safe snapshot calls = %d, want four immediate backfill passes", safeCalls)
+	}
+	wantQueries := [][2]uint64{{0, 4}, {5, 9}, {10, 14}, {15, 19}, {20, 24}, {25, 29}, {30, 34}, {35, 35}}
+	var gotQueries [][2]uint64
+	for _, query := range client.queries {
+		gotQueries = append(gotQueries, [2]uint64{query.FromBlock.Uint64(), query.ToBlock.Uint64()})
+	}
+	if !slices.Equal(gotQueries, wantQueries) {
+		t.Fatalf("catch-up queries = %v, want %v", gotQueries, wantQueries)
+	}
+}
+
+func TestIndexerPollUntilPausedStopsAfterPendingDestinationChunk(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	store := newFakeIndexerStore()
+	client := &fakeLogClient{head: 20, destinationLogs: []gethtypes.Log{testPacketVerifiedLog(t, packet)}}
+	safeCalls := 0
+	client.onSafe = func() { safeCalls++ }
+	indexer := newExecutorSourceIndexer(
+		testIndexerChain(packet.DstEID, "hoodi", common.HexToAddress("0x5555555555555555555555555555555555555555")),
+		[]chain.Pathway{testIndexerPathway()},
+		store,
+		client,
+		discardLogger(),
+	).withTestStream(ExecutorDestinationStream)
+	indexer.backfillRange = 10
+	indexer.queryBlockRange = 5
+
+	if err := indexer.pollUntilPaused(context.Background()); err != nil {
+		t.Fatalf("pollUntilPaused() error = %v", err)
+	}
+	if safeCalls != 1 {
+		t.Fatalf("safe snapshot calls = %d, want one before pending stopped catch-up", safeCalls)
+	}
+	if len(client.queries) != 1 {
+		t.Fatalf("destination queries = %d, want one pending chunk", len(client.queries))
 	}
 }
 
@@ -1365,7 +1456,7 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	}
 	configuredChain := testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222"))
 	configuredChain.IndexerPollInterval = time.Millisecond
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		configuredChain,
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1398,7 +1489,7 @@ func TestIndexerRunPollsImmediatelyAndOnInterval(t *testing.T) {
 	if metricRecorder.registerCalls != 1 || metricRecorder.pollStartedBeforeRegister || metricRecorder.pollsBeforeRegister {
 		t.Fatalf("metric registration state = %#v", metricRecorder)
 	}
-	if metricRecorder.chainEID != 40161 || metricRecorder.chainName != "ethereum-sepolia" || metricRecorder.pollInterval != time.Millisecond {
+	if metricRecorder.chainEID != 40161 || metricRecorder.chainName != "ethereum-sepolia" || metricRecorder.stream != ExecutorSourceStream.String() || metricRecorder.pollInterval != time.Millisecond {
 		t.Fatalf("registered indexer metrics = %#v", metricRecorder)
 	}
 	if metricRecorder.pollCalls < 2 {
@@ -1422,7 +1513,7 @@ func TestIndexerRunRetriesAfterPollError(t *testing.T) {
 			cancel()
 		}
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1466,7 +1557,7 @@ func TestIndexerRunContinuesPollingAfterSafeUnavailable(t *testing.T) {
 			cancel()
 		}
 	}
-	indexer := NewWithClient(
+	indexer := newExecutorSourceIndexer(
 		testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 		[]chain.Pathway{testIndexerPathway()},
 		store,
@@ -1508,7 +1599,7 @@ func TestIndexerRunFailsFastForLocalSetupErrors(t *testing.T) {
 		{
 			name: "poll interval",
 			indexer: func() *Indexer {
-				indexer := NewWithClient(
+				indexer := newExecutorSourceIndexer(
 					testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 					[]chain.Pathway{testIndexerPathway()},
 					newFakeIndexerStore(),
@@ -1521,8 +1612,49 @@ func TestIndexerRunFailsFastForLocalSetupErrors(t *testing.T) {
 			wantError: "poll interval",
 		},
 		{
+			name: "backfill range",
+			indexer: func() *Indexer {
+				indexer := newExecutorSourceIndexer(
+					testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+					[]chain.Pathway{testIndexerPathway()},
+					newFakeIndexerStore(),
+					&fakeLogClient{head: 200},
+					discardLogger(),
+				)
+				indexer.backfillRange = 0
+				return indexer
+			}(),
+			wantError: "backfill range",
+		},
+		{
+			name: "query range",
+			indexer: func() *Indexer {
+				indexer := newExecutorSourceIndexer(
+					testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+					[]chain.Pathway{testIndexerPathway()},
+					newFakeIndexerStore(),
+					&fakeLogClient{head: 200},
+					discardLogger(),
+				)
+				indexer.queryBlockRange = 0
+				return indexer
+			}(),
+			wantError: "query block range",
+		},
+		{
+			name: "stream",
+			indexer: newExecutorSourceIndexer(
+				testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
+				[]chain.Pathway{testIndexerPathway()},
+				newFakeIndexerStore(),
+				&fakeLogClient{head: 200},
+				discardLogger(),
+			).withTestStream(Stream("unknown")),
+			wantError: "unsupported indexer stream",
+		},
+		{
 			name: "store",
-			indexer: NewWithClient(
+			indexer: newExecutorSourceIndexer(
 				testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 				[]chain.Pathway{testIndexerPathway()},
 				nil,
@@ -1533,7 +1665,7 @@ func TestIndexerRunFailsFastForLocalSetupErrors(t *testing.T) {
 		},
 		{
 			name: "log client",
-			indexer: NewWithClient(
+			indexer: newExecutorSourceIndexer(
 				testIndexerChain(40161, "ethereum-sepolia", common.HexToAddress("0x2222222222222222222222222222222222222222")),
 				[]chain.Pathway{testIndexerPathway()},
 				newFakeIndexerStore(),
@@ -1574,6 +1706,7 @@ type fakeLogClient struct {
 type fakeIndexerMetrics struct {
 	chainEID                  uint32
 	chainName                 string
+	stream                    string
 	pollInterval              time.Duration
 	registerCalls             int
 	pollCalls                 int
@@ -1581,14 +1714,15 @@ type fakeIndexerMetrics struct {
 	pollsBeforeRegister       bool
 }
 
-func (m *fakeIndexerMetrics) RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration) {
+func (m *fakeIndexerMetrics) RegisterIndexer(chainEID uint32, chainName, stream string, pollInterval time.Duration) {
 	m.chainEID = chainEID
 	m.chainName = chainName
+	m.stream = stream
 	m.pollInterval = pollInterval
 	m.registerCalls++
 }
 
-func (m *fakeIndexerMetrics) RecordIndexerPoll(_ uint32, _ string, _ time.Duration, _ uint64, _ uint64, _ int, _ int, _ int, _ time.Duration, _ error) {
+func (m *fakeIndexerMetrics) RecordIndexerPoll(_ uint32, _, _ string, _ time.Duration, _ uint64, _ uint64, _ int, _ int, _ int, _ time.Duration, _ error) {
 	if m.registerCalls == 0 {
 		m.pollsBeforeRegister = true
 	}
@@ -1605,17 +1739,33 @@ func (c *fakeLogClient) BlockNumber(context.Context) (uint64, error) {
 	return c.head, nil
 }
 
-func (c *fakeLogClient) SafeBlockNumber(context.Context) (uint64, error) {
+func (c *fakeLogClient) SafeLogSnapshot(context.Context) (rpcquorum.SafeLogSnapshot, error) {
 	if c.onSafe != nil {
 		c.onSafe()
 	}
 	if c.safeErr != nil {
-		return 0, c.safeErr
+		return nil, c.safeErr
 	}
+	number := c.head
 	if c.safeSet {
-		return c.safe, nil
+		number = c.safe
 	}
-	return c.head, nil
+	return &fakeSafeLogSnapshot{client: c, number: number}, nil
+}
+
+type fakeSafeLogSnapshot struct {
+	client *fakeLogClient
+	number uint64
+}
+
+func (s *fakeSafeLogSnapshot) Number() uint64 { return s.number }
+
+func (s *fakeSafeLogSnapshot) Hash() common.Hash {
+	return common.BigToHash(new(big.Int).SetUint64(s.number))
+}
+
+func (s *fakeSafeLogSnapshot) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
+	return s.client.FilterLogs(ctx, query)
 }
 
 func (c *fakeLogClient) FilterLogs(_ context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
@@ -1659,9 +1809,9 @@ type providerStatusRecorder struct {
 	reports []providerReport
 }
 
-func (r *providerStatusRecorder) RegisterIndexer(uint32, string, time.Duration) {}
+func (r *providerStatusRecorder) RegisterIndexer(uint32, string, string, time.Duration) {}
 
-func (r *providerStatusRecorder) RecordIndexerPoll(uint32, string, time.Duration, uint64, uint64, int, int, int, time.Duration, error) {
+func (r *providerStatusRecorder) RecordIndexerPoll(uint32, string, string, time.Duration, uint64, uint64, int, int, int, time.Duration, error) {
 }
 
 func (r *providerStatusRecorder) RecordRPCProviders(chainEID uint32, chainName string, providers []rpcquorum.Provider) {
@@ -1709,17 +1859,17 @@ func (s *fakeIndexerStore) RecordSourcePacketSkip(_ context.Context, skip db.Sou
 	return nil
 }
 
-func (s *fakeIndexerStore) UpsertPacket(_ context.Context, packet db.PacketRecord) error {
+func (s *fakeIndexerStore) UpsertExecutorAssignment(_ context.Context, packet db.PacketRecord, job db.ExecutorJobRecord) error {
 	s.packets[packet.GUID] = packet
-	return nil
-}
-
-func (s *fakeIndexerStore) UpsertExecutorJob(_ context.Context, job db.ExecutorJobRecord) error {
 	s.jobs[job.GUID] = job
 	return nil
 }
 
-func (s *fakeIndexerStore) UpsertDVNJob(_ context.Context, job db.DVNJobRecord) error {
+func (s *fakeIndexerStore) UpsertDVNAssignment(_ context.Context, packet db.PacketRecord, job db.DVNJobRecord) error {
+	if existing, ok := s.packets[packet.GUID]; ok {
+		packet.Status = existing.Status
+	}
+	s.packets[packet.GUID] = packet
 	s.dvnJobs[job.GUID] = job
 	return nil
 }
@@ -1810,11 +1960,13 @@ func (s *fakeIndexerStore) MarkDVNVerifiedObserved(_ context.Context, guid, _ co
 
 func testIndexerChain(eid uint32, name string, executor common.Address) chain.Chain {
 	return chain.Chain{
-		EID:                 eid,
-		Name:                name,
-		EndpointAddress:     common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		Confirmations:       12,
-		IndexerPollInterval: 5 * time.Second,
+		EID:                       eid,
+		Name:                      name,
+		EndpointAddress:           common.HexToAddress("0x1111111111111111111111111111111111111111"),
+		Confirmations:             12,
+		IndexerQueryBlockRange:    500,
+		IndexerBackfillBlockRange: 10_000,
+		IndexerPollInterval:       5 * time.Second,
 		TxRoles: chain.TxRoles{
 			Executor: chain.ExecutorTxRole{SignerID: executor.Hex()},
 		},
@@ -1880,6 +2032,6 @@ func assertLogContains(t *testing.T, output string, wants ...string) {
 	}
 }
 
-func cursorKey(chainEID uint32, stream string) string {
-	return stream + ":" + new(big.Int).SetUint64(uint64(chainEID)).String()
+func cursorKey[S ~string](chainEID uint32, stream S) string {
+	return string(stream) + ":" + new(big.Int).SetUint64(uint64(chainEID)).String()
 }

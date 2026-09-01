@@ -24,6 +24,10 @@ type DVNJobRecord struct {
 
 // UpsertDVNJob persists DVN assignment state for a packet.
 func (s *Store) UpsertDVNJob(ctx context.Context, job DVNJobRecord) error {
+	return upsertDVNJob(ctx, s.pool, job)
+}
+
+func upsertDVNJob(ctx context.Context, executor sqlExecutor, job DVNJobRecord) error {
 	if job.GUID == (common.Hash{}) {
 		return errors.New("dvn job guid is required")
 	}
@@ -40,7 +44,7 @@ func (s *Store) UpsertDVNJob(ctx context.Context, job DVNJobRecord) error {
 	if job.AssignedFee != nil {
 		fee = job.AssignedFee.String()
 	}
-	_, err := s.pool.Exec(ctx, `
+	_, err := executor.Exec(ctx, `
 		INSERT INTO dvn_jobs (guid, assigned, assigned_fee, confirmations_required, status)
 		VALUES ($1, true, $2, $3, $4)
 			ON CONFLICT (guid) DO UPDATE SET

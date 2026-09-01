@@ -382,16 +382,14 @@ func TestCheckHeadSingleProviderDegenerate(t *testing.T) {
 	if head.Number.Uint64() != 42 {
 		t.Fatalf("head number = %s, want 42", head.Number)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("FilterLogs() = (%d, %v), want the single provider's window", len(logs), err)
 	}
 }
 
-func TestSafeBlockNumberUsesFixedMajorityAndPreservesHeadSnapshot(t *testing.T) {
+func TestSafeLogSnapshotUsesFixedMajorityAndPreservesHeadSnapshot(t *testing.T) {
 	head := testHeaderAt(50, 0x01)
 	safe := testHeaderAt(40, 0x02)
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
@@ -403,20 +401,23 @@ func TestSafeBlockNumberUsesFixedMajorityAndPreservesHeadSnapshot(t *testing.T) 
 		t.Fatalf("CheckHead() error = %v", err)
 	}
 
-	number, err := client.SafeBlockNumber(context.Background())
+	snapshot, err := client.SafeLogSnapshot(context.Background())
 	if err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
 	}
-	if number != 40 {
-		t.Fatalf("safe block = %d, want 40", number)
+	if snapshot.Number() != 40 {
+		t.Fatalf("safe block = %d, want 40", snapshot.Number())
 	}
-	snapshot := client.headSnapshotRef()
-	if snapshot == nil || snapshot.number.Uint64() != 50 || snapshot.hash != head.Hash() {
-		t.Fatalf("head snapshot = %#v, want canonical head 50", snapshot)
+	if snapshot.Hash() != safe.Hash() {
+		t.Fatalf("safe hash = %s, want %s", snapshot.Hash(), safe.Hash())
 	}
-	safeSnapshot := client.safeSnapshotRef()
-	if safeSnapshot == nil || safeSnapshot.number.Uint64() != 40 || safeSnapshot.hash != safe.Hash() || len(safeSnapshot.voters) != 3 {
-		t.Fatalf("safe snapshot = %#v, want block 40 and all three voters", safeSnapshot)
+	headSnapshot := client.headSnapshotRef()
+	if headSnapshot == nil || headSnapshot.number.Uint64() != 50 || headSnapshot.hash != head.Hash() {
+		t.Fatalf("head snapshot = %#v, want canonical head 50", headSnapshot)
+	}
+	bound, ok := snapshot.(*safeSnapshot)
+	if !ok || bound.number.Uint64() != 40 || bound.hash != safe.Hash() || len(bound.voters) != 3 {
+		t.Fatalf("safe snapshot = %#v, want block 40 and all three voters", snapshot)
 	}
 	for index, provider := range client.Providers() {
 		if provider.Status != ProviderHealthy || provider.SafeConflict {
@@ -425,7 +426,7 @@ func TestSafeBlockNumberUsesFixedMajorityAndPreservesHeadSnapshot(t *testing.T) 
 	}
 }
 
-func TestSafeBlockNumberCannotBeLiftedByOneProvider(t *testing.T) {
+func TestSafeLogSnapshotCannotBeLiftedByOneProvider(t *testing.T) {
 	canonical := testHeaderAt(40, 0x01)
 	inflated := testHeaderAt(60, 0x02)
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
@@ -434,16 +435,16 @@ func TestSafeBlockNumberCannotBeLiftedByOneProvider(t *testing.T) {
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical, headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): canonical}})},
 	}}
 
-	number, err := client.SafeBlockNumber(context.Background())
+	snapshot, err := client.SafeLogSnapshot(context.Background())
 	if err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
 	}
-	if number != 40 {
-		t.Fatalf("safe block = %d, want majority-reached 40", number)
+	if snapshot.Number() != 40 {
+		t.Fatalf("safe block = %d, want majority-reached 40", snapshot.Number())
 	}
 }
 
-func TestSafeBlockNumberStepsDownAndFlagsUnverifiedDescendants(t *testing.T) {
+func TestSafeLogSnapshotStepsDownAndFlagsUnverifiedDescendants(t *testing.T) {
 	firstTip := testHeaderAt(100, 0x01)
 	secondTip := testHeaderAt(100, 0x02)
 	canonical := testHeaderAt(99, 0x03)
@@ -454,12 +455,12 @@ func TestSafeBlockNumberStepsDownAndFlagsUnverifiedDescendants(t *testing.T) {
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical, headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): canonical}})},
 	}}
 
-	number, err := client.SafeBlockNumber(context.Background())
+	snapshot, err := client.SafeLogSnapshot(context.Background())
 	if err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
 	}
-	if number != 99 {
-		t.Fatalf("safe block = %d, want stepped-down 99", number)
+	if snapshot.Number() != 99 {
+		t.Fatalf("safe block = %d, want stepped-down 99", snapshot.Number())
 	}
 	providers := client.Providers()
 	if !providers[0].SafeConflict || !providers[1].SafeConflict || providers[2].SafeConflict {
@@ -467,7 +468,7 @@ func TestSafeBlockNumberStepsDownAndFlagsUnverifiedDescendants(t *testing.T) {
 	}
 }
 
-func TestSafeBlockNumberFlagsMinorityHashWithoutChangingHeadStatus(t *testing.T) {
+func TestSafeLogSnapshotFlagsMinorityHashWithoutChangingHeadStatus(t *testing.T) {
 	canonical := testHeaderAt(40, 0x01)
 	forked := testHeaderAt(40, 0x02)
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
@@ -476,8 +477,8 @@ func TestSafeBlockNumberFlagsMinorityHashWithoutChangingHeadStatus(t *testing.T)
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical, headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): forked}})},
 	}}
 
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
+	if _, err := client.SafeLogSnapshot(context.Background()); err != nil {
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
 	}
 	providers := client.Providers()
 	for index, provider := range providers {
@@ -501,8 +502,8 @@ func TestSafeBlockConflictStaysStickyUntilProviderAgreesAgain(t *testing.T) {
 		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: second})},
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: third})},
 	}}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber(first) error = %v", err)
+	if _, err := client.SafeLogSnapshot(context.Background()); err != nil {
+		t.Fatalf("SafeLogSnapshot(first) error = %v", err)
 	}
 	if !client.Providers()[2].SafeConflict {
 		t.Fatal("minority safe conflict = false, want true")
@@ -510,25 +511,27 @@ func TestSafeBlockConflictStaysStickyUntilProviderAgreesAgain(t *testing.T) {
 
 	canonical50 := testHeaderAt(50, 0x03)
 	first[int64(rpc.SafeBlockNumber)] = canonical50
+	first[40] = canonical40
 	second[int64(rpc.SafeBlockNumber)] = canonical50
+	second[40] = canonical40
 	third[int64(rpc.SafeBlockNumber)] = testHeaderAt(30, 0x04)
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber(lagging) error = %v", err)
+	if _, err := client.SafeLogSnapshot(context.Background()); err != nil {
+		t.Fatalf("SafeLogSnapshot(lagging) error = %v", err)
 	}
 	if !client.Providers()[2].SafeConflict {
 		t.Fatal("lagging provider cleared sticky safe conflict")
 	}
 
 	third[int64(rpc.SafeBlockNumber)] = canonical50
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber(recovered) error = %v", err)
+	if _, err := client.SafeLogSnapshot(context.Background()); err != nil {
+		t.Fatalf("SafeLogSnapshot(recovered) error = %v", err)
 	}
 	if client.Providers()[2].SafeConflict {
 		t.Fatal("agreeing provider retained stale safe conflict")
 	}
 }
 
-func TestSafeBlockNumberFailsClosedWhenTagLacksQuorumAndRedactsURLs(t *testing.T) {
+func TestSafeLogSnapshotFailsClosedWhenTagLacksQuorumAndRedactsURLs(t *testing.T) {
 	const secretURL = "https://user:password@secret.example/v2/api-key"
 	safe := testHeaderAt(40, 0x01)
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
@@ -537,23 +540,23 @@ func TestSafeBlockNumberFailsClosedWhenTagLacksQuorumAndRedactsURLs(t *testing.T
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{err: errors.New("safe tag unsupported")})},
 	}}
 
-	_, err := client.SafeBlockNumber(context.Background())
+	_, err := client.SafeLogSnapshot(context.Background())
 	if !IsQuorumUnavailable(err) {
-		t.Fatalf("SafeBlockNumber() error = %v, want quorum unavailable", err)
+		t.Fatalf("SafeLogSnapshot() error = %v, want quorum unavailable", err)
 	}
 	assertRedactedProviderError(t, err, []string{secretURL, "password", "api-key"}, "provider[1]")
 }
 
-func TestSafeBlockNumberRejectsNoHashMajority(t *testing.T) {
+func TestSafeLogSnapshotRejectsNoHashMajority(t *testing.T) {
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
 		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: testHeaderAt(40, 0x01), headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): testHeaderAt(40, 0x01)}})},
 		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: testHeaderAt(40, 0x02), headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): testHeaderAt(40, 0x02)}})},
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: testHeaderAt(40, 0x03), headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): testHeaderAt(40, 0x03)}})},
 	}}
 
-	_, err := client.SafeBlockNumber(context.Background())
+	_, err := client.SafeLogSnapshot(context.Background())
 	if !IsSafeBlockConflict(err) {
-		t.Fatalf("SafeBlockNumber() error = %v, want safe block conflict", err)
+		t.Fatalf("SafeLogSnapshot() error = %v, want safe block conflict", err)
 	}
 	for index, provider := range client.Providers() {
 		if !provider.SafeConflict {
@@ -562,7 +565,7 @@ func TestSafeBlockNumberRejectsNoHashMajority(t *testing.T) {
 	}
 }
 
-func TestSafeBlockNumberBoundsHangingProvider(t *testing.T) {
+func TestSafeLogSnapshotBoundsHangingProvider(t *testing.T) {
 	safe := testHeaderAt(40, 0x01)
 	client := &Client{chainName: "testnet", probeTimeout: 100 * time.Millisecond, providers: []configuredProvider{
 		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: safe, headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): safe}})},
@@ -571,15 +574,15 @@ func TestSafeBlockNumberBoundsHangingProvider(t *testing.T) {
 	}}
 
 	start := time.Now()
-	number, err := client.SafeBlockNumber(context.Background())
+	snapshot, err := client.SafeLogSnapshot(context.Background())
 	if err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
 	}
-	if number != 40 {
-		t.Fatalf("safe block = %d, want 40", number)
+	if snapshot.Number() != 40 {
+		t.Fatalf("safe block = %d, want 40", snapshot.Number())
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Fatalf("SafeBlockNumber took %s, want bounded provider timeout", elapsed)
+		t.Fatalf("SafeLogSnapshot took %s, want bounded provider timeout", elapsed)
 	}
 }
 
@@ -888,6 +891,15 @@ func boundedLogQuery(to int64) ethereum.FilterQuery {
 	return ethereum.FilterQuery{FromBlock: big.NewInt(40), ToBlock: big.NewInt(to)}
 }
 
+func mustSafeLogSnapshot(t *testing.T, client *Client) SafeLogSnapshot {
+	t.Helper()
+	snapshot, err := client.SafeLogSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("SafeLogSnapshot() error = %v", err)
+	}
+	return snapshot
+}
+
 func TestFilterLogsAdoptsMajorityAndFlagsMinority(t *testing.T) {
 	canonical := testHeaderAt(42, 0x01)
 	full := []gethtypes.Log{testWindowLog(0), testWindowLog(1)}
@@ -900,10 +912,8 @@ func TestFilterLogsAdoptsMajorityAndFlagsMinority(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil {
 		t.Fatalf("FilterLogs() error = %v", err)
 	}
@@ -939,15 +949,85 @@ func TestFilterLogsCannotUseDifferentMajorityFromSafeRound(t *testing.T) {
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: otherBranch, headers: map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): otherBranch}, logs: otherLogs})},
 	}}
 
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
+	snapshot := mustSafeLogSnapshot(t, client)
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	_, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	_, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if !IsLogConflict(err) {
 		t.Fatalf("FilterLogs() error = %v, want the cross-majority log vote rejected", err)
+	}
+}
+
+func TestSafeLogSnapshotRejectsConflictingLaterRound(t *testing.T) {
+	firstBranch := testHeaderAt(42, 0x01)
+	secondBranch := testHeaderAt(42, 0x02)
+	firstHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): firstBranch}
+	middleHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): firstBranch}
+	lastHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): secondBranch}
+	firstLogs := []gethtypes.Log{testWindowLog(0)}
+	secondLogs := []gethtypes.Log{testWindowLog(1)}
+	middleLogs := &logsScript{steps: []logsStep{{logs: firstLogs}, {logs: secondLogs}}}
+	client := &Client{chainName: "testnet", providers: []configuredProvider{
+		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: firstHeaders, logs: firstLogs})},
+		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: middleHeaders, logsScript: middleLogs})},
+		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: lastHeaders, logs: secondLogs})},
+	}}
+
+	firstSnapshot := mustSafeLogSnapshot(t, client)
+	middleHeaders[int64(rpc.SafeBlockNumber)] = secondBranch
+	if _, err := client.SafeLogSnapshot(context.Background()); !IsSafeBlockConflict(err) {
+		t.Fatalf("conflicting later SafeLogSnapshot() error = %v, want safe block conflict", err)
+	}
+
+	logs, err := firstSnapshot.FilterLogs(context.Background(), boundedLogQuery(41))
+	if err != nil || len(logs) != 1 || logs[0].Index != 0 {
+		t.Fatalf("first snapshot logs = (%+v, %v), want first voter-set result", logs, err)
+	}
+}
+
+func TestSafeLogSnapshotRequiresNewVotersToMatchAcceptedAnchor(t *testing.T) {
+	accepted40 := testHeaderAt(40, 0x01)
+	forked40 := testHeaderAt(40, 0x02)
+	forked50 := testHeaderAt(50, 0x03)
+	firstHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): accepted40}
+	middleHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): accepted40}
+	lastHeaders := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): forked40}
+	client := &Client{chainName: "testnet", providers: []configuredProvider{
+		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: firstHeaders})},
+		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: middleHeaders})},
+		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: lastHeaders})},
+	}}
+
+	mustSafeLogSnapshot(t, client)
+	middleHeaders[int64(rpc.SafeBlockNumber)] = forked50
+	middleHeaders[40] = accepted40
+	lastHeaders[int64(rpc.SafeBlockNumber)] = forked50
+	lastHeaders[40] = forked40
+
+	if _, err := client.SafeLogSnapshot(context.Background()); !IsSafeBlockConflict(err) {
+		t.Fatalf("unanchored advancing SafeLogSnapshot() error = %v, want safe block conflict", err)
+	}
+}
+
+func TestSafeLogSnapshotRejectsHeightRegression(t *testing.T) {
+	accepted50 := testHeaderAt(50, 0x01)
+	regressed40 := testHeaderAt(40, 0x02)
+	first := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): accepted50}
+	second := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): accepted50}
+	third := map[int64]*gethtypes.Header{int64(rpc.SafeBlockNumber): accepted50}
+	client := &Client{chainName: "testnet", providers: []configuredProvider{
+		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: first})},
+		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: second})},
+		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{headers: third})},
+	}}
+
+	mustSafeLogSnapshot(t, client)
+	first[int64(rpc.SafeBlockNumber)] = regressed40
+	second[int64(rpc.SafeBlockNumber)] = regressed40
+	third[int64(rpc.SafeBlockNumber)] = regressed40
+	if _, err := client.SafeLogSnapshot(context.Background()); !IsSafeBlockConflict(err) {
+		t.Fatalf("regressing SafeLogSnapshot() error = %v, want safe block conflict", err)
 	}
 }
 
@@ -962,10 +1042,8 @@ func TestFilterLogsOrderEquivalenceReturnsCanonicalOrder(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil {
 		t.Fatalf("FilterLogs() error = %v (equal sets in different orders must agree)", err)
 	}
@@ -989,10 +1067,8 @@ func TestFilterLogsEmptyMajorityBeatsNonEmptyMinority(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil {
 		t.Fatalf("FilterLogs() error = %v", err)
 	}
@@ -1019,10 +1095,8 @@ func TestFilterLogsErrorRetryRecovers(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil {
 		t.Fatalf("FilterLogs() error = %v (one transient error must be absorbed by the bounded retry)", err)
 	}
@@ -1046,10 +1120,8 @@ func TestFilterLogsDivergenceRetryConverges(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	logs, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	logs, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if err != nil {
 		t.Fatalf("FilterLogs() error = %v", err)
 	}
@@ -1087,10 +1159,8 @@ func TestFilterLogsConflictWithoutMajority(t *testing.T) {
 	if _, err := client.CheckHead(context.Background()); err != nil {
 		t.Fatalf("CheckHead() error = %v", err)
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	_, err := client.FilterLogs(context.Background(), boundedLogQuery(41))
+	snapshot := mustSafeLogSnapshot(t, client)
+	_, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(41))
 	if !IsLogConflict(err) {
 		t.Fatalf("FilterLogs() error = %v, want log conflict", err)
 	}
@@ -1103,16 +1173,14 @@ func TestFilterLogsRequiresSnapshotAndBoundedWindow(t *testing.T) {
 		{url: "a", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical})},
 		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical})},
 	}}
-	if _, err := client.FilterLogs(context.Background(), boundedLogQuery(41)); err == nil {
-		t.Fatal("FilterLogs without a safe snapshot succeeded")
+	if _, err := (&safeSnapshot{}).FilterLogs(context.Background(), boundedLogQuery(41)); err == nil {
+		t.Fatal("FilterLogs on an unbound snapshot succeeded")
 	}
-	if _, err := client.SafeBlockNumber(context.Background()); err != nil {
-		t.Fatalf("SafeBlockNumber() error = %v", err)
-	}
-	if _, err := client.FilterLogs(context.Background(), ethereum.FilterQuery{}); err == nil {
+	snapshot := mustSafeLogSnapshot(t, client)
+	if _, err := snapshot.FilterLogs(context.Background(), ethereum.FilterQuery{}); err == nil {
 		t.Fatal("FilterLogs without bounds succeeded")
 	}
-	if _, err := client.FilterLogs(context.Background(), boundedLogQuery(43)); err == nil {
+	if _, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(43)); err == nil {
 		t.Fatal("FilterLogs beyond the quorum safe block succeeded")
 	}
 }
@@ -1126,8 +1194,8 @@ func TestFilterLogsQuorumUnavailableWhenSafeVoterSetIsTooSmall(t *testing.T) {
 		{url: "b", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical, logs: []gethtypes.Log{testWindowLog(0)}})},
 		{url: "c", status: ProviderHealthy, client: newTestEthClient(t, testEthService{header: canonical})},
 	}}
-	client.storeSafeSnapshot(&safeSnapshot{number: big.NewInt(42), hash: canonical.Hash(), voters: map[int]struct{}{0: {}}})
-	_, err := client.FilterLogs(context.Background(), boundedLogQuery(42))
+	snapshot := &safeSnapshot{client: client, number: big.NewInt(42), hash: canonical.Hash(), voters: map[int]struct{}{0: {}}}
+	_, err := snapshot.FilterLogs(context.Background(), boundedLogQuery(42))
 	if !IsQuorumUnavailable(err) {
 		t.Fatalf("FilterLogs() error = %v, want quorum unavailable", err)
 	}

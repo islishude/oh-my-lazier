@@ -23,6 +23,7 @@ const (
 )
 
 const (
+	defaultIndexerBackfillBlockRange                      = uint64(10_000)
 	defaultIndexerPollIntervalSeconds                     = uint64(5)
 	defaultTxManagerStaleBroadcastReplacementAfterSeconds = 900
 	maxDurationSeconds                                    = uint64(math.MaxInt64 / int64(time.Second))
@@ -332,7 +333,9 @@ type ChainConfig struct {
 	StartBlockNumber uint64 `yaml:"start_block_number"`
 	// IndexerQueryBlockRange bounds each FilterLogs window and defaults to 500 when omitted.
 	IndexerQueryBlockRange uint64 `yaml:"indexer_query_block_range"`
-	// IndexerPollIntervalSeconds controls the interval between successful indexer polls and defaults to 5 when omitted.
+	// IndexerBackfillBlockRange bounds one indexer pass and defaults to 10000 when omitted.
+	IndexerBackfillBlockRange uint64 `yaml:"indexer_backfill_block_range"`
+	// IndexerPollIntervalSeconds controls the caught-up, pending, and retry wait; lagging streams catch up immediately.
 	IndexerPollIntervalSeconds uint64 `yaml:"indexer_poll_interval_seconds"`
 	// RPCURLs lists every RPC endpoint in the quorum; http(s), ws(s), and absolute IPC paths are supported.
 	RPCURLs []string `yaml:"rpc_urls"`
@@ -473,6 +476,9 @@ func load(path string, applyEnv bool) (Config, error) {
 		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
 			cfg.Chains[idx].IndexerQueryBlockRange = 500
 		}
+		if cfg.Chains[idx].IndexerBackfillBlockRange == 0 {
+			cfg.Chains[idx].IndexerBackfillBlockRange = defaultIndexerBackfillBlockRange
+		}
 		if cfg.Chains[idx].IndexerPollIntervalSeconds == 0 {
 			cfg.Chains[idx].IndexerPollIntervalSeconds = defaultIndexerPollIntervalSeconds
 		}
@@ -552,6 +558,9 @@ func (c Config) Validate() error {
 		}
 		if chain.IndexerQueryBlockRange == 0 {
 			return fmt.Errorf("chain %s indexer_query_block_range is required", chain.Name)
+		}
+		if chain.IndexerBackfillBlockRange == 0 {
+			return fmt.Errorf("chain %s indexer_backfill_block_range is required", chain.Name)
 		}
 		if chain.IndexerPollIntervalSeconds == 0 {
 			return fmt.Errorf("chain %s indexer_poll_interval_seconds is required", chain.Name)

@@ -24,7 +24,6 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/indexer"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -219,11 +218,16 @@ func Check(ctx context.Context, cfg config.Config, evidence Evidence, timeout ti
 	defer pool.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	destinationOnly := indexer.StreamSet{ExecutorDestination: true, DVNDestination: true}
-	sourceOnly := indexer.StreamSet{ExecutorSource: true, DVNSource: true}
+	destinationIndexers := []*indexer.Indexer{
+		indexer.New(destinationChain, pathways, indexer.ExecutorDestinationStream, store, logger),
+		indexer.New(destinationChain, pathways, indexer.DVNDestinationStream, store, logger),
+	}
+	sourceIndexers := []*indexer.Indexer{
+		indexer.New(sourceChain, pathways, indexer.ExecutorSourceStream, store, logger),
+		indexer.New(sourceChain, pathways, indexer.DVNSourceStream, store, logger),
+	}
 
-	destinationIndexer := indexer.New(destinationChain, pathways, store, logger).WithStreams(destinationOnly)
-	if err := waitForDestinationDeferred(ctx, store, destinationIndexer, evidence.DstEID); err != nil {
+	if err := waitForDestinationDeferred(ctx, destinationIndexers); err != nil {
 		return err
 	}
 	if rows, err := indexedPacketCount(ctx, pool, evidence); err != nil {
@@ -232,13 +236,11 @@ func Check(ctx context.Context, cfg config.Config, evidence Evidence, timeout ti
 		return fmt.Errorf("destination-only replay created %d packet rows before source replay, want 0", rows)
 	}
 
-	sourceIndexer := indexer.New(sourceChain, pathways, store, logger).WithStreams(sourceOnly)
-	if err := waitForSourceRows(ctx, pool, sourceIndexer, evidence); err != nil {
+	if err := waitForSourceRows(ctx, pool, sourceIndexers, evidence); err != nil {
 		return err
 	}
 
-	finalDestinationIndexer := indexer.New(destinationChain, pathways, store, logger).WithStreams(destinationOnly)
-	return waitForFinalRows(ctx, pool, finalDestinationIndexer, evidence)
+	return waitForFinalRows(ctx, pool, destinationIndexers, evidence)
 }
 
 // ValidateLocalE2EConfig prevents the destructive replay probe from running outside local E2E.
@@ -352,49 +354,46 @@ func CompareFinalRows(evidence Evidence, rows []FinalRow) error {
 	return nil
 }
 
-func waitForDestinationDeferred(ctx context.Context, store *db.Store, destinationIndexer *indexer.Indexer, dstEID uint32) error {
+func waitForDestinationDeferred(ctx context.Context, destinationIndexers []*indexer.Indexer) error {
 	var lastErr error
-	executorDeferredSeen := false
-	dvnDeferredSeen := false
 	for {
-		result, err := destinationIndexer.ProcessOnce(ctx)
-		if err != nil {
-			lastErr = err
-		} else if result.DestinationToBlock > 0 {
-			executorDeferred, err := cursorDeferred(ctx, store, dstEID, indexer.ExecutorDestinationStream, result.DestinationToBlock)
+		pending := 0
+		var pollErr error
+		for _, destinationIndexer := range destinationIndexers {
+			result, err := destinationIndexer.ProcessOnce(ctx)
 			if err != nil {
-				return err
+				pollErr = errors.Join(pollErr, err)
+				continue
 			}
-			dvnDeferred, err := cursorDeferred(ctx, store, dstEID, indexer.DVNDestinationStream, result.DestinationToBlock)
-			if err != nil {
-				return err
+			if result.Pending {
+				pending++
 			}
-			executorDeferredSeen = executorDeferredSeen || executorDeferred
-			dvnDeferredSeen = dvnDeferredSeen || dvnDeferred
-			if executorDeferredSeen && dvnDeferredSeen {
-				return nil
-			}
-			lastErr = fmt.Errorf("destination cursors have not both deferred yet through block %d", result.DestinationToBlock)
-		} else {
-			lastErr = errors.New("destination indexer did not process a destination window")
 		}
+		if pending == len(destinationIndexers) {
+			return nil
+		}
+		lastErr = errors.Join(pollErr, fmt.Errorf("%d of %d destination streams deferred", pending, len(destinationIndexers)))
 		if err := sleepOrDone(ctx); err != nil {
 			return fmt.Errorf("timed out waiting for destination cursor deferral: %w", lastErr)
 		}
 	}
 }
 
-func waitForSourceRows(ctx context.Context, pool *pgxpool.Pool, sourceIndexer *indexer.Indexer, evidence Evidence) error {
+func waitForSourceRows(ctx context.Context, pool *pgxpool.Pool, sourceIndexers []*indexer.Indexer, evidence Evidence) error {
 	var lastErr error
 	for {
-		if _, err := sourceIndexer.ProcessOnce(ctx); err != nil {
-			lastErr = err
-		} else if ok, err := sourceRowsPresent(ctx, pool, evidence); err != nil {
-			lastErr = err
+		var pollErr error
+		for _, sourceIndexer := range sourceIndexers {
+			if _, err := sourceIndexer.ProcessOnce(ctx); err != nil {
+				pollErr = errors.Join(pollErr, err)
+			}
+		}
+		if ok, err := sourceRowsPresent(ctx, pool, evidence); err != nil {
+			lastErr = errors.Join(pollErr, err)
 		} else if ok {
 			return nil
 		} else {
-			lastErr = errors.New("source packet/job rows are not present yet")
+			lastErr = errors.Join(pollErr, errors.New("source packet/job rows are not present yet"))
 		}
 		if err := sleepOrDone(ctx); err != nil {
 			return fmt.Errorf("timed out waiting for source replay rows: %w", lastErr)
@@ -402,15 +401,19 @@ func waitForSourceRows(ctx context.Context, pool *pgxpool.Pool, sourceIndexer *i
 	}
 }
 
-func waitForFinalRows(ctx context.Context, pool *pgxpool.Pool, destinationIndexer *indexer.Indexer, evidence Evidence) error {
+func waitForFinalRows(ctx context.Context, pool *pgxpool.Pool, destinationIndexers []*indexer.Indexer, evidence Evidence) error {
 	var lastErr error
 	for {
-		if _, err := destinationIndexer.ProcessOnce(ctx); err != nil {
-			lastErr = err
-		} else if rows, err := loadFinalRows(ctx, pool, evidence); err != nil {
-			lastErr = err
+		var pollErr error
+		for _, destinationIndexer := range destinationIndexers {
+			if _, err := destinationIndexer.ProcessOnce(ctx); err != nil {
+				pollErr = errors.Join(pollErr, err)
+			}
+		}
+		if rows, err := loadFinalRows(ctx, pool, evidence); err != nil {
+			lastErr = errors.Join(pollErr, err)
 		} else if err := CompareFinalRows(evidence, rows); err != nil {
-			lastErr = err
+			lastErr = errors.Join(pollErr, err)
 		} else {
 			return nil
 		}
@@ -418,17 +421,6 @@ func waitForFinalRows(ctx context.Context, pool *pgxpool.Pool, destinationIndexe
 			return fmt.Errorf("timed out waiting for destination replay convergence: %w", lastErr)
 		}
 	}
-}
-
-func cursorDeferred(ctx context.Context, store *db.Store, chainEID uint32, stream string, target uint64) (bool, error) {
-	cursor, err := store.GetIndexerCursor(ctx, chainEID, stream)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return cursor < target, nil
 }
 
 func resetDatabase(ctx context.Context, databaseURL string) error {

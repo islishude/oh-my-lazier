@@ -253,13 +253,14 @@ func (a *App) Run(ctx context.Context) error {
 		ExecutorEnabled: a.cfg.ExecutorEnabled(),
 		DVNEnabled:      a.cfg.DVNEnabled(),
 	}, runtimeMetrics).Run)
-	if !indexerStreams.Empty() {
+	if len(indexerStreams) > 0 {
 		for _, c := range registry.All() {
-			start("indexer."+c.Name, indexer.New(c, pathways, store, a.logger).
-				WithStreams(indexerStreams).
-				WithMetrics(runtimeMetrics).
-				WithProgressLogInterval(a.options.IndexerProgressLogInterval).
-				Run)
+			for _, stream := range indexerStreams {
+				start("indexer."+c.Name+"."+stream.String(), indexer.New(c, pathways, stream, store, a.logger).
+					WithMetrics(runtimeMetrics).
+					WithProgressLogInterval(a.options.IndexerProgressLogInterval).
+					Run)
+			}
 		}
 	}
 	if len(txTargets) > 0 {

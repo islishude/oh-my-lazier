@@ -166,7 +166,7 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
 	registry := NewRegistry()
 	registry.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
-	registry.RegisterIndexer(40161, "ethereum-sepolia", 30*time.Minute)
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 30*time.Minute)
 	handler := Handler(fakeProvider{err: errors.New("database down")}, registry)
 	recorder := httptest.NewRecorder()
 
@@ -174,11 +174,11 @@ func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
 
 	body := recorder.Body.String()
 	for _, want := range []string{
-		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia"} 1800.000000`,
-		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000000`,
-		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 0`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="success"} 0`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="error"} 0`,
+		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1800.000000`,
+		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000000`,
+		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="success"} 0`,
+		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="error"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q before first poll:\n%s", want, body)
@@ -189,11 +189,11 @@ func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
 func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 	registry := NewRegistry()
 	registry.now = func() time.Time { return time.Unix(1_699_999_990, 0) }
-	registry.RegisterIndexer(40161, "ethereum-sepolia", 5*time.Second)
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 5*time.Second)
 	registry.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
-	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 5*time.Second, 200, 188, 2, 1, 3, 1500*time.Millisecond, nil)
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 5*time.Second, 200, 188, 2, 1, 3, 1500*time.Millisecond, nil)
 	registry.now = func() time.Time { return time.Unix(1_700_000_030, 0) }
-	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 5*time.Second, 0, 0, 0, 0, 0, 250*time.Millisecond, errors.New("rpc unavailable"))
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 5*time.Second, 0, 0, 0, 0, 0, 250*time.Millisecond, errors.New("rpc unavailable"))
 	registry.now = func() time.Time { return time.Unix(1_700_000_040, 0) }
 	registry.RecordLoopRetry("txmgr")
 	registry.now = func() time.Time { return time.Unix(1_700_000_050, 0) }
@@ -224,20 +224,20 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 		`laz_worker_loop_retries_total{name="txmgr"} 2`,
 		`laz_worker_loop_last_retry_timestamp_seconds{name="pricing"} 1700000060`,
 		`laz_worker_loop_last_retry_timestamp_seconds{name="txmgr"} 1700000050`,
-		`laz_indexer_poll_success{chain_eid="40161",name="ethereum-sepolia"} 0`,
-		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia"} 5.000000`,
-		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1699999990`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="success"} 1`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",result="error"} 1`,
-		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000030`,
-		`laz_indexer_last_success_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000000`,
-		`laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000030`,
-		`laz_indexer_last_error_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia"} 1700000030`,
-		`laz_indexer_last_poll_duration_seconds{chain_eid="40161",name="ethereum-sepolia"} 0.250000`,
-		`laz_indexer_safe_to_block{chain_eid="40161",name="ethereum-sepolia"} 0`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="source_transactions"} 2`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="dvn_transactions"} 1`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",kind="destination_logs"} 3`,
+		`laz_indexer_poll_success{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 5.000000`,
+		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1699999990`,
+		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="success"} 1`,
+		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="error"} 1`,
+		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_success_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000000`,
+		`laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_error_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_poll_duration_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0.250000`,
+		`laz_indexer_safe_to_block{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="source_transactions"} 2`,
+		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="dvn_transactions"} 1`,
+		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="destination_logs"} 3`,
 		`laz_signer_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 900000000000000000`,
 		`laz_signer_min_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1000000000000000000`,
 		`laz_signer_min_native_balance_wei{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 1000000000000000000`,
@@ -268,7 +268,7 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
 	registry := NewRegistry()
 	registry.now = func() time.Time { return time.Unix(100, 0) }
-	registry.RegisterIndexer(40161, "ethereum-sepolia", 30*time.Minute)
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 30*time.Minute)
 
 	stat := onlyIndexerRuntimeStat(t, registry.RuntimeSnapshot())
 	if stat.StartedUnix != 100 || stat.PollIntervalSeconds != 1800 {
@@ -279,9 +279,9 @@ func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
 	}
 
 	registry.now = func() time.Time { return time.Unix(110, 0) }
-	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 30*time.Minute, 0, 0, 0, 0, 0, time.Second, errors.New("first failure"))
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 30*time.Minute, 0, 0, 0, 0, 0, time.Second, errors.New("first failure"))
 	registry.now = func() time.Time { return time.Unix(1_910, 0) }
-	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 30*time.Minute, 0, 0, 0, 0, 0, time.Second, errors.New("second failure"))
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 30*time.Minute, 0, 0, 0, 0, 0, time.Second, errors.New("second failure"))
 
 	stat = onlyIndexerRuntimeStat(t, registry.RuntimeSnapshot())
 	if stat.LastPollUnix != 1_910 || stat.FailureSinceUnix != 110 || stat.ErrorPolls != 2 {
@@ -289,9 +289,9 @@ func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
 	}
 
 	registry.now = func() time.Time { return time.Unix(3_710, 0) }
-	registry.RecordIndexerPoll(40161, "ethereum-sepolia", 30*time.Minute, 200, 188, 0, 0, 0, time.Second, nil)
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 30*time.Minute, 200, 188, 0, 0, 0, time.Second, nil)
 	registry.now = func() time.Time { return time.Unix(3_720, 0) }
-	registry.RegisterIndexer(40161, "ethereum-sepolia", 30*time.Minute)
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 30*time.Minute)
 
 	stat = onlyIndexerRuntimeStat(t, registry.RuntimeSnapshot())
 	if stat.StartedUnix != 100 || stat.LastPollUnix != 3_710 || stat.LastSuccessUnix != 3_710 {
@@ -299,6 +299,30 @@ func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
 	}
 	if stat.FailureSinceUnix != 0 || !stat.PollSuccess {
 		t.Fatalf("recovered indexer retains failure state = %#v", stat)
+	}
+}
+
+func TestRegistryKeepsIndexerStreamsIndependent(t *testing.T) {
+	registry := NewRegistry()
+	registry.now = func() time.Time { return time.Unix(100, 0) }
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 5*time.Second)
+	registry.RegisterIndexer(40161, "ethereum-sepolia", "dvn_source", 5*time.Second)
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "executor_source", 5*time.Second, 200, 188, 2, 0, 0, time.Second, nil)
+	registry.RecordIndexerPoll(40161, "ethereum-sepolia", "dvn_source", 5*time.Second, 200, 188, 0, 1, 0, time.Second, errors.New("log conflict after a completed chunk"))
+
+	snapshot := registry.RuntimeSnapshot()
+	if len(snapshot.Indexers) != 2 {
+		t.Fatalf("indexer stats = %#v, want two streams", snapshot.Indexers)
+	}
+	byStream := make(map[string]IndexerRuntimeStat, len(snapshot.Indexers))
+	for _, stat := range snapshot.Indexers {
+		byStream[stat.Stream] = stat
+	}
+	if !byStream["executor_source"].PollSuccess || byStream["executor_source"].SourceTransactions != 2 {
+		t.Fatalf("executor source stat = %#v, want independent success", byStream["executor_source"])
+	}
+	if byStream["dvn_source"].PollSuccess || byStream["dvn_source"].ErrorPolls != 1 || byStream["dvn_source"].DVNTransactions != 1 {
+		t.Fatalf("dvn source stat = %#v, want independent failure with durable partial count", byStream["dvn_source"])
 	}
 }
 

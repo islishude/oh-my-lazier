@@ -34,11 +34,10 @@ var _ interface {
 	CheckHead(context.Context) (HeadResult, error)
 	CodeAt(context.Context, common.Address, *big.Int) ([]byte, error)
 	EstimateGas(context.Context, ethereum.CallMsg) (uint64, error)
-	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
 	HeaderByNumber(context.Context, *big.Int) (*gethtypes.Header, error)
 	NonceAt(context.Context, common.Address, *big.Int) (uint64, error)
 	PendingNonceAt(context.Context, common.Address) (uint64, error)
-	SafeBlockNumber(context.Context) (uint64, error)
+	SafeLogSnapshot(context.Context) (SafeLogSnapshot, error)
 	SendTransaction(context.Context, *gethtypes.Transaction) error
 	SuggestGasPrice(context.Context) (*big.Int, error)
 	SuggestGasTipCap(context.Context) (*big.Int, error)
@@ -138,8 +137,9 @@ type Client struct {
 	headMu sync.Mutex
 	head   *headSnapshot
 	// safeMu serializes safe-block checks so an older round cannot overwrite the
-	// accepted safe snapshot or per-provider safe-conflict classification from a
-	// newer round.
+	// accepted safe anchor or per-provider safe-conflict classification from a
+	// newer round. Each successful round returns its own immutable snapshot for
+	// log reads, while safe retains the latest accepted canonical anchor.
 	safeMu sync.Mutex
 	safe   *safeSnapshot
 	// probeTimeout is the per-provider deadline inside quorum rounds.
@@ -154,14 +154,48 @@ type headSnapshot struct {
 	tips map[int]*big.Int
 }
 
+// SafeLogSnapshot binds one accepted safe height and hash to the exact
+// providers that voted for it. FilterLogs always uses the captured voter set,
+// even when another goroutine completes a newer safe round.
+type SafeLogSnapshot interface {
+	// Number returns the accepted safe block height.
+	Number() uint64
+	// Hash returns the accepted safe block hash.
+	Hash() common.Hash
+	// FilterLogs reads a bounded window from the providers that voted for this snapshot.
+	FilterLogs(context.Context, ethereum.FilterQuery) ([]gethtypes.Log, error)
+}
+
 // safeSnapshot binds one accepted safe height and hash to the exact providers
 // that voted for it. Log windows use only these voters, so an equivocating
 // provider cannot bridge two otherwise-disjoint majorities across safe and log
 // rounds.
 type safeSnapshot struct {
+	client *Client
 	number *big.Int
 	hash   common.Hash
 	voters map[int]struct{}
+}
+
+func (s *safeSnapshot) Number() uint64 {
+	if s == nil || s.number == nil || !s.number.IsUint64() {
+		return 0
+	}
+	return s.number.Uint64()
+}
+
+func (s *safeSnapshot) Hash() common.Hash {
+	if s == nil {
+		return common.Hash{}
+	}
+	return s.hash
+}
+
+func (s *safeSnapshot) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
+	if s == nil || s.client == nil {
+		return nil, errors.New("safe log snapshot is not bound to an rpc client")
+	}
+	return s.client.filterLogs(ctx, s, query)
 }
 
 // HeadResult is the canonical head selected by quorum checks.
@@ -708,18 +742,6 @@ func (c *Client) headSnapshotRef() *headSnapshot {
 	return c.head
 }
 
-func (c *Client) storeSafeSnapshot(snapshot *safeSnapshot) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.safe = snapshot
-}
-
-func (c *Client) safeSnapshotRef() *safeSnapshot {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.safe
-}
-
 // BlockNumber returns the quorum canonical head number: the height a fixed
 // configured majority of providers has reached. Confirmation-depth gates built
 // on it can no longer be lifted by a single provider's inflated tip.
@@ -734,20 +756,23 @@ func (c *Client) BlockNumber(ctx context.Context) (uint64, error) {
 	return head.Number.Uint64(), nil
 }
 
-// SafeBlockNumber returns the highest EVM safe block supported by a fixed
+// SafeLogSnapshot returns the highest EVM safe block supported by a fixed
 // configured majority. A provider claiming a higher safe tip cannot lift the
 // result: at least quorum providers must have reached the selected height and
 // the same providers must form a majority on its exact block hash. Ordinary
 // provider lag is handled by stepping down through lower reported safe tips.
+// Across calls, accepted snapshots never regress or change hash at one height;
+// voters for an advancing snapshot must also form quorum on the previous
+// accepted height and hash.
 // This check does not replace the latest quorum head snapshot used by log reads
 // and does not reclassify provider head health.
-func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
+func (c *Client) SafeLogSnapshot(ctx context.Context) (SafeLogSnapshot, error) {
 	c.safeMu.Lock()
 	defer c.safeMu.Unlock()
 	providers := c.snapshotProviders()
 	total := len(providers)
 	if total == 0 {
-		return 0, errors.New("no rpc providers configured")
+		return nil, errors.New("no rpc providers configured")
 	}
 	quorum := total/2 + 1
 	safeTag := big.NewInt(int64(gethrpc.SafeBlockNumber))
@@ -764,7 +789,7 @@ func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
 		tipHashes[index] = probe.header.Hash()
 	}
 	if len(tips) < quorum {
-		return 0, &QuorumUnavailableError{
+		return nil, &QuorumUnavailableError{
 			ChainName: c.chainName,
 			Details:   append(failureDetails, fmt.Sprintf("%d of %d configured providers returned a safe block, quorum is %d", len(tips), total, quorum)),
 		}
@@ -787,7 +812,7 @@ func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
 			continue
 		}
 		if !height.IsUint64() {
-			return 0, fmt.Errorf("quorum safe block number for chain %s is not a uint64", c.chainName)
+			return nil, fmt.Errorf("quorum safe block number for chain %s is not a uint64", c.chainName)
 		}
 		voters := make(map[int]struct{}, best)
 		for index, hash := range vote.hashes {
@@ -795,17 +820,22 @@ func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
 				voters[index] = struct{}{}
 			}
 		}
-		c.storeSafeSnapshot(&safeSnapshot{
+		snapshot := &safeSnapshot{
+			client: c,
 			number: new(big.Int).Set(height),
 			hash:   canonicalHash,
 			voters: voters,
-		})
+		}
+		if err := c.validateSafeContinuity(ctx, snapshot, vote.hashes, probes, tips, tipHashes, quorum); err != nil {
+			return nil, err
+		}
 		c.applySafeQuorum(tips, vote.hashes, canonicalHash, height, level > 0)
-		return height.Uint64(), nil
+		c.safe = snapshot
+		return snapshot, nil
 	}
 
 	if len(firstVotes) < quorum {
-		return 0, &QuorumUnavailableError{
+		return nil, &QuorumUnavailableError{
 			ChainName: c.chainName,
 			Details: append(
 				append(failureDetails, firstFailures...),
@@ -819,11 +849,75 @@ func (c *Client) SafeBlockNumber(ctx context.Context) (uint64, error) {
 	}
 	sort.Strings(details)
 	c.applySafeConflict(firstVotes)
-	return 0, &SafeBlockConflictError{
+	return nil, &SafeBlockConflictError{
 		ChainName: c.chainName,
 		Number:    new(big.Int).Set(candidates[0]),
 		Details:   details,
 	}
+}
+
+func (c *Client) validateSafeContinuity(ctx context.Context, snapshot *safeSnapshot, candidateVotes map[int]common.Hash, probes []headerProbe, tips map[int]*big.Int, tipHashes map[int]common.Hash, quorum int) error {
+	if c.safe == nil {
+		return nil
+	}
+	comparison := snapshot.number.Cmp(c.safe.number)
+	if comparison < 0 {
+		c.applySafeConflict(candidateVotes)
+		return &SafeBlockConflictError{
+			ChainName: c.chainName,
+			Number:    new(big.Int).Set(snapshot.number),
+			Details:   []string{fmt.Sprintf("safe block regressed below accepted block %s (%s)", c.safe.number, c.safe.hash)},
+		}
+	}
+	if comparison == 0 {
+		if snapshot.hash == c.safe.hash {
+			return nil
+		}
+		c.applySafeConflict(candidateVotes)
+		return &SafeBlockConflictError{
+			ChainName: c.chainName,
+			Number:    new(big.Int).Set(snapshot.number),
+			Details:   []string{fmt.Sprintf("safe block hash %s conflicts with accepted hash %s", snapshot.hash, c.safe.hash)},
+		}
+	}
+
+	anchorVote := c.voteAtHeight(ctx, probes, tips, tipHashes, c.safe.number)
+	usable := 0
+	matching := 0
+	conflicts := make(map[int]common.Hash)
+	for index := range snapshot.voters {
+		hash, ok := anchorVote.hashes[index]
+		if !ok {
+			continue
+		}
+		usable++
+		if hash == c.safe.hash {
+			matching++
+			continue
+		}
+		conflicts[index] = hash
+	}
+	if usable < quorum {
+		return &QuorumUnavailableError{
+			ChainName: c.chainName,
+			Details:   []string{fmt.Sprintf("%d of %d new safe voters served accepted anchor %s (%s), quorum is %d", usable, len(snapshot.voters), c.safe.number, c.safe.hash, quorum)},
+		}
+	}
+	if matching < quorum {
+		c.applySafeConflict(conflicts)
+		details := make([]string, 0, len(conflicts)+1)
+		details = append(details, fmt.Sprintf("%d of %d new safe voters matched accepted anchor %s (%s), quorum is %d", matching, len(snapshot.voters), c.safe.number, c.safe.hash, quorum))
+		for index, hash := range conflicts {
+			details = append(details, fmt.Sprintf("%s returned %s at accepted anchor", providerID(index), hash))
+		}
+		sort.Strings(details)
+		return &SafeBlockConflictError{
+			ChainName: c.chainName,
+			Number:    new(big.Int).Set(snapshot.number),
+			Details:   details,
+		}
+	}
+	return nil
 }
 
 func (c *Client) applySafeQuorum(tips map[int]*big.Int, votes map[int]common.Hash, canonicalHash common.Hash, height *big.Int, steppedDown bool) {
@@ -902,22 +996,21 @@ func (c *Client) ValidateChainID(ctx context.Context, expected *big.Int) error {
 	return validateProviderChainIDs(c.chainName, expected, ids)
 }
 
-// FilterLogs returns a bounded log window only when a fixed configured
-// majority of the providers that agreed on the latest safe snapshot return the
+// filterLogs returns a bounded log window only when a fixed configured
+// majority of the providers that agreed on the captured safe snapshot return the
 // exact same normalized log sequence. Binding both rounds to the same provider
 // set prevents one equivocating provider from bridging different safe and log
 // majorities. The minority is marked with a sticky log-conflict flag (a
 // separate dimension a later head check never clears); fewer than quorum usable
 // responses is a QuorumUnavailableError and no majority sequence is a
-// LogConflictError. Callers must run SafeBlockNumber first and stay at or below
-// the accepted safe height.
-func (c *Client) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
+// LogConflictError. Callers can reach this method only through the snapshot
+// returned by SafeLogSnapshot.
+func (c *Client) filterLogs(ctx context.Context, snapshot *safeSnapshot, query ethereum.FilterQuery) ([]gethtypes.Log, error) {
 	if query.FromBlock == nil || query.ToBlock == nil {
 		return nil, errors.New("filter logs requires a bounded from/to block range")
 	}
-	snapshot := c.safeSnapshotRef()
-	if snapshot == nil {
-		return nil, fmt.Errorf("no quorum safe snapshot for chain %s; SafeBlockNumber must precede FilterLogs", c.chainName)
+	if snapshot == nil || snapshot.client != c || snapshot.number == nil {
+		return nil, fmt.Errorf("invalid safe log snapshot for chain %s", c.chainName)
 	}
 	if query.ToBlock.Cmp(snapshot.number) > 0 {
 		return nil, fmt.Errorf("filter logs to block %s is beyond the quorum safe block %s for chain %s", query.ToBlock, snapshot.number, c.chainName)

@@ -737,6 +737,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 				Confirmations:              12,
 				RPCURLs:                    []string{"http://localhost:8545"},
 				IndexerQueryBlockRange:     500,
+				IndexerBackfillBlockRange:  10_000,
 				IndexerPollIntervalSeconds: 5,
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(signerAddress),
@@ -751,6 +752,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 				Confirmations:              12,
 				RPCURLs:                    []string{"http://localhost:8546"},
 				IndexerQueryBlockRange:     500,
+				IndexerBackfillBlockRange:  10_000,
 				IndexerPollIntervalSeconds: 5,
 				TxRoles: config.ChainTxRolesConfig{
 					Executor: testExecutorRole(signerAddress),

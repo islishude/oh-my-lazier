@@ -1000,6 +1000,186 @@ func TestUpsertPacketPersistsIndexedPacket(t *testing.T) {
 	}
 }
 
+func TestConcurrentSourceAssignmentsPersistDeterministicPacketState(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.GUID = common.HexToHash("0xfedecacacacacacacacacacacacacacacacacacacacacacacacacacacaca")
+	packet.SrcEID = 50201
+	packet.DstEID = 50202
+	packet.Nonce = big.NewInt(77)
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
+	executorPacket := packet
+	executorPacket.Status = string(packets.ExecutorAssigned)
+	dvnPacket := packet
+	dvnPacket.Status = string(packets.ExecutorNew)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- store.UpsertExecutorAssignment(ctx, executorPacket, ExecutorJobRecord{
+			GUID:        packet.GUID,
+			AssignedFee: big.NewInt(42),
+			Status:      string(packets.ExecutorAssigned),
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		errs <- store.UpsertDVNAssignment(ctx, dvnPacket, DVNJobRecord{
+			GUID:                  packet.GUID,
+			AssignedFee:           big.NewInt(43),
+			ConfirmationsRequired: 12,
+			Status:                string(packets.DVNAssigned),
+		})
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent assignment upsert error = %v", err)
+		}
+	}
+
+	var status string
+	var executorRows, dvnRows int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT p.status,
+			(SELECT count(*)::int FROM executor_jobs WHERE guid = p.guid),
+			(SELECT count(*)::int FROM dvn_jobs WHERE guid = p.guid)
+		FROM packets p WHERE p.guid = $1
+	`, packet.GUID.Bytes()).Scan(&status, &executorRows, &dvnRows); err != nil {
+		t.Fatalf("select concurrent assignment state: %v", err)
+	}
+	if status != string(packets.ExecutorAssigned) || executorRows != 1 || dvnRows != 1 {
+		t.Fatalf("packet status/executor rows/dvn rows = %q/%d/%d, want ASSIGNED/1/1", status, executorRows, dvnRows)
+	}
+}
+
+func TestSourceAssignmentReplayLocksJobBeforePacket(t *testing.T) {
+	databaseURL := os.Getenv("TEST_POSTGRES_URL")
+	if databaseURL == "" {
+		t.Skip("TEST_POSTGRES_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	store, err := Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate() error = %v", err)
+	}
+
+	packet := testPacketRecord()
+	packet.GUID = common.HexToHash("0xfededededededededededededededededededededededededededededededede")
+	packet.SrcEID = 50211
+	packet.DstEID = 50212
+	packet.Nonce = big.NewInt(78)
+	syncDrainPathway(ctx, t, store, packet)
+	cleanPathwayRows(ctx, t, store, packet.SrcEID, packet.DstEID)
+	executorPacket := packet
+	executorPacket.Status = string(packets.ExecutorAssigned)
+	executorJob := ExecutorJobRecord{GUID: packet.GUID, AssignedFee: big.NewInt(42), Status: string(packets.ExecutorAssigned)}
+	dvnPacket := packet
+	dvnPacket.Status = string(packets.ExecutorNew)
+	dvnJob := DVNJobRecord{GUID: packet.GUID, AssignedFee: big.NewInt(43), ConfirmationsRequired: 12, Status: string(packets.DVNAssigned)}
+	if err := store.UpsertExecutorAssignment(ctx, executorPacket, executorJob); err != nil {
+		t.Fatalf("seed executor assignment: %v", err)
+	}
+	if err := store.UpsertDVNAssignment(ctx, dvnPacket, dvnJob); err != nil {
+		t.Fatalf("seed dvn assignment: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		jobLockSQL string
+		replay     func() error
+	}{
+		{name: "executor", jobLockSQL: executorSourceJobLockSQL, replay: func() error {
+			return store.UpsertExecutorAssignment(ctx, executorPacket, executorJob)
+		}},
+		{name: "dvn", jobLockSQL: dvnSourceJobLockSQL, replay: func() error {
+			return store.UpsertDVNAssignment(ctx, dvnPacket, dvnJob)
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			holder, err := store.pool.Begin(ctx)
+			if err != nil {
+				t.Fatalf("begin job holder: %v", err)
+			}
+			defer func() { _ = holder.Rollback(ctx) }()
+			if _, err := holder.Exec(ctx, test.jobLockSQL, packet.GUID.Bytes()); err != nil {
+				t.Fatalf("lock %s job: %v", test.name, err)
+			}
+
+			started := make(chan struct{})
+			replayResult := make(chan error, 1)
+			go func() {
+				close(started)
+				replayResult <- test.replay()
+			}()
+			<-started
+
+			packetLockedEarly := false
+			deadline := time.Now().Add(300 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				select {
+				case err := <-replayResult:
+					t.Fatalf("assignment replay completed before held job was released: %v", err)
+				default:
+				}
+				probe, err := store.pool.Begin(ctx)
+				if err != nil {
+					t.Fatalf("begin packet probe: %v", err)
+				}
+				_, probeErr := probe.Exec(ctx, `SELECT 1 FROM packets WHERE guid = $1 FOR UPDATE NOWAIT`, packet.GUID.Bytes())
+				_ = probe.Rollback(ctx)
+				if probeErr != nil {
+					packetLockedEarly = true
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if packetLockedEarly {
+				_ = holder.Rollback(ctx)
+				<-replayResult
+				t.Fatal("assignment replay locked packets while waiting for its existing job row")
+			}
+			if _, err := holder.Exec(ctx, `UPDATE packets SET updated_at = now() WHERE guid = $1`, packet.GUID.Bytes()); err != nil {
+				t.Fatalf("job-first transition could not lock packet: %v", err)
+			}
+			if err := holder.Commit(ctx); err != nil {
+				t.Fatalf("commit job-first transition: %v", err)
+			}
+			if err := <-replayResult; err != nil {
+				t.Fatalf("assignment replay after transition: %v", err)
+			}
+		})
+	}
+}
+
 func TestUpsertExecutorJobPersistsAssignment(t *testing.T) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {

@@ -71,6 +71,7 @@ type RPCProviderRuntimeStat struct {
 type IndexerRuntimeStat struct {
 	ChainEID                uint32
 	ChainName               string
+	Stream                  string
 	PollIntervalSeconds     float64
 	StartedUnix             int64
 	PollSuccess             bool
@@ -127,6 +128,7 @@ type pricingSnapshotKey struct {
 type indexerKey struct {
 	chainEID  uint32
 	chainName string
+	stream    string
 }
 
 type signerBalanceKey struct {
@@ -146,18 +148,18 @@ func NewRegistry() *Registry {
 }
 
 // RegisterIndexer records an indexer before its first polling attempt starts.
-func (r *Registry) RegisterIndexer(chainEID uint32, chainName string, pollInterval time.Duration) {
+func (r *Registry) RegisterIndexer(chainEID uint32, chainName, stream string, pollInterval time.Duration) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.indexerStatLocked(chainEID, chainName, pollInterval, r.now().Unix())
+	r.indexerStatLocked(chainEID, chainName, stream, pollInterval, r.now().Unix())
 }
 
 // RecordIndexerPoll records one indexer polling attempt.
-func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
+func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName, stream string, pollInterval time.Duration, observedHeadBlock uint64, safeToBlock uint64, sourceTransactions int, dvnTransactions int, destinationLogs int, duration time.Duration, err error) {
 	if r == nil {
 		return
 	}
@@ -165,11 +167,14 @@ func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInte
 	defer r.mu.Unlock()
 
 	now := r.now().Unix()
-	stat := r.indexerStatLocked(chainEID, chainName, pollInterval, now)
+	stat := r.indexerStatLocked(chainEID, chainName, stream, pollInterval, now)
 	stat.LastPollDurationSeconds = duration.Seconds()
 	stat.LastPollUnix = now
 	stat.ObservedHeadBlock = observedHeadBlock
 	stat.SafeToBlock = safeToBlock
+	stat.SourceTransactions += uint64(sourceTransactions)
+	stat.DVNTransactions += uint64(dvnTransactions)
+	stat.DestinationLogs += uint64(destinationLogs)
 	if err != nil {
 		stat.PollSuccess = false
 		stat.ErrorPolls++
@@ -183,18 +188,16 @@ func (r *Registry) RecordIndexerPoll(chainEID uint32, chainName string, pollInte
 	stat.SuccessPolls++
 	stat.FailureSinceUnix = 0
 	stat.LastSuccessUnix = now
-	stat.SourceTransactions += uint64(sourceTransactions)
-	stat.DVNTransactions += uint64(dvnTransactions)
-	stat.DestinationLogs += uint64(destinationLogs)
 }
 
-func (r *Registry) indexerStatLocked(chainEID uint32, chainName string, pollInterval time.Duration, now int64) *IndexerRuntimeStat {
-	key := indexerKey{chainEID: chainEID, chainName: chainName}
+func (r *Registry) indexerStatLocked(chainEID uint32, chainName, stream string, pollInterval time.Duration, now int64) *IndexerRuntimeStat {
+	key := indexerKey{chainEID: chainEID, chainName: chainName, stream: stream}
 	stat := r.indexers[key]
 	if stat == nil {
 		stat = &IndexerRuntimeStat{
 			ChainEID:    chainEID,
 			ChainName:   chainName,
+			Stream:      stream,
 			StartedUnix: now,
 		}
 		r.indexers[key] = stat
@@ -350,7 +353,10 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 		if snapshot.Indexers[a].ChainEID != snapshot.Indexers[b].ChainEID {
 			return snapshot.Indexers[a].ChainEID < snapshot.Indexers[b].ChainEID
 		}
-		return snapshot.Indexers[a].ChainName < snapshot.Indexers[b].ChainName
+		if snapshot.Indexers[a].ChainName != snapshot.Indexers[b].ChainName {
+			return snapshot.Indexers[a].ChainName < snapshot.Indexers[b].ChainName
+		}
+		return snapshot.Indexers[a].Stream < snapshot.Indexers[b].Stream
 	})
 	sort.Slice(snapshot.LoopRetries, func(a, b int) bool {
 		return snapshot.LoopRetries[a].Name < snapshot.LoopRetries[b].Name
@@ -598,65 +604,65 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	output.WriteString("# HELP laz_indexer_poll_success Whether the most recent indexer poll succeeded.\n")
 	output.WriteString("# TYPE laz_indexer_poll_success gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_poll_success{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), boolGauge(stat.PollSuccess))
+		fmt.Fprintf(output, "laz_indexer_poll_success{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), boolGauge(stat.PollSuccess))
 	}
-	output.WriteString("# HELP laz_indexer_poll_interval_seconds Configured interval between indexer polling attempts.\n")
+	output.WriteString("# HELP laz_indexer_poll_interval_seconds Configured caught-up, pending, and retry wait; lagging streams run immediate catch-up passes.\n")
 	output.WriteString("# TYPE laz_indexer_poll_interval_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_poll_interval_seconds{chain_eid=%q,name=%s} %s\n", uint32Label(stat.ChainEID), label(stat.ChainName), floatGauge(stat.PollIntervalSeconds))
+		fmt.Fprintf(output, "laz_indexer_poll_interval_seconds{chain_eid=%q,name=%s,stream=%s} %s\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), floatGauge(stat.PollIntervalSeconds))
 	}
 	output.WriteString("# HELP laz_indexer_start_timestamp_seconds Unix timestamp when the indexer loop was first registered.\n")
 	output.WriteString("# TYPE laz_indexer_start_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_start_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.StartedUnix)
+		fmt.Fprintf(output, "laz_indexer_start_timestamp_seconds{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.StartedUnix)
 	}
 	output.WriteString("# HELP laz_indexer_polls_total Indexer polling attempts by result.\n")
 	output.WriteString("# TYPE laz_indexer_polls_total counter\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,result=\"success\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SuccessPolls)
-		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,result=\"error\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.ErrorPolls)
+		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,stream=%s,result=\"success\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.SuccessPolls)
+		fmt.Fprintf(output, "laz_indexer_polls_total{chain_eid=%q,name=%s,stream=%s,result=\"error\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.ErrorPolls)
 	}
 	output.WriteString("# HELP laz_indexer_last_poll_timestamp_seconds Unix timestamp for the most recent completed indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_poll_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_last_poll_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.LastPollUnix)
+		fmt.Fprintf(output, "laz_indexer_last_poll_timestamp_seconds{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.LastPollUnix)
 	}
 	output.WriteString("# HELP laz_indexer_last_success_timestamp_seconds Unix timestamp for the most recent successful indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_success_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_last_success_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.LastSuccessUnix)
+		fmt.Fprintf(output, "laz_indexer_last_success_timestamp_seconds{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.LastSuccessUnix)
 	}
 	output.WriteString("# HELP laz_indexer_failure_since_timestamp_seconds Unix timestamp when the current sequence of failed indexer polls began, or zero when healthy.\n")
 	output.WriteString("# TYPE laz_indexer_failure_since_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_failure_since_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.FailureSinceUnix)
+		fmt.Fprintf(output, "laz_indexer_failure_since_timestamp_seconds{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.FailureSinceUnix)
 	}
 	output.WriteString("# HELP laz_indexer_last_error_timestamp_seconds Unix timestamp for the most recent failed indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_error_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_last_error_timestamp_seconds{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.LastErrorUnix)
+		fmt.Fprintf(output, "laz_indexer_last_error_timestamp_seconds{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.LastErrorUnix)
 	}
 	output.WriteString("# HELP laz_indexer_last_poll_duration_seconds Duration of the most recent indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_last_poll_duration_seconds gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_last_poll_duration_seconds{chain_eid=%q,name=%s} %s\n", uint32Label(stat.ChainEID), label(stat.ChainName), floatGauge(stat.LastPollDurationSeconds))
+		fmt.Fprintf(output, "laz_indexer_last_poll_duration_seconds{chain_eid=%q,name=%s,stream=%s} %s\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), floatGauge(stat.LastPollDurationSeconds))
 	}
 	output.WriteString("# HELP laz_indexer_observed_head_block Most recent chain head observed by an indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_observed_head_block gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_observed_head_block{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.ObservedHeadBlock)
+		fmt.Fprintf(output, "laz_indexer_observed_head_block{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.ObservedHeadBlock)
 	}
 	output.WriteString("# HELP laz_indexer_safe_to_block Most recent safe block upper bound used by an indexer poll.\n")
 	output.WriteString("# TYPE laz_indexer_safe_to_block gauge\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_safe_to_block{chain_eid=%q,name=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SafeToBlock)
+		fmt.Fprintf(output, "laz_indexer_safe_to_block{chain_eid=%q,name=%s,stream=%s} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.SafeToBlock)
 	}
 	output.WriteString("# HELP laz_indexer_processed_total Items processed by indexer polls.\n")
 	output.WriteString("# TYPE laz_indexer_processed_total counter\n")
 	for _, stat := range snapshot.Indexers {
-		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"source_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.SourceTransactions)
-		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"dvn_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.DVNTransactions)
-		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,kind=\"destination_logs\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), stat.DestinationLogs)
+		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,stream=%s,kind=\"source_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.SourceTransactions)
+		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,stream=%s,kind=\"dvn_transactions\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.DVNTransactions)
+		fmt.Fprintf(output, "laz_indexer_processed_total{chain_eid=%q,name=%s,stream=%s,kind=\"destination_logs\"} %d\n", uint32Label(stat.ChainEID), label(stat.ChainName), label(stat.Stream), stat.DestinationLogs)
 	}
 	output.WriteString("# HELP laz_signer_native_balance_wei Last observed signer native-token balance in wei.\n")
 	output.WriteString("# TYPE laz_signer_native_balance_wei gauge\n")

@@ -115,6 +115,8 @@ export type ChainProfile = {
   confirmations: number;
   startBlockNumber?: number;
   indexerQueryBlockRange: number;
+  /** Maximum blocks processed under one safe snapshot before refreshing it. */
+  indexerBackfillBlockRange: number;
   indexerPollIntervalSeconds: number;
   externalDVNs: Address[];
   includeLayerZeroLabsDVN: boolean;
@@ -1902,6 +1904,7 @@ function normalizeChain(
     "confirmations",
     "startBlockNumber",
     "indexerQueryBlockRange",
+    "indexerBackfillBlockRange",
     "indexerPollIntervalSeconds",
     "externalDVNs",
     "includeLayerZeroLabsDVN",
@@ -2006,6 +2009,11 @@ function normalizeChain(
       input,
       "indexerQueryBlockRange",
       `${pathLabel}.indexerQueryBlockRange`
+    ),
+    indexerBackfillBlockRange: integerField(
+      input,
+      "indexerBackfillBlockRange",
+      `${pathLabel}.indexerBackfillBlockRange`
     ),
     indexerPollIntervalSeconds: integerField(
       input,
@@ -2738,6 +2746,7 @@ function renderWorkerChain(
     confirmations: ${chain.confirmations}
     start_block_number: ${startBlockNumber}
     indexer_query_block_range: ${chain.indexerQueryBlockRange}
+    indexer_backfill_block_range: ${chain.indexerBackfillBlockRange}
     indexer_poll_interval_seconds: ${chain.indexerPollIntervalSeconds}
     rpc_urls:
       - ${yamlString(rpcURL)}

@@ -41,6 +41,10 @@ type ExecutorWorkItem struct {
 
 // UpsertExecutorJob persists executor assignment state for a packet.
 func (s *Store) UpsertExecutorJob(ctx context.Context, job ExecutorJobRecord) error {
+	return upsertExecutorJob(ctx, s.pool, job)
+}
+
+func upsertExecutorJob(ctx context.Context, executor sqlExecutor, job ExecutorJobRecord) error {
 	if job.GUID == (common.Hash{}) {
 		return errors.New("executor job guid is required")
 	}
@@ -58,7 +62,7 @@ func (s *Store) UpsertExecutorJob(ctx context.Context, job ExecutorJobRecord) er
 	if job.LastError != "" {
 		lastError = job.LastError
 	}
-	_, err := s.pool.Exec(ctx, `
+	_, err := executor.Exec(ctx, `
 		INSERT INTO executor_jobs (guid, assigned, assigned_fee, status, last_error)
 		VALUES ($1, true, $2, $3, $4)
 			ON CONFLICT (guid) DO UPDATE SET

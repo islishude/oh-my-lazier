@@ -223,6 +223,7 @@ test("regtest worker configs split executor and DVN roles across workers", () =>
   );
   // Both workers still require the exact two-DVN set on every pathway.
   for (const config of [config1, config2]) {
+    assert.ok(config.includes("indexer_backfill_block_range: 10000"));
     assert.ok(config.includes("send_uln_confirmations: 1"));
     assert.ok(config.includes("receive_uln_confirmations: 1"));
     assert.ok(config.includes("send_required_dvns:"));

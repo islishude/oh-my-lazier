@@ -92,7 +92,7 @@ Required runtime checks:
 - Every active transaction signer reports `laz_signer_native_balance_wei >= laz_signer_min_native_balance_wei`.
 - For deployments with `services.dvn.enabled: true`, no DVN job is stuck in `READY_TO_VERIFY` or `VERIFY_TX_ENQUEUED` beyond the expected tx manager polling and confirmation window.
 - For deployments with `services.executor.enabled: true`, no executor job is stuck in `WAITING_DVN_VERIFICATION`, `VERIFIABLE`, `COMMIT_TX_ENQUEUED`, `COMMITTED`, `EXECUTABLE`, or `LZ_RECEIVE_TX_ENQUEUED` beyond the expected source/destination confirmation window.
-- Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`. `laz_indexer_safe_to_block` must advance, and no `laz_rpc_provider_safe_conflict` may remain active.
+- Every enabled pathway has advanced indexer cursors for the roles enabled in that process: executor requires `executor_source` and `executor_destination`; DVN requires `dvn_source` and `dvn_destination`. Every required stream's `laz_indexer_safe_to_block` series must advance, and no `laz_rpc_provider_safe_conflict` may remain active.
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` exits successfully.
 
 ### Schema upgrade: drain the send side before applying 002

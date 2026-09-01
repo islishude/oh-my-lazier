@@ -9,6 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
+	"github.com/islishude/oh-my-lazier/go/internal/packets"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -34,10 +35,14 @@ type PacketRecord struct {
 
 // UpsertPacket persists packet data from source-chain indexing.
 func (s *Store) UpsertPacket(ctx context.Context, packet PacketRecord) error {
+	return upsertPacket(ctx, s.pool, packet)
+}
+
+func upsertPacket(ctx context.Context, executor sqlExecutor, packet PacketRecord) error {
 	if err := packet.Validate(); err != nil {
 		return err
 	}
-	_, err := s.pool.Exec(ctx, `
+	_, err := executor.Exec(ctx, `
 		INSERT INTO packets (
 			guid, src_eid, dst_eid, nonce, sender, receiver, send_lib,
 			src_tx_hash, src_block_number, src_log_index, encoded_packet,
@@ -56,11 +61,15 @@ func (s *Store) UpsertPacket(ctx context.Context, packet PacketRecord) error {
 			src_log_index = EXCLUDED.src_log_index,
 			encoded_packet = EXCLUDED.encoded_packet,
 				packet_header = EXCLUDED.packet_header,
-				message = EXCLUDED.message,
-				payload_hash = EXCLUDED.payload_hash,
-				options = EXCLUDED.options,
-				updated_at = now()
-		`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, bytes.Clone(packet.EncodedPacket), bytes.Clone(packet.PacketHeader), bytes.Clone(packet.Message), packet.PayloadHash.Bytes(), bytes.Clone(packet.Options), packet.Status)
+					message = EXCLUDED.message,
+					payload_hash = EXCLUDED.payload_hash,
+					options = EXCLUDED.options,
+					status = CASE
+						WHEN packets.status = $17 AND EXCLUDED.status <> $17 THEN EXCLUDED.status
+						ELSE packets.status
+					END,
+					updated_at = now()
+			`, packet.GUID.Bytes(), packet.SrcEID, packet.DstEID, packet.Nonce.String(), addressBytes(packet.Sender), addressBytes(packet.Receiver), addressBytes(packet.SendLib), packet.SrcTxHash.Bytes(), packet.SrcBlockNumber, packet.SrcLogIndex, bytes.Clone(packet.EncodedPacket), bytes.Clone(packet.PacketHeader), bytes.Clone(packet.Message), packet.PayloadHash.Bytes(), bytes.Clone(packet.Options), packet.Status, string(packets.ExecutorNew))
 	return err
 }
 

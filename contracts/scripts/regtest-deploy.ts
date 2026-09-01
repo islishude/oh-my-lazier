@@ -716,6 +716,7 @@ ${chainList
     confirmations: ${deployment.parameters.confirmations}
     start_block_number: 0
     indexer_query_block_range: 500
+    indexer_backfill_block_range: 10000
     indexer_poll_interval_seconds: 5
     rpc_urls:
       - ${rpcURL(chain)}${

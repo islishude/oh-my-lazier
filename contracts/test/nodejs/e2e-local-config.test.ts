@@ -115,6 +115,7 @@ test("local E2E worker config enables fast RBF replacement", () => {
     /tx_manager:\n  stale_broadcast_replacement_after_seconds: 2/
   );
   assert.match(deployScript, /max_priority_fee_per_gas_wei: "2000000000"/);
+  assert.match(deployScript, /indexer_backfill_block_range: 10000/);
 });
 
 function resolver(overrides: Record<string, string>) {
