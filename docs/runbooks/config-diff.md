@@ -80,6 +80,12 @@ send-versus-receive relationship, and
 the configured `pathways[].source_workers` pathway configuration. Every
 configured RPC URL must return the configured `chain_id` from `eth_chainId`.
 Worker startup and `price-once` run the same check before database sync.
+Mismatch reports keep `chains[eid]` and `pathways[src_eid:dst_eid:...]` paths
+stable for review tooling. Each text and JSON issue also includes
+`chain_context`: a chain is rendered as `<name> (eid <eid>)`, and a pathway as
+`<source name> (eid <source eid>) -> <destination name> (eid <destination
+eid>)`. RPC quorum and on-chain read errors use the same labels even when the
+check stops before it can produce a mismatch report.
 The long-running worker can be started with `-skip-onchain-check` only when an
 operator intentionally bypasses this on-chain check; local YAML/schema
 validation still runs, and `configcheck` plus `pricebot-once` keep the normal

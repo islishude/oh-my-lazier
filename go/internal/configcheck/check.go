@@ -98,8 +98,9 @@ func (a anchoredChainClient) CodeAt(ctx context.Context, account common.Address,
 
 // Issue describes one config mismatch against on-chain state.
 type Issue struct {
-	Path    string `json:"path"`
-	Message string `json:"message"`
+	Path         string `json:"path"`
+	ChainContext string `json:"chain_context"`
+	Message      string `json:"message"`
 }
 
 // Report is the complete on-chain config check result.
@@ -124,6 +125,7 @@ func RenderText(report Report) string {
 	fmt.Fprintf(&out, "on-chain config check failed (%d %s)\n", len(report.Issues), report.issueLabel())
 	for i, issue := range report.Issues {
 		fmt.Fprintf(&out, "[%d] %s\n", i+1, issue.Path)
+		fmt.Fprintf(&out, "    chain context: %s\n", issue.ChainContext)
 		fmt.Fprintf(&out, "    %s\n", issue.Message)
 	}
 	return out.String()
@@ -186,7 +188,7 @@ type checker struct {
 func (c *checker) run(ctx context.Context) error {
 	c.invalidChains = make(map[uint32]struct{})
 	for _, configured := range c.registry.All() {
-		client, err := c.client(configured.EID)
+		client, err := c.client(configured)
 		if err != nil {
 			return err
 		}
@@ -206,14 +208,15 @@ func (c *checker) run(ctx context.Context) error {
 }
 
 func (c *checker) checkChain(ctx context.Context, client ChainClient, configured chain.Chain) error {
+	contextLabel := chainLabel(configured)
 	if validator, ok := client.(chainIDValidator); ok {
 		if err := validator.ValidateChainID(ctx, configured.ChainID); err != nil {
 			if rpcquorum.IsChainIDMismatch(err) {
-				c.add(fmt.Sprintf("chains[%d].rpc_urls", configured.EID), "%s", err)
+				c.add(contextLabel, fmt.Sprintf("chains[%d].rpc_urls", configured.EID), "%s", err)
 				c.markChainInvalid(configured.EID)
 				return nil
 			}
-			return fmt.Errorf("validate chain %d rpc chain_id: %w", configured.EID, err)
+			return fmt.Errorf("validate chain %s rpc chain_id: %w", contextLabel, err)
 		}
 	}
 	// Establish the quorum head before the first on-chain config read, so the
@@ -228,7 +231,7 @@ func (c *checker) checkChain(ctx context.Context, client ChainClient, configured
 	}); ok {
 		head, err := headChecker.CheckHead(ctx)
 		if err != nil {
-			return fmt.Errorf("check chain %d rpc head quorum: %w", configured.EID, err)
+			return fmt.Errorf("check chain %s rpc head quorum: %w", contextLabel, err)
 		}
 		if head.Number != nil {
 			c.clients[configured.EID] = anchoredChainClient{ChainClient: client, block: new(big.Int).Set(head.Number), hash: common.HexToHash(head.Hash)}
@@ -237,19 +240,19 @@ func (c *checker) checkChain(ctx context.Context, client ChainClient, configured
 	}
 	actualChainID, err := client.ChainID(ctx)
 	if err != nil {
-		return fmt.Errorf("read chain %d chain_id: %w", configured.EID, err)
+		return fmt.Errorf("read chain %s chain_id: %w", contextLabel, err)
 	}
 	if actualChainID == nil || actualChainID.Cmp(configured.ChainID) != 0 {
-		c.add(fmt.Sprintf("chains[%d].chain_id", configured.EID), "on-chain chain_id %s does not match configured %s", bigString(actualChainID), configured.ChainID)
+		c.add(contextLabel, fmt.Sprintf("chains[%d].chain_id", configured.EID), "on-chain chain_id %s does not match configured %s", bigString(actualChainID), configured.ChainID)
 		c.markChainInvalid(configured.EID)
 		return nil
 	}
 	actualEID, err := callUint32(ctx, client, endpointABI, configured.EndpointAddress, "eid")
 	if err != nil {
-		return fmt.Errorf("read chain %d endpoint eid: %w", configured.EID, err)
+		return fmt.Errorf("read chain %s endpoint eid: %w", contextLabel, err)
 	}
 	if actualEID != configured.EID {
-		c.add(fmt.Sprintf("chains[%d].eid", configured.EID), "endpoint eid %d does not match configured %d", actualEID, configured.EID)
+		c.add(contextLabel, fmt.Sprintf("chains[%d].eid", configured.EID), "endpoint eid %d does not match configured %d", actualEID, configured.EID)
 	}
 	contracts := map[string]common.Address{
 		"endpoint_address": configured.EndpointAddress,
@@ -257,10 +260,10 @@ func (c *checker) checkChain(ctx context.Context, client ChainClient, configured
 	for label, address := range contracts {
 		code, err := client.CodeAt(ctx, address, nil)
 		if err != nil {
-			return fmt.Errorf("read chain %d code at %s: %w", configured.EID, address, err)
+			return fmt.Errorf("read chain %s code at %s: %w", contextLabel, address, err)
 		}
 		if len(code) == 0 {
-			c.add(fmt.Sprintf("chains[%d].%s", configured.EID, label), "no contract code at %s", address)
+			c.add(contextLabel, fmt.Sprintf("chains[%d].%s", configured.EID, label), "no contract code at %s", address)
 		}
 	}
 	return nil
@@ -275,44 +278,45 @@ func (c *checker) checkPathway(ctx context.Context, pathway chain.Pathway) error
 	if err != nil {
 		return err
 	}
-	srcClient, err := c.client(pathway.SrcEID)
+	contextLabel := pathwayLabel(srcChain, dstChain)
+	srcClient, err := c.client(srcChain)
 	if err != nil {
-		return err
+		return wrapPathwayError(contextLabel, err)
 	}
-	dstClient, err := c.client(pathway.DstEID)
+	dstClient, err := c.client(dstChain)
 	if err != nil {
-		return err
+		return wrapPathwayError(contextLabel, err)
 	}
 	base := fmt.Sprintf("pathways[%d:%d:%s:%s]", pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)
-	if err := c.checkOApp(ctx, srcClient, base+".src_oapp", pathway.SrcOApp, srcChain.EndpointAddress, pathway.DstEID, pathway.DstOApp); err != nil {
-		return err
+	if err := c.checkOApp(ctx, srcClient, contextLabel, base+".src_oapp", pathway.SrcOApp, srcChain.EndpointAddress, pathway.DstEID, pathway.DstOApp); err != nil {
+		return wrapPathwayError(contextLabel, err)
 	}
-	if err := c.checkOApp(ctx, dstClient, base+".dst_oapp", pathway.DstOApp, dstChain.EndpointAddress, pathway.SrcEID, pathway.SrcOApp); err != nil {
-		return err
+	if err := c.checkOApp(ctx, dstClient, contextLabel, base+".dst_oapp", pathway.DstOApp, dstChain.EndpointAddress, pathway.SrcEID, pathway.SrcOApp); err != nil {
+		return wrapPathwayError(contextLabel, err)
 	}
-	if err := c.checkLibraries(ctx, srcClient, dstClient, base, srcChain, dstChain, pathway); err != nil {
-		return err
+	if err := c.checkLibraries(ctx, srcClient, dstClient, contextLabel, base, srcChain, dstChain, pathway); err != nil {
+		return wrapPathwayError(contextLabel, err)
 	}
-	if err := c.checkWorkers(ctx, srcClient, dstClient, base, srcChain, dstChain, pathway); err != nil {
-		return err
+	if err := c.checkWorkers(ctx, srcClient, dstClient, contextLabel, base, srcChain, dstChain, pathway); err != nil {
+		return wrapPathwayError(contextLabel, err)
 	}
 	return nil
 }
 
-func (c *checker) checkOApp(ctx context.Context, client ChainClient, path string, oapp, endpoint common.Address, remoteEID uint32, remoteOApp common.Address) error {
+func (c *checker) checkOApp(ctx context.Context, client ChainClient, contextLabel, path string, oapp, endpoint common.Address, remoteEID uint32, remoteOApp common.Address) error {
 	code, err := client.CodeAt(ctx, oapp, nil)
 	if err != nil {
 		return fmt.Errorf("read code at OApp %s: %w", oapp, err)
 	}
 	if len(code) == 0 {
-		c.add(path, "no contract code at %s", oapp)
+		c.add(contextLabel, path, "no contract code at %s", oapp)
 	}
 	actualEndpoint, err := callAddress(ctx, client, oappABI, oapp, "endpoint")
 	if err != nil {
 		return fmt.Errorf("read %s endpoint: %w", oapp, err)
 	}
 	if actualEndpoint != endpoint {
-		c.add(path+".endpoint", "oapp endpoint %s does not match configured endpoint %s", actualEndpoint, endpoint)
+		c.add(contextLabel, path+".endpoint", "oapp endpoint %s does not match configured endpoint %s", actualEndpoint, endpoint)
 	}
 	peer, err := callHash(ctx, client, oappABI, oapp, "peers", remoteEID)
 	if err != nil {
@@ -320,16 +324,16 @@ func (c *checker) checkOApp(ctx context.Context, client ChainClient, path string
 	}
 	expectedPeer := common.BytesToHash(remoteOApp.Bytes())
 	if peer != expectedPeer {
-		c.add(path+".peers", "peer for eid %d is %s, want %s", remoteEID, peer, expectedPeer)
+		c.add(contextLabel, path+".peers", "peer for eid %d is %s, want %s", remoteEID, peer, expectedPeer)
 	}
 	return nil
 }
 
-func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
-	if err := c.requireCode(ctx, srcClient, base+".send_lib", pathway.SrcEID, pathway.SendLib); err != nil {
+func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient ChainClient, contextLabel, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
+	if err := c.requireCode(ctx, srcClient, srcChain, contextLabel, base+".send_lib", pathway.SendLib); err != nil {
 		return err
 	}
-	if err := c.requireCode(ctx, dstClient, base+".receive_lib", pathway.DstEID, pathway.ReceiveLib); err != nil {
+	if err := c.requireCode(ctx, dstClient, dstChain, contextLabel, base+".receive_lib", pathway.ReceiveLib); err != nil {
 		return err
 	}
 	sendLib, err := callAddress(ctx, srcClient, endpointABI, srcChain.EndpointAddress, "getSendLibrary", pathway.SrcOApp, pathway.DstEID)
@@ -337,7 +341,7 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 		return fmt.Errorf("read send library for %s: %w", base, err)
 	}
 	if sendLib != pathway.SendLib {
-		c.add(base+".send_lib", "endpoint send library %s does not match configured %s", sendLib, pathway.SendLib)
+		c.add(contextLabel, base+".send_lib", "endpoint send library %s does not match configured %s", sendLib, pathway.SendLib)
 	}
 	receiveValues, err := callValues(ctx, dstClient, endpointABI, dstChain.EndpointAddress, "getReceiveLibrary", pathway.DstOApp, pathway.SrcEID)
 	if err != nil {
@@ -348,7 +352,7 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 		return fmt.Errorf("getReceiveLibrary returned %T, want address", receiveValues[0])
 	}
 	if receiveLib != pathway.ReceiveLib {
-		c.add(base+".receive_lib", "endpoint receive library %s does not match configured %s", receiveLib, pathway.ReceiveLib)
+		c.add(contextLabel, base+".receive_lib", "endpoint receive library %s does not match configured %s", receiveLib, pathway.ReceiveLib)
 	}
 	executorConfigBytes, err := callBytes(ctx, srcClient, endpointABI, srcChain.EndpointAddress, "getConfig", pathway.SrcOApp, pathway.SendLib, pathway.DstEID, configTypeExecutor)
 	if err != nil {
@@ -359,26 +363,27 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 		return fmt.Errorf("decode executor config for %s: %w", base, err)
 	}
 	if executorConfig.Executor != pathway.SourceWorkers.OpenExecutor {
-		c.add(base+".executor_config.executor", "executor config points to %s, want %s", executorConfig.Executor, pathway.SourceWorkers.OpenExecutor)
+		c.add(contextLabel, base+".executor_config.executor", "executor config points to %s, want %s", executorConfig.Executor, pathway.SourceWorkers.OpenExecutor)
 	}
 	if uint64(executorConfig.MaxMessageSize) != pathway.MaxMessageSize {
-		c.add(base+".executor_config.max_message_size", "executor max message size %d does not match configured %d", executorConfig.MaxMessageSize, pathway.MaxMessageSize)
+		c.add(contextLabel, base+".executor_config.max_message_size", "executor max message size %d does not match configured %d", executorConfig.MaxMessageSize, pathway.MaxMessageSize)
 	}
 	sendULNConfig, err := c.readULNConfig(ctx, srcClient, srcChain.EndpointAddress, pathway.SrcOApp, pathway.SendLib, pathway.DstEID, base+".send_uln_config")
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".send_uln_config", sendULNConfig, pathway.SendULNConfirmations, pathway.SendRequiredDVNs)
+	c.compareULNConfig(contextLabel, base+".send_uln_config", sendULNConfig, pathway.SendULNConfirmations, pathway.SendRequiredDVNs)
 	receiveULNConfig, err := c.readULNConfig(ctx, dstClient, dstChain.EndpointAddress, pathway.DstOApp, pathway.ReceiveLib, pathway.SrcEID, base+".receive_uln_config")
 	if err != nil {
 		return err
 	}
-	c.compareULNConfig(base+".receive_uln_config", receiveULNConfig, pathway.ReceiveULNConfirmations, pathway.ReceiveRequiredDVNs)
+	c.compareULNConfig(contextLabel, base+".receive_uln_config", receiveULNConfig, pathway.ReceiveULNConfirmations, pathway.ReceiveRequiredDVNs)
 	// ReceiveUln302 rejects verifications whose assigned confirmations fall below its own
 	// threshold, and DVN jobs are assigned the send-side value, so this relationship must
 	// hold on chain regardless of what either side was configured to match.
 	if sendULNConfig.Confirmations < receiveULNConfig.Confirmations {
 		c.add(
+			contextLabel,
 			base+".uln_confirmations",
 			"send uln confirmations %d are below receive uln confirmations %d; every DVN verification for this pathway would be rejected",
 			sendULNConfig.Confirmations, receiveULNConfig.Confirmations,
@@ -387,8 +392,8 @@ func (c *checker) checkLibraries(ctx context.Context, srcClient, dstClient Chain
 	return nil
 }
 
-func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainClient, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
-	if err := c.requireCode(ctx, srcClient, base+".source_workers.price_feed", srcChain.EID, pathway.SourceWorkers.PriceFeed); err != nil {
+func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainClient, contextLabel, base string, srcChain, dstChain chain.Chain, pathway chain.Pathway) error {
+	if err := c.requireCode(ctx, srcClient, srcChain, contextLabel, base+".source_workers.price_feed", pathway.SourceWorkers.PriceFeed); err != nil {
 		return err
 	}
 	if c.pricingSigner != (common.Address{}) {
@@ -397,7 +402,7 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 			return fmt.Errorf("read price feed submitter for %s: %w", base, err)
 		}
 		if !allowed {
-			c.add(base+".source_workers.price_feed.submitter", "price feed does not authorize pricing signer %s", c.pricingSigner)
+			c.add(contextLabel, base+".source_workers.price_feed.submitter", "price feed does not authorize pricing signer %s", c.pricingSigner)
 		}
 	}
 	workers := []struct {
@@ -411,7 +416,7 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 	for _, selected := range workers {
 		label := selected.label
 		worker := selected.addr
-		if err := c.requireCode(ctx, srcClient, base+".source_workers."+label, srcChain.EID, worker); err != nil {
+		if err := c.requireCode(ctx, srcClient, srcChain, contextLabel, base+".source_workers."+label, worker); err != nil {
 			return err
 		}
 		priceFeed, err := callAddress(ctx, srcClient, workerABI, worker, "priceFeed")
@@ -419,45 +424,45 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 			return fmt.Errorf("read %s priceFeed for %s: %w", label, base, err)
 		}
 		if priceFeed != pathway.SourceWorkers.PriceFeed {
-			c.add(base+".source_workers."+label+".price_feed", "%s priceFeed %s does not match configured %s", label, priceFeed, pathway.SourceWorkers.PriceFeed)
+			c.add(contextLabel, base+".source_workers."+label+".price_feed", "%s priceFeed %s does not match configured %s", label, priceFeed, pathway.SourceWorkers.PriceFeed)
 		}
 		allowed, err := callBool(ctx, srcClient, workerABI, worker, "allowedSendLib", pathway.SendLib)
 		if err != nil {
 			return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
 		}
 		if !allowed {
-			c.add(base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
+			c.add(contextLabel, base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
 		}
 		config, err := callPathwayConfig(ctx, srcClient, worker, pathway.DstEID, pathway.SrcOApp)
 		if err != nil {
 			return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
 		}
 		if config.Enabled != pathway.Enabled {
-			c.add(base+".source_workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
+			c.add(contextLabel, base+".source_workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
 		}
 		if config.MaxMessageSize == nil || config.MaxMessageSize.Uint64() != pathway.MaxMessageSize {
-			c.add(base+".source_workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
+			c.add(contextLabel, base+".source_workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
 		}
 		if config.MinLzReceiveGas == nil || config.MinLzReceiveGas.Uint64() != pathway.MinLzReceiveGas {
-			c.add(base+".source_workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
+			c.add(contextLabel, base+".source_workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
 		}
 		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
-			c.add(base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+			c.add(contextLabel, base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
 		}
 		if selected.fee.FixedFeeWei != "" {
 			actualFee, err := callFeeModel(ctx, srcClient, worker, pathway.DstEID)
 			if err != nil {
 				return fmt.Errorf("read %s feeModel for %s: %w", label, base, err)
 			}
-			c.compareFeeModel(base+".source_workers."+label+".fee_model", actualFee, selected.fee)
+			c.compareFeeModel(contextLabel, base+".source_workers."+label+".fee_model", actualFee, selected.fee)
 		}
 	}
-	if err := c.requireCode(ctx, dstClient, base+".destination_workers.open_dvn", dstChain.EID, pathway.DestinationWorkers.OpenDVN); err != nil {
+	if err := c.requireCode(ctx, dstClient, dstChain, contextLabel, base+".destination_workers.open_dvn", pathway.DestinationWorkers.OpenDVN); err != nil {
 		return err
 	}
 	if pathway.DVNMode == "active" {
 		if dstChain.TxRoles.DVN.SignerID == "" {
-			c.add(base+".destination_workers.open_dvn.verifiers", "destination chain dvn signer is required for active dvn pathways")
+			c.add(contextLabel, base+".destination_workers.open_dvn.verifiers", "destination chain dvn signer is required for active dvn pathways")
 			return nil
 		}
 		verifier := common.HexToAddress(dstChain.TxRoles.DVN.SignerID)
@@ -466,7 +471,7 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 			return fmt.Errorf("read destination open_dvn verifier authorization for %s: %w", base, err)
 		}
 		if !allowed {
-			c.add(base+".destination_workers.open_dvn.verifiers", "dvn signer %s is not authorized on destination OpenDVN %s", verifier, pathway.DestinationWorkers.OpenDVN)
+			c.add(contextLabel, base+".destination_workers.open_dvn.verifiers", "dvn signer %s is not authorized on destination OpenDVN %s", verifier, pathway.DestinationWorkers.OpenDVN)
 		}
 	}
 	return nil
@@ -484,26 +489,26 @@ func (c *checker) readULNConfig(ctx context.Context, client ChainClient, endpoin
 	return config, nil
 }
 
-func (c *checker) compareULNConfig(path string, config ulnConfig, confirmations uint64, requiredDVNs []common.Address) {
+func (c *checker) compareULNConfig(contextLabel, path string, config ulnConfig, confirmations uint64, requiredDVNs []common.Address) {
 	if config.Confirmations != confirmations {
-		c.add(path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, confirmations)
+		c.add(contextLabel, path+".confirmations", "confirmations %d does not match configured %d", config.Confirmations, confirmations)
 	}
 	if config.RequiredDVNCount != uint8(len(config.RequiredDVNs)) {
-		c.add(path+".required_dvn_count", "requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
+		c.add(contextLabel, path+".required_dvn_count", "requiredDVNCount %d does not match requiredDVNs length %d", config.RequiredDVNCount, len(config.RequiredDVNs))
 	}
 	if config.OptionalDVNCount != 0 && config.OptionalDVNCount != nilDVNCount {
-		c.add(path+".optional_dvn_count", "optionalDVNCount %d is not disabled", config.OptionalDVNCount)
+		c.add(contextLabel, path+".optional_dvn_count", "optionalDVNCount %d is not disabled", config.OptionalDVNCount)
 	}
 	if config.OptionalDVNThreshold != 0 {
-		c.add(path+".optional_dvn_threshold", "optionalDVNThreshold %d is not zero", config.OptionalDVNThreshold)
+		c.add(contextLabel, path+".optional_dvn_threshold", "optionalDVNThreshold %d is not zero", config.OptionalDVNThreshold)
 	}
 	if len(config.OptionalDVNs) != 0 {
-		c.add(path+".optional_dvns", "optional DVNs are configured: %s", addressesString(config.OptionalDVNs))
+		c.add(contextLabel, path+".optional_dvns", "optional DVNs are configured: %s", addressesString(config.OptionalDVNs))
 	}
 	// An unapproved, stale, or missing entry silently changes the pathway's verification
 	// quorum, so the on-chain set must match the approved set exactly (order ignored).
 	if !equalAddressSets(config.RequiredDVNs, requiredDVNs) {
-		c.add(path+".required_dvns", "required DVNs %s do not match the configured required set %s", addressesString(config.RequiredDVNs), addressesString(requiredDVNs))
+		c.add(contextLabel, path+".required_dvns", "required DVNs %s do not match the configured required set %s", addressesString(config.RequiredDVNs), addressesString(requiredDVNs))
 	}
 }
 
@@ -520,27 +525,39 @@ func equalAddressSets(a, b []common.Address) bool {
 	return slices.Equal(sortedA, sortedB)
 }
 
-func (c *checker) requireCode(ctx context.Context, client ChainClient, path string, eid uint32, address common.Address) error {
+func (c *checker) requireCode(ctx context.Context, client ChainClient, configured chain.Chain, contextLabel, path string, address common.Address) error {
 	code, err := client.CodeAt(ctx, address, nil)
 	if err != nil {
-		return fmt.Errorf("read chain %d code at %s: %w", eid, address, err)
+		return fmt.Errorf("read chain %s code at %s: %w", chainLabel(configured), address, err)
 	}
 	if len(code) == 0 {
-		c.add(path, "no contract code at %s", address)
+		c.add(contextLabel, path, "no contract code at %s", address)
 	}
 	return nil
 }
 
-func (c *checker) client(eid uint32) (ChainClient, error) {
-	client := c.clients[eid]
+func (c *checker) client(configured chain.Chain) (ChainClient, error) {
+	client := c.clients[configured.EID]
 	if client == nil {
-		return nil, fmt.Errorf("chain %d client is required", eid)
+		return nil, fmt.Errorf("chain %s client is required", chainLabel(configured))
 	}
 	return client, nil
 }
 
-func (c *checker) add(path, format string, args ...any) {
-	c.issues = append(c.issues, Issue{Path: path, Message: fmt.Sprintf(format, args...)})
+func (c *checker) add(contextLabel, path, format string, args ...any) {
+	c.issues = append(c.issues, Issue{Path: path, ChainContext: contextLabel, Message: fmt.Sprintf(format, args...)})
+}
+
+func chainLabel(configured chain.Chain) string {
+	return fmt.Sprintf("%s (eid %d)", configured.Name, configured.EID)
+}
+
+func pathwayLabel(srcChain, dstChain chain.Chain) string {
+	return fmt.Sprintf("%s -> %s", chainLabel(srcChain), chainLabel(dstChain))
+}
+
+func wrapPathwayError(contextLabel string, err error) error {
+	return fmt.Errorf("check pathway %s: %w", contextLabel, err)
 }
 
 func (c *checker) markChainInvalid(eid uint32) {
@@ -647,25 +664,25 @@ func callFeeModel(ctx context.Context, caller ChainClient, to common.Address, ds
 	}, nil
 }
 
-func (c *checker) compareFeeModel(path string, actual feeModel, expected config.WorkerFeeModelConfig) {
+func (c *checker) compareFeeModel(contextLabel, path string, actual feeModel, expected config.WorkerFeeModelConfig) {
 	expectedFixedFee, err := bigutil.ParseDecimal("configured fixed_fee_wei", expected.FixedFeeWei)
 	if err != nil {
-		c.add(path+".fixed_fee_wei", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
+		c.add(contextLabel, path+".fixed_fee_wei", "configured fixed_fee_wei %q is not a decimal integer", expected.FixedFeeWei)
 		return
 	}
 	if actual.FixedFee == nil || actual.FixedFee.Cmp(expectedFixedFee) != 0 {
-		c.add(path+".fixed_fee_wei", "worker ABI baseFee %s does not match configured fixed_fee_wei %s", bigString(actual.FixedFee), expectedFixedFee)
+		c.add(contextLabel, path+".fixed_fee_wei", "worker ABI baseFee %s does not match configured fixed_fee_wei %s", bigString(actual.FixedFee), expectedFixedFee)
 	}
 	if actual.DstGasOverhead != expected.DstGasOverhead {
-		c.add(path+".dst_gas_overhead", "worker destination gas overhead %d does not match configured %d", actual.DstGasOverhead, expected.DstGasOverhead)
+		c.add(contextLabel, path+".dst_gas_overhead", "worker destination gas overhead %d does not match configured %d", actual.DstGasOverhead, expected.DstGasOverhead)
 	}
 	if expected.DataSizeOverheadBytes == nil {
-		c.add(path+".data_size_overhead_bytes", "configured data_size_overhead_bytes is required")
+		c.add(contextLabel, path+".data_size_overhead_bytes", "configured data_size_overhead_bytes is required")
 	} else if actual.DataSizeOverheadBytes != *expected.DataSizeOverheadBytes {
-		c.add(path+".data_size_overhead_bytes", "worker data size overhead %d does not match configured %d", actual.DataSizeOverheadBytes, *expected.DataSizeOverheadBytes)
+		c.add(contextLabel, path+".data_size_overhead_bytes", "worker data size overhead %d does not match configured %d", actual.DataSizeOverheadBytes, *expected.DataSizeOverheadBytes)
 	}
 	if actual.MarginBps != expected.MarginBps {
-		c.add(path+".margin_bps", "worker margin bps %d does not match configured %d", actual.MarginBps, expected.MarginBps)
+		c.add(contextLabel, path+".margin_bps", "worker margin bps %d does not match configured %d", actual.MarginBps, expected.MarginBps)
 	}
 }
 

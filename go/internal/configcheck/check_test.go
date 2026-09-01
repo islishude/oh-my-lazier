@@ -2,6 +2,7 @@ package configcheck
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/big"
 	"strings"
@@ -170,6 +171,9 @@ func TestCheckWithClientsReportsRPCChainIDMismatch(t *testing.T) {
 	if report.Issues[0].Path != "chains[40161].rpc_urls" {
 		t.Fatalf("issue path = %q", report.Issues[0].Path)
 	}
+	if report.Issues[0].ChainContext != "ethereum-sepolia (eid 40161)" {
+		t.Fatalf("issue chain context = %q", report.Issues[0].ChainContext)
+	}
 	if !strings.Contains(report.Issues[0].Message, "provider http://wrong returned 560048") {
 		t.Fatalf("issue message = %q", report.Issues[0].Message)
 	}
@@ -205,6 +209,9 @@ func TestCheckWithClientsReportsMissingDestinationVerifierAuthorization(t *testi
 	if !strings.Contains(report.Issues[0].Path, "destination_workers.open_dvn.verifiers") {
 		t.Fatalf("issue path = %q", report.Issues[0].Path)
 	}
+	if report.Issues[0].ChainContext != "ethereum-sepolia (eid 40161) -> hoodi (eid 40449)" {
+		t.Fatalf("issue chain context = %q", report.Issues[0].ChainContext)
+	}
 }
 
 func TestCheckWithClientsReportsMissingPricingSubmitterAuthorization(t *testing.T) {
@@ -231,6 +238,95 @@ func TestCheckWithClientsReportsMissingPricingSubmitterAuthorization(t *testing.
 	}
 }
 
+func TestCheckWithClientsAddsChainContextToDirectChainReadError(t *testing.T) {
+	registry, clients := testRegistryAndClients(t)
+	wantErr := errors.New("forced chain_id read failure")
+	genericClients := chainClients(clients)
+	genericClients[40161] = chainIDFailingClient{ChainClient: clients[40161], err: wantErr}
+
+	_, err := CheckWithClients(t.Context(), registry, genericClients)
+	if err == nil {
+		t.Fatal("CheckWithClients() error = nil, want chain_id read error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("CheckWithClients() error = %v, want wrapped %v", err, wantErr)
+	}
+	if !strings.Contains(err.Error(), "read chain ethereum-sepolia (eid 40161) chain_id") {
+		t.Fatalf("CheckWithClients() error = %v, want chain name and eid", err)
+	}
+}
+
+func TestCheckWithClientsAddsPathwayContextToCallError(t *testing.T) {
+	cfg := testConfig()
+	cfg.Pathways = cfg.Pathways[:1]
+	registry, clients := testRegistryAndClientsForConfig(t, cfg)
+	wantErr := errors.New("forced eth_call failure")
+	genericClients := chainClients(clients)
+	genericClients[40161] = callFailingClient{
+		ChainClient: clients[40161],
+		target:      cfg.Pathways[0].SrcOApp.Common(),
+		err:         wantErr,
+	}
+
+	_, err := CheckWithClients(t.Context(), registry, genericClients)
+	if err == nil {
+		t.Fatal("CheckWithClients() error = nil, want eth_call error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("CheckWithClients() error = %v, want wrapped %v", err, wantErr)
+	}
+	const contextLabel = "check pathway ethereum-sepolia (eid 40161) -> hoodi (eid 40449)"
+	if !strings.Contains(err.Error(), contextLabel) {
+		t.Fatalf("CheckWithClients() error = %v, want pathway context %q", err, contextLabel)
+	}
+}
+
+func TestCheckWithClientsAddsChainAndPathwayContextToCodeError(t *testing.T) {
+	cfg := testConfig()
+	cfg.Pathways = cfg.Pathways[:1]
+	registry, clients := testRegistryAndClientsForConfig(t, cfg)
+	wantErr := errors.New("forced code read failure")
+	genericClients := chainClients(clients)
+	genericClients[40449] = codeFailingClient{
+		ChainClient: clients[40449],
+		target:      cfg.Pathways[0].ReceiveLib.Common(),
+		err:         wantErr,
+	}
+
+	_, err := CheckWithClients(t.Context(), registry, genericClients)
+	if err == nil {
+		t.Fatal("CheckWithClients() error = nil, want code read error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("CheckWithClients() error = %v, want wrapped %v", err, wantErr)
+	}
+	for _, want := range []string{
+		"check pathway ethereum-sepolia (eid 40161) -> hoodi (eid 40449)",
+		"read chain hoodi (eid 40449) code",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("CheckWithClients() error = %v, want %q", err, want)
+		}
+	}
+}
+
+func TestReportJSONIncludesChainContext(t *testing.T) {
+	encoded, err := json.Marshal(Report{
+		Issues: []Issue{{
+			Path:         "chains[40161].chain_id",
+			ChainContext: "ethereum-sepolia (eid 40161)",
+			Message:      "wrong",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	const want = `{"ok":false,"issues":[{"path":"chains[40161].chain_id","chain_context":"ethereum-sepolia (eid 40161)","message":"wrong"}]}`
+	if string(encoded) != want {
+		t.Fatalf("json.Marshal() = %s, want %s", encoded, want)
+	}
+}
+
 func TestRenderTextReportsPassedCheck(t *testing.T) {
 	output := RenderText(Report{OK: true})
 	const want = "on-chain config check passed\n"
@@ -241,10 +337,11 @@ func TestRenderTextReportsPassedCheck(t *testing.T) {
 
 func TestRenderTextReportsSingleIssue(t *testing.T) {
 	output := RenderText(Report{
-		Issues: []Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+		Issues: []Issue{{Path: "chains[40161].chain_id", ChainContext: "ethereum-sepolia (eid 40161)", Message: "wrong"}},
 	})
 	const want = "on-chain config check failed (1 issue)\n" +
 		"[1] chains[40161].chain_id\n" +
+		"    chain context: ethereum-sepolia (eid 40161)\n" +
 		"    wrong\n"
 	if output != want {
 		t.Fatalf("RenderText() = %q, want %q", output, want)
@@ -255,19 +352,23 @@ func TestRenderTextReportsMultipleIssues(t *testing.T) {
 	output := RenderText(Report{
 		Issues: []Issue{
 			{
-				Path:    "chains[40161].rpc_urls",
-				Message: "rpc chain_id mismatch for chain ethereum-sepolia, expected 11155111: provider http://wrong returned 560048",
+				Path:         "chains[40161].rpc_urls",
+				ChainContext: "ethereum-sepolia (eid 40161)",
+				Message:      "rpc chain_id mismatch for chain ethereum-sepolia, expected 11155111: provider http://wrong returned 560048",
 			},
 			{
-				Path:    "pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888].source_workers.open_executor",
-				Message: "worker pathway max_lz_receive_gas 1 does not match configured 200000",
+				Path:         "pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888].source_workers.open_executor",
+				ChainContext: "ethereum-sepolia (eid 40161) -> hoodi (eid 40449)",
+				Message:      "worker pathway max_lz_receive_gas 1 does not match configured 200000",
 			},
 		},
 	})
 	const want = "on-chain config check failed (2 issues)\n" +
 		"[1] chains[40161].rpc_urls\n" +
+		"    chain context: ethereum-sepolia (eid 40161)\n" +
 		"    rpc chain_id mismatch for chain ethereum-sepolia, expected 11155111: provider http://wrong returned 560048\n" +
 		"[2] pathways[40161:40449:0x7777777777777777777777777777777777777777:0x8888888888888888888888888888888888888888].source_workers.open_executor\n" +
+		"    chain context: ethereum-sepolia (eid 40161) -> hoodi (eid 40449)\n" +
 		"    worker pathway max_lz_receive_gas 1 does not match configured 200000\n"
 	if output != want {
 		t.Fatalf("RenderText() = %q, want %q", output, want)
@@ -351,6 +452,41 @@ type validatingChainClient struct {
 
 func (v validatingChainClient) ValidateChainID(context.Context, *big.Int) error {
 	return v.err
+}
+
+type chainIDFailingClient struct {
+	ChainClient
+	err error
+}
+
+func (f chainIDFailingClient) ChainID(context.Context) (*big.Int, error) {
+	return nil, f.err
+}
+
+type callFailingClient struct {
+	ChainClient
+	target common.Address
+	err    error
+}
+
+func (f callFailingClient) CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error) {
+	if call.To != nil && *call.To == f.target {
+		return nil, f.err
+	}
+	return f.ChainClient.CallContract(ctx, call, blockNumber)
+}
+
+type codeFailingClient struct {
+	ChainClient
+	target common.Address
+	err    error
+}
+
+func (f codeFailingClient) CodeAt(ctx context.Context, address common.Address, blockNumber *big.Int) ([]byte, error) {
+	if address == f.target {
+		return nil, f.err
+	}
+	return f.ChainClient.CodeAt(ctx, address, blockNumber)
 }
 
 type fakeChainClient struct {

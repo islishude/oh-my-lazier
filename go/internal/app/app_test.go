@@ -466,7 +466,7 @@ func TestRunChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
 		calls++
 		return configcheck.Report{
-			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", ChainContext: "ethereum-sepolia (eid 40161)", Message: "wrong"}},
 		}, nil
 	}
 
@@ -486,6 +486,9 @@ func TestRunChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	if !strings.Contains(err.Error(), "on-chain config check failed") {
 		t.Fatalf("Run() error = %v, want on-chain config error", err)
 	}
+	if !strings.Contains(err.Error(), "chain context: ethereum-sepolia (eid 40161)") {
+		t.Fatalf("Run() error = %v, want chain context", err)
+	}
 }
 
 func TestRunSkipOnchainCheckBypassesOnChainConfigCheck(t *testing.T) {
@@ -495,7 +498,7 @@ func TestRunSkipOnchainCheckBypassesOnChainConfigCheck(t *testing.T) {
 	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
 		calls++
 		return configcheck.Report{
-			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", ChainContext: "ethereum-sepolia (eid 40161)", Message: "wrong"}},
 		}, nil
 	}
 
@@ -578,7 +581,7 @@ func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	defer func() { checkOnChainConfig = originalCheck }()
 	checkOnChainConfig = func(_ context.Context, _ *chain.Registry, _ ...configcheck.Option) (configcheck.Report, error) {
 		return configcheck.Report{
-			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", Message: "wrong"}},
+			Issues: []configcheck.Issue{{Path: "chains[40161].chain_id", ChainContext: "ethereum-sepolia (eid 40161)", Message: "wrong"}},
 		}, nil
 	}
 
@@ -595,6 +598,9 @@ func TestRunPriceOnceChecksOnChainConfigBeforeDatabaseSync(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "on-chain config check failed") {
 		t.Fatalf("RunPriceOnce() error = %v, want on-chain config error", err)
+	}
+	if !strings.Contains(err.Error(), "chain context: ethereum-sepolia (eid 40161)") {
+		t.Fatalf("RunPriceOnce() error = %v, want chain context", err)
 	}
 }
 
