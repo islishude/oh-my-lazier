@@ -3,6 +3,14 @@ package bigutil
 import (
 	"fmt"
 	"math/big"
+	"strings"
+)
+
+const (
+	nativeUnitDecimals = 18
+	gweiDecimals       = 9
+	weiPerNativeUnit   = 1_000_000_000_000_000_000
+	weiPerGwei         = 1_000_000_000
 )
 
 // Clone returns a copy of value, preserving nil.
@@ -19,6 +27,24 @@ func CloneRat(value *big.Rat) *big.Rat {
 		return nil
 	}
 	return new(big.Rat).Set(value)
+}
+
+// FormatWeiAsNativeUnit formats a non-nil wei amount as an exact decimal
+// native-asset amount without trailing fractional zeros.
+func FormatWeiAsNativeUnit(value *big.Int) string {
+	return formatWeiInUnit(value, weiPerNativeUnit, nativeUnitDecimals)
+}
+
+// FormatWeiAsGwei formats a non-nil wei amount as an exact decimal Gwei
+// amount without trailing fractional zeros.
+func FormatWeiAsGwei(value *big.Int) string {
+	return formatWeiInUnit(value, weiPerGwei, gweiDecimals)
+}
+
+func formatWeiInUnit(value *big.Int, weiPerUnit int64, decimals int) string {
+	formatted := new(big.Rat).SetFrac(value, big.NewInt(weiPerUnit)).FloatString(decimals)
+	formatted = strings.TrimRight(formatted, "0")
+	return strings.TrimSuffix(formatted, ".")
 }
 
 // CeilRat returns the least integer greater than or equal to value, preserving nil.

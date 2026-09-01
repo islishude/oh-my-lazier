@@ -121,6 +121,51 @@ func TestCloneRatReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestFormatWeiAsNativeUnit(t *testing.T) {
+	tests := []struct {
+		name     string
+		valueWei string
+		want     string
+	}{
+		{name: "zero", valueWei: "0", want: "0"},
+		{name: "whole unit", valueWei: "1000000000000000000", want: "1"},
+		{name: "fraction", valueWei: "123456789012345678", want: "0.123456789012345678"},
+		{name: "one wei", valueWei: "1", want: "0.000000000000000001"},
+		{name: "trailing fractional zeros", valueWei: "1230000000000000000", want: "1.23"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			valueWei, ok := new(big.Int).SetString(test.valueWei, 10)
+			if !ok {
+				t.Fatalf("invalid test value %q", test.valueWei)
+			}
+			if got := FormatWeiAsNativeUnit(valueWei); got != test.want {
+				t.Fatalf("FormatWeiAsNativeUnit(%s) = %q, want %q", test.valueWei, got, test.want)
+			}
+		})
+	}
+}
+
+func TestFormatWeiAsGwei(t *testing.T) {
+	tests := []struct {
+		name     string
+		valueWei int64
+		want     string
+	}{
+		{name: "zero", valueWei: 0, want: "0"},
+		{name: "whole gwei", valueWei: 2_000_000_000, want: "2"},
+		{name: "fractional gwei", valueWei: 2_300_000_000, want: "2.3"},
+		{name: "one wei", valueWei: 1, want: "0.000000001"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := FormatWeiAsGwei(big.NewInt(test.valueWei)); got != test.want {
+				t.Fatalf("FormatWeiAsGwei(%d) = %q, want %q", test.valueWei, got, test.want)
+			}
+		})
+	}
+}
+
 func TestCeilRat(t *testing.T) {
 	tests := []struct {
 		name  string

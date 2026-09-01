@@ -465,11 +465,11 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		}
 		switch outcome {
 		case db.ReceiptOutcomeConfirmed:
-			m.logger.Info("confirmed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price", facts.EffectiveGasPrice, "gas_cost_dst_wei", facts.GasCostDstWei)
+			m.logger.Info("confirmed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei))
 		case db.ReceiptOutcomeCanceled:
 			m.logger.Warn("canceled tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "kind", winning.Kind, "receipt_status", receipt.Status)
 		default:
-			m.logger.Warn("failed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price", facts.EffectiveGasPrice, "gas_cost_dst_wei", facts.GasCostDstWei, "failure_kind", db.TxFailureReceiptFailed)
+			m.logger.Warn("failed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei), "failure_kind", db.TxFailureReceiptFailed)
 		}
 		return task.Outbox.ID, nil
 	}

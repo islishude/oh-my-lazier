@@ -1,7 +1,9 @@
 package feeaccounting
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"math/big"
@@ -74,6 +76,39 @@ func TestProcessOnceLeavesReceiptPendingOnPricingError(t *testing.T) {
 	}
 	if len(store.priced) != 0 {
 		t.Fatalf("priced = %v, want none", store.priced)
+	}
+}
+
+func TestProcessOnceLogsReceiptCostsInNativeUnits(t *testing.T) {
+	store := &fakeStore{costs: []db.UnpricedWorkerReceiptCost{testCost(big.NewInt(1_230_000_000_000_000_000))}}
+	var logs bytes.Buffer
+	reconciler, err := New(store, map[uint32]pricing.ChainSources{
+		40161: {NativeAssetID: "eth"},
+		40449: {NativeAssetID: "eth"},
+	}, Settings{
+		PriceSelection: pricing.PriceSelectionPolicy{MaxDeviationBps: 500, SourceRequestTimeout: time.Second, Now: func() time.Time { return time.Unix(1_700_000_000, 0) }},
+	}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if _, err := reconciler.ProcessOnce(t.Context()); err != nil {
+		t.Fatalf("ProcessOnce() error = %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+		t.Fatalf("decode log record: %v", err)
+	}
+	if got := record["gas_cost_dst"]; got != "1.23" {
+		t.Fatalf("gas_cost_dst log field = %v, want 1.23", got)
+	}
+	if got := record["gas_cost_src"]; got != "1.23" {
+		t.Fatalf("gas_cost_src log field = %v, want 1.23", got)
+	}
+	for _, oldField := range []string{"gas_cost_dst_wei", "gas_cost_src_wei"} {
+		if _, ok := record[oldField]; ok {
+			t.Fatalf("%s log field is present", oldField)
+		}
 	}
 }
 

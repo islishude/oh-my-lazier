@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/pricing"
 )
@@ -100,7 +101,7 @@ func (r *Reconciler) ProcessOnce(ctx context.Context) (int, error) {
 		if err := r.store.MarkTxReceiptCostPriced(ctx, cost.ID, gasCostSrcWei); err != nil {
 			return processed, err
 		}
-		r.logger.Info("priced worker receipt gas cost", "tx_outbox_id", cost.ID, "role", cost.Role, "src_eid", cost.SrcEID, "dst_eid", cost.DstEID, "purpose", cost.Purpose, "guid", cost.GUID, "gas_cost_dst_wei", cost.GasCostDstWei, "gas_cost_src_wei", gasCostSrcWei)
+		r.logger.Info("priced worker receipt gas cost", "tx_outbox_id", cost.ID, "role", cost.Role, "src_eid", cost.SrcEID, "dst_eid", cost.DstEID, "purpose", cost.Purpose, "guid", cost.GUID, "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(cost.GasCostDstWei), "gas_cost_src", bigutil.FormatWeiAsNativeUnit(gasCostSrcWei))
 		processed++
 	}
 	return processed, nil

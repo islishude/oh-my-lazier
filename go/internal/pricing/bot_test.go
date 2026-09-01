@@ -278,10 +278,13 @@ func TestBotEnqueueOnGasSpikeQueuesOnlyAboveThreshold(t *testing.T) {
 		`msg="price bot enqueued gas-spike update"`,
 		`src_eid=40161`,
 		`dst_eid=40449`,
-		`previous_gas_wei=2000000000`,
-		`current_gas_wei=2300000000`,
+		`previous_gas_price_gwei=2`,
+		`current_gas_price_gwei=2.3`,
 		`tx_outbox_id=`,
 	)
+	if strings.Contains(logs.String(), "previous_gas_wei=") || strings.Contains(logs.String(), "current_gas_wei=") {
+		t.Fatalf("gas-spike log retains wei fields:\n%s", logs.String())
+	}
 }
 
 func TestBotEnqueueOnGasSpikeAdvancesBaselineWhenSuppressed(t *testing.T) {

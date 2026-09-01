@@ -1,14 +1,53 @@
 package txmgr
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"testing"
 	"time"
 
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
+
+func TestBalanceMonitorLogsLowBalanceInNativeUnit(t *testing.T) {
+	signer := newTestKeystoreSigner(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	monitor := NewBalanceMonitor([]Target{{
+		ChainEID:            40161,
+		ChainName:           "ethereum-sepolia",
+		Signer:              signer,
+		Client:              &fakeChainClient{balance: big.NewInt(123_456_789_012_345_678)},
+		MinNativeBalanceWei: big.NewInt(200_000_000_000_000_000),
+	}}, nil, logger)
+
+	if err := monitor.pollOnce(t.Context()); err != nil {
+		t.Fatalf("pollOnce() error = %v", err)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &record); err != nil {
+		t.Fatalf("decode log record: %v", err)
+	}
+	if got := record["balance"]; got != "0.123456789012345678" {
+		t.Fatalf("balance log field = %v, want 0.123456789012345678", got)
+	}
+	if got := record["chain_name"]; got != "ethereum-sepolia" {
+		t.Fatalf("chain_name log field = %v, want ethereum-sepolia", got)
+	}
+	if _, ok := record["balance_wei"]; ok {
+		t.Fatal("balance_wei log field is present")
+	}
+	if got := record["min_native_balance"]; got != "0.2" {
+		t.Fatalf("min_native_balance log field = %v, want 0.2", got)
+	}
+	if _, ok := record["min_native_balance_wei"]; ok {
+		t.Fatal("min_native_balance_wei log field is present")
+	}
+}
 
 // providerReportingClient adds the optional Providers() and CheckHead()
 // surfaces the balance monitor probes for, mirroring the production rpcquorum

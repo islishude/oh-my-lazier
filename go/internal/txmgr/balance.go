@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/islishude/oh-my-lazier/go/internal/bigutil"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
 
@@ -113,7 +114,7 @@ func (m *BalanceMonitor) pollOnce(ctx context.Context) error {
 			continue
 		}
 		if target.MinNativeBalanceWei != nil && balance.Cmp(target.MinNativeBalanceWei) < 0 {
-			m.logger.Warn("low signer native balance", "chain_eid", target.ChainEID, "signer", signerID, "balance_wei", balance.String(), "min_native_balance_wei", target.MinNativeBalanceWei.String())
+			m.logger.Warn("low signer native balance", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "balance", bigutil.FormatWeiAsNativeUnit(balance), "min_native_balance", bigutil.FormatWeiAsNativeUnit(target.MinNativeBalanceWei))
 		}
 	}
 	return nil

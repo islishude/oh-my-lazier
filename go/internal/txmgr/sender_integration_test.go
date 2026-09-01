@@ -2199,7 +2199,10 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 		`chain_eid=40161`,
 		`purpose=pricing_set_price_snapshot`,
 		`receipt_status=1`,
+		`effective_gas_price_gwei=2`,
+		`gas_cost_dst=0.000042`,
 	)
+	assertLogNotContains(t, logs.String(), `effective_gas_price=`, `gas_cost_dst_wei=`)
 }
 
 func TestProcessReceiptsDefersReceiptBelowConfirmationDepth(t *testing.T) {
@@ -2588,8 +2591,11 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 		`msg="failed tx receipt"`,
 		`purpose=executor_lz_receive`,
 		`receipt_status=0`,
+		`effective_gas_price_gwei=2`,
+		`gas_cost_dst=0.000042`,
 		`failure_kind=receipt_failed`,
 	)
+	assertLogNotContains(t, logs.String(), `effective_gas_price=`, `gas_cost_dst_wei=`)
 }
 
 func TestProcessReceiptsResolvesRevertedLzReceiveAfterThirdPartyDelivery(t *testing.T) {
@@ -3756,6 +3762,15 @@ func assertLogContains(t *testing.T, output string, wants ...string) {
 	for _, want := range wants {
 		if !strings.Contains(output, want) {
 			t.Fatalf("logs missing %q in:\n%s", want, output)
+		}
+	}
+}
+
+func assertLogNotContains(t *testing.T, output string, unwanted ...string) {
+	t.Helper()
+	for _, value := range unwanted {
+		if strings.Contains(output, value) {
+			t.Fatalf("logs unexpectedly contain %q in:\n%s", value, output)
 		}
 	}
 }

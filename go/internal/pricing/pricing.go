@@ -611,7 +611,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 				if selected.update != target {
 					continue
 				}
-				b.logger.Warn("price bot enqueued gas-spike update", "src_eid", selected.update.SrcEID, "dst_eid", selected.update.DstEID, "price_feed", selected.update.PriceFeed, "previous_gas_wei", selected.previous, "current_gas_wei", selected.current, "tx_outbox_id", txOutboxID)
+				b.logger.Warn("price bot enqueued gas-spike update", "src_eid", selected.update.SrcEID, "dst_eid", selected.update.DstEID, "price_feed", selected.update.PriceFeed, "previous_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.previous), "current_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.current), "tx_outbox_id", txOutboxID)
 				break
 			}
 		}
