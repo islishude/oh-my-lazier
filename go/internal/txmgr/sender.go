@@ -130,7 +130,7 @@ func (m *Manager) signQueuedTx(ctx context.Context, target Target, signerID stri
 	quote, gasLimit, err := m.preflight(ctx, target, queued, policy, false)
 	if err != nil {
 		if errors.Is(err, ErrTxDeferred) {
-			m.logger.Debug("deferred tx outbox row", "reason", "fee_cap", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose)
+			m.logger.Debug("deferred tx outbox row", "reason", "fee_cap", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose)
 			return 0, err
 		}
 		if isEstimateGasRevert(err) {
@@ -141,13 +141,13 @@ func (m *Manager) signQueuedTx(ctx context.Context, target Target, signerID stri
 				return 0, markErr
 			}
 			if !applied {
-				m.logger.Debug("skipped estimate revert for a row another instance advanced", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose)
+				m.logger.Debug("skipped estimate revert for a row another instance advanced", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose)
 				return 0, fmt.Errorf("%w: outbox tx %d advanced past the queued estimate", ErrTxDeferred, queued.ID)
 			}
-			m.logger.Warn("failed tx gas estimate", "reason", "estimate_gas_revert", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "failure_kind", db.TxFailureEstimateGasRevert, "error", err.Error())
+			m.logger.Warn("failed tx gas estimate", "reason", "estimate_gas_revert", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose, "failure_kind", db.TxFailureEstimateGasRevert, "error", err.Error())
 			return queued.ID, nil
 		}
-		m.logger.Debug("deferred tx outbox row", "reason", "preflight_error", "id", queued.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", queued.Purpose, "error", err.Error())
+		m.logger.Debug("deferred tx outbox row", "reason", "preflight_error", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose, "error", err.Error())
 		return 0, fmt.Errorf("%w: preflight for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
 	}
 	outboxTx, leaseToken, err := m.claimForSigning(ctx, target, signerID, queued.ID)
@@ -204,13 +204,13 @@ func (m *Manager) claimForSigning(ctx context.Context, target Target, signerID s
 		if _, nonceErr := m.store.BootstrapTxNonceCursor(ctx, target.ChainEID, signerID, rpcNonce); nonceErr != nil {
 			return db.OutboxTx{}, uuid.UUID{}, nonceErr
 		}
-		m.logger.Info("bootstrapped tx nonce cursor", "id", id, "chain_eid", target.ChainEID, "signer", signerID, "rpc_nonce", rpcNonce)
+		m.logger.Info("bootstrapped tx nonce cursor", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "rpc_nonce", rpcNonce)
 		outboxTx, err = m.store.ClaimOutboxForSigning(ctx, id, target.ChainEID, signerID, leaseToken, m.options.SigningLeaseTTL)
 	}
 	if err != nil {
 		return db.OutboxTx{}, uuid.UUID{}, err
 	}
-	m.logger.Info("claimed tx outbox row for signing", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce)
+	m.logger.Info("claimed tx outbox row for signing", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce)
 	return outboxTx, leaseToken, nil
 }
 
@@ -230,7 +230,7 @@ func (m *Manager) signAndPersistAttempt(ctx context.Context, target Target, sign
 	if _, err := m.store.InsertSignedAttempt(ctx, outboxTx.ID, leaseToken, attempt); err != nil {
 		return 0, err
 	}
-	m.logger.Info("signed tx attempt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", attempt.TxHash, "gas_limit", gasLimit, "dynamic_fee", quote.Dynamic)
+	m.logger.Info("signed tx attempt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", attempt.TxHash, "gas_limit", gasLimit, "dynamic_fee", quote.Dynamic)
 	return outboxTx.ID, nil
 }
 
@@ -245,7 +245,7 @@ func (m *Manager) chargePreSignFailure(ctx context.Context, target Target, signe
 	if err != nil {
 		return 0, err
 	}
-	m.logger.Warn("failed tx pre-sign stage", "stage", stage, "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "held", held, "error", cause.Error())
+	m.logger.Warn("failed tx pre-sign stage", "stage", stage, "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "held", held, "error", cause.Error())
 	return outboxTx.ID, nil
 }
 
@@ -268,7 +268,7 @@ func (m *Manager) ProcessBroadcast(ctx context.Context, target Target) (int64, e
 		if markErr := m.store.MarkAttemptSendResult(ctx, claim.AttemptID, broadcastToken, db.SendErrorDefinitive, "raw transaction decode failed"); markErr != nil && !errors.Is(markErr, db.ErrOutboxLeaseLost) {
 			return 0, markErr
 		}
-		m.logger.Warn("failed tx raw decode before broadcast", "id", claim.OutboxID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash)
+		m.logger.Warn("failed tx raw decode before broadcast", "id", claim.OutboxID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash)
 		return claim.OutboxID, nil
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, m.options.SendTimeout)
@@ -278,7 +278,7 @@ func (m *Manager) ProcessBroadcast(ctx context.Context, target Target) (int64, e
 	if err := m.store.MarkAttemptSendResult(ctx, claim.AttemptID, broadcastToken, class, detail); err != nil {
 		if errors.Is(err, db.ErrOutboxLeaseLost) {
 			// The broadcast lease expired mid-send; the replaying owner records the outcome.
-			m.logger.Warn("lost broadcast lease before recording send result", "id", claim.OutboxID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "send_class", class)
+			m.logger.Warn("lost broadcast lease before recording send result", "id", claim.OutboxID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "send_class", class)
 			return claim.OutboxID, nil
 		}
 		return 0, err
@@ -286,9 +286,9 @@ func (m *Manager) ProcessBroadcast(ctx context.Context, target Target) (int64, e
 	// Only the canonical class and detail are logged; raw node errors can embed
 	// RPC URLs or API keys.
 	if class == db.SendErrorAccepted {
-		m.logger.Info("broadcast tx attempt", "id", claim.OutboxID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "kind", claim.Kind)
+		m.logger.Info("broadcast tx attempt", "id", claim.OutboxID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "kind", claim.Kind)
 	} else {
-		m.logger.Warn("tx broadcast not accepted", "id", claim.OutboxID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "kind", claim.Kind, "send_class", class, "send_detail", detail)
+		m.logger.Warn("tx broadcast not accepted", "id", claim.OutboxID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash, "kind", claim.Kind, "send_class", class, "send_detail", detail)
 	}
 	return claim.OutboxID, nil
 }
@@ -334,7 +334,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 				// abort the pass: an aborted pass would also starve the
 				// broadcast and replacement stages that run after receipts in
 				// processOnce.
-				m.logger.Warn("skipped pinned receipt task after a lookup failure", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", winning.TxHash, "error", err.Error())
+				m.logger.Warn("skipped pinned receipt task after a lookup failure", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", winning.TxHash, "error", err.Error())
 				if err := m.store.TouchReceiptPoll(ctx, task.Outbox.ID); err != nil {
 					return 0, err
 				}
@@ -355,7 +355,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 					// canonical receipt is authoritative regardless of the
 					// older hash's answer. A pass-wide outage simply fails
 					// every hash and the task skips as a whole.
-					m.logger.Warn("skipped receipt candidate after a lookup failure", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", attempt.TxHash, "error", err.Error())
+					m.logger.Warn("skipped receipt candidate after a lookup failure", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", attempt.TxHash, "error", err.Error())
 					continue
 				}
 				if candidate.TxHash != attempt.TxHash {
@@ -367,14 +367,14 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 						// Skip only this candidate (same reasoning as the
 						// lookup failure above); a chain-wide quorum outage
 						// fails every candidate and skips the task anyway.
-						m.logger.Warn("skipped receipt candidate; canonical hash quorum unavailable", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", attempt.TxHash, "error", canonErr.Error())
+						m.logger.Warn("skipped receipt candidate; canonical hash quorum unavailable", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", attempt.TxHash, "error", canonErr.Error())
 						continue
 					}
 					if !onCanonical {
 						// A persistently served orphaned candidate must not
 						// shadow a later replacement or cancel attempt whose
 						// receipt IS canonical: keep scanning.
-						m.logger.Warn("skipped orphaned receipt candidate", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", attempt.TxHash)
+						m.logger.Warn("skipped orphaned receipt candidate", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", attempt.TxHash)
 						continue
 					}
 				}
@@ -409,7 +409,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 				if err := m.store.RefreshBroadcastReceiptObservedAt(ctx, task.Outbox.ID); err != nil {
 					return 0, err
 				}
-				m.logger.Debug("deferred tx receipt below confirmation depth", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "confirmations", target.Confirmations)
+				m.logger.Debug("deferred tx receipt below confirmation depth", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "confirmations", target.Confirmations)
 				continue
 			}
 			// Depth alone can pair a receipt from one branch with a head from
@@ -420,7 +420,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 			// failed quorum read the row simply stays under receipt polling.
 			onCanonical, hashErr := m.receiptOnCanonicalChain(ctx, target, receipt)
 			if hashErr != nil {
-				m.logger.Warn("deferred tx receipt; canonical hash quorum unavailable", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", winning.TxHash, "error", hashErr.Error())
+				m.logger.Warn("deferred tx receipt; canonical hash quorum unavailable", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", winning.TxHash, "error", hashErr.Error())
 				continue
 			}
 			if !onCanonical {
@@ -429,7 +429,7 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 				// orphan-aware replacement precheck would never get to run —
 				// the stale replacement path is exactly how this lane
 				// recovers from a provably orphaned receipt.
-				m.logger.Warn("deferred tx receipt; block is not on the majority canonical chain", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "tx_hash", winning.TxHash, "receipt_block_hash", receipt.BlockHash)
+				m.logger.Warn("deferred tx receipt; block is not on the majority canonical chain", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "tx_hash", winning.TxHash, "receipt_block_hash", receipt.BlockHash)
 				continue
 			}
 		}
@@ -465,11 +465,11 @@ func (m *Manager) ProcessReceipts(ctx context.Context, target Target, limit int)
 		}
 		switch outcome {
 		case db.ReceiptOutcomeConfirmed:
-			m.logger.Info("confirmed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei))
+			m.logger.Info("confirmed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei))
 		case db.ReceiptOutcomeCanceled:
-			m.logger.Warn("canceled tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "kind", winning.Kind, "receipt_status", receipt.Status)
+			m.logger.Warn("canceled tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "kind", winning.Kind, "receipt_status", receipt.Status)
 		default:
-			m.logger.Warn("failed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei), "failure_kind", db.TxFailureReceiptFailed)
+			m.logger.Warn("failed tx receipt", "id", task.Outbox.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", task.Outbox.Purpose, "tx_hash", winning.TxHash, "receipt_status", receipt.Status, "gas_used", facts.GasUsed, "effective_gas_price_gwei", bigutil.FormatWeiAsGwei(facts.EffectiveGasPrice), "gas_cost_dst", bigutil.FormatWeiAsNativeUnit(facts.GasCostDstWei), "failure_kind", db.TxFailureReceiptFailed)
 		}
 		return task.Outbox.ID, nil
 	}
@@ -515,20 +515,20 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 				if err := m.store.DeferReplacement(ctx, outboxTx.ID); err != nil {
 					return 0, err
 				}
-				m.logger.Warn("deferred stale replacement; canonical hash quorum unavailable", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "tx_hash", hash, "error", canonErr.Error())
+				m.logger.Warn("deferred stale replacement; canonical hash quorum unavailable", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "tx_hash", hash, "error", canonErr.Error())
 				return outboxTx.ID, nil
 			}
 			if !onCanonical {
 				// A provably orphaned receipt must not count as mined: it
 				// would suppress same-nonce recovery forever while nothing can
 				// build on the nonce.
-				m.logger.Warn("ignoring orphaned receipt in stale replacement precheck", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "tx_hash", hash)
+				m.logger.Warn("ignoring orphaned receipt in stale replacement precheck", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "tx_hash", hash)
 				continue
 			}
 			if err := m.store.DeferReplacement(ctx, outboxTx.ID); err != nil {
 				return 0, err
 			}
-			m.logger.Debug("skipped stale replacement for a mined tx awaiting confirmations", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", hash)
+			m.logger.Debug("skipped stale replacement for a mined tx awaiting confirmations", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", hash)
 			return outboxTx.ID, nil
 		}
 	}
@@ -551,7 +551,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 		if errors.Is(err, ErrTxDeferred) {
 			return 0, ErrTxDeferred
 		}
-		m.logger.Warn("failed stale broadcast replacement preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
+		m.logger.Warn("failed stale broadcast replacement preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
 		return outboxTx.ID, nil
 	}
 	leaseToken := uuid.New()
@@ -582,7 +582,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 	if _, err := m.store.InsertReplacementAttempt(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, attempt); err != nil {
 		return 0, err
 	}
-	m.logger.Info("signed stale tx replacement attempt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "kind", attempt.Kind, "tx_hash", attempt.TxHash, "previous_tx_hash", outboxTx.TxHash)
+	m.logger.Info("signed stale tx replacement attempt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "kind", attempt.Kind, "tx_hash", attempt.TxHash, "previous_tx_hash", outboxTx.TxHash)
 	return outboxTx.ID, nil
 }
 
@@ -610,7 +610,7 @@ func (m *Manager) ProcessNonceReconciliation(ctx context.Context, target Target)
 			return
 		}
 		if finishErr := m.store.FinishNonceReconciliation(ctx, target.ChainEID, signerID, token, m.options.NonceReconcileInterval); finishErr != nil {
-			m.logger.Warn("failed to release nonce reconciliation lease", "chain_eid", target.ChainEID, "signer", signerID, "error", finishErr.Error())
+			m.logger.Warn("failed to release nonce reconciliation lease", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", finishErr.Error())
 		}
 	}()
 
@@ -802,7 +802,7 @@ func (m *Manager) ProcessNonceReconciliation(ctx context.Context, target Target)
 	decisions := make([]db.NonceReconcileDecision, 0, len(holds))
 	for i, hold := range holds {
 		if probes[i].err != nil {
-			m.logger.Warn("skipping nonce reconcile hold after a receipt lookup failure", "id", hold.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", hold.Nonce, "error", probes[i].err.Error())
+			m.logger.Warn("skipping nonce reconcile hold after a receipt lookup failure", "id", hold.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", hold.Nonce, "error", probes[i].err.Error())
 			continue
 		}
 		anyReceipt := probes[i].anyReceipt
@@ -810,20 +810,20 @@ func (m *Manager) ProcessNonceReconciliation(ctx context.Context, target Target)
 		case anyReceipt:
 			// One of our own transactions consumed the nonce; the receipts-first
 			// path confirms and terminalizes it once it reaches depth.
-			m.logger.Debug("held nonce has an own receipt pending confirmation", "id", hold.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", hold.Nonce)
+			m.logger.Debug("held nonce has an own receipt pending confirmation", "id", hold.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", hold.Nonce)
 		case confirmedNonce > hold.Nonce:
 			decisions = append(decisions, db.NonceReconcileDecision{ID: hold.ID, Action: db.NonceReconcileMarkExternal})
-			m.logger.Warn("nonce consumed externally; holding lane for operator resolution", "id", hold.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", hold.Nonce, "confirmed_nonce", confirmedNonce, "confirmed_block", confirmedBlockNumber)
+			m.logger.Warn("nonce consumed externally; holding lane for operator resolution", "id", hold.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", hold.Nonce, "confirmed_nonce", confirmedNonce, "confirmed_block", confirmedBlockNumber)
 		case hold.CancelRequested && hold.ActiveKind != db.TxAttemptCancel:
 			// The nonce is still unspent and the first-cancel flow owns the row (it
 			// accepts held rows and will sign the cancel attempt).
-			m.logger.Debug("held nonce with cancel intent left to the cancel flow", "id", hold.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", hold.Nonce)
+			m.logger.Debug("held nonce with cancel intent left to the cancel flow", "id", hold.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", hold.Nonce)
 		default:
 			// Still unspent: release back to broadcast. For a lane whose active
 			// attempt is already a cancel this resumes the same cancel raw, which
 			// no other flow owns.
 			decisions = append(decisions, db.NonceReconcileDecision{ID: hold.ID, Action: db.NonceReconcileRelease})
-			m.logger.Info("releasing nonce reconcile hold; nonce still unspent at the confirmed block", "id", hold.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", hold.Nonce, "confirmed_nonce", confirmedNonce)
+			m.logger.Info("releasing nonce reconcile hold; nonce still unspent at the confirmed block", "id", hold.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", hold.Nonce, "confirmed_nonce", confirmedNonce)
 		}
 	}
 
@@ -831,14 +831,14 @@ func (m *Manager) ProcessNonceReconciliation(ctx context.Context, target Target)
 	if err != nil {
 		if errors.Is(err, db.ErrOutboxLeaseLost) {
 			// A newer owner took the lane; our snapshot is stale and unpublished.
-			m.logger.Debug("nonce reconciliation lease lost before applying decisions", "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Debug("nonce reconciliation lease lost before applying decisions", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			return 0, db.ErrNoNonceReconcileWork
 		}
 		return 0, err
 	}
 	applied = true
 	if result.CursorForwarded {
-		m.logger.Warn("nonce cursor fast-forwarded to the confirmed chain nonce", "chain_eid", target.ChainEID, "signer", signerID, "previous_cursor", result.PreviousCursor, "confirmed_nonce", confirmedNonce)
+		m.logger.Warn("nonce cursor fast-forwarded to the confirmed chain nonce", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "previous_cursor", result.PreviousCursor, "confirmed_nonce", confirmedNonce)
 	}
 	if result.Changed > 0 {
 		return holds[0].ID, nil
@@ -876,18 +876,18 @@ func (m *Manager) ProcessCancelRequest(ctx context.Context, target Target) (int6
 				if err := m.store.DeferCancel(ctx, outboxTx.ID); err != nil {
 					return 0, err
 				}
-				m.logger.Warn("deferred cancel; canonical hash quorum unavailable", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "tx_hash", hash, "error", canonErr.Error())
+				m.logger.Warn("deferred cancel; canonical hash quorum unavailable", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "tx_hash", hash, "error", canonErr.Error())
 				return outboxTx.ID, nil
 			}
 			if !onCanonical {
 				// An orphaned receipt must not delay the operator's cancel.
-				m.logger.Warn("ignoring orphaned receipt in cancel precheck", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "tx_hash", hash)
+				m.logger.Warn("ignoring orphaned receipt in cancel precheck", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "tx_hash", hash)
 				continue
 			}
 			if err := m.store.DeferCancel(ctx, outboxTx.ID); err != nil {
 				return 0, err
 			}
-			m.logger.Debug("deferred cancel for a mined attempt awaiting confirmations", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "nonce", outboxTx.Nonce, "tx_hash", hash)
+			m.logger.Debug("deferred cancel for a mined attempt awaiting confirmations", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "nonce", outboxTx.Nonce, "tx_hash", hash)
 			return outboxTx.ID, nil
 		}
 	}
@@ -904,7 +904,7 @@ func (m *Manager) ProcessCancelRequest(ctx context.Context, target Target) (int6
 		if errors.Is(err, ErrTxDeferred) {
 			return 0, ErrTxDeferred
 		}
-		m.logger.Warn("failed cancel preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
+		m.logger.Warn("failed cancel preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
 		return outboxTx.ID, nil
 	}
 	leaseToken := uuid.New()
@@ -925,7 +925,7 @@ func (m *Manager) ProcessCancelRequest(ctx context.Context, target Target) (int6
 	if _, err := m.store.InsertCancelAttempt(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, attempt); err != nil {
 		return 0, err
 	}
-	m.logger.Warn("signed cancel attempt for operator request", "id", outboxTx.ID, "chain_eid", target.ChainEID, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", attempt.TxHash)
+	m.logger.Warn("signed cancel attempt for operator request", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "tx_hash", attempt.TxHash)
 	return outboxTx.ID, nil
 }
 

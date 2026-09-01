@@ -15,7 +15,7 @@ import (
 
 func TestRunProcessesTargetsUntilQueueIsEmpty(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Hour
 	calls := 0
 	processOnce := func(context.Context) (bool, error) {
@@ -38,7 +38,7 @@ func TestRunProcessesTargetsUntilQueueIsEmpty(t *testing.T) {
 
 func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	manager.pollInterval = time.Millisecond
 	calls := 0
 	processOnce := func(context.Context) (bool, error) {
@@ -58,7 +58,7 @@ func TestRunIgnoresNoQueuedTxUntilCanceled(t *testing.T) {
 
 func TestRunReturnsProcessingError(t *testing.T) {
 	wantErr := errors.New("broadcast failed")
-	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
+	manager := NewWithTargets(nil, []Target{{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: fakeSigner{}, Client: &fakeChainClient{}}}, discardLogger())
 	processOnce := func(context.Context) (bool, error) {
 		return false, wantErr
 	}

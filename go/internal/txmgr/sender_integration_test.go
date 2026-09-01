@@ -167,6 +167,7 @@ func TestProcessNextSignsAndBroadcastsDynamicFeeTx(t *testing.T) {
 	}
 	assertLogContains(t, logs.String(),
 		`msg="bootstrapped tx nonce cursor"`,
+		`chain_name=ethereum-sepolia`,
 		`msg="claimed tx outbox row for signing"`,
 		`nonce=10`,
 		`msg="signed tx attempt"`,
@@ -1736,7 +1737,7 @@ func TestCancelNonceEndToEnd(t *testing.T) {
 	// The cancel mines: the row terminates as canceled, the job parks for review,
 	// and the lane unlocks for the next nonce.
 	client.receipts = map[common.Hash]*types.Receipt{cancelTx.Hash(): testReceipt(cancelTx.Hash(), types.ReceiptStatusSuccessful)}
-	if _, err := manager.ProcessReceipts(t.Context(), Target{ChainEID: packet.DstEID, ChainID: big.NewInt(560048), Signer: signer, Client: client}, 1); err != nil {
+	if _, err := manager.ProcessReceipts(t.Context(), Target{ChainEID: packet.DstEID, ChainName: "hoodi", ChainID: big.NewInt(560048), Signer: signer, Client: client}, 1); err != nil {
 		t.Fatalf("ProcessReceipts(cancel) error = %v", err)
 	}
 	canceled, err := store.GetOutboxTx(t.Context(), id)
@@ -1811,7 +1812,7 @@ func TestFailedTaskReceiptUnderCancelIntentParksWorkflow(t *testing.T) {
 	// LZ_RECEIVE_FAILED auto-retry state the operator just abandoned.
 	taskHash := client.sent[0].Hash()
 	client.receipts[taskHash] = testReceipt(taskHash, types.ReceiptStatusFailed)
-	if _, err := manager.ProcessReceipts(t.Context(), Target{ChainEID: packet.DstEID, ChainID: big.NewInt(560048), Signer: signer, Client: client}, 1); err != nil {
+	if _, err := manager.ProcessReceipts(t.Context(), Target{ChainEID: packet.DstEID, ChainName: "hoodi", ChainID: big.NewInt(560048), Signer: signer, Client: client}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
 	parked, err := store.GetPacket(t.Context(), packet.GUID)
@@ -2155,10 +2156,11 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	processedID, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: 40161,
-		ChainID:  big.NewInt(11155111),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  40161,
+		ChainName: "ethereum-sepolia",
+		ChainID:   big.NewInt(11155111),
+		Signer:    signer,
+		Client:    client,
 	}, 1)
 	if err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
@@ -2197,6 +2199,7 @@ func TestProcessReceiptsMarksBroadcastTxConfirmed(t *testing.T) {
 	assertLogContains(t, logs.String(),
 		`msg="confirmed tx receipt"`,
 		`chain_eid=40161`,
+		`chain_name=ethereum-sepolia`,
 		`purpose=pricing_set_price_snapshot`,
 		`receipt_status=1`,
 		`effective_gas_price_gwei=2`,
@@ -2244,7 +2247,7 @@ func TestProcessReceiptsDefersReceiptBelowConfirmationDepth(t *testing.T) {
 	}
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
-	target := Target{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
+	target := Target{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
 	if _, err := manager.ProcessReceipts(t.Context(), target, 1); !errors.Is(err, ErrNoReceiptUpdate) {
 		t.Fatalf("ProcessReceipts() error = %v, want ErrNoReceiptUpdate (receipt below confirmation depth)", err)
 	}
@@ -2300,7 +2303,7 @@ func TestProcessReceiptsConfirmsReceiptAtConfirmationDepth(t *testing.T) {
 	}
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
-	target := Target{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
+	target := Target{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
 	processedID, err := manager.ProcessReceipts(t.Context(), target, 1)
 	if err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
@@ -2362,7 +2365,7 @@ func TestProcessReceiptsDefersReceiptOffTheCanonicalChain(t *testing.T) {
 		receipt.BlockNumber.Uint64(): common.HexToHash("0x0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"),
 	}
 
-	target := Target{ChainEID: 40161, ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
+	target := Target{ChainEID: 40161, ChainName: "ethereum-sepolia", ChainID: big.NewInt(11155111), Signer: signer, Client: client, Confirmations: 12}
 	if _, err := manager.ProcessReceipts(t.Context(), target, 1); !errors.Is(err, ErrNoReceiptUpdate) {
 		t.Fatalf("ProcessReceipts() error = %v, want ErrNoReceiptUpdate (deferred)", err)
 	}
@@ -2423,10 +2426,11 @@ func TestProcessReceiptsRejectsMismatchedReceiptTxHash(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(wrongHash, types.ReceiptStatusSuccessful)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: 40161,
-		ChainID:  big.NewInt(11155111),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  40161,
+		ChainName: "ethereum-sepolia",
+		ChainID:   big.NewInt(11155111),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err == nil || !strings.Contains(err.Error(), "receipt tx hash") {
 		t.Fatalf("ProcessReceipts() error = %v, want receipt hash mismatch", err)
 	}
@@ -2497,10 +2501,11 @@ func TestProcessReceiptsMarksExecutorLzReceiveDelivered(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -2566,10 +2571,11 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -2589,6 +2595,7 @@ func TestProcessReceiptsMarksExecutorLzReceiveFailed(t *testing.T) {
 	}
 	assertLogContains(t, logs.String(),
 		`msg="failed tx receipt"`,
+		`chain_name=hoodi`,
 		`purpose=executor_lz_receive`,
 		`receipt_status=0`,
 		`effective_gas_price_gwei=2`,
@@ -2655,10 +2662,11 @@ func TestProcessReceiptsResolvesRevertedLzReceiveAfterThirdPartyDelivery(t *test
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -2744,10 +2752,11 @@ func TestProcessReceiptsReplayFinalizesAfterManualReview(t *testing.T) {
 	// The replay must treat MANUAL_REVIEW as a legal successor and still reach
 	// the receipt finalizer instead of wedging the receipt stage forever.
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts(replay) error = %v", err)
 	}
@@ -2820,10 +2829,11 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	}
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -2873,10 +2883,11 @@ func TestProcessFailedRetryClonesLzReceiveReceiptFailureAndRestoresWorkflow(t *t
 	}
 	client.receipts[retryTx.TxHash] = testReceipt(retryTx.TxHash, types.ReceiptStatusSuccessful)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts(retry) error = %v", err)
 	}
@@ -2942,10 +2953,11 @@ func TestProcessFailedRetryIgnoresStaleLzReceiveFailureAfterWorkflowAdvanced(t *
 	}
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -3043,10 +3055,11 @@ func TestProcessReceiptsMarksDVNVerifyTxVerified(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -3104,10 +3117,11 @@ func TestProcessReceiptsFailedDVNVerifyOnlyFailsOutbox(t *testing.T) {
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: packet.DstEID,
-		ChainID:  big.NewInt(560048),
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  packet.DstEID,
+		ChainName: "hoodi",
+		ChainID:   big.NewInt(560048),
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -3243,10 +3257,11 @@ func processQueuedSuccess(t *testing.T, manager *Manager, store *db.Store, clien
 	}
 	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusSuccessful)
 	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID: chainEID,
-		ChainID:  chainID,
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  chainEID,
+		ChainName: testChainName(chainEID),
+		ChainID:   chainID,
+		Signer:    signer,
+		Client:    client,
 	}, 1); err != nil {
 		t.Fatalf("ProcessReceipts() error = %v", err)
 	}
@@ -3806,16 +3821,28 @@ func testChains() []config.ChainConfig {
 
 func testTarget(chainEID uint32, chainID *big.Int, signer signeriface.Signer, client *fakeChainClient, policy FeePolicy) Target {
 	return Target{
-		ChainEID: chainEID,
-		ChainID:  chainID,
-		Signer:   signer,
-		Client:   client,
+		ChainEID:  chainEID,
+		ChainName: testChainName(chainEID),
+		ChainID:   chainID,
+		Signer:    signer,
+		Client:    client,
 		FeePolicies: map[string]FeePolicy{
 			db.TxPurposePricingSetPriceSnapshot: policy,
 			executorCommitVerificationPurpose:   policy,
 			executorLzReceivePurpose:            policy,
 			dvnVerifyPurpose:                    policy,
 		},
+	}
+}
+
+func testChainName(chainEID uint32) string {
+	switch chainEID {
+	case 40161:
+		return "ethereum-sepolia"
+	case 40449:
+		return "hoodi"
+	default:
+		return "unknown"
 	}
 }
 

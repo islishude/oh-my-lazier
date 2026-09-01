@@ -91,7 +91,7 @@ func (m *BalanceMonitor) pollOnce(ctx context.Context) error {
 						CheckHead(ctx context.Context) (rpcquorum.HeadResult, error)
 					}); ok {
 						if _, headErr := prober.CheckHead(ctx); headErr != nil {
-							m.logger.Warn("balance poll head quorum probe failed", "chain_eid", target.ChainEID, "error", headErr.Error())
+							m.logger.Warn("balance poll head quorum probe failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "error", headErr.Error())
 						}
 					}
 					recorder.RecordRPCProviders(target.ChainEID, target.ChainName, statusSource.Providers())
@@ -110,7 +110,7 @@ func (m *BalanceMonitor) pollOnce(ctx context.Context) error {
 			m.recorder.RecordSignerBalance(target.ChainEID, signerID, balance, target.MinNativeBalanceWei, duration, err)
 		}
 		if err != nil {
-			m.logger.Warn("failed signer balance poll", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("failed signer balance poll", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		}
 		if target.MinNativeBalanceWei != nil && balance.Cmp(target.MinNativeBalanceWei) < 0 {

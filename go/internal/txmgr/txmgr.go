@@ -56,8 +56,8 @@ type Options struct {
 // Target binds one configured chain RPC client to the signer that should consume its tx_outbox rows.
 type Target struct {
 	ChainEID uint32
-	// ChainName labels provider status metrics reported through the balance
-	// monitor; it plays no role in transaction processing.
+	// ChainName identifies the configured chain in transaction-manager logs and
+	// provider status metrics reported through the balance monitor.
 	ChainName string
 	ChainID   *big.Int
 	Signer    signer.Signer
@@ -177,11 +177,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("tx receipt processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("tx receipt processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessNonceReconciliation(ctx, target)
@@ -191,11 +191,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("nonce reconciliation failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("nonce reconciliation failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("processed nonce reconciliation", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("processed nonce reconciliation", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessCancelRequest(ctx, target)
@@ -208,11 +208,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("cancel request processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("cancel request processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("processed cancel request", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("processed cancel request", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessBroadcast(ctx, target)
@@ -221,17 +221,17 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 		} else if errors.Is(err, db.ErrBroadcastLaneHeld) {
 			// Parking an exhausted lane is durable progress worth a hot rerun.
 			processed = true
-			m.logger.Info("held exhausted broadcast lane", "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("held exhausted broadcast lane", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		} else if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("tx broadcast processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("tx broadcast processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("processed tx broadcast", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("processed tx broadcast", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessStaleBroadcastReplacement(ctx, target)
@@ -247,11 +247,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("stale tx replacement processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("stale tx replacement processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessFailedRetry(ctx, target)
@@ -261,11 +261,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("failed tx retry processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("failed tx retry processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		} else {
 			processed = true
-			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 			continue
 		}
 		id, err = m.ProcessNext(ctx, target)
@@ -280,11 +280,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return processed, ctxErr
 			}
-			m.logger.Warn("queued tx processing failed", "chain_eid", target.ChainEID, "signer", signerID, "error", err.Error())
+			m.logger.Warn("queued tx processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
 			continue
 		}
 		processed = true
-		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "signer", signerID)
+		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
 	}
 	return processed, nil
 }
