@@ -3458,6 +3458,15 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 	`, srcEID, dstEID, packet.Sender.Bytes(), packet.Receiver.Bytes(), packet.SendLib.Bytes()); err != nil {
 		t.Fatalf("seed pathway: %v", err)
 	}
+	secondSrcOApp := common.HexToAddress("0x1010101010101010101010101010101010101010")
+	secondDstOApp := common.HexToAddress("0x2020202020202020202020202020202020202020")
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO pathways (src_eid, dst_eid, src_oapp, dst_oapp, send_lib, receive_lib, open_executor, open_dvn, price_feed, destination_open_dvn, max_message_size, enabled, paused)
+		VALUES ($1, $2, $3, $4, $5, $5, $5, $5, $5, $5, 1024, true, true)
+		ON CONFLICT (src_eid, dst_eid, src_oapp, dst_oapp) DO UPDATE SET enabled = true, paused = true
+	`, srcEID, dstEID, secondSrcOApp.Bytes(), secondDstOApp.Bytes(), packet.SendLib.Bytes()); err != nil {
+		t.Fatalf("seed second pathway on same chain direction: %v", err)
+	}
 	if err := store.UpsertPacket(ctx, packet); err != nil {
 		t.Fatalf("UpsertPacket() error = %v", err)
 	}
@@ -3508,6 +3517,21 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 	baseline, err := store.Stats(ctx)
 	if err != nil {
 		t.Fatalf("Stats() error = %v", err)
+	}
+	pathwayStates := make(map[[2]common.Address]bool)
+	for _, stat := range baseline.Pathways {
+		if stat.SrcEID == srcEID && stat.DstEID == dstEID {
+			pathwayStates[[2]common.Address{stat.SrcOApp, stat.DstOApp}] = stat.Enabled && stat.Paused
+		}
+	}
+	if len(pathwayStates) != 2 {
+		t.Fatalf("pathway stats for %d -> %d = %#v, want two OApp identities", srcEID, dstEID, pathwayStates)
+	}
+	if pathwayStates[[2]common.Address{packet.Sender, packet.Receiver}] {
+		t.Fatal("packet pathway stats reported paused, want active")
+	}
+	if !pathwayStates[[2]common.Address{secondSrcOApp, secondDstOApp}] {
+		t.Fatal("second OApp pathway stats did not preserve its paused state")
 	}
 	if !packetVisible(baseline) || !outboxVisible(baseline, dstEID) || !outboxVisible(baseline, srcEID) {
 		t.Fatalf("baseline stats missing seeded rows: packets=%v outbox_dst=%v outbox_src=%v", packetVisible(baseline), outboxVisible(baseline, dstEID), outboxVisible(baseline, srcEID))

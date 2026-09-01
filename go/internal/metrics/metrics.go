@@ -468,10 +468,10 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.Chains {
 		fmt.Fprintf(output, "laz_chain_paused{eid=%q,name=%s} %d\n", strconv.FormatUint(uint64(stat.EID), 10), label(stat.Name), boolGauge(stat.Enabled && stat.Paused))
 	}
-	output.WriteString("# HELP laz_pathway_paused Whether an enabled pathway is paused by safety logic.\n")
+	output.WriteString("# HELP laz_pathway_paused Whether an enabled pathway, identified by chain EIDs and OApps, is paused by safety logic.\n")
 	output.WriteString("# TYPE laz_pathway_paused gauge\n")
 	for _, stat := range snapshot.Pathways {
-		fmt.Fprintf(output, "laz_pathway_paused{src_eid=%q,dst_eid=%q} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), boolGauge(stat.Enabled && stat.Paused))
+		fmt.Fprintf(output, "laz_pathway_paused{src_eid=%q,dst_eid=%q,src_oapp=%s,dst_oapp=%s} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(stat.SrcOApp.Hex()), label(stat.DstOApp.Hex()), boolGauge(stat.Enabled && stat.Paused))
 	}
 	output.WriteString("# HELP laz_packets_total Packets by source, destination, and status.\n")
 	output.WriteString("# TYPE laz_packets_total gauge\n")

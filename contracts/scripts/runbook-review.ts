@@ -60,6 +60,7 @@ const requiredDocs: RequiredDoc[] = [
       "LazPricingPendingStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
+      "`src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp`",
       "laz_indexer_poll_success",
       "laz_indexer_poll_interval_seconds",
       "laz_indexer_start_timestamp_seconds",

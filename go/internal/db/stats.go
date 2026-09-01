@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // StatsSnapshot is a point-in-time summary used by the HTTP metrics endpoint.
@@ -64,6 +66,8 @@ type ChainStat struct {
 type PathwayStat struct {
 	SrcEID  uint32
 	DstEID  uint32
+	SrcOApp common.Address
+	DstOApp common.Address
 	Enabled bool
 	Paused  bool
 }
@@ -234,7 +238,7 @@ func (s *Store) chainStats(ctx context.Context) ([]ChainStat, error) {
 
 func (s *Store) pathwayStats(ctx context.Context) ([]PathwayStat, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT src_eid, dst_eid, enabled, paused
+		SELECT src_eid, dst_eid, src_oapp, dst_oapp, enabled, paused
 		FROM pathways
 		ORDER BY src_eid, dst_eid, id
 	`)
@@ -246,9 +250,18 @@ func (s *Store) pathwayStats(ctx context.Context) ([]PathwayStat, error) {
 	var stats []PathwayStat
 	for rows.Next() {
 		var stat PathwayStat
-		if err := rows.Scan(&stat.SrcEID, &stat.DstEID, &stat.Enabled, &stat.Paused); err != nil {
+		var srcOApp, dstOApp []byte
+		if err := rows.Scan(&stat.SrcEID, &stat.DstEID, &srcOApp, &dstOApp, &stat.Enabled, &stat.Paused); err != nil {
 			return nil, err
 		}
+		if len(srcOApp) != common.AddressLength {
+			return nil, fmt.Errorf("pathway %d -> %d source OApp has invalid address length %d", stat.SrcEID, stat.DstEID, len(srcOApp))
+		}
+		if len(dstOApp) != common.AddressLength {
+			return nil, fmt.Errorf("pathway %d -> %d destination OApp has invalid address length %d", stat.SrcEID, stat.DstEID, len(dstOApp))
+		}
+		stat.SrcOApp = common.BytesToAddress(srcOApp)
+		stat.DstOApp = common.BytesToAddress(dstOApp)
 		stats = append(stats, stat)
 	}
 	return stats, rows.Err()

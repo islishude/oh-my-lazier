@@ -22,7 +22,7 @@ Required alerts:
 
 - `LazWorkerReadinessFailed`: `/readyz` returns non-200 for more than two scrape intervals; page. Readiness also fails while any active-chain signer lane is parked `held(manual)`, `held(nonce_consumed_externally)`, `held(broadcast_exhausted)`, or reprice-held past the automatic replacement cap (reported as the synthetic `reprice_exhausted` reason) — those holds block every higher nonce for the signer until the operator resolves them with `txretry`; the self-healing `reprice_required` (below the cap) and `nonce_reconcile_required` holds and fresh pending cancels do not fail readiness — except a `reprice_required` hold or a pending cancel older than fifteen minutes, which means the mandatory bump cannot land (typically the configured fee cap blocks it, so the automatic path can neither converge nor escalate) and also fails readiness. The cancel age counts from the immutable `cancel_requested_at`; deferrals only move the separate pacing column, so a fee-cap-stuck cancel cannot hide behind a perpetually young age.
 - `LazChainPaused`: `laz_chain_paused == 1` for any chain; page immediately. This means chain-wide quorum safety logic paused the worker path. A chain removed from configuration keeps its pause bit in the database as a safety state for a possible re-enable, but its gauge reports 0 — readiness and the durable loops ignore disabled records, so their retained pause must not page.
-- `LazPathwayPaused`: `laz_pathway_paused == 1` for any pathway; page immediately. This means packet-level receipt/log conflict safety logic paused a pathway. Disabled pathways likewise report 0.
+- `LazPathwayPaused`: `laz_pathway_paused == 1` for any pathway; page immediately. This means packet-level receipt/log conflict safety logic paused a pathway. The `src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp` labels preserve the full pathway identity, including multiple OApp pairs on the same chain direction. Disabled pathways likewise report 0.
 - Disabled scopes are invisible to packet, job, and outbox statistics: when a chain or pathway is removed from configuration, its retained packets, executor/DVN jobs, and outbox rows (a pricing row follows its send chain) drop out of the `laz_packets_total`, `laz_executor_jobs_total`, `laz_dvn_jobs_total`, and `laz_tx_outbox_total` gauges and out of `/readyz`, so historical `MANUAL_REVIEW`, failed, or exhausted rows of a removed scope neither page nor hold readiness at 503. Paused scopes stay fully visible — a pause is temporary safety, not removal. Held signer-lane gauges are the exception: a held row physically blocks the shared signer lane on its chain, so it stays visible while its chain is enabled.
 - `LazDVNQuorumConflict`: `laz_dvn_jobs_total{status="QUORUM_CONFLICT"} > 0`; page immediately and inspect source RPC providers before unpausing.
 - `LazDVNReorgDetected`: `laz_dvn_jobs_total{status="REORG_DETECTED"} > 0`; page if it persists past the next confirmation loop; inspect source RPC providers and source transaction receipts.
@@ -60,7 +60,7 @@ The readiness gate fails if an enabled chain is paused, an enabled pathway betwe
 Migration dashboard panels:
 
 - Chain enabled/paused status by `eid` and `name`.
-- Pathway paused status by `src_eid` and `dst_eid`.
+- Pathway paused status by `src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp`.
 - Packet count by pathway and status.
 - Executor job count by status.
 - DVN job count by status.
