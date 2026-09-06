@@ -223,3 +223,12 @@ checks do not establish notification delivery. Validate the rules locally with
 rule syntax and executable threshold/recovery tests.
 
 `make test-integration` also runs `test-recovery-race` against its isolated PostgreSQL service. CI runs the same targeted race gate. For an existing test database, set `TEST_POSTGRES_URL` and run `make test-recovery-race`; it refuses to silently skip database coverage. Explicit cancel recovery keeps its existing operator semantics rather than consuming the normal head-recovery budget.
+
+The dual-Anvil RBF exercise keeps the secondary DVN unsubmitted until the primary
+worker verification reaches the configured local confirmation depth. It then
+submits the secondary verification and freezes mining once both verifications
+are present, leaving the worker's commit transaction pending for replacement.
+This lets the lower worker nonce terminalize without accidentally mining the
+commit transaction; merely seeing a latest-block verification event is not enough
+for the head-only recovery scheduler. The E2E still checks same-nonce replacement
+and fee bumps before resuming mining.
