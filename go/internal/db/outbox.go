@@ -369,7 +369,7 @@ func (s *Store) GetOutboxTx(ctx context.Context, id int64) (OutboxTx, error) {
 func (s *Store) RefreshBroadcastReceiptObservedAt(ctx context.Context, id int64) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
-		SET updated_at = now()
+		SET updated_at = now(), replay_authorized=false, next_recovery_at=now()+interval '60 seconds'
 		WHERE id = $1 AND status = ANY($2)
 	`, id, []string{TxStatusSigned, TxStatusBroadcast})
 	return err

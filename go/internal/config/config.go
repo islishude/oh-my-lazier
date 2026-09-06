@@ -97,6 +97,8 @@ type ServiceToggleConfig struct {
 
 // TxManagerConfig controls durable transaction outbox processing.
 type TxManagerConfig struct {
+	// MaxInflightPerSigner limits outstanding assigned nonces per signer.
+	MaxInflightPerSigner int `yaml:"max_inflight_per_signer"`
 	// StaleBroadcastReplacementAfterSeconds is how long a broadcast row can lack a receipt before same-nonce replacement.
 	StaleBroadcastReplacementAfterSeconds uint64 `yaml:"stale_broadcast_replacement_after_seconds"`
 }
@@ -446,6 +448,9 @@ func load(path string, applyEnv bool) (Config, error) {
 	if cfg.Metrics.ListenAddress == "" {
 		cfg.Metrics.ListenAddress = ":9090"
 	}
+	if cfg.TxManager.MaxInflightPerSigner == 0 {
+		cfg.TxManager.MaxInflightPerSigner = 8
+	}
 	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
 		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds
 	}
@@ -504,6 +509,9 @@ func (c Config) Validate() error {
 	}
 	if c.DatabaseURL == "" {
 		return errors.New("database_url is required")
+	}
+	if c.TxManager.MaxInflightPerSigner <= 0 || c.TxManager.MaxInflightPerSigner > 2147483647 {
+		return errors.New("tx_manager.max_inflight_per_signer must be positive")
 	}
 	if c.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
 		return errors.New("tx_manager.stale_broadcast_replacement_after_seconds is required")

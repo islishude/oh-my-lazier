@@ -449,7 +449,7 @@ func TestReplacementClaimInsertAndSwitch(t *testing.T) {
 	if _, err := h.store.NextReplacementCandidate(h.ctx, 40161, h.signerID, 15*time.Minute); !errors.Is(err, ErrNoStaleBroadcastReplacement) {
 		t.Fatalf("NextReplacementCandidate(fresh) error = %v, want ErrNoStaleBroadcastReplacement", err)
 	}
-	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET updated_at = now() - interval '16 minutes' WHERE id = $1`, id); err != nil {
+	if _, err := h.store.pool.Exec(h.ctx, `WITH aged AS (UPDATE tx_attempts SET last_broadcast_at=now()-interval '16 minutes' WHERE outbox_id=$1) UPDATE tx_outbox SET updated_at=now()-interval '16 minutes',next_recovery_at=NULL WHERE id=$1`, id); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 	candidate, err := h.store.NextReplacementCandidate(h.ctx, 40161, h.signerID, 15*time.Minute)
@@ -541,7 +541,7 @@ func TestRequestTxReplacementFromRepriceHold(t *testing.T) {
 	if _, err := h.store.NextReplacementCandidate(h.ctx, 40161, h.signerID, 15*time.Minute); !errors.Is(err, ErrNoStaleBroadcastReplacement) {
 		t.Fatalf("NextReplacementCandidate(cooldown, request cleared) error = %v, want ErrNoStaleBroadcastReplacement", err)
 	}
-	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET updated_at = now() - interval '2 minutes' WHERE id = $1`, id); err != nil {
+	if _, err := h.store.pool.Exec(h.ctx, `WITH aged AS (UPDATE tx_attempts SET updated_at=now()-interval '2 minutes' WHERE outbox_id=$1) UPDATE tx_outbox SET updated_at=now()-interval '2 minutes',next_recovery_at=NULL WHERE id=$1`, id); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 	candidate, err = h.store.NextReplacementCandidate(h.ctx, 40161, h.signerID, 15*time.Minute)
@@ -592,7 +592,7 @@ func TestFinalizeAttemptReceiptSwitchesActiveAndTerminalizes(t *testing.T) {
 	id := h.enqueue()
 	original := h.signAttempt(id, 51, common.HexToHash("0xa1a1"))
 	h.broadcastResult(original.ID, SendErrorAccepted)
-	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET updated_at = now() - interval '16 minutes' WHERE id = $1`, id); err != nil {
+	if _, err := h.store.pool.Exec(h.ctx, `WITH aged AS (UPDATE tx_attempts SET last_broadcast_at=now()-interval '16 minutes' WHERE outbox_id=$1) UPDATE tx_outbox SET updated_at=now()-interval '16 minutes',next_recovery_at=NULL WHERE id=$1`, id); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 	leaseToken := uuid.New()
@@ -896,7 +896,7 @@ func TestRequestTxReplacementBypassesAutomaticCap(t *testing.T) {
 	`, id); err != nil {
 		t.Fatalf("seed replacement attempts: %v", err)
 	}
-	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET updated_at = now() - interval '16 minutes' WHERE id = $1`, id); err != nil {
+	if _, err := h.store.pool.Exec(h.ctx, `WITH aged AS (UPDATE tx_attempts SET last_broadcast_at=now()-interval '16 minutes' WHERE outbox_id=$1) UPDATE tx_outbox SET updated_at=now()-interval '16 minutes',next_recovery_at=NULL WHERE id=$1`, id); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 
@@ -1050,7 +1050,7 @@ func TestDeferReplacementAndReceiptRefreshKeepRowOutOfStaleWindow(t *testing.T) 
 	h.broadcastResult(attempt.ID, SendErrorAccepted)
 	backdate := func() {
 		t.Helper()
-		if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET updated_at = now() - interval '16 minutes' WHERE id = $1`, id); err != nil {
+		if _, err := h.store.pool.Exec(h.ctx, `WITH aged AS (UPDATE tx_attempts SET last_broadcast_at=now()-interval '16 minutes' WHERE outbox_id=$1) UPDATE tx_outbox SET updated_at=now()-interval '16 minutes',next_recovery_at=NULL WHERE id=$1`, id); err != nil {
 			t.Fatalf("backdate: %v", err)
 		}
 	}

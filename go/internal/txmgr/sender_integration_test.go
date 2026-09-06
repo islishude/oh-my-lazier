@@ -22,6 +22,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/packets"
+	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 	signeriface "github.com/islishude/oh-my-lazier/go/internal/signer"
 	"github.com/islishude/oh-my-lazier/go/internal/signer/keystore"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1297,7 +1298,7 @@ func TestStaleBroadcastReplacementStopsAtReplacementCap(t *testing.T) {
 	if _, err := manager.ProcessBroadcast(t.Context(), target); err != nil {
 		t.Fatalf("ProcessBroadcast() error = %v", err)
 	}
-	for i := 0; i < db.TxMaxReplacements; i++ {
+	for i := range db.TxMaxReplacements {
 		forceBroadcastStale(t, id)
 		if _, err := manager.ProcessStaleBroadcastReplacement(t.Context(), target); err != nil {
 			t.Fatalf("ProcessStaleBroadcastReplacement(#%d) error = %v", i+1, err)
@@ -1850,7 +1851,7 @@ func TestNonceReconciliationPartialRPCFailureChangesNothing(t *testing.T) {
 	// replays hit stale-view nodes and hold for reconciliation.
 	client.sendErr = errors.New("connection glitch before acknowledgement")
 	var ids []int64
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		id, err := store.EnqueueTx(t.Context(), db.TxRequest{
 			ChainEID: 40161,
 			Purpose:  db.TxPurposePricingSetPriceSnapshot,
@@ -1870,25 +1871,17 @@ func TestNonceReconciliationPartialRPCFailureChangesNothing(t *testing.T) {
 			t.Fatalf("ProcessBroadcast(#%d) error = %v", i, err)
 		}
 	}
-	// Two instances claim the two due replays concurrently (both rows are still
-	// broadcast, so neither blocks the other), then both hit stale-view nodes.
-	forceAttemptBroadcastDue(t, ids[0])
-	forceAttemptBroadcastDue(t, ids[1])
-	token1, token2 := uuid.New(), uuid.New()
-	claim1, err := store.ClaimAttemptForBroadcast(t.Context(), 40161, signer.Address().Hex(), token1, 30*time.Second)
-	if err != nil {
-		t.Fatalf("ClaimAttemptForBroadcast(1) error = %v", err)
+	// Seed two pre-upgrade reconciliation holds. New recovery scheduling never
+	// spends the higher nonce's replay budget while the lower one is outstanding.
+	holdPool, e := pgxpool.New(t.Context(), os.Getenv("TEST_POSTGRES_URL"))
+	if e != nil {
+		t.Fatal(e)
 	}
-	claim2, err := store.ClaimAttemptForBroadcast(t.Context(), 40161, signer.Address().Hex(), token2, 30*time.Second)
-	if err != nil {
-		t.Fatalf("ClaimAttemptForBroadcast(2) error = %v", err)
+	if _, e = holdPool.Exec(t.Context(), `UPDATE tx_outbox SET status='held',held_reason='nonce_reconcile_required' WHERE id=ANY($1)`, ids); e != nil {
+		holdPool.Close()
+		t.Fatal(e)
 	}
-	if err := store.MarkAttemptSendResult(t.Context(), claim1.AttemptID, token1, db.SendErrorNonceTooLow, "nonce too low"); err != nil {
-		t.Fatalf("MarkAttemptSendResult(1) error = %v", err)
-	}
-	if err := store.MarkAttemptSendResult(t.Context(), claim2.AttemptID, token2, db.SendErrorNonceTooLow, "nonce too low"); err != nil {
-		t.Fatalf("MarkAttemptSendResult(2) error = %v", err)
-	}
+	holdPool.Close()
 	for _, id := range ids {
 		held, err := store.GetOutboxTx(t.Context(), id)
 		if err != nil {
@@ -3391,9 +3384,8 @@ func forceBroadcastAgeSeconds(t *testing.T, id int64, seconds int) {
 	}
 	t.Cleanup(pool.Close)
 	tag, err := pool.Exec(t.Context(), `
-		UPDATE tx_outbox
-		SET updated_at = now() - make_interval(secs => $2::int)
-		WHERE id = $1
+		WITH aged AS (UPDATE tx_attempts SET last_broadcast_at=now()-make_interval(secs=>$2::int),updated_at=now()-make_interval(secs=>$2::int) WHERE outbox_id=$1)
+ UPDATE tx_outbox SET next_recovery_at=NULL,updated_at=now()-make_interval(secs=>$2::int) WHERE id=$1
 	`, id, seconds)
 	if err != nil {
 		t.Fatalf("force broadcast age: %v", err)
@@ -3606,6 +3598,7 @@ func testExecutorPacket(t *testing.T) db.PacketRecord {
 }
 
 type fakeChainClient struct {
+	visibility            []rpcquorum.TransactionVisibility
 	pendingNonce          uint64
 	pendingNonceCalls     int
 	estimatedGas          uint64
@@ -4365,4 +4358,109 @@ func TestNonceReconciliationHeartbeatOutlivesSlowRPC(t *testing.T) {
 	if released.Status != db.TxStatusBroadcast {
 		t.Fatalf("status = %q, want broadcast (lease survived the slow RPC)", released.Status)
 	}
+}
+
+func (f *fakeChainClient) TransactionVisibility(context.Context, common.Hash) []rpcquorum.TransactionVisibility {
+	if f.visibility != nil {
+		return f.visibility
+	}
+	return []rpcquorum.TransactionVisibility{{ProviderID: "rpc-1", State: "pending"}}
+}
+
+func TestAcceptedThenMissingReplaysSameRawBeforeReplacement(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{pendingNonce: 38, confirmedNonce: 38, estimatedGas: 60000, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(130000), visibility: []rpcquorum.TransactionVisibility{{ProviderID: "rpc-1", State: "absent"}}}
+	now := time.Now().UTC()
+	logger, _ := captureLogger(slog.LevelInfo)
+	manager := NewWithOptions(store, logger, Options{Now: func() time.Time { return now }})
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{ChainEID: 40161, Purpose: db.TxPurposePricingSetPriceSnapshot, To: common.HexToAddress("0x22"), Calldata: []byte{1}, Value: big.NewInt(0), SignerID: signer.Address().Hex()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessNext(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessBroadcast(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	original := client.sent[0].Hash()
+	now = time.Now().UTC()
+	if err = manager.ProcessRecovery(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessBroadcast(t.Context(), target); !errors.Is(err, db.ErrNoBroadcastCandidate) {
+		t.Fatalf("replayed on first absence: %v", err)
+	}
+	now = now.Add(time.Minute)
+	if err = manager.ProcessRecovery(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessBroadcast(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.sent) != 2 || client.sent[1].Hash() != original {
+		t.Fatal("recovery changed transaction")
+	}
+	inspect, err := store.InspectTx(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(inspect, []byte(`"replacement_count": 0`)) {
+		t.Fatalf("unexpected replacement: %s", inspect)
+	}
+	client.receipts = map[common.Hash]*types.Receipt{original: testReceipt(original, types.ReceiptStatusSuccessful)}
+	if _, err = manager.ProcessReceipts(t.Context(), target, 1); err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.GetOutboxTx(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != db.TxStatusConfirmed {
+		t.Fatalf("not confirmed: %s", row.Status)
+	}
+}
+
+func TestRecoveryRPCFailurePreservesFeeBlockAge(t *testing.T) {
+	store := openTestStore(t)
+	signer := newTestKeystoreSigner(t)
+	client := &fakeChainClient{pendingNonce: 38, estimatedGas: 60000, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(130000)}
+	manager := New(store, discardLogger())
+	target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+	id, err := store.EnqueueTx(t.Context(), db.TxRequest{ChainEID: 40161, Purpose: db.TxPurposePricingSetPriceSnapshot, To: common.HexToAddress("0x22"), Calldata: []byte{1}, Value: big.NewInt(0), SignerID: signer.Address().Hex()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessNext(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = manager.ProcessBroadcast(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := store.RecoveryAttemptID(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.SetRecoveryReason(t.Context(), id, attempt, "fee_cap", nil, time.Now().Add(-20*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	client.nonceAtErr = errors.New("provider unavailable")
+	if err = manager.ProcessRecovery(t.Context(), target); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := store.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range stats.Recovery {
+		if r.SignerID == signer.Address().Hex() {
+			if r.Reason != "fee_cap" || r.BlockedAge < 1200 {
+				t.Fatalf("RPC failure hid blocker: %+v", r)
+			}
+			return
+		}
+	}
+	t.Fatal("missing recovery stats")
 }

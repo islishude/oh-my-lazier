@@ -45,6 +45,9 @@ jobs:
       - name: Run Solidity tests
         run: npx hardhat test solidity --no-compile
 
+      - name: Check Prometheus rules
+        run: make check-alerts
+
       - name: Check runbooks
         run: npm run check:runbooks
 
@@ -93,6 +96,11 @@ jobs:
         env:
           TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"
           RUSTACK_KMS_ENDPOINT: "http://localhost:4566"
+
+      - name: Run recovery race integration tests
+        run: make test-recovery-race
+        env:
+          TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"
 
   local-e2e:
     name: Local dual-Anvil E2E

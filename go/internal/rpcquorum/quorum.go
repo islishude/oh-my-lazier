@@ -601,7 +601,7 @@ type headerProbe struct {
 func (c *Client) probeHeaders(ctx context.Context, total int, number *big.Int) []headerProbe {
 	probes := make([]headerProbe, total)
 	var wg sync.WaitGroup
-	for index := 0; index < total; index++ {
+	for index := range total {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
@@ -712,7 +712,7 @@ func (c *Client) probeContext(ctx context.Context) (context.Context, context.Can
 }
 
 func markUnverifiedUnavailable(statuses map[int]ProviderStatus, total int) {
-	for index := 0; index < total; index++ {
+	for index := range total {
 		if _, ok := statuses[index]; !ok {
 			statuses[index] = ProviderUnavailable
 		}
@@ -1387,7 +1387,7 @@ func (c *Client) NonceAt(ctx context.Context, account common.Address, blockNumbe
 	votes := make(map[uint64]int, total)
 	responded := 0
 	var failureDetails []string
-	for completed := 0; completed < total; completed++ {
+	for range total {
 		index := <-completions
 		probe := probes[index]
 		if probe.err != nil {
@@ -1467,7 +1467,7 @@ func (c *Client) CanonicalHashAt(ctx context.Context, blockNumber *big.Int) (com
 	votes := make(map[common.Hash]int, total)
 	responded := 0
 	var failureDetails []string
-	for completed := 0; completed < total; completed++ {
+	for range total {
 		index := <-completions
 		probe := probes[index]
 		if probe.err != nil {
@@ -1594,7 +1594,7 @@ func (c *Client) TransactionReceiptAt(ctx context.Context, txHash common.Hash, m
 	notFoundTotal := 0
 	responded := 0
 	var transientErrs []error
-	for completed := 0; completed < total; completed++ {
+	for range total {
 		index := <-completions
 		probe := probes[index]
 		switch {

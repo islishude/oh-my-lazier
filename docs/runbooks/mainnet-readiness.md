@@ -175,3 +175,20 @@ Reject mainnet readiness if:
 - canary amount, sender, recipient, receipt, or recipient balance evidence is missing
 - `npm run check:migration-evidence` fails for the migration ticket record
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` reports any issue
+
+## Transaction recovery schema upgrade
+
+Migration `004_tx_recovery.sql` adds independent recovery clocks and signer-lane
+observations without rewriting earlier migrations or backfilling task data.
+Stop all old workers before upgrading; do not run old and new recovery schedulers
+against the same database. Retain existing attempts and their lifetime budgets.
+The normal recovery loop initializes historical first-send evidence from retained
+attempts; missing evidence requires inspection. Existing rows above the new
+inflight window continue recovery but block new nonce allocation.
+
+Before rollout, run `make test-integration`, Go race tests, `make check-alerts`
+and `make check`. After deployment, verify real RPC visibility, nonce advancement,
+backlog convergence, and both firing and resolved notifications. Local simulated
+accepted-then-missing tests are not proof of mainnet recovery or alert delivery.
+Rollback requires stopping the new workers and a reviewed scheduler/schema
+compatibility plan; do not erase migrations, attempts or recovery budgets.

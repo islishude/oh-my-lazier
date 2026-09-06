@@ -36,6 +36,7 @@ const (
 // ChainClient is the tx manager's RPC boundary for first-use nonce bootstrap,
 // fee reads, broadcasts, and confirmed-nonce reconciliation.
 type ChainClient interface {
+	TransactionVisibility(context.Context, common.Hash) []rpcquorum.TransactionVisibility
 	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
@@ -80,6 +81,21 @@ var ErrNoReceiptUpdate = errors.New("no receipt update")
 
 // ErrTxDeferred indicates the queued outbox row should stay queued and be retried later.
 var ErrTxDeferred = errors.New("tx deferred")
+
+// FeeCapError describes a policy wait without exposing RPC errors or secrets.
+type FeeCapError struct{ RequiredFee, RequiredTip, FeeLimit, TipLimit string }
+
+func (e *FeeCapError) Error() string { return "replacement exceeds configured fee cap" }
+func (e *FeeCapError) Unwrap() error { return ErrTxDeferred }
+func capError(fee, tip *big.Int, policy FeePolicy) error {
+	text := func(n *big.Int) string {
+		if n == nil {
+			return ""
+		}
+		return n.String()
+	}
+	return &FeeCapError{text(fee), text(tip), text(policy.ConfiguredMaxFeePerGas), text(policy.ConfiguredMaxPriorityFeePerGas)}
+}
 
 func validateTarget(target Target) error {
 	if target.ChainID == nil || target.ChainID.Sign() <= 0 {
@@ -549,6 +565,11 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 			return 0, deferErr
 		}
 		if errors.Is(err, ErrTxDeferred) {
+			if detail, ok := errors.AsType[*FeeCapError](err); ok {
+				if e := m.logRecoveryReason(ctx, target, outboxTx.ID, candidate.ActiveAttemptID, "fee_cap", detail, m.options.Now(), true); e != nil {
+					return 0, e
+				}
+			}
 			return 0, ErrTxDeferred
 		}
 		m.logger.Warn("failed stale broadcast replacement preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
@@ -581,6 +602,13 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 	}
 	if _, err := m.store.InsertReplacementAttempt(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, attempt); err != nil {
 		return 0, err
+	}
+	activeID, e := m.store.RecoveryAttemptID(ctx, outboxTx.ID)
+	if e != nil {
+		return 0, e
+	}
+	if e = m.logRecoveryReason(ctx, target, outboxTx.ID, activeID, "", nil, m.options.Now(), true); e != nil {
+		return 0, e
 	}
 	m.logger.Info("signed stale tx replacement attempt", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "kind", attempt.Kind, "tx_hash", attempt.TxHash, "previous_tx_hash", outboxTx.TxHash)
 	return outboxTx.ID, nil
@@ -902,6 +930,11 @@ func (m *Manager) ProcessCancelRequest(ctx context.Context, target Target) (int6
 			return 0, deferErr
 		}
 		if errors.Is(err, ErrTxDeferred) {
+			if detail, ok := errors.AsType[*FeeCapError](err); ok {
+				if e := m.logRecoveryReason(ctx, target, outboxTx.ID, candidate.ActiveAttemptID, "fee_cap", detail, m.options.Now(), true); e != nil {
+					return 0, e
+				}
+			}
 			return 0, ErrTxDeferred
 		}
 		m.logger.Warn("failed cancel preflight", "id", outboxTx.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", outboxTx.Purpose, "nonce", outboxTx.Nonce, "error", err.Error())
@@ -1209,7 +1242,7 @@ func quoteLegacyFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePol
 		price = bigutil.Max(price, bumpFee(queued.MaxFeePerGas))
 	}
 	if price.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
-		return feeQuote{}, ErrTxDeferred
+		return feeQuote{}, capError(price, nil, policy)
 	}
 	return feeQuote{MaxFeePerGas: price}, nil
 }
@@ -1238,17 +1271,14 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 			return feeQuote{}, fmt.Errorf("outbox tx %d previous priority fee per gas must be positive for replacement", queued.ID)
 		}
 		tip = bigutil.Max(tip, bumpFee(queued.MaxPriorityFeePerGas))
-		if tip.Cmp(policy.ConfiguredMaxPriorityFeePerGas) > 0 {
-			return feeQuote{}, ErrTxDeferred
-		}
 	}
 	feeCap := new(big.Int).Mul(baseFee, big.NewInt(2))
 	feeCap.Add(feeCap, tip)
 	if hasPreviousFee {
 		feeCap = bigutil.Max(feeCap, bumpFee(queued.MaxFeePerGas))
 	}
-	if feeCap.Cmp(policy.ConfiguredMaxFeePerGas) > 0 {
-		return feeQuote{}, ErrTxDeferred
+	if feeCap.Cmp(policy.ConfiguredMaxFeePerGas) > 0 || tip.Cmp(policy.ConfiguredMaxPriorityFeePerGas) > 0 {
+		return feeQuote{}, capError(feeCap, tip, policy)
 	}
 	return feeQuote{Dynamic: true, MaxFeePerGas: feeCap, MaxPriorityFeePerGas: tip}, nil
 }

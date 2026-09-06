@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -233,8 +233,7 @@ func revertFingerprint(err error) string {
 	if data, ok := canonicalRevertData(err); ok {
 		return "rd:" + data
 	}
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
+	if rpcErr, ok := errors.AsType[rpc.Error](err); ok {
 		return "rm:" + strings.ToLower(strings.TrimSpace(rpcErr.Error()))
 	}
 	// Not reachable for probes admitted by isDeterministicRevert; the wrapped
@@ -292,7 +291,7 @@ func (c *Client) voteStateRead(ctx context.Context, operation string, read func(
 	comparable := 0
 	var transientErrs []error
 	majorityFingerprint := ""
-	for completed := 0; completed < total; completed++ {
+	for range total {
 		index := <-completions
 		probe := probes[index]
 		if !probe.comparable() {
@@ -526,7 +525,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 	revertWinners := make(map[string]error, total)
 	comparable := 0
 	var transientErrs []error
-	for completed := 0; completed < total; completed++ {
+	for range total {
 		index := <-completions
 		probe := probes[index]
 		switch {
@@ -569,7 +568,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 		for i, vote := range successes {
 			sorted[i] = vote.gas
 		}
-		sort.Slice(sorted, func(a, b int) bool { return sorted[a] < sorted[b] })
+		slices.Sort(sorted)
 		median := sorted[len(sorted)/2]
 		lower := (median + 1) / 2
 		upper := median * 2

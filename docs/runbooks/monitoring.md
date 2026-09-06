@@ -151,3 +151,75 @@ SQL
 ```
 
 The transaction commits only when `resumed_jobs = 1` and `unpaused_pathways = 1`; otherwise it rolls back and exits nonzero. After a successful reset, run the readiness check and watch the selected GUID through the DVN states.
+
+## Durable transaction recovery
+
+A successful RPC send is acceptance, not inclusion. The recovery loop probes the
+lowest outstanding nonce per chain and signer every 60 seconds. Two absent
+majority observations at least 60 seconds apart permit a same-raw replay; any
+visible provider or an unavailable majority resets absence evidence. Provider
+errors are never absence. Single-provider configurations use the same timing,
+but have only that provider's evidence. Visibility never establishes finality.
+
+An attempt has at most five broadcasts, including the initial send. Recovery
+replays use 60/120/240/480-second delays; they do not change the hash, nonce,
+payload, or fees, or downgrade `submitted`. Before recovery, all historical
+attempt receipts are checked. A canonical shallow receipt waits for the existing
+confirmation depth. An unexplained consumed nonce enters confirmed-nonce
+reconciliation and requires operator resolution if confirmed.
+
+Replacement remains bounded to five automatic attempts with at least 10% fee
+bumps under both configured fee caps. `txretry -action replace` registers one
+additional asynchronous request; it does not broadcast itself or override fee
+caps. Only the lowest outstanding nonce spends recovery budget. Normal new
+broadcasts can proceed within `tx_manager.max_inflight_per_signer` (default 8,
+positive integer). Existing excess transactions continue converging; no new
+nonce is allocated until the window permits it.
+
+Use this read-only command first:
+
+```bash
+go run ./go/cmd/txretry -config <worker.yaml> -action inspect -id <tx_outbox_id>
+```
+
+The result includes the lane head, current and historical attempt summaries,
+budgets, first broadcast time, absence evidence, next check/action time,
+`replace_requested_at`, and recovery reason/detail. Raw signed transactions,
+signatures and RPC credentials are excluded. Mutation results include an
+inspection and `request_status: registered` for replacement requests. Run
+replacement only for the diagnosed head and only after correcting fee limits
+in the running worker config; config changes require restart.
+
+Recovery clocks are independent of `updated_at`. Deferrals and replacement do
+not refresh first-broadcast or blocked-since ages. Historical first-broadcast
+evidence is conservatively initialized from the earliest sent attempt's creation
+time; missing history is reported as `evidence_missing`, not a fresh wait.
+`fee_cap` logs include required and configured fee/tip values. Reasons are logged
+on change and at most every five minutes while unchanged; successful replacement
+clears a fee/budget blockage. Receipt polling and recovery continue when readiness
+fails. Liveness remains independent.
+
+The `laz_tx_recovery_*` metric family aggregates by `chain_eid,signer`: inflight,
+window, head_nonce, head_age_seconds, nonce_stall_seconds, blocked_age_seconds
+(with bounded `reason`), unseen, replays_total, replacements_total. Action totals
+are derived from retained durable attempt history; deleting history resets them.
+GUIDs, transaction hashes and outbox IDs belong in logs, never metric labels.
+
+- `LazTxUnseen`: repeated absence with first-broadcast age at least 5 minutes;
+  warning. Inspect the RPC receive/propagation path rather than assuming low fees.
+- `LazTxNonceStalled`: successful account-nonce evidence with no advancement for
+  15 minutes and outstanding tasks; page. Evidence older than two minutes does
+  not establish nonce stagnation; RPC failures report `rpc_unavailable` instead.
+- `LazTxFeeCap`: a fee blockage lasting 5 minutes; warning. At 15 minutes,
+  `LazTxRecoveryBlocked` pages and readiness fails.
+- `LazTxRecoveryBlocked`: budget exhaustion pages immediately; other persistent
+  recovery reasons page after 15 minutes. Readiness follows those thresholds.
+
+Group Alertmanager notifications by chain and signer, inhibit warning severity
+when a page for the same lane is firing, and enable `send_resolved` on receivers.
+Deployment owners must install the rules and configure receivers; repository
+checks do not establish notification delivery. Validate the rules locally with
+`make check-alerts` (pinned Prometheus container); CI and `make check` run both
+rule syntax and executable threshold/recovery tests.
+
+`make test-integration` also runs `test-recovery-race` against its isolated PostgreSQL service. CI runs the same targeted race gate. For an existing test database, set `TEST_POSTGRES_URL` and run `make test-recovery-race`; it refuses to silently skip database coverage. Explicit cancel recovery keeps its existing operator semantics rather than consuming the normal head-recovery budget.

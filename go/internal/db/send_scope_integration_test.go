@@ -434,6 +434,9 @@ func TestClaimAndPauseLinearizeOnScopeLocks(t *testing.T) {
 		t.Fatalf("status = %q, want broadcast (pre-pause nonce holders complete)", status)
 	}
 
+	if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET next_recovery_at=NULL WHERE id=$1`, id); err != nil {
+		t.Fatal(err)
+	}
 	// Replacement and cancel stay available while paused: they repair the lane
 	// instead of adding new spend.
 	if _, err := h.store.NextReplacementCandidate(h.ctx, 40161, h.signerID, time.Nanosecond); err != nil {
@@ -457,7 +460,7 @@ func TestSyncConfigConcurrentWithClaimsDoesNotDeadlock(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 15; i++ {
+		for range 15 {
 			if err := h.store.SyncConfig(h.ctx, registry); err != nil {
 				errs <- err
 				return
@@ -466,7 +469,7 @@ func TestSyncConfigConcurrentWithClaimsDoesNotDeadlock(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 15; i++ {
+		for range 15 {
 			id, err := h.store.EnqueueTx(h.ctx, TxRequest{
 				ChainEID: 40161,
 				Purpose:  TxPurposePricingSetPriceSnapshot,
@@ -592,20 +595,18 @@ func TestSyncConfigConcurrentFirstStartupDoesNotDeadlock(t *testing.T) {
 
 	// Rolling first startup: several instances race to insert the same
 	// brand-new chain and pathway rows into an empty schema.
-	for round := 0; round < 5; round++ {
+	for range 5 {
 		if _, err := store.pool.Exec(ctx, "TRUNCATE pathways, chains CASCADE"); err != nil {
 			t.Fatalf("truncate fresh tables: %v", err)
 		}
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
-		for instance := 0; instance < 2; instance++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 2 {
+			wg.Go(func() {
 				if err := store.SyncConfig(ctx, freshRegistry); err != nil {
 					errs <- err
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		close(errs)

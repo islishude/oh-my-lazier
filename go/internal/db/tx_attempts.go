@@ -208,6 +208,17 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 		if blocked {
 			return OutboxTx{}, ErrSignerLaneBlocked
 		}
+		window := s.maxInflight
+		if window <= 0 {
+			window = 8
+		}
+		var inflight int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM tx_outbox WHERE chain_eid=$1 AND signer_id=$2 AND nonce IS NOT NULL AND status NOT IN ('confirmed','failed')`, chainEID, signerID).Scan(&inflight); err != nil {
+			return OutboxTx{}, err
+		}
+		if inflight >= window {
+			return OutboxTx{}, ErrSignerLaneBlocked
+		}
 		next, err := s.claimCursorNonce(ctx, tx, chainEID, signerID)
 		if err != nil {
 			return OutboxTx{}, err
@@ -328,7 +339,7 @@ func (s *Store) InsertSignedAttempt(ctx context.Context, outboxID int64, leaseTo
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
-		SET active_attempt_id = $1, status = $2, lease_token = NULL, lease_until = NULL,
+		SET replay_authorized=false, absent_since=NULL, visibility_checked_at=NULL, next_visibility_at=NULL, next_recovery_at=NULL, recovery_lease_token=NULL, recovery_lease_until=NULL, active_attempt_id = $1, status = $2, lease_token = NULL, lease_until = NULL,
 			pre_sign_failure_count = 0, next_sign_at = NULL, updated_at = now()
 		WHERE id = $3
 	`, attemptID, TxStatusSigned, outboxID); err != nil {
@@ -461,9 +472,10 @@ func (s *Store) ClaimAttemptForBroadcast(ctx context.Context, chainEID uint32, s
 		JOIN tx_outbox o ON o.id = a.outbox_id AND o.active_attempt_id = a.id
 		WHERE o.chain_eid = $1 AND o.signer_id = $2
 			AND o.status IN ('signed', 'broadcast') AND o.held_reason IS NULL
-			AND a.state IN ('signed', 'ambiguous')
+			AND (a.state IN ('signed', 'ambiguous') OR (a.state='submitted' AND o.replay_authorized))
+            AND (a.kind='cancel' OR a.broadcast_count=0 OR NOT EXISTS(SELECT 1 FROM tx_outbox h WHERE h.chain_eid=o.chain_eid AND h.signer_id=o.signer_id AND h.nonce<o.nonce AND h.status NOT IN ('confirmed','failed')))
 			AND a.broadcast_count < $3
-			AND (a.next_broadcast_at IS NULL OR a.next_broadcast_at <= now())
+			AND (a.state='submitted' OR a.next_broadcast_at IS NULL OR a.next_broadcast_at <= now())
 			AND (a.broadcast_lease_until IS NULL OR a.broadcast_lease_until <= now())
 			AND (o.cancel_requested_at IS NULL OR a.kind = 'cancel')
 			AND o.receipt_outcome IS NULL
@@ -498,6 +510,11 @@ func (s *Store) ClaimAttemptForBroadcast(ctx context.Context, chainEID uint32, s
 		return BroadcastClaim{}, err
 	}
 
+	if _, err := tx.Exec(ctx, `UPDATE tx_outbox SET replay_authorized=false,
+ first_broadcast_at=COALESCE(first_broadcast_at,(SELECT min(created_at) FROM tx_attempts WHERE outbox_id=$1 AND broadcast_count>0),now()),
+ next_recovery_at=now()+$2::bigint*interval '1 second' WHERE id=$1`, outboxID, 60*(1<<uint(min(broadcastCount, 3)))); err != nil {
+		return BroadcastClaim{}, err
+	}
 	newCount := broadcastCount + 1
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_attempts
@@ -698,8 +715,7 @@ func (s *Store) ListReceiptPollTasks(ctx context.Context, chainEID uint32, signe
 }
 
 // TouchReceiptPoll advances the receipt polling fairness cursor for one outbox
-// row after its attempts were queried, without touching updated_at (which feeds
-// the stale-replacement window).
+// row after its attempts were queried, without moving any recovery deadline.
 func (s *Store) TouchReceiptPoll(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return errors.New("outbox tx id is required")
@@ -883,7 +899,7 @@ func (s *Store) FinalizeAttemptReceipt(ctx context.Context, attemptID int64, fac
 	tag, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
 		SET
-			active_attempt_id = $1,
+			recovery_reason='',recovery_since=NULL,recovery_detail=NULL,replay_authorized=false, absent_since=NULL, next_visibility_at=NULL, next_recovery_at=NULL, recovery_lease_token=NULL, recovery_lease_until=NULL, active_attempt_id = $1,
 			receipt_tx_hash = $2,
 			receipt_status = $3,
 			receipt_block_number = $4,
@@ -1009,7 +1025,7 @@ func (s *Store) RecordPreSignFailure(ctx context.Context, id int64, leaseToken u
 		}
 		if _, err := tx.Exec(ctx, `
 			UPDATE tx_outbox
-			SET pre_sign_failure_count = $1,
+			SET pre_sign_failure_count = $1, next_recovery_at=now()+$2::interval,
 				replace_requested_at = CASE
 					WHEN replace_requested_at IS NOT NULL THEN now() + $2::interval
 					ELSE NULL
@@ -1040,7 +1056,7 @@ func (s *Store) RequestTxReplacement(ctx context.Context, id int64) error {
 	}
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
-		SET replace_requested_at = now(), pre_sign_failure_count = 0, updated_at = now()
+		SET replace_requested_at = now(), next_recovery_at=NULL, pre_sign_failure_count = 0, updated_at = now()
 		WHERE id = $1
 			AND active_attempt_id IS NOT NULL
 			-- A cancel-pending row rejects replacement requests outright: the
@@ -1073,7 +1089,7 @@ func (s *Store) DeferReplacement(ctx context.Context, id int64) error {
 	}
 	_, err := s.pool.Exec(ctx, `
 		UPDATE tx_outbox
-		SET updated_at = now(),
+		SET updated_at = now(), next_recovery_at=now()+$1::interval,
 			replace_requested_at = CASE
 				WHEN replace_requested_at IS NOT NULL THEN now() + $1::interval
 				ELSE NULL
@@ -1131,6 +1147,9 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 			AND o.receipt_outcome IS NULL
 			AND a.state IN ('submitted', 'ambiguous')
 			AND o.pre_sign_failure_count < $3
+            AND (a.kind='cancel' OR NOT EXISTS(SELECT 1 FROM tx_outbox h WHERE h.chain_eid=o.chain_eid AND h.signer_id=o.signer_id AND h.nonce<o.nonce AND h.status NOT IN ('confirmed','failed')))
+            AND (a.kind='cancel' OR o.status<>'broadcast' OR o.recovery_reason NOT IN ('rpc_unavailable','evidence_missing'))
+            AND (o.next_recovery_at IS NULL OR o.next_recovery_at<=now())
 			-- Under cancel intent only cancel attempts are bumped; the original
 			-- task must never be re-signed.
 			AND (o.cancel_requested_at IS NULL OR a.kind = 'cancel')
@@ -1148,7 +1167,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 					)
 				)
 				OR (
-					o.status = $4 AND o.updated_at <= now() - $5::interval
+					o.status = $4 AND (a.last_broadcast_at <= now() - $5::interval OR (a.broadcast_count>=5 AND o.absent_since IS NOT NULL AND o.visibility_checked_at>=o.absent_since+interval '60 seconds'))
 					AND (
 						SELECT count(*) FROM tx_attempts r
 						WHERE r.outbox_id = o.id
@@ -1162,7 +1181,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 				-- operator.
 				OR (
 					o.status = $6 AND o.held_reason = $7
-					AND o.updated_at <= now() - $10::interval
+					AND a.updated_at <= now() - $10::interval
 					AND (
 						SELECT count(*) FROM tx_attempts r
 						WHERE r.outbox_id = o.id
@@ -1366,7 +1385,7 @@ func (s *Store) InsertReplacementAttempt(ctx context.Context, outboxID, expected
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
-		SET active_attempt_id = $1,
+		SET replay_authorized=false, absent_since=NULL, visibility_checked_at=NULL, next_visibility_at=NULL, next_recovery_at=NULL, recovery_lease_token=NULL, recovery_lease_until=NULL, active_attempt_id = $1,
 			status = CASE WHEN status = $2 THEN $3 ELSE status END,
 			held_reason = NULL, replace_requested_at = NULL,
 			lease_token = NULL, lease_until = NULL,

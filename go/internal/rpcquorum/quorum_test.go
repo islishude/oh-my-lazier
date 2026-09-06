@@ -1295,7 +1295,7 @@ func (s testEthService) GetBlockByNumber(ctx context.Context, number rpc.BlockNu
 	return s.header, nil
 }
 
-func (s testEthService) GetLogs(context.Context, map[string]interface{}) ([]gethtypes.Log, error) {
+func (s testEthService) GetLogs(context.Context, map[string]any) ([]gethtypes.Log, error) {
 	if s.logsScript != nil {
 		return s.logsScript.next()
 	}
@@ -1332,7 +1332,7 @@ func (s testEthService) GetTransactionCount(ctx context.Context, _ common.Addres
 	return hexutil.Uint64(s.nonce), nil
 }
 
-func (s testEthService) Call(ctx context.Context, _ map[string]interface{}, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
+func (s testEthService) Call(ctx context.Context, _ map[string]any, blockNrOrHash rpc.BlockNumberOrHash) (hexutil.Bytes, error) {
 	if s.callObserved != nil {
 		s.callObserved.record(blockNrOrHash)
 	}
@@ -1360,7 +1360,7 @@ func (s testEthService) GetCode(_ context.Context, _ common.Address, _ rpc.Block
 	return hexutil.Bytes(s.codeResult), nil
 }
 
-func (s testEthService) EstimateGas(_ context.Context, _ map[string]interface{}) (hexutil.Uint64, error) {
+func (s testEthService) EstimateGas(_ context.Context, _ map[string]any) (hexutil.Uint64, error) {
 	if s.estimateErr != nil {
 		return 0, s.estimateErr
 	}
@@ -1723,8 +1723,7 @@ func TestEstimateGasNonRevertDataDoesNotFormRevertMajority(t *testing.T) {
 	if !IsQuorumUnavailable(err) {
 		t.Fatalf("EstimateGas() error = %v, want quorum unavailable (non-revert data must not vote)", err)
 	}
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
+	if _, ok := errors.AsType[rpc.Error](err); ok {
 		t.Fatalf("unavailable error leaked an rpc revert identity: %v", err)
 	}
 }
@@ -1784,8 +1783,7 @@ func TestEstimateGasNonGethRevertMajorityWins(t *testing.T) {
 	if !IsVotedRevert(err) {
 		t.Fatalf("majority revert must carry the voted-revert marker, got %v", err)
 	}
-	var rpcErr rpc.Error
-	if !errors.As(err, &rpcErr) {
+	if _, ok := errors.AsType[rpc.Error](err); !ok {
 		t.Fatalf("voted revert marker must unwrap to the provider rpc error: %v", err)
 	}
 }
@@ -1806,8 +1804,7 @@ func TestEstimateGasHexDiagnosticWithoutRevertClaimDoesNotVote(t *testing.T) {
 	if !IsQuorumUnavailable(err) {
 		t.Fatalf("EstimateGas() error = %v, want quorum unavailable (hex diagnostics must not vote)", err)
 	}
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
+	if _, ok := errors.AsType[rpc.Error](err); ok {
 		t.Fatalf("unavailable error leaked an rpc revert identity: %v", err)
 	}
 }
@@ -1862,8 +1859,7 @@ func TestCallContractMixedRevertsDoNotMerge(t *testing.T) {
 	}
 	// The aggregate error must not expose any minority revert identity, so
 	// downstream deterministic-revert classification cannot misfire.
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
+	if _, ok := errors.AsType[rpc.Error](err); ok {
 		t.Fatalf("conflict error leaked an rpc revert identity: %v", err)
 	}
 }
@@ -1979,8 +1975,7 @@ func TestEstimateGasSplitDoesNotExposeRevert(t *testing.T) {
 	if !IsEstimateGasConflict(err) {
 		t.Fatalf("EstimateGas() error = %v, want estimate conflict", err)
 	}
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) {
+	if _, ok := errors.AsType[rpc.Error](err); ok {
 		t.Fatalf("conflict error leaked an rpc revert identity: %v", err)
 	}
 }

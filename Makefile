@@ -36,6 +36,7 @@ E2E_CI_WORKER_RUN_FLAGS ?= --network host
 	fmt-go-check fmt-sol-check
 
 check:
+	@$(MAKE) --no-print-directory check-alerts
 	npm run compile
 	npm run typecheck
 	npm run check:lzabi
@@ -71,6 +72,7 @@ test-integration:
 	trap cleanup EXIT INT TERM; \
 	$(INTEGRATION_COMPOSE) up -d --wait; \
 	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test -count=1 -p 1 ./...; \
+	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" $(MAKE) --no-print-directory test-recovery-race; \
 
 test-kms-rustack:
 	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \
@@ -173,3 +175,13 @@ fmt-sol-check:
 build-go:
 	mkdir -p go/bin
 	go build -o ./go/bin ./go/cmd/...
+
+.PHONY: check-alerts
+check-alerts:
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 check rules prometheus-alerts.yml
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 test rules prometheus-alerts.test.yml
+
+.PHONY: test-recovery-race
+test-recovery-race:
+	@test -n "$$TEST_POSTGRES_URL" || (echo "TEST_POSTGRES_URL is required for recovery race coverage" >&2; exit 1)
+	go test -race -count=1 -p 1 -run 'TestRecovery|TestAcceptedThenMissing|TestTransactionVisibility|TestVisibilityVerdict|TestInspect' ./go/internal/db ./go/internal/txmgr ./go/internal/rpcquorum ./go/cmd/txretry/...

@@ -292,6 +292,7 @@ func (a *App) Run(ctx context.Context) error {
 
 func (a *App) txManagerOptions() txmgr.Options {
 	return txmgr.Options{
+		MaxInflightPerSigner:           a.cfg.TxManager.MaxInflightPerSigner,
 		StaleBroadcastReplacementAfter: time.Duration(a.cfg.TxManager.StaleBroadcastReplacementAfterSeconds) * time.Second,
 	}
 }

@@ -209,11 +209,11 @@ func ulnConfigFromABI(value any) (ulnConfig, error) {
 		OptionalDVNCount:     uint8Field(reflected, "OptionalDVNCount"),
 		OptionalDVNThreshold: uint8Field(reflected, "OptionalDVNThreshold"),
 	}
-	requiredDVNs, ok := reflected.FieldByName("RequiredDVNs").Interface().([]common.Address)
+	requiredDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("RequiredDVNs"))
 	if !ok {
 		return ulnConfig{}, fmt.Errorf("getUlnConfig requiredDVNs has type %T", reflected.FieldByName("RequiredDVNs").Interface())
 	}
-	optionalDVNs, ok := reflected.FieldByName("OptionalDVNs").Interface().([]common.Address)
+	optionalDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("OptionalDVNs"))
 	if !ok {
 		return ulnConfig{}, fmt.Errorf("getUlnConfig optionalDVNs has type %T", reflected.FieldByName("OptionalDVNs").Interface())
 	}

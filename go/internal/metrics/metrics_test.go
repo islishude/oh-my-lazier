@@ -408,3 +408,22 @@ func cleanSnapshotWith(mutator func(*db.StatsSnapshot)) db.StatsSnapshot {
 	}
 	return snapshot
 }
+
+func TestRecoveryMetricIdentity(t *testing.T) {
+	var output strings.Builder
+	renderRecoveryMetrics(&output, []db.RecoveryStat{{ChainEID: 1, SignerID: "a", Inflight: 8, Window: 8, Reason: "fee_cap"}, {ChainEID: 1, SignerID: "b", Inflight: 2, Window: 8}})
+	seen := map[string]bool{}
+	for line := range strings.SplitSeq(output.String(), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, _, _ := strings.Cut(line, "} ")
+		if seen[key] {
+			t.Fatalf("duplicate series: %s", key)
+		}
+		seen[key] = true
+	}
+	if strings.Contains(output.String(), "guid=") || strings.Contains(output.String(), "tx_hash=") {
+		t.Fatal("unbounded labels")
+	}
+}

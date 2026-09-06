@@ -312,6 +312,10 @@ const requiredAlertRules: RequiredAlertRule[] = [
       "severity: page",
     ],
   },
+  { alert: "LazTxUnseen", anchors: ["laz_tx_recovery_unseen > 0", "severity: warning"] },
+  { alert: "LazTxNonceStalled", anchors: ["laz_tx_recovery_nonce_stall_seconds >= 900", "severity: page"] },
+  { alert: "LazTxFeeCap", anchors: ['reason="fee_cap"', "severity: warning"] },
+  { alert: "LazTxRecoveryBlocked", anchors: ['reason="replacement_exhausted"', "severity: page"] },
 ];
 
 export function validateRunbookReview(): string[] {
