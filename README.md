@@ -60,7 +60,9 @@ make check-pricing-abi
 
 ## Worker
 
-The example config is [config/example.yaml](config/example.yaml). Start the default local stack with:
+The example config is [config/example.yaml](config/example.yaml). The `worker` and
+`txretry` commands default to `config.yaml` in the current working directory;
+use `-config <worker.yaml>` to select another file. Start the default local stack with:
 
 ```bash
 docker compose up

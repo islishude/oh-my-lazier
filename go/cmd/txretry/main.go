@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config/example.yaml", "worker config path")
+	configPath := flag.String("config", "config.yaml", "worker config path")
 	action := flag.String("action", "", "inspect, retry-failed, replace, cancel-nonce, resolve-external-nonce, or rebroadcast")
 	id := flag.Int64("id", 0, "tx_outbox id")
 	resolution := flag.String("resolution", "", "external nonce resolution: retry or abandon")
