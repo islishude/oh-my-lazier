@@ -163,8 +163,12 @@ but have only that provider's evidence. Visibility never establishes finality.
 
 An attempt has at most five broadcasts, including the initial send. Recovery
 replays use 60/120/240/480-second delays; they do not change the hash, nonce,
-payload, or fees, or downgrade `submitted`. Before recovery, all historical
-attempt receipts are checked. A canonical shallow receipt waits for the existing
+payload, or fees, or downgrade `submitted`. If a replay encounters a retryable
+send error (including a full txpool, insufficient funds, or nonce too high), an
+already accepted attempt stays in `broadcast` for visibility recovery. The next
+replay still requires absence evidence and the recovery delay; initial sends
+without prior acceptance retain their existing retry behavior. Before recovery,
+all historical attempt receipts are checked. A canonical shallow receipt waits for the existing
 confirmation depth. An unexplained consumed nonce enters confirmed-nonce
 reconciliation and requires operator resolution if confirmed.
 
@@ -215,6 +219,10 @@ GUIDs, transaction hashes and outbox IDs belong in logs, never metric labels.
   `LazTxRecoveryBlocked` pages and readiness fails.
 - `LazTxRecoveryBlocked`: budget exhaustion pages immediately; other persistent
   recovery reasons page after 15 minutes. Readiness follows those thresholds.
+
+Recovery alert conditions match the complete metric label set, including scrape
+identity and deployment labels, so evidence from different instances is never
+combined.
 
 Group Alertmanager notifications by chain and signer, inhibit warning severity
 when a page for the same lane is firing, and enable `send_resolved` on receivers.

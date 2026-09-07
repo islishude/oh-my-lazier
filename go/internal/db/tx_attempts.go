@@ -539,7 +539,9 @@ func (s *Store) ClaimAttemptForBroadcast(ctx context.Context, chainEID uint32, s
 // MarkAttemptSendResult records a broadcast outcome. The attempt aggregate state
 // is monotonic (accepted upgrades to submitted; nothing downgrades ambiguous),
 // and the outbox action status is updated only while this attempt is active and
-// the outbox is not already terminal. Requires the broadcast lease token.
+// the outbox is not already terminal. Retryable replay failures keep previously
+// submitted attempts in broadcast for visibility recovery. Requires the broadcast
+// lease token.
 func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broadcastToken uuid.UUID, class, sendErr string) error {
 	if attemptID <= 0 || class == "" {
 		return errors.New("mark attempt send result requires attempt id and class")
@@ -582,6 +584,12 @@ func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broa
 		return err
 	}
 	status, heldReason := mapSendClassToOutbox(class)
+	// A retryable replay failure cannot revoke an earlier acceptance. Keep
+	// submitted attempts under visibility recovery, which authorizes the next
+	// replay after its evidence and backoff gates. Never downgrade the attempt.
+	if state == TxAttemptSubmitted && (class == SendErrorRetryableEnv || class == SendErrorNonceTooHigh) {
+		status = TxStatusBroadcast
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
 		SET status = $1, held_reason = $2, updated_at = now()

@@ -199,3 +199,56 @@ func TestRecoveryUpgradePreservesOldAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRecoveryAcceptedReplayRetryableFailure(t *testing.T) {
+	for _, class := range []string{SendErrorRetryableEnv, SendErrorNonceTooHigh} {
+		t.Run(class, func(t *testing.T) {
+			h := newAttemptHarness(t, "0x9898989898989898989898989898989898989898", 38)
+			id := h.enqueue()
+			a := h.signAttempt(id, 38, common.HexToHash("0x9898"))
+			h.broadcastResult(a.ID, SendErrorAccepted)
+			now := time.Now().UTC()
+			observe := func(at time.Time, replay bool) {
+				t.Helper()
+				task, err := h.store.ClaimRecovery(h.ctx, 40161, h.signerID, at, 8)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = h.store.FinishRecovery(h.ctx, task, 40161, h.signerID, RecoveryObservation{Now: at, Absent: true, Replay: replay}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observe(now, false)
+			observe(now.Add(time.Minute), true)
+			h.broadcastResult(a.ID, class)
+			row, err := h.store.GetOutboxTx(h.ctx, id)
+			if err != nil || row.Status != TxStatusBroadcast {
+				t.Fatalf("accepted replay must remain broadcast: status=%s err=%v", row.Status, err)
+			}
+			var state string
+			var deadline time.Time
+			if err = h.store.pool.QueryRow(h.ctx, `SELECT a.state,o.next_recovery_at FROM tx_outbox o JOIN tx_attempts a ON a.id=o.active_attempt_id WHERE o.id=$1`, id).Scan(&state, &deadline); err != nil {
+				t.Fatal(err)
+			}
+			if state != TxAttemptSubmitted {
+				t.Fatalf("acceptance lost: %s", state)
+			}
+			if _, err = h.store.ClaimAttemptForBroadcast(h.ctx, 40161, h.signerID, uuid.New(), time.Minute); !errors.Is(err, ErrNoBroadcastCandidate) {
+				t.Fatalf("replayed without new authorization: %v", err)
+			}
+			// A fresh observation before the action deadline must not spend budget.
+			observe(deadline.Add(-time.Millisecond), true)
+			if _, err = h.store.ClaimAttemptForBroadcast(h.ctx, 40161, h.signerID, uuid.New(), time.Minute); !errors.Is(err, ErrNoBroadcastCandidate) {
+				t.Fatalf("replayed before recovery deadline: %v", err)
+			}
+			observe(deadline.Add(time.Minute), true)
+			claim, err := h.store.ClaimAttemptForBroadcast(h.ctx, 40161, h.signerID, uuid.New(), time.Minute)
+			if err != nil {
+				t.Fatalf("retryable replay cannot recover: %v", err)
+			}
+			if claim.AttemptID != a.ID || !bytes.Equal(claim.RawTx, a.RawTx) || claim.Nonce != 38 {
+				t.Fatalf("recovery changed the transaction: %+v", claim)
+			}
+		})
+	}
+}
