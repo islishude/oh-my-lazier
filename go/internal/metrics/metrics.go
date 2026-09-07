@@ -505,6 +505,7 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	}
 	output.WriteString("# HELP laz_tx_outbox_orphaned_total Send-state rows with no active attempt (a broken invariant) by chain, signer, and status.\n")
 	output.WriteString("# TYPE laz_tx_outbox_orphaned_total gauge\n")
+	renderRecoveryMetrics(output, snapshot.Recovery)
 	for _, stat := range snapshot.TxOutboxOrphaned {
 		fmt.Fprintf(output, "laz_tx_outbox_orphaned_total{chain_eid=%q,signer=%s,status=%s} %d\n", uint32Label(stat.ChainEID), label(stat.SignerID), label(stat.Status), stat.Count)
 	}
@@ -744,4 +745,23 @@ func floatGauge(value float64) string {
 
 func label(value string) string {
 	return strconv.Quote(value)
+}
+
+func renderRecoveryMetrics(output *strings.Builder, stats []db.RecoveryStat) {
+	names := []string{"inflight", "window", "head_nonce", "head_age_seconds", "nonce_stall_seconds", "blocked_age_seconds", "unseen", "replays_total", "replacements_total"}
+	for _, name := range names {
+		kind := "gauge"
+		if strings.HasSuffix(name, "_total") {
+			kind = "counter"
+		}
+		fmt.Fprintf(output, "# HELP laz_tx_recovery_%s Durable signer lane recovery %s.\n# TYPE laz_tx_recovery_%s %s\n", name, name, name, kind)
+		for _, r := range stats {
+			values := map[string]float64{"inflight": float64(r.Inflight), "window": float64(r.Window), "head_nonce": float64(r.HeadNonce), "head_age_seconds": r.FirstBroadcastAge, "nonce_stall_seconds": r.NonceStallAge, "blocked_age_seconds": r.BlockedAge, "unseen": float64(r.Unseen), "replays_total": float64(r.Replays), "replacements_total": float64(r.Replacements)}
+			extra := ""
+			if name == "blocked_age_seconds" {
+				extra = ",reason=" + label(r.Reason)
+			}
+			fmt.Fprintf(output, "laz_tx_recovery_%s{chain_eid=%q,signer=%s%s} %g\n", name, uint32Label(r.ChainEID), label(r.SignerID), extra, values[name])
+		}
+	}
 }

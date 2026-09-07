@@ -715,6 +715,7 @@ func testConfig(signerID, keystorePath string) config.Config {
 	return config.Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		TxManager: config.TxManagerConfig{
+			MaxInflightPerSigner:                  8,
 			StaleBroadcastReplacementAfterSeconds: 900,
 		},
 		Signers: []config.SignerConfig{

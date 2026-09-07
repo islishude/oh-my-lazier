@@ -9,6 +9,7 @@ import (
 
 // StatsSnapshot is a point-in-time summary used by the HTTP metrics endpoint.
 type StatsSnapshot struct {
+	Recovery          []RecoveryStat
 	Chains            []ChainStat
 	Pathways          []PathwayStat
 	Packets           []PacketStat
@@ -198,7 +199,12 @@ func (s *Store) Stats(ctx context.Context) (StatsSnapshot, error) {
 	if err != nil {
 		return StatsSnapshot{}, err
 	}
+	recovery, err := s.recoveryStats(ctx)
+	if err != nil {
+		return StatsSnapshot{}, err
+	}
 	return StatsSnapshot{
+		Recovery:          recovery,
 		Chains:            chains,
 		Pathways:          pathways,
 		Packets:           packets,

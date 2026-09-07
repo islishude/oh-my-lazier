@@ -741,6 +741,16 @@ async function submitSecondaryVerificationAndExerciseRBF(
   });
   await setAutomine(destinationClients, false);
   try {
+    // Keep the second DVN absent while mining the primary worker's receipt
+    // to depth. Otherwise commitVerification can enter the pool before its
+    // lower nonce is terminal, and freezing blocks deadlocks head-only RBF.
+    await waitForPrimaryVerificationDepth(
+      sourceClients,
+      destinationClients,
+      destination,
+      packet,
+      BigInt(state.deployment.parameters.confirmations)
+    );
     const secondaryHash = await sendSecondaryVerification(
       state,
       destinationClients,
@@ -780,6 +790,42 @@ async function submitSecondaryVerificationAndExerciseRBF(
     await setAutomine(destinationClients, true);
   }
   await mine(destinationClients);
+}
+
+async function waitForPrimaryVerificationDepth(
+  sourceClients: Clients,
+  destinationClients: Clients,
+  destination: ChainDeployment,
+  packet: PacketDetails,
+  confirmations: bigint
+) {
+  const started = Date.now();
+  while (Date.now() - started < 60_000) {
+    await Promise.all([mine(sourceClients), mine(destinationClients)]);
+    const head = await destinationClients.publicClient.getBlockNumber({
+      cacheTime: 0,
+    });
+    if (head >= confirmations) {
+      const verified = await verifiedDVNs(
+        destinationClients.publicClient,
+        destination,
+        packet,
+        head - confirmations
+      );
+      if (verified.has(destination.primaryOpenDVN.toLowerCase())) {
+        logStep("rbf primary verification reached confirmation depth", {
+          chain: destination.name,
+          head,
+          confirmations,
+        });
+        return;
+      }
+    }
+    await sleep(500);
+  }
+  throw new Error(
+    `${destination.name} timed out waiting for primary verification confirmation depth before RBF exercise`
+  );
 }
 
 async function waitForSecondaryAndPrimaryVerifications(
@@ -1348,12 +1394,13 @@ function workerArtifactForClaim(claim: SourceWorkerFeeClaim): Artifact {
 async function verifiedDVNs(
   publicClient: PublicClient,
   destination: ChainDeployment,
-  packet: PacketDetails
+  packet: PacketDetails,
+  toBlock: bigint | "latest" = "latest"
 ): Promise<Set<string>> {
   const logs = await publicClient.getLogs({
     address: destination.receiveUln,
     fromBlock: 0n,
-    toBlock: "latest",
+    toBlock,
   });
   const out = new Set<string>();
   for (const log of logs) {

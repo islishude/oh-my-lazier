@@ -151,3 +151,133 @@ SQL
 ```
 
 The transaction commits only when `resumed_jobs = 1` and `unpaused_pathways = 1`; otherwise it rolls back and exits nonzero. After a successful reset, run the readiness check and watch the selected GUID through the DVN states.
+
+## Durable transaction recovery
+
+A successful RPC send is acceptance, not inclusion. The recovery loop probes the
+lowest outstanding nonce per chain and signer every 60 seconds. Two absent
+majority observations at least 60 seconds apart permit a same-raw replay; any
+visible provider or an unavailable majority resets absence evidence. Provider
+errors are never absence. Single-provider configurations use the same timing,
+but have only that provider's evidence. Visibility never establishes finality.
+
+An attempt has at most five broadcasts, including the initial send. Recovery
+replays use 60/120/240/480-second delays; they do not change the hash, nonce,
+payload, or fees, or downgrade `submitted`. If a replay encounters a retryable
+send error (including a full txpool, insufficient funds, or nonce too high), an
+already accepted attempt stays in `broadcast` for visibility recovery. The next
+replay still requires absence evidence and the recovery delay; initial sends
+without prior acceptance retain their existing retry behavior. Before recovery,
+all historical attempt receipts are checked. A canonical shallow receipt waits for the existing
+confirmation depth. An unexplained consumed nonce enters confirmed-nonce
+reconciliation and requires operator resolution if confirmed.
+
+Replacement remains bounded to five automatic attempts with at least 10% fee
+bumps under both configured fee caps. `txretry -action replace` registers one
+additional asynchronous request; it does not broadcast itself or override fee
+caps. Only the lowest outstanding nonce spends recovery budget. Normal new
+broadcasts can proceed within `tx_manager.max_inflight_per_signer` (default 8, defined by
+[`config.DefaultMaxInflightPerSigner`](../../go/internal/config/config.go);
+positive integer). Existing excess transactions continue converging; no new
+nonce is allocated until the window permits it.
+
+Use this read-only command first:
+
+```bash
+go run ./go/cmd/txretry -config <worker.yaml> -action inspect -id <tx_outbox_id>
+```
+
+The result includes the lane head, current and historical attempt summaries,
+budgets, first broadcast time, absence evidence, next check/action time,
+`replace_requested_at`, and recovery reason/detail. Raw signed transactions,
+signatures and RPC credentials are excluded. Mutation results include an
+inspection and `request_status: registered` for replacement requests. Run
+replacement only for the diagnosed head and only after correcting fee limits
+in the running worker config; config changes require restart.
+
+For an RPC propagation problem, immediately replay the current persisted signed
+attempt through an explicitly selected endpoint:
+
+```bash
+go run ./go/cmd/txretry -config <worker.yaml> -action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>
+```
+
+`rebroadcast` requires `-rpc-url`; other actions reject that option. HTTP(S),
+WS(S), and absolute IPC paths are supported. The command checks the RPC chain ID
+against the outbox chain's worker configuration and validates the signed
+transaction's chain ID, signature, sender, nonce, hash and canonical bytes before
+reserving a send. It needs the database and RPC, but does not load signer keys.
+RPC calls are bounded; the send timeout is 15 seconds and the lease is 45 seconds.
+
+Each invocation authorizes exactly one send, including past the automatic replay
+cap and cooldown; cumulative `broadcast_count` is retained. Only the lowest
+outstanding nonce may replay. Eligible rows are `signed`, `broadcast`, and
+`held(broadcast_exhausted)`, with a current signed/ambiguous/submitted attempt.
+Other holds, terminal rows, pinned receipts, missing attempts and active signing
+or broadcast leases are rejected. A pending cancel blocks the original attempt;
+an active cancel attempt may itself replay. Existing nonce holders can converge
+while paused. The command preserves raw bytes, fees, nonce and hash, so it cannot
+repair an underpriced transaction by itself.
+
+The database reserves both broadcast and signing leases before sending, fencing
+worker and operator claims. A cancel requested after a send was claimed still
+races that already authorized transaction. No additional automatic replay budget
+is granted. `replace` and `cancel-nonce` remain the recovery paths when a different
+signed transaction is required.
+
+The JSON result includes `action`, `outbox_id`, `attempt_id`, `tx_hash`,
+`send_class`, `detail`, and `recorded`. Only RPC acceptance (including
+`already known`) exits successfully; **RPC acceptance is not receipt confirmation**.
+Timeouts and unknown errors remain ambiguous and receipt polling retains the
+attempt. A failed result writeback reports that the transaction may have been
+accepted and sets `recorded: false`; inspect the attempt and let worker receipt
+tracking reconcile it before retrying. Output excludes RPC URLs, raw signed
+transactions and unfiltered provider errors. Keep RPC credentials out of retained
+shell history and operational evidence.
+
+Recovery clocks are independent of `updated_at`. Deferrals and replacement do
+not refresh first-broadcast or blocked-since ages. Historical first-broadcast
+evidence is conservatively initialized from the earliest sent attempt's creation
+time; missing history is reported as `evidence_missing`, not a fresh wait.
+`fee_cap` logs include required and configured fee/tip values. Reasons are logged
+on change and at most every five minutes while unchanged; successful replacement
+clears a fee/budget blockage. Receipt polling and recovery continue when readiness
+fails. Liveness remains independent.
+
+The `laz_tx_recovery_*` metric family aggregates by `chain_eid,signer`: inflight,
+window, head_nonce, head_age_seconds, nonce_stall_seconds, blocked_age_seconds
+(with bounded `reason`), unseen, replays_total, replacements_total. Action totals
+are derived from retained durable attempt history; deleting history resets them.
+GUIDs, transaction hashes and outbox IDs belong in logs, never metric labels.
+
+- `LazTxUnseen`: repeated absence with first-broadcast age at least 5 minutes;
+  warning. Inspect the RPC receive/propagation path rather than assuming low fees.
+- `LazTxNonceStalled`: successful account-nonce evidence with no advancement for
+  15 minutes and outstanding tasks; page. Evidence older than two minutes does
+  not establish nonce stagnation; RPC failures report `rpc_unavailable` instead.
+- `LazTxFeeCap`: a fee blockage lasting 5 minutes; warning. At 15 minutes,
+  `LazTxRecoveryBlocked` pages and readiness fails.
+- `LazTxRecoveryBlocked`: budget exhaustion pages immediately; other persistent
+  recovery reasons page after 15 minutes. Readiness follows those thresholds.
+
+Recovery alert conditions match the complete metric label set, including scrape
+identity and deployment labels, so evidence from different instances is never
+combined.
+
+Group Alertmanager notifications by chain and signer, inhibit warning severity
+when a page for the same lane is firing, and enable `send_resolved` on receivers.
+Deployment owners must install the rules and configure receivers; repository
+checks do not establish notification delivery. Validate the rules locally with
+`make check-alerts` (pinned Prometheus container); CI and `make check` run both
+rule syntax and executable threshold/recovery tests.
+
+`make test-integration` also runs `test-recovery-race` against its isolated PostgreSQL service. CI runs the same targeted race gate. For an existing test database, set `TEST_POSTGRES_URL` and run `make test-recovery-race`; it refuses to silently skip database coverage. Explicit cancel recovery keeps its existing operator semantics rather than consuming the normal head-recovery budget.
+
+The dual-Anvil RBF exercise keeps the secondary DVN unsubmitted until the primary
+worker verification reaches the configured local confirmation depth. It then
+submits the secondary verification and freezes mining once both verifications
+are present, leaving the worker's commit transaction pending for replacement.
+This lets the lower worker nonce terminalize without accidentally mining the
+commit transaction; merely seeing a latest-block verification event is not enough
+for the head-only recovery scheduler. The E2E still checks same-nonce replacement
+and fee bumps before resuming mining.

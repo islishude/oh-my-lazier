@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "config/example.yaml", "worker config path")
+	configPath := flag.String("config", "config.yaml", "worker config path")
 	logLevelName := flag.String("log-level", logging.DefaultLevelName, "minimum log level: debug, info, warn, or error")
 	indexerProgressLogInterval := flag.Duration("indexer-progress-log-interval", app.DefaultIndexerProgressLogInterval, "minimum interval between indexer progress info logs; 0 disables periodic progress info logs")
 	skipOnchainCheck := flag.Bool("skip-onchain-check", false, "skip the startup on-chain config check; local config validation still runs")

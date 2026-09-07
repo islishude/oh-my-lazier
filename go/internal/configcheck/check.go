@@ -698,7 +698,7 @@ func decodeExecutorConfig(data []byte) (executorConfig, error) {
 	if reflected.Kind() != reflect.Struct {
 		return executorConfig{}, fmt.Errorf("executor config returned %T, want tuple struct", values[0])
 	}
-	executor, ok := reflected.FieldByName("Executor").Interface().(common.Address)
+	executor, ok := reflect.TypeAssert[common.Address](reflected.FieldByName("Executor"))
 	if !ok {
 		return executorConfig{}, fmt.Errorf("executor config executor returned %T, want address", reflected.FieldByName("Executor").Interface())
 	}
@@ -720,11 +720,11 @@ func decodeULNConfig(data []byte) (ulnConfig, error) {
 	if reflected.Kind() != reflect.Struct {
 		return ulnConfig{}, fmt.Errorf("uln config returned %T, want tuple struct", values[0])
 	}
-	requiredDVNs, ok := reflected.FieldByName("RequiredDVNs").Interface().([]common.Address)
+	requiredDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("RequiredDVNs"))
 	if !ok {
 		return ulnConfig{}, fmt.Errorf("uln config requiredDVNs returned %T, want []common.Address", reflected.FieldByName("RequiredDVNs").Interface())
 	}
-	optionalDVNs, ok := reflected.FieldByName("OptionalDVNs").Interface().([]common.Address)
+	optionalDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("OptionalDVNs"))
 	if !ok {
 		return ulnConfig{}, fmt.Errorf("uln config optionalDVNs returned %T, want []common.Address", reflected.FieldByName("OptionalDVNs").Interface())
 	}

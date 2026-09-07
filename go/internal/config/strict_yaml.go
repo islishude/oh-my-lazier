@@ -42,6 +42,12 @@ func validateUnsignedIntegerNode(node *yaml.Node, target reflect.Type, path stri
 		target = target.Elem()
 	}
 
+	if path == "tx_manager.max_inflight_per_signer" {
+		var n int
+		if node.Tag != "!!int" || node.Decode(&n) != nil || n <= 0 {
+			return fmt.Errorf("%s must be a positive integer", path)
+		}
+	}
 	switch target.Kind() {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		if node.Kind != yaml.ScalarNode || node.Tag != "!!int" {

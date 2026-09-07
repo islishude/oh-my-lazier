@@ -194,3 +194,37 @@ groups:
         annotations:
           summary: A pending pricing transaction is stuck and gating new price writes while the snapshot ages
           runbook: docs/runbooks/price-bot.md
+
+      # Match the full label set so scrape instances and deployment labels
+      # cannot supply evidence for a different worker.
+      - alert: LazTxUnseen
+        expr: (laz_tx_recovery_unseen > 0) and (laz_tx_recovery_head_age_seconds >= 300)
+        labels:
+          severity: warning
+        annotations:
+          summary: Accepted transaction is repeatedly absent from RPC providers
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazTxNonceStalled
+        expr: (laz_tx_recovery_nonce_stall_seconds >= 900) and (laz_tx_recovery_inflight > 0)
+        labels:
+          severity: page
+        annotations:
+          summary: Signer nonce has not advanced for fifteen minutes
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazTxFeeCap
+        expr: laz_tx_recovery_blocked_age_seconds{reason="fee_cap"} >= 300
+        labels:
+          severity: warning
+        annotations:
+          summary: Transaction recovery exceeds configured fee limits
+          runbook: docs/runbooks/monitoring.md
+
+      - alert: LazTxRecoveryBlocked
+        expr: laz_tx_recovery_blocked_age_seconds{reason!=""} >= 900 or laz_tx_recovery_blocked_age_seconds{reason="replacement_exhausted"} >= 0
+        labels:
+          severity: page
+        annotations:
+          summary: Transaction recovery requires operator attention
+          runbook: docs/runbooks/monitoring.md

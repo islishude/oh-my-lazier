@@ -31,6 +31,9 @@ const (
 
 var environmentVariableNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+// DefaultMaxInflightPerSigner limits outstanding assigned nonces per signer when unset.
+const DefaultMaxInflightPerSigner = 8
+
 // MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
 const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
 
@@ -97,6 +100,8 @@ type ServiceToggleConfig struct {
 
 // TxManagerConfig controls durable transaction outbox processing.
 type TxManagerConfig struct {
+	// MaxInflightPerSigner limits outstanding assigned nonces per signer.
+	MaxInflightPerSigner int `yaml:"max_inflight_per_signer"`
 	// StaleBroadcastReplacementAfterSeconds is how long a broadcast row can lack a receipt before same-nonce replacement.
 	StaleBroadcastReplacementAfterSeconds uint64 `yaml:"stale_broadcast_replacement_after_seconds"`
 }
@@ -339,10 +344,6 @@ type ChainConfig struct {
 	IndexerPollIntervalSeconds uint64 `yaml:"indexer_poll_interval_seconds"`
 	// RPCURLs lists every RPC endpoint in the quorum; http(s), ws(s), and absolute IPC paths are supported.
 	RPCURLs []string `yaml:"rpc_urls"`
-	// LegacyTransactions forces type-0 (legacy) transactions on this chain even
-	// when it reports a base fee, for chains whose mempools drop EIP-1559
-	// transactions when legacy transaction tooling is required.
-	LegacyTransactions bool `yaml:"legacy_transactions"`
 	// TxRoles defines local send-time tx policies for worker submissions on this chain.
 	TxRoles ChainTxRolesConfig `yaml:"tx_roles"`
 }
@@ -446,6 +447,9 @@ func load(path string, applyEnv bool) (Config, error) {
 	if cfg.Metrics.ListenAddress == "" {
 		cfg.Metrics.ListenAddress = ":9090"
 	}
+	if cfg.TxManager.MaxInflightPerSigner == 0 {
+		cfg.TxManager.MaxInflightPerSigner = DefaultMaxInflightPerSigner
+	}
 	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
 		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds
 	}
@@ -504,6 +508,9 @@ func (c Config) Validate() error {
 	}
 	if c.DatabaseURL == "" {
 		return errors.New("database_url is required")
+	}
+	if c.TxManager.MaxInflightPerSigner <= 0 || c.TxManager.MaxInflightPerSigner > 2147483647 {
+		return errors.New("tx_manager.max_inflight_per_signer must be positive")
 	}
 	if c.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
 		return errors.New("tx_manager.stale_broadcast_replacement_after_seconds is required")
@@ -575,7 +582,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
 		}
 		for i, rpcURL := range chain.RPCURLs {
-			if err := validateRPCURL(rpcURL); err != nil {
+			if err := ValidateRPCURL(rpcURL); err != nil {
 				return fmt.Errorf("chain %s rpc_urls[%d] is invalid: %w", chain.Name, i, err)
 			}
 		}
@@ -757,7 +764,8 @@ func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers m
 	return validateTxSubmissionPolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei, role.MinNativeBalanceWei)
 }
 
-func validateRPCURL(raw string) error {
+// ValidateRPCURL checks the supported RPC transports without exposing credentials.
+func ValidateRPCURL(raw string) error {
 	if raw == "" {
 		return errors.New("value is required")
 	}

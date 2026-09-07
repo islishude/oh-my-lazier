@@ -1368,6 +1368,7 @@ func validConfig() Config {
 	return Config{
 		DatabaseURL: "postgres://user:pass@localhost:5432/db?sslmode=disable",
 		TxManager: TxManagerConfig{
+			MaxInflightPerSigner:                  8,
 			StaleBroadcastReplacementAfterSeconds: 900,
 		},
 		Signers: []SignerConfig{
@@ -1558,5 +1559,18 @@ func validPathwayPricingConfig() PathwayPricingConfig {
 	return PathwayPricingConfig{
 		ExecutorFee: WorkerFeeModelConfig{FixedFeeWei: "1000", DstGasOverhead: 50000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 100},
 		DVNFee:      WorkerFeeModelConfig{FixedFeeWei: "2000", DstGasOverhead: 150000, DataSizeOverheadBytes: new(uint64(0)), MarginBps: 200},
+	}
+}
+
+func TestRecoveryWindowYAML(t *testing.T) {
+	for _, v := range []string{"0", "-1", "1.5", "null", "\"8\""} {
+		var c Config
+		if err := decodeConfigYAML([]byte("tx_manager:\n  max_inflight_per_signer: "+v), &c); err == nil {
+			t.Errorf("accepted %s", v)
+		}
+	}
+	var c Config
+	if err := decodeConfigYAML([]byte("tx_manager:\n  max_inflight_per_signer: 8"), &c); err != nil {
+		t.Fatal(err)
 	}
 }

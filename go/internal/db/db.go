@@ -11,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/islishude/oh-my-lazier/go/internal/chain"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,7 +24,8 @@ type sqlExecutor interface {
 
 // Store wraps the Postgres connection pool used by worker state machines.
 type Store struct {
-	pool *pgxpool.Pool
+	pool        *pgxpool.Pool
+	maxInflight int
 }
 
 // Connect opens the Postgres pool for the configured database URL.
@@ -32,7 +34,7 @@ func Connect(ctx context.Context, databaseURL string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, maxInflight: config.DefaultMaxInflightPerSigner}, nil
 }
 
 // Ping verifies that the database connection is usable.
@@ -185,4 +187,11 @@ func addressBytes(address common.Address) []byte {
 	copied := make([]byte, len(bytes))
 	copy(copied, bytes)
 	return copied
+}
+
+// SetMaxInflight configures the nonce window before worker loops start.
+func (s *Store) SetMaxInflight(n int) {
+	if n > 0 {
+		s.maxInflight = n
+	}
 }

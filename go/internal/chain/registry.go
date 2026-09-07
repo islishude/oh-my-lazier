@@ -21,11 +21,8 @@ type Chain struct {
 	IndexerQueryBlockRange    uint64
 	IndexerBackfillBlockRange uint64
 	IndexerPollInterval       time.Duration
-	// LegacyTransactions forces type-0 transactions on this chain even when
-	// it reports a base fee (its mempool drops EIP-1559 transactions).
-	LegacyTransactions bool
-	TxRoles            TxRoles
-	RPC                *rpcquorum.Client
+	TxRoles                   TxRoles
+	RPC                       *rpcquorum.Client
 }
 
 // TxRoles identifies local transaction signers and fee caps for one chain.
@@ -111,7 +108,6 @@ func NewRegistry(chains []config.ChainConfig, pathways []config.PathwayConfig) (
 			IndexerQueryBlockRange:    cfg.IndexerQueryBlockRange,
 			IndexerBackfillBlockRange: cfg.IndexerBackfillBlockRange,
 			IndexerPollInterval:       time.Duration(cfg.IndexerPollIntervalSeconds) * time.Second,
-			LegacyTransactions:        cfg.LegacyTransactions,
 			TxRoles: TxRoles{
 				Executor: ExecutorTxRole{
 					SignerID:                cfg.TxRoles.Executor.Signer.Hex(),

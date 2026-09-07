@@ -826,10 +826,7 @@ func (b *Bot) shouldWriteSnapshot(ctx context.Context, update pricedUpdate, snap
 	}
 	deviation := PriceChangeBps(previous.price, snapshot.DstGasPriceInSrcToken)
 	now := b.now()
-	elapsed := now.Sub(previous.writtenAt)
-	if elapsed < 0 {
-		elapsed = 0
-	}
+	elapsed := max(now.Sub(previous.writtenAt), 0)
 	if deviation >= b.settings.MinUpdateDeviation || elapsed >= b.settings.Heartbeat {
 		return true, deviation, elapsed, nil
 	}

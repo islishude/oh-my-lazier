@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
 )
@@ -35,6 +36,10 @@ const (
 
 // Options controls tx manager runtime behavior.
 type Options struct {
+	// Now is the recovery clock; defaults to time.Now.
+	Now func() time.Time
+	// MaxInflightPerSigner bounds new nonce assignment.
+	MaxInflightPerSigner int
 	// StaleBroadcastReplacementAfter is how long a broadcast row can lack a receipt before same-nonce replacement.
 	StaleBroadcastReplacementAfter time.Duration
 	// PreSignRPCTimeout bounds the estimate-gas and fee-quote preflight for one attempt.
@@ -106,10 +111,19 @@ func NewWithTargetsAndOptions(store *db.Store, targets []Target, logger *slog.Lo
 		options:      normalizeOptions(options),
 		logger:       logger,
 	}
+	if store != nil {
+		store.SetMaxInflight(manager.options.MaxInflightPerSigner)
+	}
 	return manager
 }
 
 func normalizeOptions(options Options) Options {
+	if options.Now == nil {
+		options.Now = time.Now
+	}
+	if options.MaxInflightPerSigner <= 0 {
+		options.MaxInflightPerSigner = config.DefaultMaxInflightPerSigner
+	}
 	if options.StaleBroadcastReplacementAfter <= 0 {
 		options.StaleBroadcastReplacementAfter = DefaultStaleBroadcastReplacementAfter
 	}
@@ -165,6 +179,11 @@ func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 		signerID := "<nil>"
 		if target.Signer != nil {
 			signerID = target.Signer.Address().Hex()
+		}
+		if target.Signer != nil {
+			if err := m.ProcessRecovery(ctx, target); err != nil {
+				m.logger.Warn("tx recovery probe failed", "chain_eid", target.ChainEID, "error", err)
+			}
 		}
 		// One durable action per target per pass; the hot loop reruns immediately
 		// while anything was processed. Receipts run first so a mined tx stops

@@ -156,6 +156,7 @@ The rollback section of the migration ticket must include:
 - owner account able to pause/unpause the affected OApp/OFT pathway
 - signer account able to submit worker transactions
 - `go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json` output for the affected pathway
+- RPC propagation recovery may use `go run ./go/cmd/txretry -config <worker.yaml> -action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>` after inspecting the lowest outstanding nonce. This sends the existing signed bytes once, including beyond the automatic replay cap, without changing fees or resetting counts. RPC acceptance is not receipt confirmation; retain the safe JSON result and canonical confirmation evidence separately. Follow the eligibility, lease and ambiguous-result rules in [durable transaction recovery](monitoring.md#durable-transaction-recovery).
 - manual retry plan for verified but undelivered packets when `verified_but_undelivered_count` is non-zero, using txmgr automatic retry and `tx_manager.stale_broadcast_replacement_after_seconds` pending replacement first. Run `go run ./go/cmd/txretry -config <worker.yaml> -action retry-failed|replace -id <tx_outbox_id>` only after automatic retry is exhausted or an operator override is approved. Reprice-held (underpriced) rows recover automatically after a one-minute cooldown until the automatic replacement cap; `replace` records an operator replacement request on a broadcast or reprice-held row, resets its signing-failure budget, and authorizes one replacement past the automatic cap and cooldowns; the tx manager then signs a same-nonce replacement attempt at the greater of the fresh RPC suggestion and a 10% bump over the previous signed fee (deferring instead of exceeding the configured cap) and broadcasts the persisted raw. `retry-failed` requeues estimate-gas failures in place; only receipt-failed rows are cloned to keep mined failure evidence, and lzReceive receipt retries are skipped when the executor workflow has already advanced. Rows in `status = held` with reason `nonce_reconcile_required` are reconciled automatically against the confirmed chain nonce (read under the fixed provider majority; a round without a majority nonce is skipped); reason `broadcast_exhausted` (the active attempt spent its replay budget without an accepted send) recovers with `replace` or `cancel-nonce`; reason `manual` needs `txretry -action cancel-nonce` (abandon the task attempt and free the nonce with a noop; a lane whose active attempt is already a cancel instead gets one bumped cancel authorized by re-running `cancel-nonce` — `replace` does not accept manual holds); reason `nonce_consumed_externally` needs `txretry -action resolve-external-nonce -resolution retry` (terminate and clone a fresh task) or `-resolution abandon` (terminate and park the job for manual review).
 
 ## Rejection Criteria
@@ -175,3 +176,20 @@ Reject mainnet readiness if:
 - canary amount, sender, recipient, receipt, or recipient balance evidence is missing
 - `npm run check:migration-evidence` fails for the migration ticket record
 - `go run ./go/cmd/readinesscheck -config <worker.yaml>` reports any issue
+
+## Transaction recovery schema upgrade
+
+Migration `004_tx_recovery.sql` adds independent recovery clocks and signer-lane
+observations without rewriting earlier migrations or backfilling task data.
+Stop all old workers before upgrading; do not run old and new recovery schedulers
+against the same database. Retain existing attempts and their lifetime budgets.
+The normal recovery loop initializes historical first-send evidence from retained
+attempts; missing evidence requires inspection. Existing rows above the new
+inflight window continue recovery but block new nonce allocation.
+
+Before rollout, run `make test-integration`, Go race tests, `make check-alerts`
+and `make check`. After deployment, verify real RPC visibility, nonce advancement,
+backlog convergence, and both firing and resolved notifications. Local simulated
+accepted-then-missing tests are not proof of mainnet recovery or alert delivery.
+Rollback requires stopping the new workers and a reviewed scheduler/schema
+compatibility plan; do not erase migrations, attempts or recovery budgets.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -65,7 +66,8 @@ func (s *Store) RequestTxCancel(ctx context.Context, id int64) error {
 			cancel_defer_until = NULL,
 			pre_sign_failure_count = 0,
 			next_sign_at = NULL,
-			replace_requested_at = CASE WHEN EXISTS (
+			next_recovery_at=NULL, replay_authorized=false,
+ replace_requested_at = CASE WHEN EXISTS (
 				SELECT 1 FROM tx_attempts a
 				WHERE a.outbox_id = o.id AND a.id = o.active_attempt_id AND a.kind = $4
 			) THEN now() ELSE NULL END,
@@ -232,6 +234,8 @@ func (s *Store) ClaimOutboxForCancelSigning(ctx context.Context, id, expectedAct
 		SELECT status, held_reason, active_attempt_id, cancel_requested_at, receipt_outcome
 		FROM tx_outbox
 		WHERE id = $1 AND nonce IS NOT NULL AND (lease_until IS NULL OR lease_until <= now())
+			AND NOT EXISTS (SELECT 1 FROM tx_attempts a WHERE a.id=tx_outbox.active_attempt_id
+				AND a.broadcast_lease_until > now())
 		FOR UPDATE
 	`, id).Scan(&status, &heldReason, &activeAttemptID, &cancelRequestedAt, &receiptOutcome); errors.Is(err, pgx.ErrNoRows) {
 		return OutboxTx{}, ErrOutboxLeaseLost
@@ -248,13 +252,7 @@ func (s *Store) ClaimOutboxForCancelSigning(ctx context.Context, id, expectedAct
 	if current != expectedActiveAttemptID {
 		return OutboxTx{}, ErrActiveAttemptChanged
 	}
-	cancelable := false
-	for _, cancelableStatus := range txCancelableStatuses {
-		if status == cancelableStatus {
-			cancelable = true
-			break
-		}
-	}
+	cancelable := slices.Contains(txCancelableStatuses, status)
 	if !cancelable || (heldReason != nil && *heldReason == HeldNonceConsumedExternally) {
 		return OutboxTx{}, fmt.Errorf("outbox tx %d is not cancelable in status %s", id, status)
 	}
@@ -332,13 +330,7 @@ func (s *Store) InsertCancelAttempt(ctx context.Context, outboxID, expectedActiv
 	if current != expectedActiveAttemptID {
 		return TxAttempt{}, ErrActiveAttemptChanged
 	}
-	cancelable := false
-	for _, cancelableStatus := range txCancelableStatuses {
-		if outboxStatus == cancelableStatus {
-			cancelable = true
-			break
-		}
-	}
+	cancelable := slices.Contains(txCancelableStatuses, outboxStatus)
 	if !cancelable || (heldReason != nil && *heldReason == HeldNonceConsumedExternally) {
 		return TxAttempt{}, ErrActiveAttemptChanged
 	}

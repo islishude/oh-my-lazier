@@ -45,6 +45,9 @@ jobs:
       - name: Run Solidity tests
         run: npx hardhat test solidity --no-compile
 
+      - name: Check Prometheus rules
+        run: make check-alerts
+
       - name: Check runbooks
         run: npm run check:runbooks
 
@@ -88,8 +91,8 @@ jobs:
       - name: Check Go format
         run: make fmt-go-check
 
-      - name: Run Go tests
-        run: go test ./...
+      - name: Run Go integration tests
+        run: make test-integration INTEGRATION_MANAGE_DEPS=0
         env:
           TEST_POSTGRES_URL: "postgres://laz_worker:laz_worker@localhost:5432/laz_worker?sslmode=disable"
           RUSTACK_KMS_ENDPOINT: "http://localhost:4566"

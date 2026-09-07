@@ -335,3 +335,23 @@ func TestEvaluateIgnoresDisabledState(t *testing.T) {
 		t.Fatalf("ready = false, issues = %+v", report.Issues)
 	}
 }
+
+func TestRecoveryReadinessThresholds(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		age    float64
+		fail   bool
+	}{{"fee_cap", 899, false}, {"fee_cap", 900, true}, {"replacement_exhausted", 0, true}, {"rpc_unavailable", 900, true}, {"", 0, false}} {
+		snapshot := db.StatsSnapshot{Chains: []db.ChainStat{{EID: 1, Enabled: true}}, Recovery: []db.RecoveryStat{{ChainEID: 1, SignerID: "worker", Inflight: 1, Reason: tc.reason, BlockedAge: tc.age}}}
+		r := EvaluateWithServices(snapshot, Services{})
+		found := false
+		for _, i := range r.Issues {
+			if i.Code == "tx_recovery_stalled" {
+				found = true
+			}
+		}
+		if found != tc.fail {
+			t.Errorf("%s %.0f: %+v", tc.reason, tc.age, r.Issues)
+		}
+	}
+}

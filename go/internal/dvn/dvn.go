@@ -669,11 +669,11 @@ func receiveUlnConfigFromABI(value any) (receiveUlnConfig, error) {
 	if reflected.Kind() != reflect.Struct {
 		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig returned %T, want tuple struct", value)
 	}
-	requiredDVNs, ok := reflected.FieldByName("RequiredDVNs").Interface().([]common.Address)
+	requiredDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("RequiredDVNs"))
 	if !ok {
 		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig requiredDVNs has type %T", reflected.FieldByName("RequiredDVNs").Interface())
 	}
-	optionalDVNs, ok := reflected.FieldByName("OptionalDVNs").Interface().([]common.Address)
+	optionalDVNs, ok := reflect.TypeAssert[[]common.Address](reflected.FieldByName("OptionalDVNs"))
 	if !ok {
 		return receiveUlnConfig{}, fmt.Errorf("getUlnConfig optionalDVNs has type %T", reflected.FieldByName("OptionalDVNs").Interface())
 	}

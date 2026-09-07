@@ -81,6 +81,14 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			})
 		}
 	}
+	for _, r := range snapshot.Recovery {
+		if _, ok := activeChains[r.ChainEID]; !ok {
+			continue
+		}
+		if r.Inflight > 0 && (r.Reason == "replacement_exhausted" || (r.Reason != "" && r.BlockedAge >= 900) || r.NonceStallAge >= 900) {
+			issues = append(issues, Issue{Code: "tx_recovery_stalled", Message: fmt.Sprintf("chain %d signer %s nonce %d recovery stalled: reason=%s blocked=%.0fs nonce_stall=%.0fs", r.ChainEID, r.SignerID, r.HeadNonce, r.Reason, r.BlockedAge, r.NonceStallAge)})
+		}
+	}
 	for _, pathway := range snapshot.Pathways {
 		if !pathway.Enabled {
 			continue
