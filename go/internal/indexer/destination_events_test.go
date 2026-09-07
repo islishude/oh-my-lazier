@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/big"
 	"testing"
 
@@ -970,4 +971,43 @@ func originFromPacketRecord(packet db.PacketRecord) lzabi.Origin {
 func endpointEventInputs(t *testing.T, name string) abi.Arguments {
 	t.Helper()
 	return lzabi.EndpointV2ABI().Events[name].Inputs
+}
+
+// foreignOriginStore fails the test if the indexer tries to look up a packet
+// whose origin cannot be represented in the store (srcEid > int32 max).
+type foreignOriginStore struct {
+	*fakeDestinationStore
+	t *testing.T
+}
+
+func (s *foreignOriginStore) GetPacketByDestination(_ context.Context, _, srcEID uint32, _, _ common.Address, _ uint64) (db.PacketRecord, error) {
+	s.t.Fatalf("GetPacketByDestination must not be called for srcEid %d", srcEID)
+	return db.PacketRecord{}, nil
+}
+
+func TestPacketForDestinationLogSkipsForeignSrcEID(t *testing.T) {
+	packet := testDestinationPacketRecord()
+	packet.SrcEID = math.MaxUint32 // e.g. Sepolia tx 0xfd4dcbcf… emitted origin.srcEid = 0xffffffff
+	store := &foreignOriginStore{fakeDestinationStore: &fakeDestinationStore{}, t: t}
+	for name, log := range map[string]gethtypes.Log{
+		"PacketVerified":  testPacketVerifiedLog(t, packet),
+		"PacketDelivered": testPacketDeliveredLog(t, packet),
+	} {
+		got, found, err := packetForDestinationLog(context.Background(), store, packet.DstEID, log)
+		if err != nil {
+			t.Fatalf("%s: unexpected error %v", name, err)
+		}
+		if found || got.GUID != (common.Hash{}) {
+			t.Fatalf("%s: foreign-origin event must be treated as not-ours (found=%v)", name, found)
+		}
+	}
+}
+
+func TestDestinationOriginFitsStore(t *testing.T) {
+	if !destinationOriginFitsStore(30361) || !destinationOriginFitsStore(math.MaxInt32) {
+		t.Fatal("valid eids must fit")
+	}
+	if destinationOriginFitsStore(math.MaxInt32+1) || destinationOriginFitsStore(math.MaxUint32) {
+		t.Fatal("eids above int32 max must be rejected")
+	}
 }
