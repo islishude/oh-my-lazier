@@ -396,7 +396,7 @@ function validateAlertRules(
       }
     }
   }
-  if (!body.includes("runbook: docs/runbooks/monitoring.md")) {
+  if (!body.includes("runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md")) {
     errors.push(`${path}: alert annotations must link the monitoring runbook`);
   }
 }

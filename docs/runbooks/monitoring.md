@@ -16,7 +16,9 @@ http://<worker-host>:9090/metrics
 
 Required alert rules are tracked in `docs/monitoring/prometheus-alerts.yml`.
 `npm run check:runbooks` verifies that the documented high-signal alerts remain
-present and linked back to this runbook.
+present and linked back to this runbook using its full GitHub URL on the main
+branch. Alert annotations use absolute URLs so links work from alert receivers;
+repository-relative paths do not satisfy the runbook check.
 
 Required alerts:
 

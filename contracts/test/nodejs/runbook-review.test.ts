@@ -10,6 +10,32 @@ test("runbook review accepts current repository documents and alert rules", () =
   assert.deepEqual(validateRunbookReview(), []);
 });
 
+for (const { name, replacement } of [
+  { name: "missing", replacement: "" },
+  { name: "relative", replacement: "runbook: docs/runbooks/monitoring.md" },
+  {
+    name: "wrong document",
+    replacement:
+      "runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/missing.md",
+  },
+]) {
+  test(`runbook review rejects ${name} monitoring runbook links`, () => {
+    const documents = currentDocuments();
+    const alerts = documents.get("docs/monitoring/prometheus-alerts.yml");
+    assert.ok(alerts);
+    const updatedAlerts = alerts.replaceAll(
+      "runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md",
+      replacement
+    );
+    assert.notEqual(updatedAlerts, alerts);
+    documents.set("docs/monitoring/prometheus-alerts.yml", updatedAlerts);
+
+    assert.deepEqual(validateRunbookDocuments(documents), [
+      "docs/monitoring/prometheus-alerts.yml: alert annotations must link the monitoring runbook",
+    ]);
+  });
+}
+
 test("runbook review rejects missing required alert rules", () => {
   const documents = currentDocuments();
   const alerts = documents.get("docs/monitoring/prometheus-alerts.yml");
