@@ -3,6 +3,7 @@ SHELL := /bin/sh
 INTEGRATION_COMPOSE = docker compose -p oh-my-lazier-integration -f docker-compose.integration.yml
 INTEGRATION_POSTGRES_URL = postgres://laz_worker:laz_worker@localhost:55432/laz_worker?sslmode=disable
 INTEGRATION_RUSTACK_ENDPOINT = http://localhost:4566
+INTEGRATION_MANAGE_DEPS ?= 1
 
 E2E_COMPOSE = docker compose -p oh-my-lazier-e2e -f docker-compose.e2e.yml
 E2E_TMP_DIR = tmp/e2e
@@ -66,13 +67,22 @@ check-pricing-abi:
 # not run in parallel against the same database (-p 1).
 test-integration:
 	@set -e; \
-	cleanup() { \
-		$(INTEGRATION_COMPOSE) down -v --remove-orphans; \
-	}; \
-	trap cleanup EXIT INT TERM; \
-	$(INTEGRATION_COMPOSE) up -d --wait; \
-	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)" go test -count=1 -p 1 ./...; \
-	TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)" $(MAKE) --no-print-directory test-recovery-race; \
+	case "$(INTEGRATION_MANAGE_DEPS)" in \
+		1) \
+			cleanup() { $(INTEGRATION_COMPOSE) down -v --remove-orphans; }; \
+			trap cleanup EXIT INT TERM; \
+			$(INTEGRATION_COMPOSE) up -d --wait; \
+			export TEST_POSTGRES_URL="$(INTEGRATION_POSTGRES_URL)"; \
+			export RUSTACK_KMS_ENDPOINT="$(INTEGRATION_RUSTACK_ENDPOINT)"; \
+			;; \
+		0) \
+			: "$${TEST_POSTGRES_URL:?TEST_POSTGRES_URL is required for existing dependencies}"; \
+			: "$${RUSTACK_KMS_ENDPOINT:?RUSTACK_KMS_ENDPOINT is required for existing dependencies}"; \
+			;; \
+		*) echo "INTEGRATION_MANAGE_DEPS must be 0 or 1" >&2; exit 1 ;; \
+	esac; \
+	go test -count=1 -p 1 ./...; \
+	$(MAKE) --no-print-directory test-recovery-race
 
 test-kms-rustack:
 	@if [ -z "$$RUSTACK_KMS_ENDPOINT" ]; then \
