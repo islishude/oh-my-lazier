@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/signer"
 )
@@ -121,7 +122,7 @@ func normalizeOptions(options Options) Options {
 		options.Now = time.Now
 	}
 	if options.MaxInflightPerSigner <= 0 {
-		options.MaxInflightPerSigner = 8
+		options.MaxInflightPerSigner = config.DefaultMaxInflightPerSigner
 	}
 	if options.StaleBroadcastReplacementAfter <= 0 {
 		options.StaleBroadcastReplacementAfter = DefaultStaleBroadcastReplacementAfter

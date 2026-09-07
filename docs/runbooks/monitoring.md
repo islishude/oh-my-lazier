@@ -172,7 +172,8 @@ Replacement remains bounded to five automatic attempts with at least 10% fee
 bumps under both configured fee caps. `txretry -action replace` registers one
 additional asynchronous request; it does not broadcast itself or override fee
 caps. Only the lowest outstanding nonce spends recovery budget. Normal new
-broadcasts can proceed within `tx_manager.max_inflight_per_signer` (default 8,
+broadcasts can proceed within `tx_manager.max_inflight_per_signer` (default 8, defined by
+[`config.DefaultMaxInflightPerSigner`](../../go/internal/config/config.go);
 positive integer). Existing excess transactions continue converging; no new
 nonce is allocated until the window permits it.
 

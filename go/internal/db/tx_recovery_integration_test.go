@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -174,7 +175,7 @@ func TestRecoveryUpgradePreservesOldAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &Store{pool: pool, maxInflight: 8}
+	store := &Store{pool: pool, maxInflight: config.DefaultMaxInflightPerSigner}
 	if err = store.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
 	}

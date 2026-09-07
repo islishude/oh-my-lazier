@@ -31,6 +31,9 @@ const (
 
 var environmentVariableNamePattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
+// DefaultMaxInflightPerSigner limits outstanding assigned nonces per signer when unset.
+const DefaultMaxInflightPerSigner = 8
+
 // MaxPriceSnapshotStaleAfterSeconds mirrors OpenPriceFeed.MAX_PRICE_SNAPSHOT_STALE_AFTER.
 const MaxPriceSnapshotStaleAfterSeconds uint64 = 24 * 60 * 60
 
@@ -445,7 +448,7 @@ func load(path string, applyEnv bool) (Config, error) {
 		cfg.Metrics.ListenAddress = ":9090"
 	}
 	if cfg.TxManager.MaxInflightPerSigner == 0 {
-		cfg.TxManager.MaxInflightPerSigner = 8
+		cfg.TxManager.MaxInflightPerSigner = DefaultMaxInflightPerSigner
 	}
 	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
 		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds

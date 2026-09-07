@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
+	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -210,7 +211,7 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 		}
 		window := s.maxInflight
 		if window <= 0 {
-			window = 8
+			window = config.DefaultMaxInflightPerSigner
 		}
 		var inflight int
 		if err := tx.QueryRow(ctx, `SELECT count(*) FROM tx_outbox WHERE chain_eid=$1 AND signer_id=$2 AND nonce IS NOT NULL AND status NOT IN ('confirmed','failed')`, chainEID, signerID).Scan(&inflight); err != nil {
