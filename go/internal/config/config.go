@@ -582,7 +582,7 @@ func (c Config) Validate() error {
 			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
 		}
 		for i, rpcURL := range chain.RPCURLs {
-			if err := validateRPCURL(rpcURL); err != nil {
+			if err := ValidateRPCURL(rpcURL); err != nil {
 				return fmt.Errorf("chain %s rpc_urls[%d] is invalid: %w", chain.Name, i, err)
 			}
 		}
@@ -764,7 +764,8 @@ func validateRequiredDVNTxRole(chainName string, role DVNTxRoleConfig, signers m
 	return validateTxSubmissionPolicy(fmt.Sprintf("chain %s tx_roles.dvn", chainName), role.MaxFeePerGasWei, role.MaxPriorityFeePerGasWei, role.MinNativeBalanceWei)
 }
 
-func validateRPCURL(raw string) error {
+// ValidateRPCURL checks the supported RPC transports without exposing credentials.
+func ValidateRPCURL(raw string) error {
 	if raw == "" {
 		return errors.New("value is required")
 	}

@@ -234,6 +234,8 @@ func (s *Store) ClaimOutboxForCancelSigning(ctx context.Context, id, expectedAct
 		SELECT status, held_reason, active_attempt_id, cancel_requested_at, receipt_outcome
 		FROM tx_outbox
 		WHERE id = $1 AND nonce IS NOT NULL AND (lease_until IS NULL OR lease_until <= now())
+			AND NOT EXISTS (SELECT 1 FROM tx_attempts a WHERE a.id=tx_outbox.active_attempt_id
+				AND a.broadcast_lease_until > now())
 		FOR UPDATE
 	`, id).Scan(&status, &heldReason, &activeAttemptID, &cancelRequestedAt, &receiptOutcome); errors.Is(err, pgx.ErrNoRows) {
 		return OutboxTx{}, ErrOutboxLeaseLost

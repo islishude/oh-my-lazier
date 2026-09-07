@@ -195,6 +195,46 @@ inspection and `request_status: registered` for replacement requests. Run
 replacement only for the diagnosed head and only after correcting fee limits
 in the running worker config; config changes require restart.
 
+For an RPC propagation problem, immediately replay the current persisted signed
+attempt through an explicitly selected endpoint:
+
+```bash
+go run ./go/cmd/txretry -config <worker.yaml> -action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>
+```
+
+`rebroadcast` requires `-rpc-url`; other actions reject that option. HTTP(S),
+WS(S), and absolute IPC paths are supported. The command checks the RPC chain ID
+against the outbox chain's worker configuration and validates the signed
+transaction's chain ID, signature, sender, nonce, hash and canonical bytes before
+reserving a send. It needs the database and RPC, but does not load signer keys.
+RPC calls are bounded; the send timeout is 15 seconds and the lease is 45 seconds.
+
+Each invocation authorizes exactly one send, including past the automatic replay
+cap and cooldown; cumulative `broadcast_count` is retained. Only the lowest
+outstanding nonce may replay. Eligible rows are `signed`, `broadcast`, and
+`held(broadcast_exhausted)`, with a current signed/ambiguous/submitted attempt.
+Other holds, terminal rows, pinned receipts, missing attempts and active signing
+or broadcast leases are rejected. A pending cancel blocks the original attempt;
+an active cancel attempt may itself replay. Existing nonce holders can converge
+while paused. The command preserves raw bytes, fees, nonce and hash, so it cannot
+repair an underpriced transaction by itself.
+
+The database reserves both broadcast and signing leases before sending, fencing
+worker and operator claims. A cancel requested after a send was claimed still
+races that already authorized transaction. No additional automatic replay budget
+is granted. `replace` and `cancel-nonce` remain the recovery paths when a different
+signed transaction is required.
+
+The JSON result includes `action`, `outbox_id`, `attempt_id`, `tx_hash`,
+`send_class`, `detail`, and `recorded`. Only RPC acceptance (including
+`already known`) exits successfully; **RPC acceptance is not receipt confirmation**.
+Timeouts and unknown errors remain ambiguous and receipt polling retains the
+attempt. A failed result writeback reports that the transaction may have been
+accepted and sets `recorded: false`; inspect the attempt and let worker receipt
+tracking reconcile it before retrying. Output excludes RPC URLs, raw signed
+transactions and unfiltered provider errors. Keep RPC credentials out of retained
+shell history and operational evidence.
+
 Recovery clocks are independent of `updated_at`. Deferrals and replacement do
 not refresh first-broadcast or blocked-since ages. Historical first-broadcast
 evidence is conservatively initialized from the earliest sent attempt's creation

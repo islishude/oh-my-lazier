@@ -597,6 +597,12 @@ func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broa
 	`, status, heldReason, outboxID, attemptID); err != nil {
 		return err
 	}
+	// Manual sends also reserve the outbox against replacement/cancel signing.
+	// Never release a signing lease acquired by a different owner.
+	if _, err := tx.Exec(ctx, `UPDATE tx_outbox SET lease_token=NULL, lease_until=NULL
+	 WHERE id=$1 AND lease_token=$2::uuid`, outboxID, broadcastToken.String()); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -1270,6 +1276,8 @@ func (s *Store) ClaimOutboxForReplacementSigning(ctx context.Context, id, expect
 		SELECT status, held_reason, active_attempt_id, receipt_outcome
 		FROM tx_outbox
 		WHERE id = $1 AND (lease_until IS NULL OR lease_until <= now())
+			AND NOT EXISTS (SELECT 1 FROM tx_attempts a WHERE a.id=tx_outbox.active_attempt_id
+				AND a.broadcast_lease_until > now())
 		FOR UPDATE
 	`, id).Scan(&status, &heldReason, &activeAttemptID, &receiptOutcome); errors.Is(err, pgx.ErrNoRows) {
 		return OutboxTx{}, ErrOutboxLeaseLost

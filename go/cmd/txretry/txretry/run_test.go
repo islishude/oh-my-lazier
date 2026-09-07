@@ -17,13 +17,13 @@ func (s *fakeStore) InspectTx(context.Context, int64) (json.RawMessage, error) {
 func (s *fakeStore) RequestTxReplacement(context.Context, int64) error { s.writes++; return nil }
 func TestInspectNeverMutatesAndReplaceReportsRegistration(t *testing.T) {
 	s := &fakeStore{}
-	if _, err := Run(t.Context(), s, Options{ID: 1, Action: "inspect"}); err != nil {
+	if _, err := Run(t.Context(), s, Options{ID: 1, Action: "inspect"}, Dependencies{}); err != nil {
 		t.Fatal(err)
 	}
 	if s.writes != 0 {
 		t.Fatal("inspect mutated")
 	}
-	out, err := Run(t.Context(), s, Options{ID: 1, Action: "replace"})
+	out, err := Run(t.Context(), s, Options{ID: 1, Action: "replace"}, Dependencies{})
 	if err != nil {
 		t.Fatal(err)
 	}

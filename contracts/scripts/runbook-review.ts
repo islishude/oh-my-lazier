@@ -36,6 +36,9 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/monitoring.md",
     anchors: [
+      "-action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>",
+      "RPC acceptance is not receipt confirmation",
+      "`recorded: false`",
       "/healthz",
       "/readyz",
       "/metrics",

@@ -83,6 +83,7 @@ go run ./go/cmd/readinesscheck -config <worker.yaml> -format json
 go run ./go/cmd/pricebot-once -config <worker.yaml> -log-level debug
 go run ./go/cmd/draincheck -config <worker.yaml> -src-eid <src> -dst-eid <dst> -format json
 go run ./go/cmd/txretry -config <worker.yaml> -action inspect|retry-failed|replace|cancel-nonce|resolve-external-nonce [-resolution retry|abandon] -id <tx_outbox_id>
+go run ./go/cmd/txretry -config <worker.yaml> -action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>
 ```
 
 Worker binaries default to `-log-level info`. Use `-log-level debug` when investigating normal skip/defer reasons such as indexer caught-up windows, disabled pathways, not-yet-confirmed DVN jobs, or deferred tx manager work.
@@ -138,5 +139,7 @@ Phase 1 is EVM-only.
 - [docs/runbooks/key-management.md](docs/runbooks/key-management.md), [docs/runbooks/price-bot.md](docs/runbooks/price-bot.md), [docs/runbooks/rate-limit.md](docs/runbooks/rate-limit.md), [docs/runbooks/monitoring.md](docs/runbooks/monitoring.md): operator checklists.
 - [docs/security/security-review.md](docs/security/security-review.md) and [docs/security/npm-audit-disposition.md](docs/security/npm-audit-disposition.md): release-readiness security records.
 - [docs/runbooks/dvn-executor-migration.md](docs/runbooks/dvn-executor-migration.md): a general production-grade method for migrating the DVN/Executor workers.
+
+`txretry -action rebroadcast -rpc-url <rpc_url>` immediately replays the current persisted signed transaction through an explicitly selected RPC. It validates the RPC and transaction chain IDs, signature, sender, nonce and hash; it does not load a signer or change fees. Each invocation authorizes one manual send beyond automatic replay limits without resetting the cumulative count. An accepted result acknowledges RPC acceptance only; the worker still establishes canonical receipt confirmation. See the recovery runbook for eligible states and concurrency guards.
 
 Accepted-but-missing transactions use bounded same-raw recovery before replacement; independent recovery clocks, signer-level alerts and `txretry inspect` expose silent fee/budget waits. See [durable transaction recovery](docs/runbooks/monitoring.md#durable-transaction-recovery) for timing, operator actions and alert receiver setup. `make check-alerts` runs pinned Prometheus rule tests using Docker and is part of `make check`.

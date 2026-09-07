@@ -283,10 +283,7 @@ func (m *Manager) ProcessBroadcast(ctx context.Context, target Target) (int64, e
 		m.logger.Warn("failed tx raw decode before broadcast", "id", claim.OutboxID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", claim.Purpose, "nonce", claim.Nonce, "tx_hash", claim.TxHash)
 		return claim.OutboxID, nil
 	}
-	sendCtx, cancel := context.WithTimeout(ctx, m.options.SendTimeout)
-	sendErr := target.Client.SendTransaction(sendCtx, tx)
-	cancel()
-	class, detail := classifyBroadcastError(sendErr)
+	class, detail := sendPersistedTransaction(ctx, target.Client, tx, m.options.SendTimeout)
 	if err := m.store.MarkAttemptSendResult(ctx, claim.AttemptID, broadcastToken, class, detail); err != nil {
 		if errors.Is(err, db.ErrOutboxLeaseLost) {
 			// The broadcast lease expired mid-send; the replaying owner records the outcome.
