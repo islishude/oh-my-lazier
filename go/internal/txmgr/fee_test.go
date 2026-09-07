@@ -32,25 +32,39 @@ func TestQuoteDynamicFeeClampsPriorityTip(t *testing.T) {
 	}
 }
 
-func TestQuoteFeeForceLegacyIgnoresBaseFee(t *testing.T) {
-	// A legacy-forced chain quotes type-0 fees even when the header reports a
-	// base fee: its mempool drops EIP-1559 transactions.
-	client := &fakeChainClient{
-		header:            dynamicHeader(),
-		suggestedGasPrice: big.NewInt(1_000_000_000),
-	}
-	quote, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1}, FeePolicy{
-		ConfiguredMaxFeePerGas:  big.NewInt(3_000_000_000),
-		ForceLegacyTransactions: true,
-	}, client)
-	if err != nil {
-		t.Fatalf("quoteFee() error = %v", err)
-	}
-	if quote.Dynamic {
-		t.Fatal("quote.Dynamic = true, want a legacy quote on a legacy-forced chain")
-	}
-	if quote.MaxFeePerGas.Cmp(big.NewInt(1_000_000_000)) != 0 {
-		t.Fatalf("gas price = %s, want the suggested legacy price", quote.MaxFeePerGas)
+func TestQuoteFeeSelectsTypeFromHeader(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		baseFee     *big.Int
+		wantDynamic bool
+	}{
+		{name: "no base fee"},
+		{name: "zero base fee", baseFee: big.NewInt(0), wantDynamic: true},
+		{name: "positive base fee", baseFee: big.NewInt(500_000_000), wantDynamic: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			header := legacyHeader()
+			header.BaseFee = tt.baseFee
+			client := &fakeChainClient{header: header, suggestedGasPrice: big.NewInt(1_000_000_000), suggestedGasTipCap: big.NewInt(500_000_000)}
+			policy := FeePolicy{ConfiguredMaxFeePerGas: big.NewInt(3_000_000_000)}
+			if tt.wantDynamic {
+				policy.ConfiguredMaxPriorityFeePerGas = big.NewInt(500_000_000)
+			}
+			quote, err := quoteFee(context.Background(), db.QueuedOutboxTx{ID: 1}, policy, client)
+			if err != nil {
+				t.Fatalf("quoteFee() error = %v", err)
+			}
+			if quote.Dynamic != tt.wantDynamic {
+				t.Fatalf("quote.Dynamic = %v, want %v", quote.Dynamic, tt.wantDynamic)
+			}
+			wantFee := big.NewInt(1_000_000_000)
+			if tt.wantDynamic {
+				wantFee.Add(new(big.Int).Mul(tt.baseFee, big.NewInt(2)), policy.ConfiguredMaxPriorityFeePerGas)
+			}
+			if quote.MaxFeePerGas.Cmp(wantFee) != 0 {
+				t.Fatalf("fee = %s, want %s", quote.MaxFeePerGas, wantFee)
+			}
+		})
 	}
 }
 
