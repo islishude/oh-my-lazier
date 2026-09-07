@@ -5,11 +5,11 @@ tests:
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",signer="worker",reason="fee_cap"}'
-        values: '0+60x16 stale'
+        values: "0+60x16 stale"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker"}'
-        values: '8+0x16 0'
+        values: "8+0x16 0"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker"}'
-        values: '0+60x16 0'
+        values: "0+60x16 0"
     alert_rule_test:
       - eval_time: 4m
         alertname: LazTxFeeCap
@@ -17,48 +17,66 @@ tests:
       - eval_time: 5m
         alertname: LazTxFeeCap
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: worker, reason: fee_cap, severity: warning}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: worker,
+                reason: fee_cap,
+                severity: warning,
+              }
             exp_annotations:
               summary: Transaction recovery exceeds configured fee limits
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 15m
         alertname: LazTxRecoveryBlocked
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: worker, reason: fee_cap, severity: page}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: worker,
+                reason: fee_cap,
+                severity: page,
+              }
             exp_annotations:
               summary: Transaction recovery requires operator attention
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 15m
         alertname: LazTxNonceStalled
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: worker, severity: page}
+          - exp_labels: { chain_eid: "30361", signer: worker, severity: page }
             exp_annotations:
               summary: Signer nonce has not advanced for fifteen minutes
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 17m
         alertname: LazTxRecoveryBlocked
         exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",signer="worker",reason="replacement_exhausted"}'
-        values: '0 stale'
+        values: "0 stale"
     alert_rule_test:
       - eval_time: 0m
         alertname: LazTxRecoveryBlocked
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: worker, reason: replacement_exhausted, severity: page}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: worker,
+                reason: replacement_exhausted,
+                severity: page,
+              }
             exp_annotations:
               summary: Transaction recovery requires operator attention
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 1m
         alertname: LazTxRecoveryBlocked
         exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker"}'
-        values: '1+0x5 0'
+        values: "1+0x5 0"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker"}'
-        values: '0+60x6'
+        values: "0+60x6"
     alert_rule_test:
       - eval_time: 4m
         alertname: LazTxUnseen
@@ -66,31 +84,32 @@ tests:
       - eval_time: 5m
         alertname: LazTxUnseen
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: worker, severity: warning}
+          - exp_labels:
+              { chain_eid: "30361", signer: worker, severity: warning }
             exp_annotations:
               summary: Accepted transaction is repeatedly absent from RPC providers
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 6m
         alertname: LazTxUnseen
         exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '1 1 0'
+        values: "1 1 0"
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '100 300 360'
+        values: "100 300 360"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
-        values: '600 660 720'
+        values: "600 660 720"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '900 960 0'
+        values: "900 960 0"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '0 1 0'
+        values: "0 1 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
-        values: '1 1 1'
+        values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
         alertname: LazTxUnseen
@@ -98,10 +117,18 @@ tests:
       - eval_time: 1m
         alertname: LazTxUnseen
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'warning'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "warning",
+              }
             exp_annotations:
               summary: Accepted transaction is repeatedly absent from RPC providers
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxUnseen
         exp_alerts: []
@@ -111,31 +138,39 @@ tests:
       - eval_time: 1m
         alertname: LazTxNonceStalled
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'page'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "page",
+              }
             exp_annotations:
               summary: Signer nonce has not advanced for fifteen minutes
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxNonceStalled
         exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '1 1 0'
+        values: "1 1 0"
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '100 300 360'
+        values: "100 300 360"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
-        values: '600 660 720'
+        values: "600 660 720"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '900 960 0'
+        values: "900 960 0"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '0 1 0'
+        values: "0 1 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
-        values: '1 1 1'
+        values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
         alertname: LazTxUnseen
@@ -143,10 +178,18 @@ tests:
       - eval_time: 1m
         alertname: LazTxUnseen
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'warning'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "warning",
+              }
             exp_annotations:
               summary: Accepted transaction is repeatedly absent from RPC providers
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxUnseen
         exp_alerts: []
@@ -156,31 +199,39 @@ tests:
       - eval_time: 1m
         alertname: LazTxNonceStalled
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'page'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "page",
+              }
             exp_annotations:
               summary: Signer nonce has not advanced for fifteen minutes
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxNonceStalled
         exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '1 1 0'
+        values: "1 1 0"
       - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '100 300 360'
+        values: "100 300 360"
       - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
-        values: '600 660 720'
+        values: "600 660 720"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '900 960 0'
+        values: "900 960 0"
       - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
-        values: '0 0 0'
+        values: "0 0 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
-        values: '0 1 0'
+        values: "0 1 0"
       - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
-        values: '1 1 1'
+        values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
         alertname: LazTxUnseen
@@ -188,10 +239,18 @@ tests:
       - eval_time: 1m
         alertname: LazTxUnseen
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'warning'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "warning",
+              }
             exp_annotations:
               summary: Accepted transaction is repeatedly absent from RPC providers
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxUnseen
         exp_alerts: []
@@ -201,10 +260,18 @@ tests:
       - eval_time: 1m
         alertname: LazTxNonceStalled
         exp_alerts:
-          - exp_labels: {chain_eid: '30361', signer: 'worker', job: 'worker', instance: 'a', cluster: 'primary', severity: 'page'}
+          - exp_labels:
+              {
+                chain_eid: "30361",
+                signer: "worker",
+                job: "worker",
+                instance: "a",
+                cluster: "primary",
+                severity: "page",
+              }
             exp_annotations:
               summary: Signer nonce has not advanced for fifteen minutes
-              runbook: docs/runbooks/monitoring.md
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
       - eval_time: 2m
         alertname: LazTxNonceStalled
         exp_alerts: []
