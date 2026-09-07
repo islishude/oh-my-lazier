@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# syntax=docker/dockerfile:1
 
 FROM golang:1.27-alpine AS build
 
@@ -11,7 +11,7 @@ RUN  --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o ./go/bin/ ./go/cmd/...
 
-FROM alpine:3.24
+FROM alpine:latest
 
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 worker
 
