@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 
 	"github.com/ethereum/go-ethereum/common"
 	gethtypes "github.com/ethereum/go-ethereum/core/types"
@@ -566,6 +567,16 @@ func dvnCanApplyPayloadVerified(status string) bool {
 	}
 }
 
+// destinationOriginFitsStore reports whether a destination event's origin can
+// be looked up at all. LayerZero eids are uint32 but the packets table stores
+// src_eid as INTEGER (int4); a foreign PacketVerified/PacketDelivered with
+// srcEid > MaxInt32 (seen on Sepolia with 0xffffffff) would make pgx fail to
+// encode the query parameter and wedge the whole poll forever. Such events can
+// never belong to a packet we indexed, so treat them as "not ours".
+func destinationOriginFitsStore(srcEID uint32) bool {
+	return srcEID <= math.MaxInt32
+}
+
 func packetForDestinationLog(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, log gethtypes.Log) (db.PacketRecord, bool, error) {
 	if len(log.Topics) == 0 {
 		return db.PacketRecord{}, false, nil
@@ -576,12 +587,18 @@ func packetForDestinationLog(ctx context.Context, store ExecutorDestinationStore
 		if err != nil {
 			return db.PacketRecord{}, false, err
 		}
+		if !destinationOriginFitsStore(event.Origin.SrcEID) {
+			return db.PacketRecord{}, false, nil
+		}
 		packet, err := store.GetPacketByDestination(ctx, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver, event.Origin.Nonce)
 		return packet, true, err
 	case lzabi.PacketDeliveredTopic():
 		event, err := lzabi.DecodePacketDelivered(log)
 		if err != nil {
 			return db.PacketRecord{}, false, err
+		}
+		if !destinationOriginFitsStore(event.Origin.SrcEID) {
+			return db.PacketRecord{}, false, nil
 		}
 		packet, err := store.GetPacketByDestination(ctx, dstEID, event.Origin.SrcEID, originSenderAddress(event.Origin), event.Receiver, event.Origin.Nonce)
 		return packet, true, err
