@@ -283,3 +283,19 @@ This lets the lower worker nonce terminalize without accidentally mining the
 commit transaction; merely seeing a latest-block verification event is not enough
 for the head-only recovery scheduler. The E2E still checks same-nonce replacement
 and fee bumps before resuming mining.
+
+## Pricing source rejection
+
+`laz_pricing_source_failures_total{eid,source,role,category}` counts actual
+rejected price-source observations in the running bot. Categories are bounded:
+`stale`, `timeout`, `unavailable`, `invalid_observation`, `non_positive`,
+`missing_time`, `future`, and `deviation`. Error text is never a metric label.
+Cooldown hits do not increment the counter; counters reset on process restart.
+
+A rejected EID waits one pricing interval before another source request, shared
+by periodic and gas-spike checks. Its rejection does not increment supervisor
+retry metrics. Independent feeds continue, and existing snapshot age and
+`LazPricingSnapshotNearStale` alerts remain the availability signal during the
+cooldown. Consult [price bot recovery](price-bot.md#source-failures-and-retry-cadence)
+for recovery latency and pending-write behavior. Other loop failures use the
+[bounded exponential supervisor delay](../runtime.md#accounting-metrics-and-supervision).

@@ -33,11 +33,37 @@ type RuntimeProvider interface {
 
 // RuntimeSnapshot is a process-local worker metrics snapshot.
 type RuntimeSnapshot struct {
-	Indexers         []IndexerRuntimeStat
-	LoopRetries      []LoopRetryRuntimeStat
-	SignerBalances   []SignerBalanceRuntimeStat
-	RPCProviders     []RPCProviderRuntimeStat
-	PricingSnapshots []PricingSnapshotRuntimeStat
+	Indexers              []IndexerRuntimeStat
+	LoopRetries           []LoopRetryRuntimeStat
+	SignerBalances        []SignerBalanceRuntimeStat
+	RPCProviders          []RPCProviderRuntimeStat
+	PricingSnapshots      []PricingSnapshotRuntimeStat
+	PricingSourceFailures []PricingSourceFailureRuntimeStat
+}
+
+// PricingSourceFailureRuntimeStat counts rejected source observations.
+type PricingSourceFailureRuntimeStat struct {
+	EID                    uint32
+	Source, Role, Category string
+	Count                  uint64
+}
+
+type pricingSourceFailureKey struct {
+	eid                    uint32
+	source, role, category string
+}
+
+// RecordPricingSourceFailure counts a failure from an actual source read.
+func (r *Registry) RecordPricingSourceFailure(eid uint32, source, role, category string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pricingSourceFailures == nil {
+		r.pricingSourceFailures = make(map[pricingSourceFailureKey]uint64)
+	}
+	r.pricingSourceFailures[pricingSourceFailureKey{eid, source, role, category}]++
 }
 
 // PricingSnapshotRuntimeStat is the latest observed on-chain price snapshot
@@ -110,13 +136,14 @@ type SignerBalanceRuntimeStat struct {
 
 // Registry records process-local worker metrics.
 type Registry struct {
-	mu             sync.Mutex
-	indexers       map[indexerKey]*IndexerRuntimeStat
-	loopRetries    map[string]*LoopRetryRuntimeStat
-	signerBalances map[signerBalanceKey]*SignerBalanceRuntimeStat
-	rpcProviders   map[uint32][]RPCProviderRuntimeStat
-	pricing        map[pricingSnapshotKey]*PricingSnapshotRuntimeStat
-	now            func() time.Time
+	mu                    sync.Mutex
+	pricingSourceFailures map[pricingSourceFailureKey]uint64
+	indexers              map[indexerKey]*IndexerRuntimeStat
+	loopRetries           map[string]*LoopRetryRuntimeStat
+	signerBalances        map[signerBalanceKey]*SignerBalanceRuntimeStat
+	rpcProviders          map[uint32][]RPCProviderRuntimeStat
+	pricing               map[pricingSnapshotKey]*PricingSnapshotRuntimeStat
+	now                   func() time.Time
 }
 
 type pricingSnapshotKey struct {
@@ -329,6 +356,22 @@ func (r *Registry) RuntimeSnapshot() RuntimeSnapshot {
 	for _, stats := range r.rpcProviders {
 		snapshot.RPCProviders = append(snapshot.RPCProviders, stats...)
 	}
+	for key, count := range r.pricingSourceFailures {
+		snapshot.PricingSourceFailures = append(snapshot.PricingSourceFailures, PricingSourceFailureRuntimeStat{EID: key.eid, Source: key.source, Role: key.role, Category: key.category, Count: count})
+	}
+	sort.Slice(snapshot.PricingSourceFailures, func(i, j int) bool {
+		a, b := snapshot.PricingSourceFailures[i], snapshot.PricingSourceFailures[j]
+		if a.EID != b.EID {
+			return a.EID < b.EID
+		}
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		if a.Role != b.Role {
+			return a.Role < b.Role
+		}
+		return a.Category < b.Category
+	})
 	nowUnix := r.now().Unix()
 	for _, stat := range r.pricing {
 		copied := *stat
@@ -562,6 +605,12 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 }
 
 func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
+	output.WriteString("# HELP laz_pricing_source_failures_total Rejected observations from actual pricing source reads.\n")
+	output.WriteString("# TYPE laz_pricing_source_failures_total counter\n")
+	for _, stat := range snapshot.PricingSourceFailures {
+		fmt.Fprintf(output, "laz_pricing_source_failures_total{eid=%q,source=%s,role=%s,category=%s} %d\n", uint32Label(stat.EID), label(stat.Source), label(stat.Role), label(stat.Category), stat.Count)
+	}
+
 	output.WriteString("# HELP laz_pricing_snapshot_age_seconds Age of the on-chain price snapshot per priced pathway, from on-chain updatedAt.\n")
 	output.WriteString("# TYPE laz_pricing_snapshot_age_seconds gauge\n")
 	for _, stat := range snapshot.PricingSnapshots {

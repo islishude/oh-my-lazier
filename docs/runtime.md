@@ -88,4 +88,6 @@ For commands and startup options, see [worker operation](runbooks/worker.md).
 
 - Worker metrics expose each active transaction signer's native balance against its configured `min_native_balance_wei` threshold.
 
-- Retryable loop errors are logged and supervised with backoff; non-retryable loop errors stop `App.Run`.
+- Retryable loop errors use exponential restart delays of 5, 10, 20, 40, then 60 seconds. Pricing instead caps the delay at its configured `interval_seconds` (starting at the smaller of five seconds and that interval). An uninterrupted run of at least the greater of five minutes and twice the cap resets the delay; unexpected successful returns also back off. Cancellation interrupts the wait and non-retryable loop errors stop `App.Run` immediately.
+
+- Runtime price-source rejections stay inside the pricing loop. A failed EID cools down for one `interval_seconds` after the read completes, shared by periodic and gas-spike evaluation; independent feeds continue. A timer evaluates again at cooldown expiry, so recovery can wait one full interval after the preceding failure, plus read/enqueue/confirmation time. No stale observation is reused. Cooldowns survive supervisor re-entry of the same bot but not process restart. Single-shot pricing still reports total failure as an error.

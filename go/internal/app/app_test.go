@@ -644,7 +644,7 @@ func TestSuperviseLoopRestartsReturnedErrorsUntilContextCanceled(t *testing.T) {
 	go func() {
 		defer close(done)
 		attempts := 0
-		errCh <- superviseLoop(ctx, "test", 0, discardLogger(), retries, func(context.Context) error {
+		errCh <- superviseLoop(ctx, "test", newLoopBackoff(0), discardLogger(), retries, func(context.Context) error {
 			attempts++
 			calls <- attempts
 			if attempts == 2 {
@@ -683,7 +683,7 @@ func TestSuperviseLoopReturnsFatalErrorWithoutRetry(t *testing.T) {
 	retries := &recordingLoopRetries{}
 	calls := 0
 
-	err := superviseLoop(context.Background(), "test", 0, discardLogger(), retries, func(context.Context) error {
+	err := superviseLoop(context.Background(), "test", newLoopBackoff(0), discardLogger(), retries, func(context.Context) error {
 		calls++
 		return workerloop.Fatal(wantErr)
 	})

@@ -36,6 +36,7 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/monitoring.md",
     anchors: [
+      "laz_pricing_source_failures_total{eid,source,role,category}",
       "-action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>",
       "RPC acceptance is not receipt confirmation",
       "`recorded: false`",
@@ -114,6 +115,8 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/price-bot.md",
     anchors: [
+      "## Source failures and retry cadence",
+      "Periodic checks and gas-spike checks share it",
       "go run ./go/cmd/pricebot-once -config <worker.yaml>",
       "npm run check:price-config",
       "OML_SCRIPT_PARAMS=tmp/check-price-config.json",
