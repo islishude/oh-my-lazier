@@ -275,3 +275,77 @@ tests:
       - eval_time: 2m
         alertname: LazTxNonceStalled
         exp_alerts: []
+  # An isolated failure, a first visible nonzero counter, and failures spread
+  # across different scrape instances must not trigger the source warning.
+  - interval: 1m
+    input_series:
+      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="a"}'
+        values: "0+0x14 1+0x75"
+      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="b"}'
+        values: "0+0x14 1+0x75"
+      - series: 'laz_pricing_source_failures_total{eid="30361",source="chainlink",role="sanity",category="timeout",instance="a"}'
+        values: "1+0x90"
+    alert_rule_test:
+      - eval_time: 0m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+  # Two observed increases fire without a hold time, then age out of the window.
+  - interval: 1m
+    input_series:
+      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="a",job="worker"}'
+        values: "0+0x14 1+0x14 2+0x60"
+    alert_rule_test:
+      - eval_time: 29m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LazPricingSourceFailing
+        exp_alerts:
+          - exp_labels:
+              eid: "30361"
+              source: coingecko
+              role: primary
+              category: stale
+              instance: a
+              job: worker
+              severity: warning
+            exp_annotations:
+              summary: Pricing source has repeatedly rejected observations in the last hour
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 90m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+  # A restart resets the counter; increases on both sides still count.
+  - interval: 1m
+    input_series:
+      - series: 'laz_pricing_source_failures_total{eid="30361",source="chainlink",role="sanity",category="timeout",instance="a"}'
+        values: "0+0x14 1+0x14 0+0x14 1+0x45"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LazPricingSourceFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: LazPricingSourceFailing
+        exp_alerts:
+          - exp_labels:
+              eid: "30361"
+              source: chainlink
+              role: sanity
+              category: timeout
+              instance: a
+              severity: warning
+            exp_annotations:
+              summary: Pricing source has repeatedly rejected observations in the last hour
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: LazPricingSourceFailing
+        exp_alerts: []

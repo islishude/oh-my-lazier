@@ -106,5 +106,7 @@ limits and chain snapshot expiry remain independent safety bounds; increasing
 
 Watch `laz_pricing_source_failures_total{eid,source,role,category}` alongside
 snapshot age and time-to-stale. The counter increments on actual rejected reads,
-not cooldown hits. Snapshot age continues advancing during an outage. See
+not cooldown hits. `LazPricingSourceFailing` warns on repeated failures within
+one hour; snapshot age continues advancing during an outage and remains the
+paging signal. See
 [monitoring](monitoring.md) and [runtime supervision](../runtime.md).

@@ -61,6 +61,7 @@ const requiredDocs: RequiredDoc[] = [
       "LazRPCProviderConflict",
       "LazRPCQuorumUnavailable",
       "LazPricingSnapshotNearStale",
+      "LazPricingSourceFailing",
       "LazPricingPendingStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
@@ -295,6 +296,13 @@ const requiredAlertRules: RequiredAlertRule[] = [
     anchors: [
       "laz_tx_outbox_orphaned_total > 0",
       "severity: page",
+    ],
+  },
+  {
+    alert: "LazPricingSourceFailing",
+    anchors: [
+      "increase(laz_pricing_source_failures_total[1h]) >= 2",
+      "severity: warning",
     ],
   },
   {
