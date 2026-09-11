@@ -27,72 +27,42 @@ make security-check
 `make security-check` runs the security review document gate, npm audit
 disposition gate, and `govulncheck`.
 
-Current npm audit metadata:
+Current npm audit metadata (2026-09-11, after ABI dependency cleanup and the OpenZeppelin v4 override):
 
 ```text
 critical: 0
-high: 18
-moderate: 4
-low: 21
-total: 43
+high: 1
+moderate: 3
+low: 24
+total: 28
 ```
 
 ## Remediation Applied
 
-- `@nomicfoundation/hardhat-toolbox-viem` remains a direct dependency.
-- `@nomicfoundation/ignition-core = 3.1.7` is a direct dependency for the
-  documented deployment-state query workaround.
-- `viem` remains a direct pinned dependency for scripts.
-- `@chainlink/contracts = 1.5.0` is pinned only as the AggregatorV3 ABI source.
-- `@uniswap/v3-core = 1.0.1` is pinned only as the V3 pool ABI source; the retired V3 periphery/QuoterV2 dependency is removed.
-- Independent vulnerable transitive packages are pinned through npm overrides:
-  - `axios = 1.18.1`
-  - `elliptic = 6.6.1`
-  - `undici = 6.28.0`
-  - `ws = 8.21.0`
+- Removed direct `@chainlink/contracts = 1.5.0` and `@uniswap/v3-core = 1.0.1` dependencies. Complete interface ABI arrays and their licenses are retained as [vendored inputs](../../contracts/vendor/abis/README.md), with source provenance and SHA-256 verification in both generation and check modes.
+- Generated Go pricing ABI bytes remain unchanged. The Go worker embeds these files and has no Node.js runtime dependency.
+- The ABI cleanup removed 176 package entries, added none, and changed no retained package versions. LayerZero dependencies and the Hardhat/Viem/Ignition toolchain remain pinned.
+- Existing npm overrides are retained. A scoped `@chainlink/contracts-ccip@0.7.6` override pins its `@openzeppelin/contracts` dependency to `4.9.6` instead of `4.3.3`. The path is `@layerzerolabs/lz-evm-messagelib-v2 -> @chainlink/contracts-ccip -> @openzeppelin/contracts`. The direct v5 dependency remains `5.6.1`; no other installed package version changes in this override step.
+- After this override, audit reports critical=0, high=2, moderate=3, low=24, total=29. The installed `@openzeppelin/contracts@4.9.6` is absent from the current advisory nodes. CCIP and its LayerZero parents now have moderate aggregate findings. At that step, the CCIP aliases `@openzeppelin/contracts-v0.7` (actual version `3.4.2`) and `@openzeppelin/contracts-upgradeable-4.7.3` accounted for the two high findings.
+- A fresh audit before cleanup reported critical=0, high=6, moderate=3, low=25, total=34. After cleanup it reports critical=0, high=5, moderate=0, low=24, total=29. The removed high/moderate findings are `tmp`, `@chainlink/contracts`, `@arbitrum/nitro-contracts`, and `@offchainlabs/upgrade-executor`. Previously recorded findings absent from the fresh audit are also removed from the disposition set.
 
-These changes remove all critical npm audit findings without changing pinned
-LayerZero package versions or removing Hardhat toolbox support.
+- A subsequent override under the same CCIP scope maps `@openzeppelin/contracts-upgradeable-4.7.3` to `npm:@openzeppelin/contracts-upgradeable@4.9.6`. The alias name is preserved for upstream imports; its installed version is 4.9.6. This step changes only that package version and retains upgradeable v5.6.1. Audit now reports critical=0, high=1, moderate=3, low=24, total=28; the upgradeable finding is removed.
 
 ## Remaining High Findings
 
-| Package                                       | Direct | Source                                      | Disposition                                                           |
-| --------------------------------------------- | ------ | ------------------------------------------- | --------------------------------------------------------------------- |
-| `@chainlink/contracts-ccip`                   | no     | LayerZero transitive dependency             | Open. Do not auto-downgrade LayerZero packages.                       |
-| `@layerzerolabs/lz-evm-messagelib-v2`         | yes    | pinned LayerZero package                    | Open. Required for current LayerZero interfaces.                      |
-| `@layerzerolabs/lz-evm-oapp-v2`               | yes    | pinned LayerZero package                    | Open. Required for current OFT base contracts.                        |
-| `@nomicfoundation/hardhat-ignition`           | no     | retained Hardhat deployment toolchain       | Open. Aggregate finding inherited from Hardhat and Ignition core.     |
-| `@nomicfoundation/hardhat-ignition-viem`      | no     | retained Hardhat deployment toolchain       | Open. Aggregate finding inherited from Hardhat and Ignition core.     |
-| `@nomicfoundation/hardhat-keystore`           | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
-| `@nomicfoundation/hardhat-network-helpers`    | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
-| `@nomicfoundation/hardhat-node-test-runner`   | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
-| `@nomicfoundation/hardhat-toolbox-viem`       | yes    | pinned Hardhat V3 toolbox                   | Open. Required by compile, test, Viem, and Ignition workflows.        |
-| `@nomicfoundation/hardhat-verify`             | no     | retained Hardhat deployment toolchain       | Open. Inherited from Hardhat and legacy Ethers ABI code.              |
-| `@nomicfoundation/hardhat-viem`               | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat.                       |
-| `@nomicfoundation/hardhat-viem-assertions`    | no     | retained Hardhat toolbox                    | Open. Aggregate finding inherited from Hardhat and Viem integration.  |
-| `@openzeppelin/contracts`                     | no     | LayerZero and Chainlink dependency graph    | Open. Project contracts directly use pinned OpenZeppelin v5.          |
-| `@openzeppelin/contracts-upgradeable`         | no     | LayerZero and Chainlink dependency graph    | Open. Project contracts do not import upgradeable contracts.         |
-| `adm-zip`                                     | no     | Hardhat compiler/tooling dependency         | Open. Pinned Hardhat currently exposes no compatible fix.             |
-| `hardhat`                                     | yes    | pinned Hardhat 3.9.1                        | Open. Aggregate finding from vulnerable `adm-zip`.                    |
-| `lodash-es`                                   | no     | Ignition core transitive dependency         | Open. Required by pinned Ignition core.                               |
-| `tmp`                                         | no     | Chainlink ABI package transitive tooling    | Open. Not imported by the Go runtime or project contracts.            |
+| Package | Direct | Source | Disposition |
+| --- | --- | --- | --- |
+| `@openzeppelin/contracts` | no | CCIP alias `@openzeppelin/contracts-v0.7`, actual version `3.4.2` | Open. Outside the v4 override; project contracts directly use v5.6.1. |
 
 ## Remaining Moderate Findings
 
-The remaining moderate findings are attached to the direct Ignition core state
-adapter dependency and transitive tooling bundled by the pinned Chainlink ABI
-source:
+| Package | Direct | Source | Disposition |
+| --- | --- | --- | --- |
+| `@chainlink/contracts-ccip` | no | LayerZero peer dependency | Open. Remaining aggregate finding from its dependency graph. |
+| `@layerzerolabs/lz-evm-messagelib-v2` | yes | pinned LayerZero package | Open. Required for current LayerZero interfaces. |
+| `@layerzerolabs/lz-evm-oapp-v2` | yes | pinned LayerZero package | Open. Required for current OFT base contracts. |
 
-- `@arbitrum/nitro-contracts`
-- `@chainlink/contracts`
-- `@nomicfoundation/ignition-core`
-- `@offchainlabs/upgrade-executor`
-
-These are not accepted for mainnet by this document. They require either a
-compatible upstream fix or explicit approval before mainnet readiness.
-`@chainlink/contracts` is used as a pinned source for the AggregatorV3 ABI; the
-project does not deploy its bundled contracts. The Go worker embeds the generated
-ABI and has no Node.js runtime dependency.
+New high or moderate findings and severity changes still fail the disposition gate; these results are not mainnet approval.
 
 ## Release Decision
 
@@ -101,7 +71,7 @@ ABI and has no Node.js runtime dependency.
 - Do not apply npm's suggested LayerZero downgrade automatically; the project
   relies on the currently pinned package interfaces.
 - Mainnet readiness requires one of:
-  - compatible LayerZero/Hardhat/Chainlink package updates that clear these advisories
+  - compatible dependency updates that clear these advisories
   - an explicit security approval accepting the remaining transitive toolchain
     exposure for the planned release
 

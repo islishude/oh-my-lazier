@@ -61,15 +61,15 @@
     "@layerzerolabs/lz-evm-messagelib-v2": "3.0.168",
     "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
     "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",
-    "@chainlink/contracts": "1.5.0",
-    "@nomicfoundation/hardhat-toolbox-viem": "5.0.7",
-    "@nomicfoundation/ignition-core": "3.1.9",
     "@openzeppelin/contracts": "5.6.1",
-    "@types/node": "26.4.1",
-    "@uniswap/v3-core": "1.0.1",
-    "hardhat": "3.14.0",
-    "typescript": "6.0.3",
     "viem": "2.56.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.4.1",
+    "typescript": "6.0.3",
+    "hardhat": "3.14.0",
+    "@nomicfoundation/hardhat-toolbox-viem": "5.0.7",
+    "@nomicfoundation/ignition-core": "3.1.9"
   },
   "overrides": {
     "axios": "1.20.0",
@@ -77,6 +77,10 @@
     "undici": "6.28.1",
     "ws": "8.21.0",
     "js-yaml": "4.3.2",
-    "adm-zip": "0.6.1"
+    "adm-zip": "0.6.1",
+    "@chainlink/contracts-ccip@0.7.6": {
+      "@openzeppelin/contracts": "4.9.6",
+      "@openzeppelin/contracts-upgradeable-4.7.3": "npm:@openzeppelin/contracts-upgradeable@4.9.6"
+    }
   }
 }

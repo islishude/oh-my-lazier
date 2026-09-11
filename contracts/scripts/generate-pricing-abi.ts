@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -54,19 +55,19 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/chainlink_aggregator_v3.json",
         type: "function",
         name: "latestRoundData",
       },
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/chainlink_aggregator_v3.json",
         type: "function",
         name: "decimals",
       },
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/chainlink_aggregator_v3.json",
         type: "function",
         name: "description",
       },
@@ -77,19 +78,19 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/uniswap_v3_pool.json",
         type: "function",
         name: "observe",
       },
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/uniswap_v3_pool.json",
         type: "function",
         name: "token0",
       },
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/uniswap_v3_pool.json",
         type: "function",
         name: "token1",
       },
@@ -111,6 +112,7 @@ const outputs: AbiOutput[] = [
 const repoRoot = process.cwd();
 
 export async function generatePricingABI(checkOnly: boolean): Promise<void> {
+  await verifyVendoredPricingABIs(path.join(repoRoot, "contracts/vendor/abis"));
   const artifactCache = new Map<string, Artifact>();
 
   for (const output of outputs) {
@@ -258,4 +260,27 @@ function formatCompactParameter(input: AbiInput): string {
   )}, "name": ${JSON.stringify(input.name)}, "type": ${JSON.stringify(
     input.type
   )} }`;
+}
+
+export async function verifyVendoredPricingABIs(directory: string): Promise<void> {
+  const sources = JSON.parse(
+    await readFile(path.join(directory, "sources.json"), "utf8")
+  ) as Array<{ file: string; sha256: string }>;
+  const expected = ["chainlink_aggregator_v3.json", "uniswap_v3_pool.json"];
+  if (
+    sources.length !== expected.length ||
+    expected.some(
+      (file) => sources.filter((source) => source.file === file).length !== 1
+    )
+  ) {
+    throw new Error(
+      "vendored pricing ABI manifest must contain exactly the expected sources"
+    );
+  }
+  for (const source of sources) {
+    const raw = await readFile(path.join(directory, source.file));
+    if (createHash("sha256").update(raw).digest("hex") !== source.sha256) {
+      throw new Error(`${source.file}: vendored pricing ABI SHA-256 mismatch`);
+    }
+  }
 }

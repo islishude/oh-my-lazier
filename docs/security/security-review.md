@@ -122,9 +122,9 @@ Evidence:
 
 - `npm audit --audit-level=moderate --json` reports zero critical findings.
 - The remaining high and moderate findings are limited to pinned LayerZero
-  dependencies, the retained Hardhat/Ignition deployment toolchain (including
-  its `adm-zip` and `lodash-es` dependencies), and transitive tooling bundled by
-  the pinned Chainlink AggregatorV3 ABI source.
+  dependencies, including their Chainlink CCIP and OpenZeppelin dependency graph.
+  The standalone Chainlink and Uniswap ABI source packages have been removed;
+  their [vendored ABI inputs](../../contracts/vendor/abis/README.md) are hash-checked.
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 

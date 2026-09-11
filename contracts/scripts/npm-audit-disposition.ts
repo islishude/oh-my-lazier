@@ -17,30 +17,10 @@ type AuditReport = {
 };
 
 const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
-  ["@chainlink/contracts-ccip", "high"],
-  ["@layerzerolabs/lz-evm-messagelib-v2", "high"],
-  ["@layerzerolabs/lz-evm-oapp-v2", "high"],
-  ["@nomicfoundation/hardhat-ignition", "high"],
-  ["@nomicfoundation/hardhat-ignition-viem", "high"],
-  ["@nomicfoundation/hardhat-keystore", "high"],
-  ["@nomicfoundation/hardhat-network-helpers", "high"],
-  ["@nomicfoundation/hardhat-node-test-runner", "high"],
-  ["@nomicfoundation/hardhat-toolbox-viem", "high"],
-  ["@nomicfoundation/hardhat-verify", "high"],
-  ["@nomicfoundation/hardhat-viem", "high"],
-  ["@nomicfoundation/hardhat-viem-assertions", "high"],
+  ["@chainlink/contracts-ccip", "moderate"],
+  ["@layerzerolabs/lz-evm-messagelib-v2", "moderate"],
+  ["@layerzerolabs/lz-evm-oapp-v2", "moderate"],
   ["@openzeppelin/contracts", "high"],
-  ["@openzeppelin/contracts-upgradeable", "high"],
-  ["adm-zip", "high"],
-  ["hardhat", "high"],
-  ["lodash-es", "high"],
-  ["tmp", "high"],
-  ["@arbitrum/nitro-contracts", "moderate"],
-  ["@chainlink/contracts", "moderate"],
-  ["@nomicfoundation/ignition-core", "moderate"],
-  ["@offchainlabs/upgrade-executor", "moderate"],
-  ["@nomicfoundation/hardhat-utils", "moderate"],
-  ["@actions/http-client", "moderate"]
 ]);
 
 function runAudit(): AuditReport {

@@ -1,0 +1,24 @@
+[
+  {
+    "file": "chainlink_aggregator_v3.json",
+    "package": "@chainlink/contracts",
+    "version": "1.5.0",
+    "upstream": "https://github.com/smartcontractkit/chainlink-evm",
+    "sourcePath": "abi/v0.8/shared/AggregatorV3Interface.abi.json",
+    "extraction": "Verbatim ABI JSON",
+    "sourceSha256": "ad03a0b3f82447803d55b1bb7d24ed67c3ae195d6881fe1b704f76266b53151f",
+    "sha256": "ad03a0b3f82447803d55b1bb7d24ed67c3ae195d6881fe1b704f76266b53151f",
+    "license": "MIT"
+  },
+  {
+    "file": "uniswap_v3_pool.json",
+    "package": "@uniswap/v3-core",
+    "version": "1.0.1",
+    "upstream": "https://github.com/Uniswap/v3-core",
+    "sourcePath": "artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+    "extraction": "JSON.stringify(artifact.abi, null, 2) plus newline",
+    "sourceSha256": "1cb22d8cc5f70b1cef8a4f59bdd49541f01279bfba116878244ed913fe4cba33",
+    "sha256": "d3882d5ad8ac400dd9c64e8783675551c561c28b0085632c7f05988f9c904c40",
+    "license": "GPL-2.0-or-later"
+  }
+]

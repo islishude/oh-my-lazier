@@ -133,6 +133,8 @@ This mode requires both endpoints and neither starts nor stops dependencies.
 Both modes run the full Go suite serially across packages, followed by recovery
 race integration tests.
 
+Chainlink and Uniswap pricing ABI sources are vendored with pinned provenance and SHA-256 verification; see the [source manifest and update procedure](../contracts/vendor/abis/README.md). Normal ABI generation does not download these sources.
+
 ABI artifacts are committed under `go/internal/lzabi/abis`, `go/internal/configcheck/abis`, and `go/internal/pricing/abis`.
 
 ```bash
