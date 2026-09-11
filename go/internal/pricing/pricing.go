@@ -10,7 +10,6 @@ import (
 	"maps"
 	"math/big"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -22,6 +21,7 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/config"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
+	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
 const (
@@ -44,12 +44,13 @@ var (
 
 // Bot updates shared worker price snapshots.
 type Bot struct {
-	store         Store
-	registry      *chain.Registry
-	settings      Settings
-	sources       map[uint32]ChainSources
-	snapshots     PriceSnapshotReader
-	lastGasPrices map[string]*big.Int
+	store           Store
+	registry        *chain.Registry
+	settings        Settings
+	sources         map[uint32]ChainSources
+	snapshots       PriceSnapshotReader
+	lastGasPrices   map[string]*big.Int
+	sourceCooldowns map[uint32]sourceCooldown
 	// cycleWritten caches the on-chain gate baseline for ONE evaluation cycle.
 	// The chain snapshot is the only durable write state: an enqueued update is
 	// tracked through its pending outbox row, never through an optimistic
@@ -197,28 +198,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		return ctx.Err()
 	}
 	b.logger.Info("price bot loop started")
-	if err := b.EnqueueOnce(ctx); err != nil {
-		return err
-	}
-	interval := time.NewTicker(b.settings.Interval)
-	defer interval.Stop()
-	gasCheckInterval := min(b.settings.Interval, 15*time.Second)
-	gasCheck := time.NewTicker(gasCheckInterval)
-	defer gasCheck.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-interval.C:
-			if err := b.EnqueueOnce(ctx); err != nil {
-				return err
-			}
-		case <-gasCheck.C:
-			if err := b.EnqueueOnGasSpike(ctx); err != nil {
-				return err
-			}
-		}
-	}
+	return b.runScheduled(ctx)
 }
 
 // Store persists price update transactions and exposes their pending state.
@@ -234,6 +214,7 @@ type Store interface {
 // MetricsRecorder receives pricing snapshot observability samples.
 type MetricsRecorder interface {
 	RecordPricingSnapshot(srcEID, dstEID uint32, priceFeed common.Address, updatedAt time.Time, staleAfter time.Duration)
+	RecordPricingSourceFailure(eid uint32, source, role, category string)
 }
 
 // GasPriceReader reads a destination-chain gas price.
@@ -482,6 +463,9 @@ func (b *Bot) EnqueueOnce(ctx context.Context) error {
 			succeeded++
 			continue
 		}
+		if workerloop.IsFatal(err) {
+			return err
+		}
 		if err != nil {
 			// Caller cancellation is never feed-local: an interrupted one-shot
 			// must not report success after skipping remaining feeds.
@@ -590,6 +574,9 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			b.rememberPendingFeed(batch.SrcEID, batch.PriceFeed)
 			continue
 		}
+		if workerloop.IsFatal(err) {
+			return err
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return errors.Join(append(batchErrs, ctx.Err())...)
@@ -597,7 +584,11 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			// A failed feed keeps its spike baselines so the spike re-fires
 			// on the next check instead of waiting for a further rise.
 			b.logger.Warn("gas-spike batch failed; continuing with remaining feeds", "src_eid", batch.SrcEID, "price_feed", batch.PriceFeed, "error", err.Error())
-			failedFeeds[pendingFeedKey(batch.SrcEID, batch.PriceFeed)] = struct{}{}
+			feedKey := pendingFeedKey(batch.SrcEID, batch.PriceFeed)
+			failedFeeds[feedKey] = struct{}{}
+			if _, wasPending := previousPending[feedKey]; wasPending {
+				b.rememberPendingFeed(batch.SrcEID, batch.PriceFeed)
+			}
 			batchErrs = append(batchErrs, fmt.Errorf("feed %d:%s: %w", batch.SrcEID, batch.PriceFeed, err))
 			continue
 		}
@@ -698,7 +689,19 @@ func (c *priceCycle) nativePrice(ctx context.Context, eid uint32) (*big.Rat, err
 		Now:                  c.bot.now,
 		OnSourceFailure:      c.bot.logSourceFailure,
 	}
+	if cooldown, ok := c.bot.sourceCooldowns[eid]; ok && c.bot.now().Before(cooldown.nextRetryAt) {
+		c.nativeUSD[eid] = nativeUSDResult{err: cooldown.err}
+		return nil, cooldown.err
+	}
 	price, err := ChainNativePrice(ctx, c.bot.sources, eid, policy)
+	if onlySourceFailures(err) {
+		if c.bot.sourceCooldowns == nil {
+			c.bot.sourceCooldowns = make(map[uint32]sourceCooldown)
+		}
+		c.bot.sourceCooldowns[eid] = sourceCooldown{err: err, nextRetryAt: c.bot.now().Add(c.bot.settings.Interval)}
+	} else {
+		delete(c.bot.sourceCooldowns, eid)
+	}
 	c.nativeUSD[eid] = nativeUSDResult{price: price, err: err}
 	return price, err
 }
@@ -897,6 +900,9 @@ func (b *Bot) loadWrittenPrice(ctx context.Context, update pricedUpdate) (writte
 }
 
 func (b *Bot) logSourceFailure(failure PriceSourceFailure) {
+	if b.metrics != nil {
+		b.metrics.RecordPricingSourceFailure(failure.EID, failure.Source, failure.Role, failure.Category)
+	}
 	attributes := []any{
 		"eid", failure.EID,
 		"source", failure.Source,
@@ -1330,6 +1336,11 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 			}
 		}
 	}
+	for _, result := range completed {
+		if isPriceSourceConfigurationError(result.err) || workerloop.IsFatal(result.err) {
+			return nil, result.err
+		}
+	}
 	validationNow := now()
 	primaryResult := completed[chainSources.Primary.Name]
 	primary := primaryResult.price
@@ -1351,12 +1362,6 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 		}
 		sanityPrices = append(sanityPrices, result.price)
 	}
-	if primaryErr != nil {
-		notifyPriceSourceFailure(policy, PriceSourceFailure{
-			EID: eid, Source: chainSources.Primary.Name, Role: "primary", Category: priceSourceFailureCategory(primaryErr), Err: primaryErr,
-		})
-		return nil, fmt.Errorf("%s primary source for chain %d: %w", chainSources.Primary.Name, eid, primaryErr)
-	}
 	for _, err := range sanityErrs {
 		if sourceErr, ok := errors.AsType[sanitySourceError](err); ok {
 			notifyPriceSourceFailure(policy, PriceSourceFailure{
@@ -1364,12 +1369,18 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 			})
 		}
 	}
+	if primaryErr != nil {
+		notifyPriceSourceFailure(policy, PriceSourceFailure{
+			EID: eid, Source: chainSources.Primary.Name, Role: "primary", Category: priceSourceFailureCategory(primaryErr), Err: primaryErr,
+		})
+		return nil, runtimeSourceFailure(eid, priceSourceFailureCategory(primaryErr), fmt.Errorf("%s primary source for chain %d: %w", chainSources.Primary.Name, eid, primaryErr))
+	}
 	if len(chainSources.Sanity) > 0 && len(sanityPrices) == 0 {
 		err := fmt.Errorf("no healthy sanity price source for chain %d", eid)
 		if len(sanityErrs) > 0 {
-			return nil, errors.Join(append([]error{err}, sanityErrs...)...)
+			return nil, runtimeSourceFailure(eid, "unavailable", errors.Join(append([]error{err}, sanityErrs...)...))
 		}
-		return nil, err
+		return nil, runtimeSourceFailure(eid, "unavailable", err)
 	}
 	for _, sanity := range sanityPrices {
 		deviation := DeviationBps(primary.USD, sanity.USD)
@@ -1378,7 +1389,7 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 			notifyPriceSourceFailure(policy, PriceSourceFailure{
 				EID: eid, Source: sanity.Source, Role: "sanity", Category: "deviation", DeviationBps: deviation, Err: err,
 			})
-			return nil, err
+			return nil, runtimeSourceFailure(eid, "deviation", err)
 		}
 	}
 	return SelectPriceWithSanity(primary, sanityPrices, policy.MaxDeviationBps)
@@ -1401,20 +1412,13 @@ func notifyPriceSourceFailure(policy PriceSelectionPolicy, failure PriceSourceFa
 }
 
 func priceSourceFailureCategory(err error) string {
-	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout"
-	case strings.Contains(err.Error(), "stale"):
-		return "stale"
-	case strings.Contains(err.Error(), "future"):
-		return "future"
-	case strings.Contains(err.Error(), "non-positive"):
-		return "non_positive"
-	case strings.Contains(err.Error(), "missing observation time"):
-		return "missing_time"
-	default:
-		return "unavailable"
+	if observation, ok := errors.AsType[*observationError](err); ok {
+		return observation.category
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "unavailable"
 }
 
 func validateObservedPrice(source ConfiguredPriceReader, price SourcePrice, now time.Time) error {
@@ -1425,22 +1429,22 @@ func validateObservedPrice(source ConfiguredPriceReader, price SourcePrice, now 
 		return fmt.Errorf("%s max age must be positive", source.Name)
 	}
 	if price.Source == "" {
-		return fmt.Errorf("%s returned missing source name", source.Name)
+		return &observationError{category: "invalid_observation", cause: fmt.Errorf("%s returned missing source name", source.Name)}
 	}
 	if price.Source != source.Name {
-		return fmt.Errorf("%s returned unexpected source %q", source.Name, price.Source)
+		return &observationError{category: "invalid_observation", cause: fmt.Errorf("%s returned unexpected source %q", source.Name, price.Source)}
 	}
 	if price.USD == nil || price.USD.Sign() <= 0 {
-		return fmt.Errorf("%s returned non-positive price", source.Name)
+		return &observationError{category: "non_positive", cause: fmt.Errorf("%s returned non-positive price", source.Name)}
 	}
 	if price.ObservedAt.IsZero() {
-		return fmt.Errorf("%s returned missing observation time", source.Name)
+		return &observationError{category: "missing_time", cause: fmt.Errorf("%s returned missing observation time", source.Name)}
 	}
 	if price.ObservedAt.After(now.Add(sourceFutureTolerance)) {
-		return fmt.Errorf("%s observation time is too far in the future", source.Name)
+		return &observationError{category: "future", cause: fmt.Errorf("%s observation time is too far in the future", source.Name)}
 	}
 	if now.Sub(price.ObservedAt) > source.MaxAge {
-		return fmt.Errorf("%s observation is stale", source.Name)
+		return &observationError{category: "stale", cause: fmt.Errorf("%s observation is stale", source.Name)}
 	}
 	return nil
 }

@@ -171,6 +171,19 @@ groups:
           summary: A send-state tx_outbox row lost its active attempt; the signer lane needs operator recovery
           runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
 
+      - alert: LazPricingSourceFailing
+        # Cooldown hits do not increment this counter. Keep each complete label
+        # set separate so different sources or scrape instances cannot combine
+        # failures. This warning diagnoses repeated rejection; snapshot age is
+        # still the paging signal for an actual loss of pricing availability.
+        expr: increase(laz_pricing_source_failures_total[1h]) >= 2
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Pricing source has repeatedly rejected observations in the last hour
+          runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+
       - alert: LazPricingSnapshotNearStale
         expr: laz_pricing_snapshot_time_to_stale_seconds < 300
         # No hold time: time-to-stale decreases monotonically between writes,

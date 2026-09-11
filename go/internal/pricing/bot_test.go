@@ -993,7 +993,8 @@ func TestDecodeSetPriceSnapshotCalldata(t *testing.T) {
 }
 
 type fakeMetricsRecorder struct {
-	samples int
+	samples  int
+	failures int
 }
 
 func (f *fakeMetricsRecorder) RecordPricingSnapshot(uint32, uint32, common.Address, time.Time, time.Duration) {
@@ -1375,4 +1376,8 @@ func TestBotEnqueueOncePropagatesCancellationAfterPartialSuccess(t *testing.T) {
 	if err := bot.EnqueueOnce(ctx); err == nil {
 		t.Fatal("EnqueueOnce() error = nil, want propagated cancellation")
 	}
+}
+
+func (f *fakeMetricsRecorder) RecordPricingSourceFailure(uint32, string, string, string) {
+	f.failures++
 }

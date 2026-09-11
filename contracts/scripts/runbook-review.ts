@@ -36,6 +36,7 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/monitoring.md",
     anchors: [
+      "laz_pricing_source_failures_total{eid,source,role,category}",
       "-action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>",
       "RPC acceptance is not receipt confirmation",
       "`recorded: false`",
@@ -60,6 +61,7 @@ const requiredDocs: RequiredDoc[] = [
       "LazRPCProviderConflict",
       "LazRPCQuorumUnavailable",
       "LazPricingSnapshotNearStale",
+      "LazPricingSourceFailing",
       "LazPricingPendingStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
@@ -114,6 +116,8 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/price-bot.md",
     anchors: [
+      "## Source failures and retry cadence",
+      "Periodic checks and gas-spike checks share it",
       "go run ./go/cmd/pricebot-once -config <worker.yaml>",
       "npm run check:price-config",
       "OML_SCRIPT_PARAMS=tmp/check-price-config.json",
@@ -292,6 +296,13 @@ const requiredAlertRules: RequiredAlertRule[] = [
     anchors: [
       "laz_tx_outbox_orphaned_total > 0",
       "severity: page",
+    ],
+  },
+  {
+    alert: "LazPricingSourceFailing",
+    anchors: [
+      "increase(laz_pricing_source_failures_total[1h]) >= 2",
+      "severity: warning",
     ],
   },
   {

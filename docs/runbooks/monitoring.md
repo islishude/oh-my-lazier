@@ -22,6 +22,8 @@ repository-relative paths do not satisfy the runbook check.
 
 Required alerts:
 
+- `LazPricingSourceFailing`: `increase(laz_pricing_source_failures_total[1h]) >= 2`; warning without an additional hold time. Inspect the indicated instance, EID, source, role, and category. See [pricing source rejection](#pricing-source-rejection) for counter and recovery semantics.
+
 - `LazWorkerReadinessFailed`: `/readyz` returns non-200 for more than two scrape intervals; page. Readiness also fails while any active-chain signer lane is parked `held(manual)`, `held(nonce_consumed_externally)`, `held(broadcast_exhausted)`, or reprice-held past the automatic replacement cap (reported as the synthetic `reprice_exhausted` reason) — those holds block every higher nonce for the signer until the operator resolves them with `txretry`; the self-healing `reprice_required` (below the cap) and `nonce_reconcile_required` holds and fresh pending cancels do not fail readiness — except a `reprice_required` hold or a pending cancel older than fifteen minutes, which means the mandatory bump cannot land (typically the configured fee cap blocks it, so the automatic path can neither converge nor escalate) and also fails readiness. The cancel age counts from the immutable `cancel_requested_at`; deferrals only move the separate pacing column, so a fee-cap-stuck cancel cannot hide behind a perpetually young age.
 - `LazChainPaused`: `laz_chain_paused == 1` for any chain; page immediately. This means chain-wide quorum safety logic paused the worker path. A chain removed from configuration keeps its pause bit in the database as a safety state for a possible re-enable, but its gauge reports 0 — readiness and the durable loops ignore disabled records, so their retained pause must not page.
 - `LazPathwayPaused`: `laz_pathway_paused == 1` for any pathway; page immediately. This means packet-level receipt/log conflict safety logic paused a pathway. The `src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp` labels preserve the full pathway identity, including multiple OApp pairs on the same chain direction. Disabled pathways likewise report 0.
@@ -283,3 +285,37 @@ This lets the lower worker nonce terminalize without accidentally mining the
 commit transaction; merely seeing a latest-block verification event is not enough
 for the head-only recovery scheduler. The E2E still checks same-nonce replacement
 and fee bumps before resuming mining.
+
+## Pricing source rejection
+
+`laz_pricing_source_failures_total{eid,source,role,category}` counts actual
+rejected price-source observations in the running bot. Categories are bounded:
+`stale`, `timeout`, `unavailable`, `invalid_observation`, `non_positive`,
+`missing_time`, `future`, and `deviation`. Error text is never a metric label.
+Cooldown hits do not increment the counter; counters reset on process restart.
+
+A rejected EID waits one pricing interval before another source request, shared
+by periodic and gas-spike checks. Its rejection does not increment supervisor
+retry metrics. Independent feeds continue, and existing snapshot age and
+`LazPricingSnapshotNearStale` alerts remain the availability signal during the
+cooldown. Consult [price bot recovery](price-bot.md#source-failures-and-retry-cadence)
+for recovery latency and pending-write behavior. Other loop failures use the
+[bounded exponential supervisor delay](../runtime.md#accounting-metrics-and-supervision).
+
+`LazPricingSourceFailing` warns when a source/role/category series records an
+estimated increase of at least two failures over one hour. The expression keeps
+all labels, including scrape instance and deployment labels; failures from
+different sources, categories, or workers are never summed together. A single
+isolated failure, an unchanged counter, or an absent series does not constitute
+ongoing evidence. Prometheus accounts for counter resets; because a series is
+created on its first failure, that initial event may not be visible as an
+increase until subsequent samples provide a baseline.
+
+This is a repeated-failure warning, not proof of consecutive failures or an
+unavailable price feed: a rejected sanity source may coexist with another
+healthy sanity source. Inspect source freshness, API limits, connectivity, and
+the approved source configuration. Preserve freshness checks. The warning clears
+when the rolling one-hour increase falls below two, so it can remain active for
+up to an hour after recovery. Missing scrape data must be handled by scrape
+monitoring, not interpreted as source recovery. `LazPricingSnapshotNearStale`
+continues to page when the chain snapshot has less than five minutes of headroom.

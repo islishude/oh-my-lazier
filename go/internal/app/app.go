@@ -240,7 +240,11 @@ func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	start := func(name string, run func(context.Context) error) {
 		wg.Go(func() {
-			if err := superviseLoop(ctx, name, loopRestartDelay, a.logger, runtimeMetrics, run); err != nil {
+			capDelay := time.Minute
+			if name == "pricing" {
+				capDelay = time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second
+			}
+			if err := superviseLoop(ctx, name, newLoopBackoff(capDelay), a.logger, runtimeMetrics, run); err != nil {
 				select {
 				case errCh <- fmt.Errorf("%s loop failed fatally: %w", name, err):
 				default:
@@ -297,8 +301,13 @@ func (a *App) txManagerOptions() txmgr.Options {
 	}
 }
 
-func superviseLoop(ctx context.Context, name string, restartDelay time.Duration, logger *slog.Logger, retryMetrics loopRetryRecorder, run func(context.Context) error) error {
+func superviseLoop(ctx context.Context, name string, backoff loopBackoff, logger *slog.Logger, retryMetrics loopRetryRecorder, run func(context.Context) error) error {
+	delay := backoff.initial
 	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		started := backoff.now()
 		err := run(ctx)
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 			logger.Info("loop stopped", "name", name)
@@ -308,19 +317,34 @@ func superviseLoop(ctx context.Context, name string, restartDelay time.Duration,
 			logger.Error("loop failed fatally", "name", name, "error", err)
 			return err
 		}
+		if backoff.now().Sub(started) >= backoff.resetAfter {
+			delay = backoff.initial
+		}
 		if err != nil {
-			logger.Error("loop failed; restarting", "name", name, "error", err)
+			logger.Error("loop failed; restarting", "name", name, "error", err, "restart_delay", delay)
 			if retryMetrics != nil {
 				retryMetrics.RecordLoopRetry(name)
 			}
 		} else {
-			logger.Warn("loop stopped unexpectedly; restarting", "name", name)
+			logger.Warn("loop stopped unexpectedly; restarting", "name", name, "restart_delay", delay)
 		}
-		if !waitLoopRestart(ctx, restartDelay) {
+		if !backoff.wait(ctx, delay) {
 			logger.Info("loop stopped", "name", name)
 			return nil
 		}
+		delay = min(delay, backoff.capDelay-delay) + delay
 	}
+}
+
+type loopBackoff struct {
+	initial, capDelay, resetAfter time.Duration
+	now                           func() time.Time
+	wait                          func(context.Context, time.Duration) bool
+}
+
+func newLoopBackoff(capDelay time.Duration) loopBackoff {
+	return loopBackoff{initial: min(loopRestartDelay, capDelay), capDelay: capDelay,
+		resetAfter: max(5*time.Minute, 2*capDelay), now: time.Now, wait: waitLoopRestart}
 }
 
 func waitLoopRestart(ctx context.Context, delay time.Duration) bool {

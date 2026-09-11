@@ -427,3 +427,26 @@ func TestRecoveryMetricIdentity(t *testing.T) {
 		t.Fatal("unbounded labels")
 	}
 }
+
+func TestPricingSourceFailuresAndSnapshotAgeDuringOutage(t *testing.T) {
+	registry := NewRegistry()
+	now := time.Unix(1_700_000_000, 0)
+	registry.now = func() time.Time { return now }
+	registry.RecordPricingSnapshot(1, 2, common.Address{}, now, time.Hour)
+	registry.RecordPricingSourceFailure(1, "coingecko", "primary", "stale")
+	registry.RecordPricingSourceFailure(1, "coingecko", "primary", "stale")
+	for _, elapsed := range []time.Duration{0, 15 * time.Minute} {
+		now = time.Unix(1_700_000_000, 0).Add(elapsed)
+		snapshot := registry.RuntimeSnapshot()
+		if len(snapshot.PricingSourceFailures) != 1 || snapshot.PricingSourceFailures[0].Count != 2 {
+			t.Fatalf("failure stats=%v", snapshot.PricingSourceFailures)
+		}
+		if snapshot.PricingSnapshots[0].AgeSeconds != elapsed.Seconds() {
+			t.Fatalf("age=%v", snapshot.PricingSnapshots[0])
+		}
+		output := renderPrometheus(db.StatsSnapshot{}, false, snapshot)
+		if !strings.Contains(output, `laz_pricing_source_failures_total{eid="1",source="coingecko",role="primary",category="stale"} 2`) {
+			t.Fatalf("missing counter: %s", output)
+		}
+	}
+}

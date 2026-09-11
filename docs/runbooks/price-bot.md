@@ -40,7 +40,7 @@ For each unique source/source price-feed key with at least one pathway crossing 
 
 - one `pricing_set_price_snapshot` transaction to the source-chain OpenPriceFeed using a `PriceSnapshotUpdate[]` batch for every destination EID sharing that source/feed
 
-For cross-asset pathways, an unavailable, stale, future-dated, or non-positive primary prevents every update in that cycle. If sanity sources are declared, all being unavailable or any healthy sanity observation exceeding `max_deviation_bps` also prevents every update. A healthy sanity source never replaces the primary.
+For cross-asset pathways, an unavailable, stale, future-dated, or non-positive primary prevents updates in the feeds that depend on that EID. If sanity sources are declared, all being unavailable or any healthy sanity observation exceeding `max_deviation_bps` also prevents updates in the dependent feeds. A healthy sanity source never replaces the primary.
 
 During the long-running worker loop, the bot tracks the last written converted price and write time for each unique source/destination/source price-feed key. Values are initialized from the source-chain OpenPriceFeed after startup, so a restart with a fresh, unchanged snapshot does not enqueue another write. Each scheduled interval evaluates the deviation-plus-heartbeat gate; suppressed updates are logged at `Debug` with the computed deviation, elapsed time, and configured thresholds. The existing primary-versus-sanity `max_deviation_bps` validation remains separate and still rejects the entire cycle before any enqueue. The bot also tracks the last destination gas price used for each key. If later destination gas reads increase by at least `gas_spike_bps`, it evaluates the same write gate early, groups eligible destinations by source/feed, and enqueues fresh snapshot update batches before the next scheduled interval.
 
@@ -78,3 +78,35 @@ If the newly submitted price snapshot is wrong:
 2. Correct the approved pricing inputs and run `go run ./go/cmd/pricebot-once -config <worker.yaml>` to enqueue a fresh snapshot through the normal tx manager and pricing signer. If the incident procedure requires a direct corrective snapshot, use a separately reviewed transaction from an authorized PriceFeed submitter. Do not use `configure:workers` for a routine price refresh because it also writes low-frequency owner configuration. If the configured `source_workers.price_feed` changed, rotate OpenExecutor/OpenDVN back with `setPriceFeed`; only use worker fee-model updates when the low-frequency model itself was wrong.
 3. Restart the worker after updating config files; phase 1 does not support hot reload.
 4. Let txmgr automatic retry and pending replacement handle classified pricing outbox failures or stale broadcasts. Use `txretry` only after automatic retry is exhausted or after the signer balance, fee caps, and calldata have been reviewed for an operator override.
+
+## Source failures and retry cadence
+
+Runtime source rejection does not restart the pricing loop. Each failed EID has
+an in-memory cooldown of one `interval_seconds`, measured from completion of the
+failed read. Periodic checks and gas-spike checks share it, including failures in
+a partially successful cycle. Independent feeds and same-native-asset pathways
+continue; a healthy sanity source never replaces the primary. Configuration,
+database, and internal invariant errors are not treated as source cooldowns.
+
+The bot wakes at cooldown expiry for another evaluation, coalescing a coincident
+periodic tick and scheduling the next periodic pass one interval after that
+full evaluation. Pending writes still gate evaluation, without repeated immediate
+wakeups; their drain still forces evaluation when eligible. Failed gas-spike
+baselines are retained. A fresh successful read clears the cooldown; another
+failure starts a full new interval. Recovery may therefore wait a full interval
+(15 minutes with a 900-second interval), plus read/enqueue/confirmation time.
+Restarting the process clears cooldowns and permits an immediate read; supervisor
+re-entry of the same bot preserves them. Do not restart to bypass source pacing.
+
+`pricebot-once` retains the existing total-failure exit semantics. The long-running
+bot absorbs only errors entirely attributable to runtime price-source rejection;
+a mixed source/database failure still reaches the supervisor. Source freshness
+limits and chain snapshot expiry remain independent safety bounds; increasing
+`max_age_seconds` is not part of this recovery policy.
+
+Watch `laz_pricing_source_failures_total{eid,source,role,category}` alongside
+snapshot age and time-to-stale. The counter increments on actual rejected reads,
+not cooldown hits. `LazPricingSourceFailing` warns on repeated failures within
+one hour; snapshot age continues advancing during an outage and remains the
+paging signal. See
+[monitoring](monitoring.md) and [runtime supervision](../runtime.md).
