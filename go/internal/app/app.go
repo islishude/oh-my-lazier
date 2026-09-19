@@ -199,7 +199,11 @@ func (a *App) Run(ctx context.Context) error {
 		return err
 	}
 
-	runtimeMetrics := metrics.NewRegistry()
+	chainNames := make(map[uint32]string, len(a.cfg.Chains))
+	for _, chain := range a.cfg.Chains {
+		chainNames[chain.EID] = chain.Name
+	}
+	runtimeMetrics := metrics.NewRegistry(chainNames)
 	pathways := registry.Pathways()
 	indexerStreams := indexer.StreamsForRoles(a.cfg.ExecutorEnabled(), a.cfg.DVNEnabled())
 	txTargets, err := a.txTargets(ctx, registry, store)

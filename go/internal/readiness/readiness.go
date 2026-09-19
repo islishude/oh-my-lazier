@@ -227,7 +227,7 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 		})
 	}
 	if services.ExecutorEnabled {
-		for _, job := range snapshot.ExecutorJobs {
+		for _, job := range aggregateJobStatuses(snapshot.ExecutorJobs) {
 			if job.Count == 0 {
 				continue
 			}
@@ -246,7 +246,7 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 		}
 	}
 	if services.DVNEnabled {
-		for _, job := range snapshot.DVNJobs {
+		for _, job := range aggregateJobStatuses(snapshot.DVNJobs) {
 			if job.Count == 0 {
 				continue
 			}
@@ -305,4 +305,20 @@ func requireCursor(required map[uint32]map[string]struct{}, chainEID uint32, str
 		required[chainEID] = make(map[string]struct{})
 	}
 	required[chainEID][stream] = struct{}{}
+}
+
+// aggregateJobStatuses keeps readiness issues at their process-wide granularity.
+func aggregateJobStatuses(stats []db.JobStatusStat) []db.JobStatusStat {
+	var totals []db.JobStatusStat
+	indices := make(map[string]int)
+	for _, stat := range stats {
+		index, ok := indices[stat.Status]
+		if !ok {
+			index = len(totals)
+			indices[stat.Status] = index
+			totals = append(totals, db.JobStatusStat{Status: stat.Status})
+		}
+		totals[index].Count += stat.Count
+	}
+	return totals
 }

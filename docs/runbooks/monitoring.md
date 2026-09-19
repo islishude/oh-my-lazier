@@ -20,6 +20,25 @@ present and linked back to this runbook using its full GitHub URL on the main
 branch. Alert annotations use absolute URLs so links work from alert receivers;
 repository-relative paths do not satisfy the runbook check.
 
+All chain-scoped metrics and alerts carry the configured `chains[].name`:
+single-chain series use `chain_name`, while pathway, packet, executor/DVN job,
+worker-fee, and price-snapshot series use `src_chain_name` and `dst_chain_name`.
+Existing EID labels remain the identifiers; executor/DVN job gauges are grouped
+by `src_eid`, `dst_eid`, and `status`. Readiness continues to aggregate job counts
+across pathways. `LazWorkerReadinessFailed` describes the whole process and keeps
+its probe target labels without a chain name.
+
+DB metrics resolve names from persisted chain records, including retained
+history. Runtime metrics use a copy of startup chain names, so RPC, signer,
+indexer, and pricing names remain available during a database outage.
+
+Deploy the worker and alert rules together. The former chain-name `name` label
+on chain and indexer metrics is now `chain_name`; update dashboards and receiver
+templates that query it. Worker-loop `name` still identifies the loop. These
+label changes create new time series and reset pending alert durations; old
+series age out normally. The RPC quorum aggregation retains `chain_name` along
+with EID and scrape identity. No database migration or backfill is required.
+
 Required alerts:
 
 - `LazPricingSourceFailing`: `increase(laz_pricing_source_failures_total[1h]) >= 2`; warning without an additional hold time. Inspect the indicated instance, EID, source, role, and category. See [pricing source rejection](#pricing-source-rejection) for counter and recovery semantics.
@@ -38,7 +57,7 @@ Required alerts:
 - `LazWorkerFeeReconciliationPending`: `laz_worker_fee_unpriced_receipts > 0`; ticket after fifteen minutes. Check pricing source health and `fee_accounting` loop logs; tx receipt status has already been recorded and is not blocked by pricing failures.
 - `LazSignerLowNativeBalance`: `laz_signer_native_balance_wei < laz_signer_min_native_balance_wei`; page after five minutes. Fund the affected worker signer before queued or replacement transactions exhaust their configured fee caps.
 - `LazRPCProviderConflict`: `laz_rpc_provider_status{status="conflict"} == 1` or `laz_rpc_provider_log_conflict == 1` or `laz_rpc_provider_state_conflict == 1` or `laz_rpc_provider_safe_conflict == 1` for five minutes; page. A conflicting provider disagrees with the majority quorum on canonical headers, safe blocks, log windows, or comparable state reads (`eth_call`, `eth_getCode`, gas estimates outside the bounded set, pending nonces). Safe snapshots also fail closed on a height regression, a same-height hash change, or an advancing voter set that cannot reproduce the previously accepted safe height/hash with the configured quorum. The worker keeps making progress while a strict majority still agrees, so this alert is the only signal that a configured endpoint is forked, corrupted, or hostile; remove or replace the endpoint before it can become part of a majority.
-- `LazRPCQuorumUnavailable`: `2 * count by (chain_eid, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, job, instance) (laz_rpc_provider_status)` for five minutes; page. The grouping keeps each scrape target separate: every worker instance has its own provider set, and merging instances would let a healthy instance mask another's lost majority. Once half or more of a chain's configured providers are unavailable, the fixed strict majority (`q = floor(N/2) + 1`) can no longer form and all quorum reads for that chain stop fail-closed. This alert covers deployments without indexers (for example pricing-only), where `LazIndexerPollFailing` cannot fire; restore enough independent providers to re-establish the majority.
+- `LazRPCQuorumUnavailable`: `2 * count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status)` for five minutes; page. The grouping keeps each scrape target separate: every worker instance has its own provider set, and merging instances would let a healthy instance mask another's lost majority. Once half or more of a chain's configured providers are unavailable, the fixed strict majority (`q = floor(N/2) + 1`) can no longer form and all quorum reads for that chain stop fail-closed. This alert covers deployments without indexers (for example pricing-only), where `LazIndexerPollFailing` cannot fire; restore enough independent providers to re-establish the majority.
 - `LazPricingSnapshotNearStale`: `laz_pricing_snapshot_time_to_stale_seconds < 300`; page immediately — time-to-stale only decreases between writes, so any hold time would consume the warning window. The age comes from the on-chain `updatedAt` sampled each pricing cycle — never receipt times, so a confirmed batch whose entries were superseded (skipped) on chain cannot fake freshness. Once the snapshot crosses its `staleAfter` cutoff, every quote for the pathway reverts fail-closed; check the pricing loop, the pending write for the feed, and the signer lane.
 - `LazPricingPendingStalled`: `laz_pricing_pending_oldest_age_seconds > 300`; page immediately. A pending pricing transaction gates its feed against new snapshots (one write in flight per feed), so one stuck behind a wedged signer lane or a fee cap lets the on-chain price age toward the cutoff. The threshold is half the validated 600-second freshness margin, so escalation lands while the snapshot still has headroom even when the write started at the very end of the schedule. Readiness also fails for a pending pricing transaction older than five minutes. Recover the lane with `txretry` (replace or cancel-nonce); the bot rebuilds from a fresh observation on its next cycle — failed pricing rows are never re-signed because their calldata carries a time-bound market observation.
 - `LazIndexerPollFailing`: evaluate each `chain_eid`/`stream` series where `laz_indexer_poll_success == 0` with a non-zero `laz_indexer_failure_since_timestamp_seconds`; page only after the failure sequence outlasts the configured poll interval and persists for another five minutes. A successful retry of that stream clears its failure sequence before it pages. With quorum reads this also fires when fewer than a strict majority of configured RPC providers serve an agreed `safe` block, or when no log-window majority exists; only the affected cursor stalls fail-closed rather than falling back or ingesting unverified logs.
@@ -63,11 +82,11 @@ The readiness gate fails if an enabled chain is paused, an enabled pathway betwe
 
 Migration dashboard panels:
 
-- Chain enabled/paused status by `eid` and `name`.
+- Chain enabled/paused status by `eid` and `chain_name`.
 - Pathway paused status by `src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp`.
 - Packet count by pathway and status.
-- Executor job count by status.
-- DVN job count by status.
+- Executor job count by source chain, destination chain, and status.
+- DVN job count by source chain, destination chain, and status.
 - Tx outbox count by chain, status, and retry state.
 - Mined receipt gas cost by chain and purpose: `laz_tx_receipt_gas_cost_dst_wei`.
 - Worker fee revenue, actual gas cost, gross margin, negative-margin jobs, and unpriced receipts by role and pathway: `laz_worker_fee_revenue_src_wei`, `laz_worker_fee_actual_gas_cost_src_wei`, `laz_worker_fee_gross_margin_src_wei`, `laz_worker_fee_negative_margin_jobs`, and `laz_worker_fee_unpriced_receipts`.
@@ -288,7 +307,7 @@ and fee bumps before resuming mining.
 
 ## Pricing source rejection
 
-`laz_pricing_source_failures_total{eid,source,role,category}` counts actual
+`laz_pricing_source_failures_total{eid,chain_name,source,role,category}` counts actual
 rejected price-source observations in the running bot. Categories are bounded:
 `stale`, `timeout`, `unavailable`, `invalid_observation`, `non_positive`,
 `missing_time`, `future`, and `deviation`. Error text is never a metric label.

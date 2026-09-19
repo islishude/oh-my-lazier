@@ -36,7 +36,7 @@ const requiredDocs: RequiredDoc[] = [
   {
     path: "docs/runbooks/monitoring.md",
     anchors: [
-      "laz_pricing_source_failures_total{eid,source,role,category}",
+      "laz_pricing_source_failures_total{eid,chain_name,source,role,category}",
       "-action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>",
       "RPC acceptance is not receipt confirmation",
       "`recorded: false`",
@@ -65,6 +65,8 @@ const requiredDocs: RequiredDoc[] = [
       "LazPricingPendingStalled",
       "laz_chain_paused == 1",
       "laz_pathway_paused == 1",
+      "`chain_name`",
+      "`src_chain_name` and `dst_chain_name`",
       "`src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp`",
       "laz_indexer_poll_success",
       "laz_indexer_poll_interval_seconds",
@@ -322,7 +324,7 @@ const requiredAlertRules: RequiredAlertRule[] = [
   {
     alert: "LazRPCQuorumUnavailable",
     anchors: [
-      '2 * count by (chain_eid, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, job, instance) (laz_rpc_provider_status)',
+      '2 * count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status)',
       "severity: page",
     ],
   },

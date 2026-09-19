@@ -118,7 +118,7 @@ test("runbook review rejects missing runbook anchors", () => {
   assert.ok(monitoring);
   documents.set(
     "docs/runbooks/monitoring.md",
-    monitoring.replace("LazWorkerReadinessFailed", "MissingReadinessAlert")
+    monitoring.replaceAll("LazWorkerReadinessFailed", "MissingReadinessAlert")
   );
 
   assert.deepEqual(validateRunbookDocuments(documents), [
@@ -190,4 +190,17 @@ function currentDocuments(): Map<string, string> {
       readFileSync("docs/monitoring/prometheus-alerts.yml", "utf8"),
     ],
   ]);
+}
+
+for (const grouping of ["chain_eid, job, instance", "chain_eid, chain_name"]) {
+  test(`runbook review rejects quorum aggregation losing labels: ${grouping}`, () => {
+    const documents = currentDocuments();
+    const path = "docs/monitoring/prometheus-alerts.yml";
+    const alerts = documents.get(path);
+    assert.ok(alerts);
+    documents.set(path, alerts.replaceAll("chain_eid, chain_name, job, instance", grouping));
+    const issues = validateRunbookDocuments(documents);
+    assert.equal(issues.length, 1);
+    assert.match(issues[0]!, /alert LazRPCQuorumUnavailable missing required anchor/);
+  });
 }

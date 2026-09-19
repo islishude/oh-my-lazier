@@ -243,11 +243,11 @@ func TestEvaluateRejectsUnsafeDurableJobStates(t *testing.T) {
 		Packets: []db.PacketStat{
 			{SrcEID: 40161, DstEID: 40449, Status: string(packets.ExecutorManualReview), Count: 2},
 		},
-		ExecutorJobs: []db.StatusStat{
+		ExecutorJobs: []db.JobStatusStat{
 			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
 			{Status: string(packets.ExecutorManualReview), Count: 1},
 		},
-		DVNJobs: []db.StatusStat{
+		DVNJobs: []db.JobStatusStat{
 			{Status: string(packets.DVNQuorumConflict), Count: 1},
 			{Status: string(packets.DVNReorgDetected), Count: 1},
 			{Status: string(packets.DVNManualReview), Count: 1},
@@ -290,10 +290,10 @@ func TestEvaluateWithServicesRequiresOnlyEnabledRoleState(t *testing.T) {
 		Pathways: []db.PathwayStat{
 			{SrcEID: 40161, DstEID: 40449, Enabled: true},
 		},
-		ExecutorJobs: []db.StatusStat{
+		ExecutorJobs: []db.JobStatusStat{
 			{Status: string(packets.ExecutorLzReceiveFailed), Count: 1},
 		},
-		DVNJobs: []db.StatusStat{
+		DVNJobs: []db.JobStatusStat{
 			{Status: string(packets.DVNQuorumConflict), Count: 1},
 		},
 		IndexerCursors: []db.IndexerCursorStat{
@@ -353,5 +353,35 @@ func TestRecoveryReadinessThresholds(t *testing.T) {
 		if found != tc.fail {
 			t.Errorf("%s %.0f: %+v", tc.reason, tc.age, r.Issues)
 		}
+	}
+}
+
+func TestReadinessAggregatesJobStatusesAcrossPathways(t *testing.T) {
+	for _, role := range []string{"executor", "dvn"} {
+		t.Run(role, func(t *testing.T) {
+			jobs := []db.JobStatusStat{
+				{SrcEID: 1, DstEID: 2, Status: "MANUAL_REVIEW", Count: 2},
+				{SrcEID: 2, DstEID: 1, Status: "MANUAL_REVIEW", Count: 3},
+			}
+			snapshot := db.StatsSnapshot{}
+			if role == "executor" {
+				snapshot.ExecutorJobs = jobs
+			} else {
+				snapshot.DVNJobs = jobs
+			}
+			report := Evaluate(snapshot)
+			var matched int
+			for _, issue := range report.Issues {
+				if issue.Code == role+"_manual_review" {
+					matched++
+					if issue.Message != role+" has 5 jobs requiring manual review" {
+						t.Fatalf("issue = %+v", issue)
+					}
+				}
+			}
+			if report.Ready || matched != 1 {
+				t.Fatalf("report = %+v", report)
+			}
+		})
 	}
 }

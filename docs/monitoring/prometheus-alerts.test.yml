@@ -4,11 +4,11 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",signer="worker",reason="fee_cap"}'
+      - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",reason="fee_cap"}'
         values: "0+60x16 stale"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker"}'
         values: "8+0x16 0"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker"}'
         values: "0+60x16 0"
     alert_rule_test:
       - eval_time: 4m
@@ -20,6 +20,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: worker,
                 reason: fee_cap,
                 severity: warning,
@@ -33,6 +34,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: worker,
                 reason: fee_cap,
                 severity: page,
@@ -43,7 +45,7 @@ tests:
       - eval_time: 15m
         alertname: LazTxNonceStalled
         exp_alerts:
-          - exp_labels: { chain_eid: "30361", signer: worker, severity: page }
+          - exp_labels: { chain_eid: "30361", chain_name: "arbitrum-sepolia", signer: worker, severity: page }
             exp_annotations:
               summary: Signer nonce has not advanced for fifteen minutes
               runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
@@ -52,7 +54,7 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",signer="worker",reason="replacement_exhausted"}'
+      - series: 'laz_tx_recovery_blocked_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",reason="replacement_exhausted"}'
         values: "0 stale"
     alert_rule_test:
       - eval_time: 0m
@@ -61,6 +63,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: worker,
                 reason: replacement_exhausted,
                 severity: page,
@@ -73,9 +76,9 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker"}'
         values: "1+0x5 0"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker"}'
         values: "0+60x6"
     alert_rule_test:
       - eval_time: 4m
@@ -85,7 +88,7 @@ tests:
         alertname: LazTxUnseen
         exp_alerts:
           - exp_labels:
-              { chain_eid: "30361", signer: worker, severity: warning }
+              { chain_eid: "30361", chain_name: "arbitrum-sepolia", signer: worker, severity: warning }
             exp_annotations:
               summary: Accepted transaction is repeatedly absent from RPC providers
               runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
@@ -94,21 +97,21 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "1 1 0"
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="b",cluster="primary"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "100 300 360"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="b",cluster="primary"}'
         values: "600 660 720"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "900 960 0"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="b",cluster="primary"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "0 1 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="b",cluster="primary"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="b",cluster="primary"}'
         values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
@@ -120,6 +123,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -141,6 +145,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -155,21 +160,21 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "1 1 0"
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="other-worker",instance="a",cluster="primary"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "100 300 360"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="other-worker",instance="a",cluster="primary"}'
         values: "600 660 720"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "900 960 0"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="other-worker",instance="a",cluster="primary"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "0 1 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="other-worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="other-worker",instance="a",cluster="primary"}'
         values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
@@ -181,6 +186,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -202,6 +208,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -216,21 +223,21 @@ tests:
         exp_alerts: []
   - interval: 1m
     input_series:
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "1 1 0"
-      - series: 'laz_tx_recovery_unseen{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
+      - series: 'laz_tx_recovery_unseen{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "100 300 360"
-      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
+      - series: 'laz_tx_recovery_head_age_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
         values: "600 660 720"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "900 960 0"
-      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
+      - series: 'laz_tx_recovery_nonce_stall_seconds{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
         values: "0 0 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="primary"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="primary"}'
         values: "0 1 0"
-      - series: 'laz_tx_recovery_inflight{chain_eid="30361",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
+      - series: 'laz_tx_recovery_inflight{chain_eid="30361",chain_name="arbitrum-sepolia",signer="worker",job="worker",instance="a",cluster="other-cluster"}'
         values: "1 1 1"
     alert_rule_test:
       - eval_time: 0m
@@ -242,6 +249,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -263,6 +271,7 @@ tests:
           - exp_labels:
               {
                 chain_eid: "30361",
+                chain_name: "arbitrum-sepolia",
                 signer: "worker",
                 job: "worker",
                 instance: "a",
@@ -279,11 +288,11 @@ tests:
   # across different scrape instances must not trigger the source warning.
   - interval: 1m
     input_series:
-      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="a"}'
+      - series: 'laz_pricing_source_failures_total{eid="30361",chain_name="arbitrum-sepolia",source="coingecko",role="primary",category="stale",instance="a"}'
         values: "0+0x14 1+0x75"
-      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="b"}'
+      - series: 'laz_pricing_source_failures_total{eid="30361",chain_name="arbitrum-sepolia",source="coingecko",role="primary",category="stale",instance="b"}'
         values: "0+0x14 1+0x75"
-      - series: 'laz_pricing_source_failures_total{eid="30361",source="chainlink",role="sanity",category="timeout",instance="a"}'
+      - series: 'laz_pricing_source_failures_total{eid="30361",chain_name="arbitrum-sepolia",source="chainlink",role="sanity",category="timeout",instance="a"}'
         values: "1+0x90"
     alert_rule_test:
       - eval_time: 0m
@@ -298,7 +307,7 @@ tests:
   # Two observed increases fire without a hold time, then age out of the window.
   - interval: 1m
     input_series:
-      - series: 'laz_pricing_source_failures_total{eid="30361",source="coingecko",role="primary",category="stale",instance="a",job="worker"}'
+      - series: 'laz_pricing_source_failures_total{eid="30361",chain_name="arbitrum-sepolia",source="coingecko",role="primary",category="stale",instance="a",job="worker"}'
         values: "0+0x14 1+0x14 2+0x60"
     alert_rule_test:
       - eval_time: 29m
@@ -309,6 +318,7 @@ tests:
         exp_alerts:
           - exp_labels:
               eid: "30361"
+              chain_name: "arbitrum-sepolia"
               source: coingecko
               role: primary
               category: stale
@@ -324,7 +334,7 @@ tests:
   # A restart resets the counter; increases on both sides still count.
   - interval: 1m
     input_series:
-      - series: 'laz_pricing_source_failures_total{eid="30361",source="chainlink",role="sanity",category="timeout",instance="a"}'
+      - series: 'laz_pricing_source_failures_total{eid="30361",chain_name="arbitrum-sepolia",source="chainlink",role="sanity",category="timeout",instance="a"}'
         values: "0+0x14 1+0x14 0+0x14 1+0x45"
     alert_rule_test:
       - eval_time: 30m
@@ -335,6 +345,7 @@ tests:
         exp_alerts:
           - exp_labels:
               eid: "30361"
+              chain_name: "arbitrum-sepolia"
               source: chainlink
               role: sanity
               category: timeout
@@ -348,4 +359,385 @@ tests:
     alert_rule_test:
       - eval_time: 1h
         alertname: LazPricingSourceFailing
+        exp_alerts: []
+
+  # Every chain-scoped rule carries names through firing and stale-series resolution.
+  - interval: 1m
+    input_series:
+      - series: probe_success{job="laz-worker-readyz",instance="a"}
+        values: 0+0x20 stale
+      - series: laz_chain_paused{eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a"}
+        values: 1+0x20 stale
+      - series: laz_pathway_paused{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",src_oapp="0x01",dst_oapp="0x02"}
+        values: 1+0x20 stale
+      - series: laz_dvn_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="QUORUM_CONFLICT"}
+        values: 1+0x20 stale
+      - series: laz_dvn_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="REORG_DETECTED"}
+        values: 1+0x20 stale
+      - series: laz_packets_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="MANUAL_REVIEW"}
+        values: 1+0x20 stale
+      - series: laz_executor_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="LZ_RECEIVE_FAILED"}
+        values: 1+0x20 stale
+      - series: laz_executor_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="MANUAL_REVIEW"}
+        values: 1+0x20 stale
+      - series: laz_dvn_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",status="MANUAL_REVIEW"}
+        values: 1+0x20 stale
+      - series: laz_tx_outbox_total{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",status="failed",retry_state="exhausted"}
+        values: 1+0x20 stale
+      - series: laz_worker_fee_negative_margin_jobs{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",role="executor"}
+        values: 1+0x20 stale
+      - series: laz_worker_fee_unpriced_receipts{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",role="executor"}
+        values: 1+0x20 stale
+      - series: laz_signer_native_balance_wei{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",signer="worker"}
+        values: 1+0x20 stale
+      - series: laz_signer_min_native_balance_wei{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",signer="worker"}
+        values: 2+0x20 stale
+      - series: laz_indexer_poll_success{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",stream="executor_source"}
+        values: 0+0x20 stale
+      - series: laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",stream="executor_source"}
+        values: 1+0x20 stale
+      - series: laz_indexer_poll_interval_seconds{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",stream="executor_source"}
+        values: 5+0x20 stale
+      - series: laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",stream="executor_source"}
+        values: 1+0x20 stale
+      - series: laz_indexer_start_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",stream="executor_source"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",provider="provider[0]",status="conflict"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",provider="provider[1]",status="unavailable"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",provider="provider[2]",status="unavailable"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="b",provider="provider[1]",status="healthy"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="b",provider="provider[2]",status="healthy"}
+        values: 1+0x20 stale
+      - series: laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="b",provider="provider[3]",status="healthy"}
+        values: 1+0x20 stale
+      - series: laz_tx_outbox_orphaned_total{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a",signer="worker",status="signed"}
+        values: 1+0x20 stale
+      - series: laz_pricing_snapshot_time_to_stale_seconds{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",job="worker",instance="a",price_feed="0x01"}
+        values: 1+0x20 stale
+      - series: laz_pricing_pending_oldest_age_seconds{chain_eid="40161",chain_name="ethereum-sepolia",job="worker",instance="a"}
+        values: 301+0x20 stale
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LazWorkerReadinessFailed
+        exp_alerts:
+          - exp_labels:
+              job: laz-worker-readyz
+              instance: a
+              severity: page
+            exp_annotations:
+              summary: LayerZero worker readiness check is failing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazWorkerReadinessFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazChainPaused
+        exp_alerts:
+          - exp_labels:
+              eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              severity: page
+            exp_annotations:
+              summary: LayerZero worker chain is paused by safety logic
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazChainPaused
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazPathwayPaused
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              src_oapp: '0x01'
+              dst_oapp: '0x02'
+              severity: page
+            exp_annotations:
+              summary: LayerZero worker pathway is paused by safety logic
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazPathwayPaused
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazDVNQuorumConflict
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              status: QUORUM_CONFLICT
+              severity: page
+            exp_annotations:
+              summary: DVN RPC quorum conflict requires operator review
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazDVNQuorumConflict
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazDVNReorgDetected
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              status: REORG_DETECTED
+              severity: page
+            exp_annotations:
+              summary: DVN job remains in reorg-detected state
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazDVNReorgDetected
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazPacketManualReview
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              status: MANUAL_REVIEW
+              severity: ticket
+            exp_annotations:
+              summary: Packet requires manual review before migration approval
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazPacketManualReview
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazExecutorReceiveFailed
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              status: LZ_RECEIVE_FAILED
+              severity: ticket
+            exp_annotations:
+              summary: Executor delivery failed and needs retry review
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazExecutorReceiveFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazWorkerManualReview
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              status: MANUAL_REVIEW
+              severity: ticket
+            exp_annotations:
+              summary: Worker job requires manual review before migration approval
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazWorkerManualReview
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazTxOutboxFailed
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              status: failed
+              retry_state: exhausted
+              severity: ticket
+            exp_annotations:
+              summary: Transaction outbox has exhausted failed rows
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazTxOutboxFailed
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazWorkerFeeNegativeMargin
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              role: executor
+              severity: page
+            exp_annotations:
+              summary: Worker job actual gas cost exceeds assignment revenue
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazWorkerFeeNegativeMargin
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazWorkerFeeReconciliationPending
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              role: executor
+              severity: ticket
+            exp_annotations:
+              summary: Worker receipt gas costs are waiting for source-token pricing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazWorkerFeeReconciliationPending
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazSignerLowNativeBalance
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              signer: worker
+              severity: page
+            exp_annotations:
+              summary: Worker signer native gas balance is below configured minimum
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazSignerLowNativeBalance
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazIndexerPollFailing
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              stream: executor_source
+              severity: page
+            exp_annotations:
+              summary: Worker indexer polling is failing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazIndexerPollFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazIndexerPollStalled
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              stream: executor_source
+              severity: page
+            exp_annotations:
+              summary: Worker indexer has not completed a poll within twice its configured interval
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazIndexerPollStalled
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazRPCProviderConflict
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              provider: provider[0]
+              status: conflict
+              severity: page
+            exp_annotations:
+              summary: RPC provider disagrees with the majority quorum on canonical chain data
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazRPCProviderConflict
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazRPCQuorumUnavailable
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              severity: page
+            exp_annotations:
+              summary: Too many RPC providers are unavailable for the fixed majority quorum to form
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazRPCQuorumUnavailable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazTxOutboxOrphaned
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              signer: worker
+              status: signed
+              severity: page
+            exp_annotations:
+              summary: A send-state tx_outbox row lost its active attempt; the signer lane needs operator recovery
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+      - eval_time: 22m
+        alertname: LazTxOutboxOrphaned
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazPricingSnapshotNearStale
+        exp_alerts:
+          - exp_labels:
+              src_eid: '40161'
+              dst_eid: '40449'
+              src_chain_name: ethereum-sepolia
+              dst_chain_name: hoodi
+              job: worker
+              instance: a
+              price_feed: '0x01'
+              severity: page
+            exp_annotations:
+              summary: On-chain price snapshot is close to its staleAfter cutoff; quotes fail closed once it crosses
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/price-bot.md
+      - eval_time: 22m
+        alertname: LazPricingSnapshotNearStale
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LazPricingPendingStalled
+        exp_alerts:
+          - exp_labels:
+              chain_eid: '40161'
+              chain_name: ethereum-sepolia
+              job: worker
+              instance: a
+              severity: page
+            exp_annotations:
+              summary: A pending pricing transaction is stuck and gating new price writes while the snapshot ages
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/price-bot.md
+      - eval_time: 22m
+        alertname: LazPricingPendingStalled
         exp_alerts: []

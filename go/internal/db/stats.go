@@ -13,8 +13,8 @@ type StatsSnapshot struct {
 	Chains            []ChainStat
 	Pathways          []PathwayStat
 	Packets           []PacketStat
-	ExecutorJobs      []StatusStat
-	DVNJobs           []StatusStat
+	ExecutorJobs      []JobStatusStat
+	DVNJobs           []JobStatusStat
 	TxOutbox          []TxOutboxStat
 	TxOutboxHeld      []TxOutboxHeldStat
 	TxOutboxOrphaned  []TxOutboxOrphanedStat
@@ -81,8 +81,10 @@ type PacketStat struct {
 	Count  uint64
 }
 
-// StatusStat counts rows by state for tables without chain-specific labels.
-type StatusStat struct {
+// JobStatusStat counts worker jobs by pathway chain pair and state.
+type JobStatusStat struct {
+	SrcEID uint32
+	DstEID uint32
 	Status string
 	Count  uint64
 }
@@ -297,29 +299,29 @@ func (s *Store) packetStats(ctx context.Context) ([]PacketStat, error) {
 	return stats, rows.Err()
 }
 
-func (s *Store) statusStats(ctx context.Context, table string) ([]StatusStat, error) {
+func (s *Store) statusStats(ctx context.Context, table string) ([]JobStatusStat, error) {
 	switch table {
 	case "executor_jobs", "dvn_jobs":
 	default:
 		return nil, fmt.Errorf("unsupported stats table %q", table)
 	}
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT j.status, count(*)::bigint
+		SELECT p.src_eid, p.dst_eid, j.status, count(*)::bigint
 		FROM %s j
 		JOIN packets p ON p.guid = j.guid
 		WHERE %s
-		GROUP BY j.status
-		ORDER BY j.status
+		GROUP BY p.src_eid, p.dst_eid, j.status
+		ORDER BY p.src_eid, p.dst_eid, j.status
 	`, table, fmt.Sprintf(statsEnabledPacketScopeSQL, "p")))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var stats []StatusStat
+	var stats []JobStatusStat
 	for rows.Next() {
-		var stat StatusStat
-		if err := rows.Scan(&stat.Status, &stat.Count); err != nil {
+		var stat JobStatusStat
+		if err := rows.Scan(&stat.SrcEID, &stat.DstEID, &stat.Status, &stat.Count); err != nil {
 			return nil, err
 		}
 		stats = append(stats, stat)

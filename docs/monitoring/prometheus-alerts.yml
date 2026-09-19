@@ -135,7 +135,7 @@ groups:
       # independent provider set, and merging instances would let a healthy
       # instance's providers mask another instance's lost majority.
       - alert: LazRPCQuorumUnavailable
-        expr: 2 * count by (chain_eid, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, job, instance) (laz_rpc_provider_status)
+        expr: 2 * count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status{status="unavailable"}) >= count by (chain_eid, chain_name, job, instance) (laz_rpc_provider_status)
         for: 5m
         labels:
           severity: page

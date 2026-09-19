@@ -3410,14 +3410,16 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 		t.Fatalf("SyncConfig() error = %v", err)
 	}
 
-	// A dedicated chain pair keeps every labeled assertion exclusive to this
-	// test; global job-status buckets are asserted as exact deltas instead.
+	// Dedicated chain directions verify labeled job counts and scope filtering.
 	const srcEID, dstEID = uint32(41000), uint32(41001)
 	packet := testPacketRecord()
 	packet.GUID = common.HexToHash("0xd15ab1edd15ab1edd15ab1edd15ab1edd15ab1edd15ab1edd15ab1edd15ab1ed")
 	packet.SrcEID = srcEID
 	packet.DstEID = dstEID
 	packet.Status = string(packets.ExecutorManualReview)
+	reversePacket := packet
+	reversePacket.GUID = common.HexToHash("0xd15ab1ee")
+	reversePacket.SrcEID, reversePacket.DstEID = dstEID, srcEID
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
@@ -3431,11 +3433,11 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 			t.Fatalf("cleanup tx_outbox: %v", err)
 		}
 		for _, table := range []string{"executor_jobs", "dvn_jobs", "packets"} {
-			if _, err := cleanupStore.pool.Exec(cleanupCtx, "DELETE FROM "+table+" WHERE guid = $1", packet.GUID.Bytes()); err != nil {
+			if _, err := cleanupStore.pool.Exec(cleanupCtx, "DELETE FROM "+table+" WHERE guid IN ($1, $2)", packet.GUID.Bytes(), reversePacket.GUID.Bytes()); err != nil {
 				t.Fatalf("cleanup %s: %v", table, err)
 			}
 		}
-		if _, err := cleanupStore.pool.Exec(cleanupCtx, "DELETE FROM pathways WHERE src_eid = 41000"); err != nil {
+		if _, err := cleanupStore.pool.Exec(cleanupCtx, "DELETE FROM pathways WHERE src_eid IN (41000, 41001)"); err != nil {
 			t.Fatalf("cleanup pathways: %v", err)
 		}
 		if _, err := cleanupStore.pool.Exec(cleanupCtx, "DELETE FROM chains WHERE eid IN (41000, 41001)"); err != nil {
@@ -3489,13 +3491,31 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 		t.Fatalf("EnqueueTx(pricing) error = %v", err)
 	}
 
-	statusCount := func(stats []StatusStat, status string) uint64 {
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO pathways (src_eid, dst_eid, src_oapp, dst_oapp, send_lib, receive_lib, open_executor, open_dvn, price_feed, destination_open_dvn, max_message_size, enabled)
+		SELECT dst_eid, src_eid, src_oapp, dst_oapp, send_lib, receive_lib, open_executor, open_dvn, price_feed, destination_open_dvn, max_message_size, true
+		FROM pathways WHERE src_eid = $1 AND dst_eid = $2 AND src_oapp = $3
+	`, srcEID, dstEID, packet.Sender.Bytes()); err != nil {
+		t.Fatalf("seed reverse pathway: %v", err)
+	}
+	if err := store.UpsertPacket(ctx, reversePacket); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertExecutorJob(ctx, ExecutorJobRecord{GUID: reversePacket.GUID, Status: string(packets.ExecutorManualReview)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertDVNJob(ctx, DVNJobRecord{GUID: reversePacket.GUID, ConfirmationsRequired: 12, Status: string(packets.DVNManualReview)}); err != nil {
+		t.Fatal(err)
+	}
+
+	statusCount := func(stats []JobStatusStat, status string) uint64 {
+		var count uint64
 		for _, stat := range stats {
 			if stat.Status == status {
-				return stat.Count
+				count += stat.Count
 			}
 		}
-		return 0
+		return count
 	}
 	packetVisible := func(snapshot StatsSnapshot) bool {
 		for _, stat := range snapshot.Packets {
@@ -3518,6 +3538,23 @@ func TestStatsExcludeDisabledScopeHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stats() error = %v", err)
 	}
+	for role, stats := range map[string][]JobStatusStat{"executor": baseline.ExecutorJobs, "dvn": baseline.DVNJobs} {
+		for _, pair := range [][2]uint32{{srcEID, dstEID}, {dstEID, srcEID}} {
+			var matches int
+			for _, stat := range stats {
+				if stat.SrcEID == pair[0] && stat.DstEID == pair[1] && stat.Status == "MANUAL_REVIEW" {
+					matches++
+					if stat.Count != 1 {
+						t.Fatalf("%s jobs for %v = %d, want 1", role, pair, stat.Count)
+					}
+				}
+			}
+			if matches != 1 {
+				t.Fatalf("%s job buckets for %v = %d, want 1", role, pair, matches)
+			}
+		}
+	}
+
 	pathwayStates := make(map[[2]common.Address]bool)
 	for _, stat := range baseline.Pathways {
 		if stat.SrcEID == srcEID && stat.DstEID == dstEID {

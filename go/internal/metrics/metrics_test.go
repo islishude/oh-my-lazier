@@ -44,7 +44,7 @@ func TestHandlerReadyReportsStatsFailure(t *testing.T) {
 
 func TestHandlerReadyReportsReadinessFailure(t *testing.T) {
 	handler := Handler(fakeProvider{snapshot: cleanSnapshotWith(func(snapshot *db.StatsSnapshot) {
-		snapshot.DVNJobs = []db.StatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
+		snapshot.DVNJobs = []db.JobStatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
 	})})
 	recorder := httptest.NewRecorder()
 
@@ -75,7 +75,7 @@ func TestHandlerReadyUsesRoleAwareReadiness(t *testing.T) {
 			{ChainEID: 40161, Stream: "executor_source", LastBlock: 100},
 			{ChainEID: 40449, Stream: "executor_destination", LastBlock: 100},
 		}
-		snapshot.DVNJobs = []db.StatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
+		snapshot.DVNJobs = []db.JobStatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
 	})
 	handler := HandlerWithReadiness(fakeProvider{snapshot: snapshot}, readiness.Services{ExecutorEnabled: true})
 	recorder := httptest.NewRecorder()
@@ -119,12 +119,16 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 		Packets: []db.PacketStat{
 			{SrcEID: 40161, DstEID: 40449, Status: "MANUAL_REVIEW", Count: 2},
 		},
-		ExecutorJobs: []db.StatusStat{
-			{Status: "LZ_RECEIVE_FAILED", Count: 1},
+		ExecutorJobs: []db.JobStatusStat{
+			{SrcEID: 40161, DstEID: 40449, Status: "LZ_RECEIVE_FAILED", Count: 1},
 		},
-		DVNJobs: []db.StatusStat{
-			{Status: "QUORUM_CONFLICT", Count: 1},
+		DVNJobs: []db.JobStatusStat{
+			{SrcEID: 40161, DstEID: 40449, Status: "QUORUM_CONFLICT", Count: 1},
 		},
+		Recovery:         []db.RecoveryStat{{ChainEID: 40449, SignerID: "worker", Reason: "fee_cap"}},
+		PricingPending:   []db.PricingPendingStat{{ChainEID: 40161, Count: 1, OldestAgeSeconds: 301}},
+		TxOutboxHeld:     []db.TxOutboxHeldStat{{ChainEID: 49999, SignerID: "worker", HeldReason: "fee_cap", Count: 1}},
+		TxOutboxOrphaned: []db.TxOutboxOrphanedStat{{ChainEID: 40449, SignerID: "worker", Status: "signed", Count: 1}},
 		TxOutbox: []db.TxOutboxStat{
 			{ChainEID: 40449, Status: "failed", RetryState: db.TxOutboxRetryStateExhausted, Count: 3},
 		},
@@ -156,24 +160,28 @@ func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
 	}
 	body := recorder.Body.String()
 	for _, want := range []string{
+		`laz_pricing_pending_oldest_age_seconds{chain_eid="40161",chain_name="ethereum-sepolia"} 301`,
+		`laz_tx_outbox_held_total{chain_eid="49999",chain_name="retired",signer="worker",reason="fee_cap"} 1`,
+		`laz_tx_outbox_orphaned_total{chain_eid="40449",chain_name="hoodi",signer="worker",status="signed"} 1`,
+		`laz_tx_recovery_blocked_age_seconds{chain_eid="40449",chain_name="hoodi",signer="worker",reason="fee_cap"} 0`,
 		`laz_worker_info 1`,
 		`laz_metrics_db_snapshot_available 1`,
-		`laz_chain_paused{eid="40449",name="hoodi"} 1`,
-		`laz_chain_paused{eid="49999",name="retired"} 0`,
-		`laz_pathway_paused{src_eid="40161",dst_eid="40449",src_oapp="0x1111111111111111111111111111111111111111",dst_oapp="0x2222222222222222222222222222222222222222"} 1`,
-		`laz_pathway_paused{src_eid="40161",dst_eid="40449",src_oapp="0x3333333333333333333333333333333333333333",dst_oapp="0x4444444444444444444444444444444444444444"} 0`,
-		`laz_pathway_paused{src_eid="40161",dst_eid="49999",src_oapp="0x5555555555555555555555555555555555555555",dst_oapp="0x6666666666666666666666666666666666666666"} 0`,
-		`laz_packets_total{src_eid="40161",dst_eid="40449",status="MANUAL_REVIEW"} 2`,
-		`laz_executor_jobs_total{status="LZ_RECEIVE_FAILED"} 1`,
-		`laz_dvn_jobs_total{status="QUORUM_CONFLICT"} 1`,
-		`laz_tx_outbox_total{chain_eid="40449",status="failed",retry_state="exhausted"} 3`,
-		`laz_tx_receipt_gas_cost_dst_wei{chain_eid="40449",purpose="executor_lz_receive"} 42000000000000`,
-		`laz_worker_fee_revenue_src_wei{role="executor",src_eid="40161",dst_eid="40449"} 100`,
-		`laz_worker_fee_actual_gas_cost_src_wei{role="executor",src_eid="40161",dst_eid="40449"} 120`,
-		`laz_worker_fee_gross_margin_src_wei{role="executor",src_eid="40161",dst_eid="40449"} -20`,
-		`laz_worker_fee_negative_margin_jobs{role="executor",src_eid="40161",dst_eid="40449"} 1`,
-		`laz_worker_fee_unpriced_receipts{role="executor",src_eid="40161",dst_eid="40449"} 2`,
-		`laz_indexer_cursor_last_block{chain_eid="40161",stream="source"} 123456`,
+		`laz_chain_paused{eid="40449",chain_name="hoodi"} 1`,
+		`laz_chain_paused{eid="49999",chain_name="retired"} 0`,
+		`laz_pathway_paused{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",src_oapp="0x1111111111111111111111111111111111111111",dst_oapp="0x2222222222222222222222222222222222222222"} 1`,
+		`laz_pathway_paused{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",src_oapp="0x3333333333333333333333333333333333333333",dst_oapp="0x4444444444444444444444444444444444444444"} 0`,
+		`laz_pathway_paused{src_eid="40161",dst_eid="49999",src_chain_name="ethereum-sepolia",dst_chain_name="retired",src_oapp="0x5555555555555555555555555555555555555555",dst_oapp="0x6666666666666666666666666666666666666666"} 0`,
+		`laz_packets_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",status="MANUAL_REVIEW"} 2`,
+		`laz_executor_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",status="LZ_RECEIVE_FAILED"} 1`,
+		`laz_dvn_jobs_total{src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi",status="QUORUM_CONFLICT"} 1`,
+		`laz_tx_outbox_total{chain_eid="40449",chain_name="hoodi",status="failed",retry_state="exhausted"} 3`,
+		`laz_tx_receipt_gas_cost_dst_wei{chain_eid="40449",chain_name="hoodi",purpose="executor_lz_receive"} 42000000000000`,
+		`laz_worker_fee_revenue_src_wei{role="executor",src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi"} 100`,
+		`laz_worker_fee_actual_gas_cost_src_wei{role="executor",src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi"} 120`,
+		`laz_worker_fee_gross_margin_src_wei{role="executor",src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi"} -20`,
+		`laz_worker_fee_negative_margin_jobs{role="executor",src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi"} 1`,
+		`laz_worker_fee_unpriced_receipts{role="executor",src_eid="40161",dst_eid="40449",src_chain_name="ethereum-sepolia",dst_chain_name="hoodi"} 2`,
+		`laz_indexer_cursor_last_block{chain_eid="40161",chain_name="ethereum-sepolia",stream="source"} 123456`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -203,7 +211,7 @@ func assertUniquePrometheusSeries(t *testing.T, body string) {
 }
 
 func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry(map[uint32]string{40161: "ethereum-sepolia", 40449: "hoodi", 1: "chain-a", 2: "chain-b"})
 	registry.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
 	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 30*time.Minute)
 	handler := Handler(fakeProvider{err: errors.New("database down")}, registry)
@@ -213,11 +221,11 @@ func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
 
 	body := recorder.Body.String()
 	for _, want := range []string{
-		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1800.000000`,
-		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000000`,
-		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="success"} 0`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="error"} 0`,
+		`laz_indexer_poll_interval_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1800.000000`,
+		`laz_indexer_start_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1700000000`,
+		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_polls_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",result="success"} 0`,
+		`laz_indexer_polls_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",result="error"} 0`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q before first poll:\n%s", want, body)
@@ -226,7 +234,7 @@ func TestHandlerMetricsRendersRegisteredIndexerBeforeFirstPoll(t *testing.T) {
 }
 
 func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry(map[uint32]string{40161: "ethereum-sepolia", 40449: "hoodi", 1: "chain-a", 2: "chain-b"})
 	registry.now = func() time.Time { return time.Unix(1_699_999_990, 0) }
 	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 5*time.Second)
 	registry.now = func() time.Time { return time.Unix(1_700_000_000, 0) }
@@ -263,34 +271,34 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 		`laz_worker_loop_retries_total{name="txmgr"} 2`,
 		`laz_worker_loop_last_retry_timestamp_seconds{name="pricing"} 1700000060`,
 		`laz_worker_loop_last_retry_timestamp_seconds{name="txmgr"} 1700000050`,
-		`laz_indexer_poll_success{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
-		`laz_indexer_poll_interval_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 5.000000`,
-		`laz_indexer_start_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1699999990`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="success"} 1`,
-		`laz_indexer_polls_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",result="error"} 1`,
-		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
-		`laz_indexer_last_success_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000000`,
-		`laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
-		`laz_indexer_last_error_timestamp_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 1700000030`,
-		`laz_indexer_last_poll_duration_seconds{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0.250000`,
-		`laz_indexer_safe_to_block{chain_eid="40161",name="ethereum-sepolia",stream="executor_source"} 0`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="source_transactions"} 2`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="dvn_transactions"} 1`,
-		`laz_indexer_processed_total{chain_eid="40161",name="ethereum-sepolia",stream="executor_source",kind="destination_logs"} 3`,
-		`laz_signer_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 900000000000000000`,
-		`laz_signer_min_native_balance_wei{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1000000000000000000`,
-		`laz_signer_min_native_balance_wei{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 1000000000000000000`,
-		`laz_signer_balance_poll_success{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1`,
-		`laz_signer_balance_poll_success{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 0`,
-		`laz_signer_balance_last_success_timestamp_seconds{chain_eid="40161",signer="0x9999999999999999999999999999999999999999"} 1700000070`,
-		`laz_signer_balance_last_error_timestamp_seconds{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 1700000080`,
-		`laz_signer_balance_last_poll_duration_seconds{chain_eid="40449",signer="0x8888888888888888888888888888888888888888"} 0.125000`,
-		`laz_rpc_provider_status{chain_eid="40161",provider="provider-0",status="healthy"} 1`,
-		`laz_rpc_provider_status{chain_eid="40161",provider="provider-1",status="conflict"} 1`,
-		`laz_rpc_provider_log_conflict{chain_eid="40161",provider="provider-0"} 0`,
-		`laz_rpc_provider_log_conflict{chain_eid="40161",provider="provider-1"} 1`,
-		`laz_rpc_provider_safe_conflict{chain_eid="40161",provider="provider-0"} 0`,
-		`laz_rpc_provider_safe_conflict{chain_eid="40161",provider="provider-1"} 1`,
+		`laz_indexer_poll_success{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_poll_interval_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 5.000000`,
+		`laz_indexer_start_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1699999990`,
+		`laz_indexer_polls_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",result="success"} 1`,
+		`laz_indexer_polls_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",result="error"} 1`,
+		`laz_indexer_last_poll_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_success_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1700000000`,
+		`laz_indexer_failure_since_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_error_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 1700000030`,
+		`laz_indexer_last_poll_duration_seconds{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 0.250000`,
+		`laz_indexer_safe_to_block{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source"} 0`,
+		`laz_indexer_processed_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",kind="source_transactions"} 2`,
+		`laz_indexer_processed_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",kind="dvn_transactions"} 1`,
+		`laz_indexer_processed_total{chain_eid="40161",chain_name="ethereum-sepolia",stream="executor_source",kind="destination_logs"} 3`,
+		`laz_signer_native_balance_wei{chain_eid="40161",chain_name="ethereum-sepolia",signer="0x9999999999999999999999999999999999999999"} 900000000000000000`,
+		`laz_signer_min_native_balance_wei{chain_eid="40161",chain_name="ethereum-sepolia",signer="0x9999999999999999999999999999999999999999"} 1000000000000000000`,
+		`laz_signer_min_native_balance_wei{chain_eid="40449",chain_name="hoodi",signer="0x8888888888888888888888888888888888888888"} 1000000000000000000`,
+		`laz_signer_balance_poll_success{chain_eid="40161",chain_name="ethereum-sepolia",signer="0x9999999999999999999999999999999999999999"} 1`,
+		`laz_signer_balance_poll_success{chain_eid="40449",chain_name="hoodi",signer="0x8888888888888888888888888888888888888888"} 0`,
+		`laz_signer_balance_last_success_timestamp_seconds{chain_eid="40161",chain_name="ethereum-sepolia",signer="0x9999999999999999999999999999999999999999"} 1700000070`,
+		`laz_signer_balance_last_error_timestamp_seconds{chain_eid="40449",chain_name="hoodi",signer="0x8888888888888888888888888888888888888888"} 1700000080`,
+		`laz_signer_balance_last_poll_duration_seconds{chain_eid="40449",chain_name="hoodi",signer="0x8888888888888888888888888888888888888888"} 0.125000`,
+		`laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-0",status="healthy"} 1`,
+		`laz_rpc_provider_status{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-1",status="conflict"} 1`,
+		`laz_rpc_provider_log_conflict{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-0"} 0`,
+		`laz_rpc_provider_log_conflict{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-1"} 1`,
+		`laz_rpc_provider_safe_conflict{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-0"} 0`,
+		`laz_rpc_provider_safe_conflict{chain_eid="40161",chain_name="ethereum-sepolia",provider="provider-1"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("metrics body missing %q:\n%s", want, body)
@@ -305,7 +313,7 @@ func TestHandlerMetricsRendersRuntimeMetricsWhenStatsUnavailable(t *testing.T) {
 }
 
 func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry(map[uint32]string{40161: "ethereum-sepolia", 40449: "hoodi", 1: "chain-a", 2: "chain-b"})
 	registry.now = func() time.Time { return time.Unix(100, 0) }
 	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 30*time.Minute)
 
@@ -342,7 +350,7 @@ func TestRegistryTracksIndexerRegistrationAndFailureWindow(t *testing.T) {
 }
 
 func TestRegistryKeepsIndexerStreamsIndependent(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry(map[uint32]string{40161: "ethereum-sepolia", 40449: "hoodi", 1: "chain-a", 2: "chain-b"})
 	registry.now = func() time.Time { return time.Unix(100, 0) }
 	registry.RegisterIndexer(40161, "ethereum-sepolia", "executor_source", 5*time.Second)
 	registry.RegisterIndexer(40161, "ethereum-sepolia", "dvn_source", 5*time.Second)
@@ -411,7 +419,7 @@ func cleanSnapshotWith(mutator func(*db.StatsSnapshot)) db.StatsSnapshot {
 
 func TestRecoveryMetricIdentity(t *testing.T) {
 	var output strings.Builder
-	renderRecoveryMetrics(&output, []db.RecoveryStat{{ChainEID: 1, SignerID: "a", Inflight: 8, Window: 8, Reason: "fee_cap"}, {ChainEID: 1, SignerID: "b", Inflight: 2, Window: 8}})
+	renderRecoveryMetrics(&output, []db.RecoveryStat{{ChainEID: 1, SignerID: "a", Inflight: 8, Window: 8, Reason: "fee_cap"}, {ChainEID: 1, SignerID: "b", Inflight: 2, Window: 8}}, map[uint32]string{1: "chain-a"})
 	seen := map[string]bool{}
 	for line := range strings.SplitSeq(output.String(), "\n") {
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -429,7 +437,7 @@ func TestRecoveryMetricIdentity(t *testing.T) {
 }
 
 func TestPricingSourceFailuresAndSnapshotAgeDuringOutage(t *testing.T) {
-	registry := NewRegistry()
+	registry := NewRegistry(map[uint32]string{40161: "ethereum-sepolia", 40449: "hoodi", 1: "chain-a", 2: "chain-b"})
 	now := time.Unix(1_700_000_000, 0)
 	registry.now = func() time.Time { return now }
 	registry.RecordPricingSnapshot(1, 2, common.Address{}, now, time.Hour)
@@ -445,8 +453,35 @@ func TestPricingSourceFailuresAndSnapshotAgeDuringOutage(t *testing.T) {
 			t.Fatalf("age=%v", snapshot.PricingSnapshots[0])
 		}
 		output := renderPrometheus(db.StatsSnapshot{}, false, snapshot)
-		if !strings.Contains(output, `laz_pricing_source_failures_total{eid="1",source="coingecko",role="primary",category="stale"} 2`) {
+		if !strings.Contains(output, `laz_pricing_source_failures_total{eid="1",chain_name="chain-a",source="coingecko",role="primary",category="stale"} 2`) {
 			t.Fatalf("missing counter: %s", output)
+		}
+	}
+}
+
+func TestChainNamesAreCopiedAndEscaped(t *testing.T) {
+	const name = "chain\"\\\nname"
+	names := map[uint32]string{1: name, 2: "destination"}
+	registry := NewRegistry(names)
+	names[1] = "mutated input"
+	registry.RuntimeSnapshot().ChainNames[1] = "mutated snapshot"
+	registry.RecordPricingSourceFailure(1, "coingecko", "primary", "stale")
+	registry.RecordPricingSnapshot(1, 2, common.Address{}, time.Now(), time.Hour)
+	for _, dbAvailable := range []bool{true, false} {
+		body := renderPrometheus(db.StatsSnapshot{
+			Chains:   []db.ChainStat{{EID: 1, Name: name}},
+			TxOutbox: []db.TxOutboxStat{{ChainEID: 1, Status: "failed", Count: 1}},
+		}, dbAvailable, registry.RuntimeSnapshot())
+		for _, want := range []string{
+			`laz_pricing_source_failures_total{eid="1",chain_name="chain\"\\\nname",`,
+			`src_chain_name="chain\"\\\nname",dst_chain_name="destination"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Fatalf("missing %q in %s", want, body)
+			}
+		}
+		if dbAvailable && !strings.Contains(body, `laz_tx_outbox_total{chain_eid="1",chain_name="chain\"\\\nname",`) {
+			t.Fatalf("DB chain name missing: %s", body)
 		}
 	}
 }

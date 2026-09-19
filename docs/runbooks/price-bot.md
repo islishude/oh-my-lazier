@@ -104,7 +104,7 @@ a mixed source/database failure still reaches the supervisor. Source freshness
 limits and chain snapshot expiry remain independent safety bounds; increasing
 `max_age_seconds` is not part of this recovery policy.
 
-Watch `laz_pricing_source_failures_total{eid,source,role,category}` alongside
+Watch `laz_pricing_source_failures_total{eid,chain_name,source,role,category}` alongside
 snapshot age and time-to-stale. The counter increments on actual rejected reads,
 not cooldown hits. `LazPricingSourceFailing` warns on repeated failures within
 one hour; snapshot age continues advancing during an outage and remains the
