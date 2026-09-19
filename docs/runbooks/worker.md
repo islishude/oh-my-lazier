@@ -14,6 +14,25 @@ Run the same on-chain config gate used at worker startup:
 go run ./go/cmd/configcheck -config config/example.yaml
 ```
 
+RPC failures include the provider index, operation, and underlying reason. For
+example, a single provider unable to read the anchored block state reports:
+
+```text
+rpc quorum unavailable for chain example-chain: provider[0] eth_call failed: rpc error -32000: missing trie node aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (path ); eth_call has 0 comparable answers, quorum is 1
+```
+
+This is a state-read failure, not an endpoint EID mismatch. JSON-RPC error codes
+and messages are shown in full; additional `error.data` is not printed. HTTP
+and network diagnostics are redacted and bounded. See the
+[RPC diagnostic policy](../runtime.md#rpc-quorum), including the explicit trust
+in upstream JSON-RPC messages, before retaining or sharing output. No debug flag
+is needed to see these failure details.
+
+An HTTP failure whose body mentions `execution reverted` still represents an
+unavailable RPC response. Preflight quorum failures defer the queued transaction
+without assigning a nonce or consuming a transaction attempt. HTTP status codes
+remain visible even when endpoint parameters contain the same digits.
+
 `DATABASE_URL` may override the configured database URL at runtime. Other config is loaded once at startup; runtime config changes require a process restart.
 
 Useful operator commands:

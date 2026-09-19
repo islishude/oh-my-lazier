@@ -265,7 +265,7 @@ func (c *Client) voteStateRead(ctx context.Context, operation string, read func(
 			defer cancel()
 			client, err := c.providerClient(perProbeCtx, index)
 			if err != nil {
-				probes[index] = stateReadProbe{transientErr: wrapProviderOperationError(index, operation, err)}
+				probes[index] = stateReadProbe{transientErr: c.wrapProviderOperationError(index, operation, err)}
 				completions <- index
 				return
 			}
@@ -277,9 +277,9 @@ func (c *Client) voteStateRead(ctx context.Context, operation string, read func(
 				}
 				probes[index] = stateReadProbe{payload: payload, responded: true}
 			case isDeterministicRevert(err):
-				probes[index] = stateReadProbe{revertErr: wrapProviderOperationError(index, operation, err), responded: true}
+				probes[index] = stateReadProbe{revertErr: c.wrapProviderOperationError(index, operation, err), responded: true}
 			default:
-				probes[index] = stateReadProbe{transientErr: wrapProviderOperationError(index, operation, err)}
+				probes[index] = stateReadProbe{transientErr: c.wrapProviderOperationError(index, operation, err)}
 			}
 			completions <- index
 		}(index)
@@ -331,9 +331,8 @@ func (c *Client) voteStateRead(ctx context.Context, operation string, read func(
 	}
 }
 
-// stateReadFailureDetails summarizes an unavailable state read without leaking
-// provider URLs or payloads: provider operation errors are already redacted to
-// provider indexes when wrapped.
+// stateReadFailureDetails summarizes an unavailable state read using provider
+// diagnostics: verbatim JSON-RPC codes/messages, or redacted Go errors.
 func stateReadFailureDetails(operation string, quorum, comparable int, transientErrs []error) []string {
 	details := make([]string, 0, len(transientErrs)+1)
 	for _, err := range transientErrs {
@@ -499,7 +498,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 			defer cancel()
 			client, err := c.providerClient(perProbeCtx, index)
 			if err != nil {
-				probes[index] = gasProbe{transientErr: wrapProviderOperationError(index, "eth_estimateGas", err)}
+				probes[index] = gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
 				completions <- index
 				return
 			}
@@ -508,9 +507,9 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 			case err == nil:
 				probes[index] = gasProbe{gas: gas, responded: true}
 			case isDeterministicRevert(err):
-				probes[index] = gasProbe{revertErr: wrapProviderOperationError(index, "eth_estimateGas", err), responded: true}
+				probes[index] = gasProbe{revertErr: c.wrapProviderOperationError(index, "eth_estimateGas", err), responded: true}
 			default:
-				probes[index] = gasProbe{transientErr: wrapProviderOperationError(index, "eth_estimateGas", err)}
+				probes[index] = gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
 			}
 			completions <- index
 		}(index)

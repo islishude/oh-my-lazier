@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/islishude/oh-my-lazier/go/internal/db"
 	"github.com/islishude/oh-my-lazier/go/internal/rpcquorum"
 )
@@ -16,12 +19,42 @@ func TestIsEstimateGasRevertHonorsQuorumVerdict(t *testing.T) {
 	// ganache's message-only shape carries no code 3 and no hex data, so the
 	// text classifier alone would leave the row queued and retrying forever.
 	ganache := errors.New("VM Exception while processing transaction: revert MyError")
-	if isEstimateGasRevert(ganache) {
-		t.Fatal("a plain non-rpc error must not be terminal without the quorum verdict")
-	}
 	voted := fmt.Errorf("estimate outbox tx 1: %w", &rpcquorum.VotedRevertError{Operation: "eth_estimateGas", Err: ganache})
-	if !isEstimateGasRevert(voted) {
-		t.Fatal("quorum-voted revert must classify as a terminal estimate revert")
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "no error"},
+		{name: "plain ganache message", err: ganache},
+		{name: "quorum voted revert", err: voted, want: true},
+		{name: "unavailable", err: &rpcquorum.QuorumUnavailableError{Details: []string{"HTTP 503: execution reverted"}}},
+		{name: "wrapped unavailable", err: fmt.Errorf("estimate: %w", &rpcquorum.QuorumUnavailableError{Details: []string{"HTTP 503: execution reverted"}})},
+		{name: "head conflict", err: &rpcquorum.HeadConflictError{Details: []string{"execution reverted"}}},
+		{name: "state conflict", err: &rpcquorum.StateReadConflictError{ChainName: "reverted"}},
+		{name: "estimate conflict", err: &rpcquorum.EstimateGasConflictError{Detail: "execution reverted"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isEstimateGasRevert(test.err); got != test.want {
+				t.Fatalf("isEstimateGasRevert(%v) = %v, want %v", test.err, got, test.want)
+			}
+		})
+	}
+}
+
+func TestEstimateGasHTTPFailureDoesNotBecomeRevert(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"error":{"code":3,"message":"execution reverted"}}`, http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	client := rpcquorum.New("testnet", []string{server.URL})
+	defer client.Close()
+	_, err := client.EstimateGas(t.Context(), ethereum.CallMsg{})
+	if !rpcquorum.IsQuorumUnavailable(err) {
+		t.Fatalf("EstimateGas() error = %v, want quorum unavailable", err)
+	}
+	if isEstimateGasRevert(fmt.Errorf("estimate: %w", err)) {
+		t.Fatalf("HTTP failure classified as terminal revert: %v", err)
 	}
 }
 

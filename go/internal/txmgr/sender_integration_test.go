@@ -433,59 +433,69 @@ func TestProcessNextDefersFeeOverCapBeforeNonceAssignment(t *testing.T) {
 }
 
 func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *testing.T) {
-	store := openTestStore(t)
-	signer := newTestKeystoreSigner(t)
-	client := &fakeChainClient{
-		pendingNonce:       13,
-		estimateGasErr:     errors.New("rpc unavailable"),
-		header:             dynamicHeader(),
-		suggestedGasTipCap: big.NewInt(1_000_000_000),
-	}
-	logger, logs := captureLogger(slog.LevelDebug)
-	manager := New(store, logger)
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "rpc unavailable", err: errors.New("rpc unavailable")},
+		{name: "quorum diagnostic mentions revert", err: &rpcquorum.QuorumUnavailableError{ChainName: "testnet", Details: []string{"HTTP 503: execution reverted"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			client := &fakeChainClient{
+				pendingNonce:       13,
+				estimateGasErr:     test.err,
+				header:             dynamicHeader(),
+				suggestedGasTipCap: big.NewInt(1_000_000_000),
+			}
+			logger, logs := captureLogger(slog.LevelDebug)
+			manager := New(store, logger)
 
-	queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
-		ChainEID: 40161,
-		Purpose:  db.TxPurposePricingSetPriceSnapshot,
-		To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
-		Calldata: []byte{0x01, 0x02, 0x03},
-		Value:    big.NewInt(123),
-		SignerID: signer.Address().Hex(),
-	})
-	if err != nil {
-		t.Fatalf("EnqueueTx() error = %v", err)
-	}
+			queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
+				ChainEID: 40161,
+				Purpose:  db.TxPurposePricingSetPriceSnapshot,
+				To:       common.HexToAddress("0x2222222222222222222222222222222222222222"),
+				Calldata: []byte{0x01, 0x02, 0x03},
+				Value:    big.NewInt(123),
+				SignerID: signer.Address().Hex(),
+			})
+			if err != nil {
+				t.Fatalf("EnqueueTx() error = %v", err)
+			}
 
-	_, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
-	if !errors.Is(err, ErrTxDeferred) {
-		t.Fatalf("ProcessNext() error = %v, want ErrTxDeferred", err)
+			_, err = manager.ProcessNext(t.Context(), testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+			if !errors.Is(err, ErrTxDeferred) {
+				t.Fatalf("ProcessNext() error = %v, want ErrTxDeferred", err)
+			}
+			outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
+			if err != nil {
+				t.Fatalf("GetOutboxTx() error = %v", err)
+			}
+			if outboxTx.Status != db.TxStatusQueued {
+				t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusQueued)
+			}
+			if outboxTx.Nonce != 0 {
+				t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
+			}
+			if outboxTx.Attempts != 0 {
+				t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
+			}
+			if client.pendingNonceCalls != 0 {
+				t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
+			}
+			if len(client.sent) != 0 {
+				t.Fatalf("sent tx count = %d, want 0", len(client.sent))
+			}
+			assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
+			assertLogContains(t, logs.String(),
+				`level=DEBUG`,
+				`msg="deferred tx outbox row"`,
+				`reason=preflight_error`,
+				test.err.Error(),
+			)
+		})
 	}
-	outboxTx, err := store.GetOutboxTx(t.Context(), queuedID)
-	if err != nil {
-		t.Fatalf("GetOutboxTx() error = %v", err)
-	}
-	if outboxTx.Status != db.TxStatusQueued {
-		t.Fatalf("outbox status = %q, want %q", outboxTx.Status, db.TxStatusQueued)
-	}
-	if outboxTx.Nonce != 0 {
-		t.Fatalf("outbox nonce = %d, want unassigned zero value", outboxTx.Nonce)
-	}
-	if outboxTx.Attempts != 0 {
-		t.Fatalf("outbox attempts = %d, want 0", outboxTx.Attempts)
-	}
-	if client.pendingNonceCalls != 0 {
-		t.Fatalf("PendingNonceAt() calls = %d, want 0", client.pendingNonceCalls)
-	}
-	if len(client.sent) != 0 {
-		t.Fatalf("sent tx count = %d, want 0", len(client.sent))
-	}
-	assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
-	assertLogContains(t, logs.String(),
-		`level=DEBUG`,
-		`msg="deferred tx outbox row"`,
-		`reason=preflight_error`,
-		`error="rpc unavailable"`,
-	)
 }
 
 func TestProcessNextMarksEstimateGasRevertFailedBeforeNonceAssignment(t *testing.T) {

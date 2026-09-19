@@ -1498,6 +1498,12 @@ func isEstimateGasRevert(err error) bool {
 	if err == nil {
 		return false
 	}
+	// Quorum failures can contain upstream diagnostics mentioning a revert,
+	// including HTTP bodies. They are never an authoritative EVM verdict.
+	if rpcquorum.IsQuorumUnavailable(err) || rpcquorum.IsHeadConflict(err) ||
+		rpcquorum.IsStateReadConflict(err) || rpcquorum.IsEstimateGasConflict(err) {
+		return false
+	}
 	// A quorum-voted revert is authoritative: the RPC layer already agreed by
 	// fixed majority that the EVM rejected this call, across every client
 	// revert shape it recognizes. Re-deriving that verdict from text here

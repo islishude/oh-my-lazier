@@ -32,6 +32,10 @@ For commands and startup options, see [worker operation](runbooks/worker.md).
 
 - Startup establishes the head quorum before the first on-chain config read.
 
+- Provider failures include the operation and underlying diagnostic. Typed JSON-RPC errors display their complete code and message verbatim, without redaction or truncation; `error.data` stays available through the original error chain but is not added to output. This deliberately trusts upstream message text, including any credentials an upstream echoes there. Other Go errors, including HTTP response bodies, redact URLs, configured endpoint credentials, and explicitly labeled sensitive fields; their diagnostics are flattened to one line and capped at 2 KiB with a truncation marker. HTTP bodies are never treated as typed JSON-RPC errors just because they contain JSON. Rendering does not change error identities or quorum classification.
+
+- HTTP status metadata is preserved separately from the redacted body. Credential matching covers original URL encodings and mixed-case percent escapes without ignoring the case of literal credential characters. Endpoint components match whole tokens rather than fragments of other numbers or words; explicitly identified credentials, including URL usernames, passwords, and sensitive query values, are also removed when embedded in other text. Preflight quorum-unavailable, head-conflict, state-conflict, and gas-estimate-conflict errors remain retryable even when their diagnostic text mentions `execution reverted`; they cannot trigger terminal estimate-revert handling.
+
 - Configured RPC endpoints must come from independent failure domains — duplicating one backend across URLs satisfies the count but silently voids the majority-safety assumption.
 
 ## Indexing and confirmations

@@ -38,6 +38,7 @@ before editing; these rules supplement [AGENTS.md](../AGENTS.md).
 - Load config once at startup. Fail fast on invalid local config or mismatched on-chain config before durable loops start.
 - Keep signer implementations behind `internal/signer.Signer`.
 - Never log private keys, decrypted keystores, KMS signatures, API keys, raw secrets, or secret-bearing config values.
+- RPC diagnostics follow the explicit [runtime policy](runtime.md#rpc-quorum): typed JSON-RPC codes and messages are displayed verbatim, while other Go errors are redacted. Do not add request payloads or `error.data` to diagnostic output.
 - Validate every configured RPC URL against the configured chain ID; one healthy endpoint is not enough.
 - Keep price sources configurable. CoinMarketCap, CoinGecko, and Chainlink may be primary or sanity sources; Uniswap V3 remains an on-chain sanity-only route.
 - CoinMarketCap API keys must be referenced by environment variable name, not stored in YAML.

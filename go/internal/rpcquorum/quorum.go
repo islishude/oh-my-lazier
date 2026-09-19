@@ -96,35 +96,8 @@ type configuredProvider struct {
 	client       *ethclient.Client
 }
 
-type providerOperationError struct {
-	providerID string
-	operation  string
-	cause      error
-}
-
-func (e *providerOperationError) Error() string {
-	if e == nil {
-		return "rpc provider operation failed"
-	}
-	return fmt.Sprintf("%s %s failed", e.providerID, e.operation)
-}
-
-func (e *providerOperationError) Unwrap() error {
-	if e == nil {
-		return nil
-	}
-	return e.cause
-}
-
 func providerID(index int) string {
 	return fmt.Sprintf("provider[%d]", index)
-}
-
-func wrapProviderOperationError(index int, operation string, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &providerOperationError{providerID: providerID(index), operation: operation, cause: err}
 }
 
 // Client coordinates multiple RPC providers for one chain.
@@ -468,7 +441,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 	for index, probe := range probes {
 		if probe.err != nil || probe.header == nil || probe.header.Number == nil {
 			statuses[index] = ProviderUnavailable
-			failureDetails = append(failureDetails, fmt.Sprintf("%s head unavailable", providerID(index)))
+			failureDetails = append(failureDetails, providerFailureDetail(index, "head unavailable", probe.err))
 			continue
 		}
 		tips[index] = new(big.Int).Set(probe.header.Number)
@@ -673,7 +646,7 @@ func (c *Client) voteAtHeight(ctx context.Context, probes []headerProbe, tips ma
 	wg.Wait()
 	for slot, index := range vote.fetchIndices {
 		if fetchedErrs[slot] != nil || fetchedHeaders[slot] == nil {
-			vote.failures = append(vote.failures, fmt.Sprintf("%s canonical header unavailable", providerID(index)))
+			vote.failures = append(vote.failures, providerFailureDetail(index, "canonical header unavailable", fetchedErrs[slot]))
 			continue
 		}
 		vote.hashes[index] = fetchedHeaders[slot].Hash()
@@ -782,7 +755,7 @@ func (c *Client) SafeLogSnapshot(ctx context.Context) (SafeLogSnapshot, error) {
 	failureDetails := make([]string, 0, total)
 	for index, probe := range probes {
 		if probe.err != nil || probe.header == nil || probe.header.Number == nil {
-			failureDetails = append(failureDetails, fmt.Sprintf("%s safe block unavailable", providerID(index)))
+			failureDetails = append(failureDetails, providerFailureDetail(index, "safe block unavailable", probe.err))
 			continue
 		}
 		tips[index] = new(big.Int).Set(probe.header.Number)
@@ -968,7 +941,7 @@ func (c *Client) BalanceAt(ctx context.Context, account common.Address, blockNum
 		return nil, err
 	}
 	result, err := client.BalanceAt(ctx, account, blockNumber)
-	return result, wrapProviderOperationError(index, "eth_getBalance", err)
+	return result, c.wrapProviderOperationError(index, "eth_getBalance", err)
 }
 
 // ValidateChainID verifies every configured provider reports the expected EVM chain ID.
@@ -1079,8 +1052,10 @@ func (c *Client) filterLogs(ctx context.Context, snapshot *safeSnapshot, query e
 
 	fingerprints := make(map[int]string, len(results))
 	var successes int
+	var failureDetails []string
 	for slot, index := range participants {
 		if results[slot].err != nil {
+			failureDetails = append(failureDetails, results[slot].err.Error())
 			continue
 		}
 		successes++
@@ -1089,7 +1064,7 @@ func (c *Client) filterLogs(ctx context.Context, snapshot *safeSnapshot, query e
 	if successes < quorum {
 		return nil, &QuorumUnavailableError{
 			ChainName: c.chainName,
-			Details:   []string{fmt.Sprintf("%d of %d configured providers answered the log window [%s, %s], quorum is %d", successes, total, query.FromBlock, query.ToBlock, quorum)},
+			Details:   append(failureDetails, fmt.Sprintf("%d of %d configured providers answered the log window [%s, %s], quorum is %d", successes, total, query.FromBlock, query.ToBlock, quorum)),
 		}
 	}
 	if best < quorum {
@@ -1183,7 +1158,7 @@ func (c *Client) filterLogsFromProvider(ctx context.Context, index int, query et
 	probeCtx, cancel := c.probeContext(ctx)
 	defer cancel()
 	result, err := client.FilterLogs(probeCtx, query)
-	return result, wrapProviderOperationError(index, "eth_getLogs", err)
+	return result, c.wrapProviderOperationError(index, "eth_getLogs", err)
 }
 
 // normalizeLogWindow returns the canonical (blockNumber, txIndex, logIndex)
@@ -1257,7 +1232,7 @@ func (c *Client) SuggestGasPrice(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	result, err := client.SuggestGasPrice(ctx)
-	return result, wrapProviderOperationError(index, "eth_gasPrice", err)
+	return result, c.wrapProviderOperationError(index, "eth_gasPrice", err)
 }
 
 // SuggestGasTipCap returns the first healthy provider's EIP-1559 priority-fee estimate.
@@ -1271,7 +1246,7 @@ func (c *Client) SuggestGasTipCap(ctx context.Context) (*big.Int, error) {
 		return nil, err
 	}
 	result, err := client.SuggestGasTipCap(ctx)
-	return result, wrapProviderOperationError(index, "eth_maxPriorityFeePerGas", err)
+	return result, c.wrapProviderOperationError(index, "eth_maxPriorityFeePerGas", err)
 }
 
 // HeaderByNumber returns a header. A nil number returns the full header of the
@@ -1391,7 +1366,7 @@ func (c *Client) NonceAt(ctx context.Context, account common.Address, blockNumbe
 		index := <-completions
 		probe := probes[index]
 		if probe.err != nil {
-			failureDetails = append(failureDetails, fmt.Sprintf("%s eth_getTransactionCount failed", providerID(index)))
+			failureDetails = append(failureDetails, probe.err.Error())
 			continue
 		}
 		responded++
@@ -1471,7 +1446,7 @@ func (c *Client) CanonicalHashAt(ctx context.Context, blockNumber *big.Int) (com
 		index := <-completions
 		probe := probes[index]
 		if probe.err != nil {
-			failureDetails = append(failureDetails, fmt.Sprintf("%s header unavailable", providerID(index)))
+			failureDetails = append(failureDetails, providerFailureDetail(index, "header unavailable", probe.err))
 			continue
 		}
 		responded++
@@ -1506,7 +1481,7 @@ func (c *Client) nonceAtFromProvider(ctx context.Context, index int, account com
 		return 0, err
 	}
 	result, err := client.NonceAt(ctx, account, blockNumber)
-	return result, wrapProviderOperationError(index, "eth_getTransactionCount", err)
+	return result, c.wrapProviderOperationError(index, "eth_getTransactionCount", err)
 }
 
 // SendTransaction broadcasts a signed transaction through the first healthy provider.
@@ -1519,7 +1494,7 @@ func (c *Client) SendTransaction(ctx context.Context, tx *gethtypes.Transaction)
 	if err != nil {
 		return err
 	}
-	return wrapProviderOperationError(index, "eth_sendRawTransaction", client.SendTransaction(ctx, tx))
+	return c.wrapProviderOperationError(index, "eth_sendRawTransaction", client.SendTransaction(ctx, tx))
 }
 
 // TransactionReceipt returns a receipt only when healthy providers agree on the receipt.
@@ -1703,7 +1678,7 @@ func (c *Client) TransactionReceiptAt(ctx context.Context, txHash common.Hash, m
 	}
 	return nil, &QuorumUnavailableError{
 		ChainName: c.chainName,
-		Details:   []string{fmt.Sprintf("receipt for tx %s lacks a comparable-evidence majority", txHash)},
+		Details:   append(stateReadFailureDetails("eth_getTransactionReceipt", quorum, receiptVotes+unexcusedNotFound, transientErrs), fmt.Sprintf("receipt for tx %s lacks a comparable-evidence majority", txHash)),
 	}
 }
 
@@ -1713,7 +1688,7 @@ func (c *Client) transactionReceiptFromProvider(ctx context.Context, index int, 
 		return nil, err
 	}
 	receipt, err := client.TransactionReceipt(ctx, txHash)
-	return receipt, wrapProviderOperationError(index, "eth_getTransactionReceipt", err)
+	return receipt, c.wrapProviderOperationError(index, "eth_getTransactionReceipt", err)
 }
 
 func (c *Client) chainIDFromProvider(ctx context.Context, index int) (*big.Int, error) {
@@ -1722,7 +1697,7 @@ func (c *Client) chainIDFromProvider(ctx context.Context, index int) (*big.Int, 
 		return nil, err
 	}
 	chainID, err := client.ChainID(ctx)
-	return chainID, wrapProviderOperationError(index, "eth_chainId", err)
+	return chainID, c.wrapProviderOperationError(index, "eth_chainId", err)
 }
 
 func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, number *big.Int) (*gethtypes.Header, error) {
@@ -1731,7 +1706,7 @@ func (c *Client) headerByNumberFromProvider(ctx context.Context, index int, numb
 		return nil, err
 	}
 	header, err := client.HeaderByNumber(ctx, number)
-	return header, wrapProviderOperationError(index, "eth_getBlockByNumber", err)
+	return header, c.wrapProviderOperationError(index, "eth_getBlockByNumber", err)
 }
 
 // firstHealthyProvider selects the healthy provider whose observed tip is
@@ -1796,7 +1771,7 @@ func (c *Client) providerClient(ctx context.Context, index int) (*ethclient.Clie
 
 	client, err := ethclient.DialContext(ctx, url)
 	if err != nil {
-		return nil, wrapProviderOperationError(index, "connect", err)
+		return nil, c.wrapProviderOperationError(index, "connect", err)
 	}
 
 	c.mu.Lock()

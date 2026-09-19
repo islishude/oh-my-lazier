@@ -3,13 +3,17 @@ package rpcquorum
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -98,25 +102,95 @@ func TestValidateChainIDRedactsProviderURLOnRequestFailure(t *testing.T) {
 	}
 }
 
-func TestProviderOperationErrorRedactsCauseAndPreservesIdentity(t *testing.T) {
-	cause := testRPCError{message: "upstream included rpc-secret-token", code: 3}
-	err := wrapProviderOperationError(2, "eth_getLogs", cause)
-	if err.Error() != "provider[2] eth_getLogs failed" {
-		t.Fatalf("error = %q, want redacted provider operation", err)
+func TestProviderOperationErrorPreservesRPCDetailsAndIdentity(t *testing.T) {
+	const rawURL = "https://rpc-user:rpc-password@rpc.example/path-key"
+	for _, message := range []string{
+		"missing trie node " + strings.Repeat("a", 64) + " (path )",
+		"upstream included rpc-secret-token " + rawURL,
+		strings.Repeat("完整消息\n", 1024),
+		"",
+	} {
+		for _, nested := range []bool{false, true} {
+			t.Run(fmt.Sprintf("bytes=%d/nested=%v", len(message), nested), func(t *testing.T) {
+				cause := testCodedRevertError{message: message, code: -32000, data: "data-must-not-appear"}
+				var input error = &url.Error{Op: "Post", URL: rawURL, Err: cause}
+				if nested {
+					input = wrapProviderOperationError(2, "connect", input, rawURL)
+				}
+				err := wrapProviderOperationError(2, "eth_getLogs", input, rawURL)
+				want := "provider[2] eth_getLogs failed: rpc error -32000: " + message
+				if err.Error() != want {
+					t.Fatalf("error = %q, want %q", err, want)
+				}
+				if !errors.Is(err, cause) {
+					t.Fatal("errors.Is() lost original cause")
+				}
+				var rpcErr rpc.Error
+				if !errors.As(err, &rpcErr) || rpcErr.ErrorCode() != -32000 {
+					t.Fatal("errors.As() lost RPC identity")
+				}
+				var dataErr rpc.DataError
+				if !errors.As(err, &dataErr) || dataErr.ErrorData() != cause.data {
+					t.Fatal("errors.As() lost RPC data")
+				}
+			})
+		}
 	}
-	if !errors.Is(err, cause) {
-		t.Fatal("errors.Is() = false, want wrapped cause identity")
-	}
-	var rpcErr rpc.Error
-	if !errors.As(err, &rpcErr) || rpcErr.ErrorCode() != 3 {
-		t.Fatalf("errors.As() did not preserve rpc error: %v", err)
-	}
-	if strings.Contains(err.Error(), "rpc-secret-token") {
-		t.Fatalf("error leaked cause: %q", err)
-	}
-	canceled := wrapProviderOperationError(2, "eth_getLogs", context.Canceled)
-	if !errors.Is(canceled, context.Canceled) {
-		t.Fatalf("errors.Is(context.Canceled) = false for %v", canceled)
+}
+
+func TestProviderOperationErrorRedactsGoErrors(t *testing.T) {
+	const rawURL = "https://rpc-user:p%40ss%2Bword@rpc.example/v2/path-secret?api_key=query%2Ftoken%2Bvalue"
+	for _, test := range []struct {
+		name    string
+		rawURL  string
+		cause   error
+		want    string
+		omitted []string
+	}{
+		{name: "canceled", cause: context.Canceled, want: "context canceled"},
+		{name: "timeout", cause: &url.Error{Op: "Post", URL: rawURL, Err: context.DeadlineExceeded}, want: "context deadline exceeded"},
+		{name: "unknown", cause: errors.New("connection reset by peer"), want: "connection reset by peer"},
+		{name: "URL", cause: fmt.Errorf("Post %s: connection refused", rawURL), want: "connection refused"},
+		{name: "other URL", cause: errors.New("redirect https://other.example/other-key failed"), want: "failed", omitted: []string{"other.example", "other-key"}},
+		{name: "known credentials", cause: errors.New("rpc-user p@ss+word p%40ss%2Bword path-secret query/token+value query%2Ftoken%2Bvalue"), want: "[REDACTED]"},
+		{name: "lowercase encoded credential", rawURL: "https://rpc.example/v2?api_key=query%2ftoken%2bvalue", cause: rpc.HTTPError{StatusCode: 403, Body: []byte("unrecognized credential query%2ftoken%2bvalue")}, want: "HTTP 403 Forbidden: unrecognized credential [REDACTED]", omitted: []string{"query%2ftoken%2bvalue"}},
+		{name: "mixed case escapes", cause: errors.New("unrecognized credential query%2ftoken%2Bvalue"), want: "unrecognized credential [REDACTED]", omitted: []string{"query%2ftoken%2Bvalue"}},
+		{name: "raw encoded query", rawURL: "https://rpc.example/?api_key=%71uery%2ftoken", cause: errors.New("unrecognized credential %71uery%2Ftoken"), want: "unrecognized credential [REDACTED]", omitted: []string{"%71uery%2Ftoken"}},
+		{name: "credential case remains significant", cause: errors.New("unrecognized credential QUERY%2ftoken%2bvalue"), want: "QUERY%2ftoken%2bvalue"},
+		{name: "short components preserve diagnostics", rawURL: "https://rpc.example/rpc?version=1&method=eth", cause: rpc.HTTPError{StatusCode: 401, Body: []byte("method unavailable on port 8541")}, want: "HTTP 401 Unauthorized: method unavailable on port 8541"},
+		{name: "ordinary query values preserve words", rawURL: "https://rpc.example/?network=test", cause: errors.New("latest block unavailable"), want: "latest block unavailable"},
+		{name: "credential substring", rawURL: "https://rpc.example/?api_key=secret-key", cause: errors.New("upstream echoed prefixsecret-keysuffix"), want: "prefix[REDACTED]suffix", omitted: []string{"secret-key"}},
+		{name: "short credentials still redacted", rawURL: "https://rpc.example/?api_key=x", cause: errors.New("unrecognized credential x"), want: "unrecognized credential [REDACTED]", omitted: []string{"credential x"}},
+		{name: "HTTP metadata is not upstream text", rawURL: "https://rpc.example/?api_key=Unauthorized", cause: rpc.HTTPError{StatusCode: 401, Body: []byte("credential Unauthorized denied")}, want: "HTTP 401 Unauthorized: credential [REDACTED] denied"},
+		{name: "fields", cause: errors.New(`password="p a s s" token=opaque-token API-Key: opaque-key Authorization: Bearer opaque-bearer; secret='opaque secret'`), want: "[REDACTED]", omitted: []string{"p a s s", "opaque"}},
+		{name: "JSON body", cause: rpc.HTTPError{StatusCode: 403, Body: []byte(`{"error":{"code":-32000,"message":"token=body-secret"},"password":"json-secret"}`)}, want: "HTTP 403 Forbidden", omitted: []string{"body-secret", "json-secret"}},
+		{name: "rate limit", cause: rpc.HTTPError{StatusCode: 429, Body: []byte("rate limited")}, want: "HTTP 429 Too Many Requests: rate limited"},
+		{name: "unavailable", cause: rpc.HTTPError{StatusCode: 503, Body: []byte("upstream unavailable")}, want: "HTTP 503 Service Unavailable: upstream unavailable"},
+		{name: "controls", cause: errors.New("upstream\r\nfailed\x00\t\u202e"), want: "upstream  failed", omitted: []string{"\r", "\n", "\x00", "\t", "\u202e"}},
+		{name: "long", cause: errors.New(strings.Repeat("界", 1024) + " token=long-secret"), want: "[truncated]", omitted: []string{"long-secret"}},
+		{name: "long HTTP body", cause: rpc.HTTPError{StatusCode: 503, Body: []byte(strings.Repeat("界", 1024))}, want: "HTTP 503 Service Unavailable:"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			providerURL := test.rawURL
+			if providerURL == "" {
+				providerURL = rawURL
+			}
+			client := New("testnet", []string{providerURL})
+			err := client.wrapProviderOperationError(0, "eth_call", test.cause)
+			assertRedactedProviderError(t, err, append(test.omitted,
+				rawURL, "rpc-user", "p@ss+word", "p%40ss%2Bword", "rpc.example", "path-secret", "query/token+value", "query%2Ftoken%2Bvalue"), test.want)
+			if !reflect.DeepEqual(errors.Unwrap(err), test.cause) || (reflect.TypeOf(test.cause).Comparable() && !errors.Is(err, test.cause)) {
+				t.Fatal("errors.Is() lost original Go error")
+			}
+			const prefix = "provider[0] eth_call failed: "
+			if len(strings.TrimPrefix(err.Error(), prefix)) > maxProviderDiagnosticBytes || !utf8.ValidString(err.Error()) {
+				t.Fatal("diagnostic exceeds byte limit or has invalid UTF-8")
+			}
+			nested := client.wrapProviderOperationError(0, "eth_call", err)
+			if nested.Error() != err.Error() {
+				t.Fatalf("nested wrapper duplicated diagnostic: %v", nested)
+			}
+		})
 	}
 }
 
@@ -204,7 +278,7 @@ func TestTransactionReceiptUnknownTipNotFoundIsUnavailable(t *testing.T) {
 	}
 }
 
-func TestTransactionReceiptTransientErrorRedactsProviderURL(t *testing.T) {
+func TestTransactionReceiptTransientErrorPreservesRPCMessage(t *testing.T) {
 	const secretURL = "https://rpc-user:rpc-password@rpc-secret.example/v2/rpc-api-key"
 	cause := errors.New("upstream echoed rpc-api-key")
 	client := &Client{chainName: "testnet", providers: []configuredProvider{
@@ -215,7 +289,7 @@ func TestTransactionReceiptTransientErrorRedactsProviderURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("TransactionReceipt() error = nil, want transient failure")
 	}
-	assertRedactedProviderError(t, err, []string{secretURL, "rpc-password", "rpc-api-key"}, "provider[0]", "eth_getTransactionReceipt")
+	assertRedactedProviderError(t, err, []string{secretURL, "rpc-password"}, "provider[0]", "eth_getTransactionReceipt", "rpc error -32000: upstream echoed rpc-api-key")
 }
 
 func TestTransactionReceiptRequiresMajorityAgreement(t *testing.T) {
@@ -803,8 +877,8 @@ func TestNonceAtQuorumUnavailableOnInsufficientResponders(t *testing.T) {
 	if !IsQuorumUnavailable(err) {
 		t.Fatalf("NonceAt() error = %v, want quorum unavailable", err)
 	}
-	if strings.Contains(err.Error(), "rpc-secret") {
-		t.Fatalf("error leaked provider failure detail: %q", err)
+	if !strings.Contains(err.Error(), "rpc error -32000: boom with rpc-secret") {
+		t.Fatalf("error omitted JSON-RPC failure detail: %q", err)
 	}
 }
 
@@ -1612,15 +1686,67 @@ func TestCallContractSplitIsConflictNotUnavailable(t *testing.T) {
 
 func TestCallContractTooFewComparableIsUnavailable(t *testing.T) {
 	canonical := testHeaderAt(42, 0x01)
-	client := stateReadTestClient(t,
-		testEthService{header: canonical, callResult: []byte{0x01}},
-		testEthService{header: canonical, callErr: testRPCError{message: "boom", code: -32000}},
-		testEthService{header: canonical, callErr: testRPCError{message: "boom", code: -32000}},
-	)
+	message := "missing trie node " + strings.Repeat("a", 64) + " (path )"
+	failing := testEthService{header: canonical, callErr: testRPCError{message: message, code: -32000}}
+	for _, test := range []struct {
+		name     string
+		services []testEthService
+		want     string
+	}{
+		{name: "single provider", services: []testEthService{failing}, want: "eth_call has 0 comparable answers, quorum is 1"},
+		{name: "minority success", services: []testEthService{{header: canonical, callResult: []byte{0x01}}, failing, failing}, want: "eth_call has 1 comparable answers, quorum is 2"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := stateReadTestClient(t, test.services...)
+			_, err := client.CallContract(context.Background(), ethereum.CallMsg{}, nil)
+			if !IsQuorumUnavailable(err) {
+				t.Fatalf("CallContract() error = %v, want quorum unavailable", err)
+			}
+			for _, detail := range []string{"rpc quorum unavailable for chain testnet", "eth_call failed: rpc error -32000: " + message, test.want} {
+				if !strings.Contains(err.Error(), detail) {
+					t.Fatalf("error = %q, missing %q", err, detail)
+				}
+			}
+			var rpcErr rpc.Error
+			if errors.As(err, &rpcErr) || IsVotedRevert(err) {
+				t.Fatal("unavailable aggregate must not expose a provider RPC error for classification")
+			}
+		})
+	}
+}
 
-	_, err := client.CallContract(context.Background(), ethereum.CallMsg{}, big.NewInt(42))
-	if !IsQuorumUnavailable(err) {
-		t.Fatalf("CallContract() error = %v, want quorum unavailable", err)
+func TestQuorumAggregatesPreserveProviderDiagnostics(t *testing.T) {
+	canonical := testHeaderAt(42, 0x01)
+	cause := testRPCError{code: -32000, message: "upstream state unavailable"}
+	for _, test := range []struct {
+		name    string
+		service testEthService
+		read    func(*Client) error
+	}{
+		{name: "head", service: testEthService{err: cause}, read: func(c *Client) error { _, err := c.CheckHead(context.Background()); return err }},
+		{name: "safe", service: testEthService{err: cause}, read: func(c *Client) error { _, err := c.SafeLogSnapshot(context.Background()); return err }},
+		{name: "canonical hash", service: testEthService{err: cause}, read: func(c *Client) error { _, err := c.CanonicalHashAt(context.Background(), big.NewInt(42)); return err }},
+		{name: "nonce", service: testEthService{nonceErr: cause}, read: func(c *Client) error {
+			_, err := c.NonceAt(context.Background(), common.Address{}, big.NewInt(42))
+			return err
+		}},
+		{name: "logs", service: testEthService{header: canonical, logsErr: cause}, read: func(c *Client) error {
+			snapshot, err := c.SafeLogSnapshot(context.Background())
+			if err != nil {
+				return err
+			}
+			_, err = snapshot.FilterLogs(context.Background(), boundedLogQuery(42))
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := stateReadTestClient(t, test.service)
+			err := test.read(client)
+			if !IsQuorumUnavailable(err) {
+				t.Fatalf("error = %v, want quorum unavailable", err)
+			}
+			assertRedactedProviderError(t, err, nil, "provider[0]", "rpc error -32000: upstream state unavailable")
+		})
 	}
 }
 
