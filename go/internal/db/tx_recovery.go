@@ -26,7 +26,8 @@ type RecoveryTask struct {
 }
 
 // ClaimRecovery selects the lowest outstanding nonce, never skipping a delayed
-// head in order to spend a higher nonce's recovery budget.
+// head in order to spend a higher nonce's recovery budget. Environmental holds
+// with an operator replacement request stay owned by the replacement pipeline.
 func (s *Store) ClaimRecovery(ctx context.Context, eid uint32, signer string, now time.Time, window int) (RecoveryTask, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -48,9 +49,13 @@ func (s *Store) ClaimRecovery(ctx context.Context, eid uint32, signer string, no
  AND status NOT IN ('confirmed','failed') ORDER BY nonce,id LIMIT 1
  ) UPDATE tx_outbox o SET recovery_lease_token=$3,recovery_lease_until=$4::timestamptz+interval '2 minutes',
  replay_authorized=false,
+ next_recovery_at=CASE WHEN o.status='held' AND o.visibility_checked_at IS NULL
+   THEN LEAST(COALESCE(o.next_recovery_at,$4::timestamptz+interval '60 seconds'),$4::timestamptz+interval '60 seconds') ELSE o.next_recovery_at END,
  first_broadcast_at=COALESCE(o.first_broadcast_at,(SELECT min(created_at) FROM tx_attempts WHERE outbox_id=o.id AND broadcast_count>0))
  FROM head,tx_attempts a WHERE o.id=head.id AND a.id=o.active_attempt_id AND a.outbox_id=o.id
- AND o.status='broadcast' AND o.receipt_outcome IS NULL AND o.cancel_requested_at IS NULL
+ AND (o.status='broadcast' OR (`+environmentalHoldSQL+` AND o.replace_requested_at IS NULL)) AND o.receipt_outcome IS NULL AND o.cancel_requested_at IS NULL
+ AND (o.lease_until IS NULL OR o.lease_until<=now())
+ AND (a.broadcast_lease_until IS NULL OR a.broadcast_lease_until<=now())
  AND a.state IN ('submitted','ambiguous')
  AND (o.next_visibility_at IS NULL OR o.next_visibility_at<=$4)
  AND (o.recovery_lease_until IS NULL OR o.recovery_lease_until<=$4)
@@ -80,6 +85,8 @@ type RecoveryObservation struct {
 }
 
 // FinishRecovery persists a fenced observation without resetting lifetime budgets.
+// Unexplained nonce consumption enters reconciliation in the same transaction.
+// An operator replacement that raced an environmental probe invalidates it.
 func (s *Store) FinishRecovery(ctx context.Context, t RecoveryTask, eid uint32, signer string, o RecoveryObservation) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -90,15 +97,22 @@ func (s *Store) FinishRecovery(ctx context.Context, t RecoveryTask, eid uint32, 
 	if err = lockSignerNonce(ctx, tx, eid, signer); err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE tx_outbox SET
+	tag, err := tx.Exec(ctx, `UPDATE tx_outbox o SET
+ status=CASE WHEN $9 THEN 'held' WHEN $4 THEN 'broadcast' ELSE o.status END,
+ held_reason=CASE WHEN $9 THEN 'nonce_reconcile_required' WHEN $4 THEN NULL ELSE o.held_reason END,
  last_seen_at=CASE WHEN $4 THEN $3 ELSE last_seen_at END,
  absent_since=CASE WHEN $5 THEN CASE WHEN visibility_checked_at<$3::timestamptz-interval '2 minutes' THEN $3 ELSE COALESCE(absent_since,$3) END ELSE NULL END,
  visibility_checked_at=$3,next_visibility_at=$3::timestamptz+interval '60 seconds',
  recovery_lease_token=NULL,recovery_lease_until=NULL,
  replay_authorized=$6 AND (next_recovery_at IS NULL OR next_recovery_at<=$3),
  next_recovery_at=CASE WHEN $7='rpc_unavailable' THEN $3::timestamptz+interval '60 seconds' ELSE next_recovery_at END
- WHERE id=$1 AND active_attempt_id=$2 AND recovery_lease_token=$8
- AND recovery_lease_until>now() AND status='broadcast' AND receipt_outcome IS NULL AND cancel_requested_at IS NULL`, t.ID, t.AttemptID, o.Now, o.Visible, o.Absent, o.Replay, o.Reason, t.Token)
+ FROM tx_attempts a
+ WHERE o.id=$1 AND o.active_attempt_id=$2 AND o.recovery_lease_token=$8
+ AND a.id=o.active_attempt_id AND a.outbox_id=o.id
+ AND o.recovery_lease_until>now() AND (o.status='broadcast' OR (`+environmentalHoldSQL+` AND o.replace_requested_at IS NULL))
+ AND o.receipt_outcome IS NULL AND o.cancel_requested_at IS NULL
+ AND (o.lease_until IS NULL OR o.lease_until<=now())
+ AND (a.broadcast_lease_until IS NULL OR a.broadcast_lease_until<=now())`, t.ID, t.AttemptID, o.Now, o.Visible, o.Absent, o.Replay, o.Reason, t.Token, o.Nonce != nil && *o.Nonce > t.Nonce)
 	if err != nil {
 		return err
 	}
@@ -147,14 +161,6 @@ func (s *Store) RecoveryAttemptID(ctx context.Context, id int64) (int64, error) 
 	var n int64
 	err := s.pool.QueryRow(ctx, `SELECT active_attempt_id FROM tx_outbox WHERE id=$1`, id).Scan(&n)
 	return n, err
-}
-
-// MarkRecoveryNonceConsumed routes unexplained consumption through the existing
-// confirmed-nonce reconciler instead of treating a latest nonce as finality.
-func (s *Store) MarkRecoveryNonceConsumed(ctx context.Context, t RecoveryTask) error {
-	_, err := s.pool.Exec(ctx, `UPDATE tx_outbox SET status='held',held_reason='nonce_reconcile_required',replay_authorized=false
- WHERE id=$1 AND active_attempt_id=$2 AND status='broadcast' AND receipt_outcome IS NULL AND cancel_requested_at IS NULL`, t.ID, t.AttemptID)
-	return err
 }
 
 // InspectTx returns only operator-safe fields; signed raw bytes and calldata are excluded.

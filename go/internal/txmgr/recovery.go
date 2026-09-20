@@ -76,10 +76,10 @@ func (m *Manager) ProcessRecovery(ctx context.Context, target Target) error {
 	}
 	obs.Nonce = &nonce
 	if nonce > t.Nonce {
-		if err = m.finishRecovery(ctx, target, t, obs); err != nil {
-			return err
-		}
-		return m.store.MarkRecoveryNonceConsumed(ctx, t)
+		obs.Reason = ""
+		// Persist the nonce-reconciliation hold with the fenced observation,
+		// so another replacement cannot slip between evidence and routing.
+		return m.finishRecovery(ctx, target, t, obs)
 	}
 	rows := target.Client.TransactionVisibility(probe, t.Hash)
 	obs.Absent, obs.Visible = visibilityVerdict(rows)

@@ -38,6 +38,9 @@ const (
 	// attempts, so fifteen minutes of the same hold means the bump cannot land
 	// (typically the configured fee cap) and the operator must intervene.
 	repriceHeldStallSeconds = 15 * 60
+
+	// Environmental recovery must make signing progress within fifteen minutes.
+	broadcastHeldStallSeconds = 15 * 60
 )
 
 // Services selects which worker role state should be evaluated for this process.
@@ -138,7 +141,7 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 		}
 		// Only operator-action holds block readiness: a held row parks the
 		// signer lane so no higher nonce is signed until it is resolved.
-		// reprice_required (below the automatic replacement cap) and
+		// broadcast_retrying and reprice_required (below the automatic replacement cap) and
 		// nonce_reconcile_required self-heal through the automatic replacement
 		// and nonce reconciliation loops, and a fresh cancel_requested is an
 		// operator-initiated cancel already converging; a reprice hold past
@@ -159,6 +162,13 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 				issues = append(issues, Issue{
 					Code:    "held_signer_lane",
 					Message: fmt.Sprintf("chain %d signer %s has %d pending cancel(s) stalled for %ds, likely blocked by the fee cap", held.ChainEID, held.SignerID, held.Count, held.OldestAgeSeconds),
+				})
+			}
+		case db.HeldBroadcastRetrying:
+			if held.OldestAgeSeconds > broadcastHeldStallSeconds {
+				issues = append(issues, Issue{
+					Code:    "held_signer_lane",
+					Message: fmt.Sprintf("chain %d signer %s has %d environmental broadcast recovery row(s) stalled for %ds; check RPC, signer balance and fee caps", held.ChainEID, held.SignerID, held.Count, held.OldestAgeSeconds),
 				})
 			}
 		case db.HeldRepriceRequired:

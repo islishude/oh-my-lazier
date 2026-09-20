@@ -60,6 +60,7 @@ const (
 	HeldManual                 = "manual"
 	// HeldBroadcastExhausted parks a lane whose active attempt spent its whole
 	// broadcast budget without an accepted send. Unlike held(manual) it is
+	// automatically recoverable for eligible environmental rejections, or
 	// explicitly replaceable: an operator replace signs a fresh attempt with a
 	// fresh budget for the same intent, while manual holds (definitive errors,
 	// signing budgets) usually need a config fix or a cancel instead.
@@ -114,15 +115,17 @@ type TxAttempt struct {
 // the txmgr persists. Raw tx hash/signer/params are verified in the txmgr (which
 // holds chain id and signer address) before this is called.
 type SignedAttempt struct {
-	Kind                 string
-	Nonce                uint64
-	TxType               uint8
-	TxHash               common.Hash
-	RawTx                []byte
-	GasLimit             uint64
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int // nil for legacy (tx_type 0)
-	SigningToken         uuid.UUID
+	// EnvironmentalRecovery requires fresh automatic recovery evidence at publication.
+	EnvironmentalRecovery bool
+	Kind                  string
+	Nonce                 uint64
+	TxType                uint8
+	TxHash                common.Hash
+	RawTx                 []byte
+	GasLimit              uint64
+	MaxFeePerGas          *big.Int
+	MaxPriorityFeePerGas  *big.Int // nil for legacy (tx_type 0)
+	SigningToken          uuid.UUID
 }
 
 // signerLaneBlockedByLowerNonce reports whether a lower nonce for the signer has
@@ -433,7 +436,7 @@ type BroadcastClaim struct {
 // exhaustion and the reservation happen in the same advisory-lock transaction so a
 // row is never broadcast a (cap+1)-th time. Exhausted lanes are handled in SQL so
 // they never block a higher nonce that is still legal to broadcast: a
-// never-accepted lane at the budget is parked held(manual) (ErrBroadcastLaneHeld
+// never-accepted lane at the budget is parked held(broadcast_exhausted) (ErrBroadcastLaneHeld
 // when that was the only state change), and an exhausted accepted row simply stops
 // matching (receipt polling and stale replacement keep covering it).
 func (s *Store) ClaimAttemptForBroadcast(ctx context.Context, chainEID uint32, signerID string, broadcastToken uuid.UUID, leaseTTL time.Duration) (BroadcastClaim, error) {
@@ -512,6 +515,7 @@ func (s *Store) ClaimAttemptForBroadcast(ctx context.Context, chainEID uint32, s
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE tx_outbox SET replay_authorized=false,
+ absent_since=NULL,visibility_checked_at=NULL,next_visibility_at=NULL,recovery_lease_token=NULL,recovery_lease_until=NULL,
  first_broadcast_at=COALESCE(first_broadcast_at,(SELECT min(created_at) FROM tx_attempts WHERE outbox_id=$1 AND broadcast_count>0),now()),
  next_recovery_at=now()+$2::bigint*interval '1 second' WHERE id=$1`, outboxID, 60*(1<<uint(min(broadcastCount, 3)))); err != nil {
 		return BroadcastClaim{}, err
@@ -556,17 +560,19 @@ func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broa
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var outboxID int64
-	var state string
+	var state, kind string
+	var broadcastCount int64
 	if err := tx.QueryRow(ctx, `
-		SELECT outbox_id, state FROM tx_attempts
+		SELECT outbox_id, state, kind, broadcast_count FROM tx_attempts
 		WHERE id = $1 AND broadcast_lease_token = $2::uuid AND broadcast_lease_until > now()
 		FOR UPDATE
-	`, attemptID, broadcastToken.String()).Scan(&outboxID, &state); errors.Is(err, pgx.ErrNoRows) {
+	`, attemptID, broadcastToken.String()).Scan(&outboxID, &state, &kind, &broadcastCount); errors.Is(err, pgx.ErrNoRows) {
 		return ErrOutboxLeaseLost
 	} else if err != nil {
 		return err
 	}
 
+	environmental := class == SendErrorRetryableEnv && state != TxAttemptSubmitted && state != TxAttemptMined && kind != TxAttemptCancel
 	newState := state
 	if class == SendErrorAccepted && state != TxAttemptMined {
 		newState = TxAttemptSubmitted
@@ -578,9 +584,10 @@ func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broa
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_attempts
 		SET state = $1, send_error_class = $2, send_error = $3,
+            next_broadcast_at = CASE WHEN $5 THEN now()+$6::interval ELSE next_broadcast_at END,
 			broadcast_lease_token = NULL, broadcast_lease_until = NULL, updated_at = now()
 		WHERE id = $4
-	`, newState, class, sendErrArg, attemptID); err != nil {
+	`, newState, class, sendErrArg, attemptID, environmental, pgInterval(environmentalReplayDelay(broadcastCount))); err != nil {
 		return err
 	}
 	status, heldReason := mapSendClassToOutbox(class)
@@ -592,9 +599,10 @@ func (s *Store) MarkAttemptSendResult(ctx context.Context, attemptID int64, broa
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE tx_outbox
-		SET status = $1, held_reason = $2, updated_at = now()
+		SET status = $1, held_reason = $2, updated_at = now(),
+            next_recovery_at = CASE WHEN $5 THEN now()+interval '60 seconds' ELSE next_recovery_at END
 		WHERE id = $3 AND active_attempt_id = $4 AND status NOT IN ('confirmed', 'failed')
-	`, status, heldReason, outboxID, attemptID); err != nil {
+	`, status, heldReason, outboxID, attemptID, environmental && broadcastCount >= TxMaxBroadcasts); err != nil {
 		return err
 	}
 	// Manual sends also reserve the outbox against replacement/cancel signing.
@@ -1120,10 +1128,11 @@ func (s *Store) DeferReplacement(ctx context.Context, id int64) error {
 // ActiveKind tells the caller what payload to build: bumping a cancel attempt
 // must produce another cancel, never the original task calldata.
 type ReplacementCandidate struct {
-	Outbox          OutboxTx
-	ActiveAttemptID int64
-	ActiveKind      string
-	AttemptHashes   []common.Hash
+	EnvironmentalRecovery bool
+	Outbox                OutboxTx
+	ActiveAttemptID       int64
+	ActiveKind            string
+	AttemptHashes         []common.Hash
 }
 
 // NextReplacementCandidate peeks (without reserving) the next outbox row whose
@@ -1143,6 +1152,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 	var row outboxTxRow
 	var activeAttemptID int64
 	var activeKind string
+	var environmental bool
 	err := s.pool.QueryRow(ctx, `
 		SELECT
 			o.id, o.chain_eid, o.purpose, o.guid, o.to_address, o.calldata, o.value::text,
@@ -1154,11 +1164,12 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 			o.receipt_gas_cost_dst_wei::text, o.receipt_gas_cost_src_wei::text,
 			o.receipt_observed_at, o.receipt_cost_priced_at, o.cancel_requested_at,
 			o.receipt_outcome, o.receipt_attempt_id,
-			a.id, a.kind
+			a.id, a.kind, (o.status='held' AND o.held_reason='broadcast_exhausted' AND o.replace_requested_at IS NULL)
 		FROM tx_outbox o
 		JOIN tx_attempts a ON a.outbox_id = o.id AND a.id = o.active_attempt_id
 		WHERE o.chain_eid = $1 AND o.signer_id = $2
 			AND (o.lease_until IS NULL OR o.lease_until <= now())
+			AND (a.broadcast_lease_until IS NULL OR a.broadcast_lease_until <= now())
 			AND o.receipt_outcome IS NULL
 			AND a.state IN ('submitted', 'ambiguous')
 			AND o.pre_sign_failure_count < $3
@@ -1189,6 +1200,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 							AND r.kind = CASE WHEN a.kind = 'cancel' THEN 'cancel' ELSE $8 END
 					) < $9
 				)
+                OR (`+environmentalHoldSQL+` AND `+environmentalEvidenceSQL+` AND o.replace_requested_at IS NULL)
 				-- A reprice hold recovers automatically after a cooldown (updated_at
 				-- is refreshed by the underpriced send result and by deferrals, so
 				-- back-to-back underpriced rounds cannot burn the budget in one hot
@@ -1218,7 +1230,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 		&row.ReceiptGasCostDstWei, &row.ReceiptGasCostSrcWei,
 		&row.ReceiptObservedAt, &row.ReceiptCostPricedAt, &row.CancelRequestedAt,
 		&row.ReceiptOutcome, &row.ReceiptAttemptID,
-		&activeAttemptID, &activeKind,
+		&activeAttemptID, &activeKind, &environmental,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReplacementCandidate{}, ErrNoStaleBroadcastReplacement
@@ -1234,7 +1246,7 @@ func (s *Store) NextReplacementCandidate(ctx context.Context, chainEID uint32, s
 	if err != nil {
 		return ReplacementCandidate{}, err
 	}
-	return ReplacementCandidate{Outbox: outboxTx, ActiveAttemptID: activeAttemptID, ActiveKind: activeKind, AttemptHashes: hashes}, nil
+	return ReplacementCandidate{EnvironmentalRecovery: environmental, Outbox: outboxTx, ActiveAttemptID: activeAttemptID, ActiveKind: activeKind, AttemptHashes: hashes}, nil
 }
 
 // replacementClaimable reports whether a row can take a replacement of the
@@ -1257,8 +1269,9 @@ func replacementClaimable(status string, heldReason *string, kind string) bool {
 // ClaimOutboxForReplacementSigning writes a signing lease for a same-nonce
 // replacement of the expected active attempt. The nonce is already owned by the
 // row, so no signer advisory lock is needed; the lease plus the active-attempt
-// CAS keep concurrent replacers out.
-func (s *Store) ClaimOutboxForReplacementSigning(ctx context.Context, id, expectedActiveAttemptID int64, leaseToken uuid.UUID, leaseTTL time.Duration) (OutboxTx, error) {
+// CAS keep concurrent replacers out. Environmental candidates also revalidate
+// automatic budgets, cooldown and quorum evidence before acquiring the lease.
+func (s *Store) ClaimOutboxForReplacementSigning(ctx context.Context, id, expectedActiveAttemptID int64, leaseToken uuid.UUID, leaseTTL time.Duration, environmental bool) (OutboxTx, error) {
 	if id <= 0 || expectedActiveAttemptID <= 0 || leaseTTL <= 0 {
 		return OutboxTx{}, errors.New("replacement signing claim requires ids and a positive ttl")
 	}
@@ -1295,6 +1308,11 @@ func (s *Store) ClaimOutboxForReplacementSigning(ctx context.Context, id, expect
 		SELECT kind FROM tx_attempts WHERE id = $1
 	`, expectedActiveAttemptID).Scan(&activeKind); err != nil {
 		return OutboxTx{}, err
+	}
+	if environmental {
+		if err := checkEnvironmentalReplacement(ctx, tx, id); err != nil {
+			return OutboxTx{}, err
+		}
 	}
 	if !replacementClaimable(status, heldReason, activeKind) {
 		return OutboxTx{}, fmt.Errorf("outbox tx %d is not replaceable in status %s", id, status)
@@ -1375,6 +1393,11 @@ func (s *Store) InsertReplacementAttempt(ctx context.Context, outboxID, expected
 	// held(manual) lane (an operator re-request authorized it).
 	if !replacementClaimable(outboxStatus, heldReason, a.Kind) {
 		return TxAttempt{}, ErrActiveAttemptChanged
+	}
+	if a.EnvironmentalRecovery {
+		if err := checkEnvironmentalReplacement(ctx, tx, outboxID); err != nil {
+			return TxAttempt{}, err
+		}
 	}
 	// Under cancel intent only cancel bumps may land; a task replacement that
 	// raced the cancel request must lose.

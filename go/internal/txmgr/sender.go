@@ -569,7 +569,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 		return outboxTx.ID, nil
 	}
 	leaseToken := uuid.New()
-	claimed, err := m.store.ClaimOutboxForReplacementSigning(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, m.options.SigningLeaseTTL)
+	claimed, err := m.store.ClaimOutboxForReplacementSigning(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, m.options.SigningLeaseTTL, candidate.EnvironmentalRecovery)
 	if err != nil {
 		return 0, err
 	}
@@ -593,6 +593,7 @@ func (m *Manager) ProcessStaleBroadcastReplacement(ctx context.Context, target T
 	if err != nil {
 		return m.chargePreSignFailure(ctx, target, signerID, claimed, leaseToken, "replacement_verify", err)
 	}
+	attempt.EnvironmentalRecovery = candidate.EnvironmentalRecovery
 	if _, err := m.store.InsertReplacementAttempt(ctx, outboxTx.ID, candidate.ActiveAttemptID, leaseToken, attempt); err != nil {
 		return 0, err
 	}

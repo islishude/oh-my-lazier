@@ -68,6 +68,7 @@ func (s *Store) ClaimManualRebroadcast(ctx context.Context, expected Rebroadcast
 	}
 	// Preserve first-broadcast evidence and the cumulative automatic budget.
 	_, err = tx.Exec(ctx, `UPDATE tx_outbox SET replay_authorized=false,
+ absent_since=NULL,visibility_checked_at=NULL,next_visibility_at=NULL,recovery_lease_token=NULL,recovery_lease_until=NULL,
  first_broadcast_at=COALESCE(first_broadcast_at,(SELECT min(created_at) FROM tx_attempts WHERE outbox_id=$1 AND broadcast_count>0),now()),
  next_recovery_at=now()+$2::bigint*interval '1 second',
  lease_token=$3,lease_until=clock_timestamp()+$4::interval,updated_at=now() WHERE id=$1`,
