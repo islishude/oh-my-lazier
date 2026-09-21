@@ -16,3 +16,6 @@ For runtime changes, also read [runtime behavior](docs/runtime.md) and the relev
 - Never log secrets or put keys, RPC credentials, or passwords in script JSON. Follow the development guide's signer, secret-reference, and connection rules.
 - Chain-writing scripts require explicit `apply`; non-TTY `apply: true` also requires `confirmation: "approved"`.
 - Prefer extending existing table-driven tests. Run focused checks first, then `make check` before handoff; run applicable integration, security, and smoke gates from the development guide.
+- Pricing ABI sources for Chainlink and Uniswap are local, hash-verified inputs;
+  update [source records and licenses](contracts/vendor/abis/README.md) with any
+  source change. Do not restore npm source dependencies or network downloads.

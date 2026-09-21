@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -54,19 +55,19 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/AggregatorV3Interface.json",
         type: "function",
         name: "latestRoundData",
       },
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/AggregatorV3Interface.json",
         type: "function",
         name: "decimals",
       },
       {
         artifact:
-          "node_modules/@chainlink/contracts/abi/v0.8/shared/AggregatorV3Interface.abi.json",
+          "contracts/vendor/abis/AggregatorV3Interface.json",
         type: "function",
         name: "description",
       },
@@ -77,19 +78,19 @@ const outputs: AbiOutput[] = [
     selections: [
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/IUniswapV3Pool.json",
         type: "function",
         name: "observe",
       },
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/IUniswapV3Pool.json",
         type: "function",
         name: "token0",
       },
       {
         artifact:
-          "node_modules/@uniswap/v3-core/artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+          "contracts/vendor/abis/IUniswapV3Pool.json",
         type: "function",
         name: "token1",
       },
@@ -112,6 +113,26 @@ const repoRoot = process.cwd();
 
 export async function generatePricingABI(checkOnly: boolean): Promise<void> {
   const artifactCache = new Map<string, Artifact>();
+
+  const vendorDir = "contracts/vendor/abis";
+  const sources = JSON.parse(
+    await readFile(path.join(repoRoot, vendorDir, "sources.json"), "utf8")
+  ) as Record<string, { sha256: string }>;
+  const vendorPaths = new Set(outputs.flatMap((output) =>
+    output.selections.map((selection) => selection.artifact)
+      .filter((artifact) => artifact.startsWith(`${vendorDir}/`))
+  ));
+  for (const artifactPath of vendorPaths) {
+    const absolutePath = path.join(repoRoot, artifactPath);
+    const raw = await readVerifiedABIFile(
+      absolutePath, sources[path.basename(artifactPath)]?.sha256
+    );
+    const abi = JSON.parse(raw) as AbiEntry[];
+    if (!Array.isArray(abi)) {
+      throw new Error(`${artifactPath}: missing ABI array`);
+    }
+    artifactCache.set(absolutePath, { abi });
+  }
 
   for (const output of outputs) {
     const abi = await Promise.all(
@@ -136,6 +157,22 @@ export async function generatePricingABI(checkOnly: boolean): Promise<void> {
   if (checkOnly) {
     await assertNoUnexpectedABIJSON();
   }
+}
+
+/** Read a local ABI only after verifying its recorded SHA-256. */
+export async function readVerifiedABIFile(
+  filePath: string,
+  expectedSha256: string | undefined
+): Promise<string> {
+  if (expectedSha256 === undefined || !/^[a-f0-9]{64}$/.test(expectedSha256)) {
+    throw new Error(`${filePath}: missing or invalid source SHA-256`);
+  }
+  const raw = await readFile(filePath);
+  const actualSha256 = createHash("sha256").update(raw).digest("hex");
+  if (actualSha256 !== expectedSha256) {
+    throw new Error(`${filePath}: source SHA-256 mismatch`);
+  }
+  return raw.toString("utf8");
 }
 
 async function readSelectedEntry(

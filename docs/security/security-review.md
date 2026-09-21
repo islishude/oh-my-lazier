@@ -47,7 +47,9 @@ rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|wit
   fails if any high or moderate finding appears outside the recorded
   disposition set.
 - `govulncheck` currently reports no vulnerabilities in called Go code.
-- The remaining npm audit findings are toolchain and artifact-source findings
+  The 2026-09-21 scan also reports 1 vulnerability in imported packages and 4
+  in required modules that the code does not appear to call.
+- The remaining npm audit findings are toolchain findings
   described in `docs/security/npm-audit-disposition.md`; they block final
   mainnet approval until upgraded or formally accepted.
 
@@ -121,10 +123,15 @@ Severity: release blocker for mainnet approval.
 Evidence:
 
 - `npm audit --audit-level=moderate --json` reports zero critical findings.
-- The remaining high and moderate findings are limited to pinned LayerZero
-  dependencies, the retained Hardhat/Ignition deployment toolchain (including
-  its `adm-zip` and `lodash-es` dependencies), and transitive tooling bundled by
-  the pinned Chainlink AggregatorV3 ABI source.
+- The ABI source migration audit records 5 high, 0 moderate, and 24 low
+  package-level findings (29 total), down from 6 high, 3 moderate, and 25 low.
+  The five high findings remain in LayerZero, its required Chainlink CCIP
+  dependency, and legacy OpenZeppelin copies. Retained Hardhat/Ignition tooling
+  still has low inherited findings.
+- Chainlink and Uniswap pricing ABIs are local SHA-256-verified sources with
+  interface-specific licenses; their npm source packages have been removed.
+  See [audit disposition](npm-audit-disposition.md) and
+  [ABI source records](../../contracts/vendor/abis/README.md).
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 

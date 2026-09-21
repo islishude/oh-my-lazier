@@ -1,0 +1,26 @@
+{
+  "AggregatorV3Interface.json": {
+    "package": "@chainlink/contracts",
+    "version": "1.5.0",
+    "upstream": "https://github.com/smartcontractkit/chainlink-evm/tree/contracts-v1.5.0",
+    "tarball": "https://registry.npmjs.org/@chainlink/contracts/-/contracts-1.5.0.tgz",
+    "sourcePath": "abi/v0.8/shared/AggregatorV3Interface.abi.json",
+    "interfacePath": "src/v0.8/shared/interfaces/AggregatorV3Interface.sol",
+    "license": "MIT",
+    "extraction": "Copy the complete ABI file byte for byte.",
+    "sourceSha256": "ad03a0b3f82447803d55b1bb7d24ed67c3ae195d6881fe1b704f76266b53151f",
+    "sha256": "ad03a0b3f82447803d55b1bb7d24ed67c3ae195d6881fe1b704f76266b53151f"
+  },
+  "IUniswapV3Pool.json": {
+    "package": "@uniswap/v3-core",
+    "version": "1.0.1",
+    "upstream": "https://github.com/Uniswap/v3-core/tree/v1.0.1",
+    "tarball": "https://registry.npmjs.org/@uniswap/v3-core/-/v3-core-1.0.1.tgz",
+    "sourcePath": "artifacts/contracts/interfaces/IUniswapV3Pool.sol/IUniswapV3Pool.json",
+    "interfacePath": "contracts/interfaces/IUniswapV3Pool.sol",
+    "license": "GPL-2.0-or-later",
+    "extraction": "Parse the artifact JSON and save JSON.stringify(artifact.abi, null, 2) + \"\\n\" as UTF-8; discard all other fields.",
+    "sourceSha256": "1cb22d8cc5f70b1cef8a4f59bdd49541f01279bfba116878244ed913fe4cba33",
+    "sha256": "d3882d5ad8ac400dd9c64e8783675551c561c28b0085632c7f05988f9c904c40"
+  }
+}

@@ -134,6 +134,14 @@ This mode requires both endpoints and neither starts nor stops dependencies.
 Both modes run the full Go suite serially across packages, followed by recovery
 race integration tests.
 
+Chainlink AggregatorV3 1.5.0 and Uniswap V3 pool 1.0.1 full ABI inputs are
+vendored under [contracts/vendor/abis](../contracts/vendor/abis/README.md), with
+source provenance, interface licenses, and SHA-256 records. Pricing generation
+and checks verify saved-byte hashes before writing or comparing Go outputs;
+they do not fetch ABI sources. Updates require explicit review of the local
+files, provenance, hashes, licenses, and generated diff. The corresponding npm
+packages are not dependencies; LayerZero still requires `@chainlink/contracts-ccip`.
+
 ABI artifacts are committed under `go/internal/lzabi/abis`, `go/internal/configcheck/abis`, and `go/internal/pricing/abis`.
 
 ```bash
