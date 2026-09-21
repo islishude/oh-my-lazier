@@ -385,3 +385,31 @@ func TestReadinessAggregatesJobStatusesAcrossPathways(t *testing.T) {
 		})
 	}
 }
+
+func TestEnvironmentalRecoveryReadiness(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		reason  string
+		age     uint64
+		blocked bool
+	}{
+		{"recovering", db.HeldBroadcastRetrying, 300, false},
+		{"threshold", db.HeldBroadcastRetrying, 900, false},
+		{"stalled", db.HeldBroadcastRetrying, 901, true},
+		{"exhausted", db.HeldBroadcastExhausted, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := db.StatsSnapshot{Chains: []db.ChainStat{{EID: 40161, Enabled: true}}, TxOutboxHeld: []db.TxOutboxHeldStat{{ChainEID: 40161, SignerID: "worker", HeldReason: tc.reason, Count: 1, OldestAgeSeconds: tc.age}}}
+			report := EvaluateWithServices(snapshot, Services{})
+			held := false
+			for _, issue := range report.Issues {
+				if issue.Code == "held_signer_lane" {
+					held = true
+				}
+			}
+			if held != tc.blocked {
+				t.Fatalf("report=%+v want held=%v", report, tc.blocked)
+			}
+		})
+	}
+}

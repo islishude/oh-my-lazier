@@ -92,7 +92,7 @@ func TestManualRebroadcastBudgetAndLeases(t *testing.T) {
 	if count != 6 || state != TxAttemptAmbiguous {
 		t.Fatalf("count=%d state=%s", count, state)
 	}
-	if _, err = h.store.ClaimOutboxForReplacementSigning(h.ctx, id, a.ID, uuid.New(), time.Minute); !errors.Is(err, ErrOutboxLeaseLost) {
+	if _, err = h.store.ClaimOutboxForReplacementSigning(h.ctx, id, a.ID, uuid.New(), time.Minute, false); !errors.Is(err, ErrOutboxLeaseLost) {
 		t.Fatalf("replacement raced send: %v", err)
 	}
 	if err = h.store.ClaimManualRebroadcast(h.ctx, snapshot, uuid.New(), time.Minute); err == nil {
@@ -204,7 +204,7 @@ func TestManualRebroadcastHeadOnlyAndSigningRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = h.store.ClaimOutboxForReplacementSigning(h.ctx, first, a.ID, uuid.New(), time.Minute); err != nil {
+	if _, err = h.store.ClaimOutboxForReplacementSigning(h.ctx, first, a.ID, uuid.New(), time.Minute, false); err != nil {
 		t.Fatal(err)
 	}
 	if err = h.store.ClaimManualRebroadcast(h.ctx, snapshot, uuid.New(), time.Minute); err == nil {

@@ -464,11 +464,11 @@ func TestReplacementClaimInsertAndSwitch(t *testing.T) {
 	}
 
 	leaseToken := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning: %v", err)
 	}
 	// The signing lease excludes concurrent replacers.
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, uuid.New(), 30*time.Second); !errors.Is(err, ErrOutboxLeaseLost) {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, uuid.New(), 30*time.Second, false); !errors.Is(err, ErrOutboxLeaseLost) {
 		t.Fatalf("second replacement claim error = %v, want ErrOutboxLeaseLost", err)
 	}
 
@@ -553,7 +553,7 @@ func TestRequestTxReplacementFromRepriceHold(t *testing.T) {
 	}
 
 	leaseToken := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning: %v", err)
 	}
 	inserted, err := h.store.InsertReplacementAttempt(h.ctx, id, original.ID, leaseToken, SignedAttempt{
@@ -596,7 +596,7 @@ func TestFinalizeAttemptReceiptSwitchesActiveAndTerminalizes(t *testing.T) {
 		t.Fatalf("backdate: %v", err)
 	}
 	leaseToken := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, leaseToken, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning: %v", err)
 	}
 	replacement, err := h.store.InsertReplacementAttempt(h.ctx, id, original.ID, leaseToken, SignedAttempt{
@@ -610,7 +610,7 @@ func TestFinalizeAttemptReceiptSwitchesActiveAndTerminalizes(t *testing.T) {
 	}
 	// A pending replacement signing lease must not survive terminalization.
 	staleLease := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, replacement.ID, staleLease, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, replacement.ID, staleLease, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning(stale): %v", err)
 	}
 
@@ -925,7 +925,7 @@ func TestRecordPreSignFailureReplacementBudgetHoldsLane(t *testing.T) {
 
 	for i := int32(1); i <= TxMaxPreSignFailures; i++ {
 		leaseToken := uuid.New()
-		if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, attempt.ID, leaseToken, 30*time.Second); err != nil {
+		if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, attempt.ID, leaseToken, 30*time.Second, false); err != nil {
 			t.Fatalf("ClaimOutboxForReplacementSigning #%d: %v", i, err)
 		}
 		held, err := h.store.RecordPreSignFailure(h.ctx, id, leaseToken)
@@ -1226,5 +1226,79 @@ func TestOrphanedOutboxStatsDetectSendStateWithoutAttempt(t *testing.T) {
 	})
 	if count, _ := orphaned(TxStatusSigned); count != 0 {
 		t.Fatalf("disabled chain rows reported as orphaned (count = %d)", count)
+	}
+}
+
+func TestEnvironmentalBroadcastSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		classes  []string
+		kind     string
+		accepted bool
+		want     []time.Duration
+	}{
+		{name: "environmental", classes: []string{SendErrorRetryableEnv, SendErrorRetryableEnv, SendErrorRetryableEnv, SendErrorRetryableEnv, SendErrorRetryableEnv}, want: []time.Duration{20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 160 * time.Second}},
+		{name: "mixed", classes: []string{SendErrorRetryableEnv, SendErrorAmbiguous, SendErrorRetryableEnv}, want: []time.Duration{20 * time.Second, 6 * time.Second, 80 * time.Second}},
+		{name: "accepted", accepted: true, classes: []string{SendErrorRetryableEnv}, want: []time.Duration{3 * time.Second}},
+		{name: "cancel", kind: TxAttemptCancel, classes: []string{SendErrorRetryableEnv}, want: []time.Duration{3 * time.Second}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newAttemptHarness(t, "0x7070707070707070707070707070707070707070", 7)
+			id := h.enqueue()
+			a := h.signAttempt(id, 7, common.HexToHash("0x7070"))
+			if tc.kind != "" {
+				if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_attempts SET kind=$2 WHERE id=$1`, a.ID, tc.kind); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.accepted {
+				if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_attempts SET state='submitted' WHERE id=$1`, a.ID); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_outbox SET status='broadcast',replay_authorized=true WHERE id=$1`, id); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for i, class := range tc.classes {
+				h.broadcastResult(a.ID, class)
+				var delay float64
+				var count int64
+				var state string
+				if err := h.store.pool.QueryRow(h.ctx, `SELECT extract(epoch FROM next_broadcast_at-updated_at)::float8,broadcast_count,state FROM tx_attempts WHERE id=$1`, a.ID).Scan(&delay, &count, &state); err != nil {
+					t.Fatal(err)
+				}
+				// Non-environmental timers start at the claim transaction, slightly
+				// before result persistence. Environmental timers are atomic with it.
+				if diff := time.Duration(delay*float64(time.Second)) - tc.want[i]; diff > time.Second || diff < -time.Second || count != int64(i+1) {
+					t.Fatalf("delay=%v count=%d, want %v/%d", delay, count, tc.want[i], i+1)
+				}
+				if tc.accepted && state != TxAttemptSubmitted {
+					t.Fatal("acceptance downgraded")
+				}
+				// A fresh Store sees the durable schedule, with no in-memory retry state.
+				restarted := &Store{pool: h.store.pool}
+				if _, err := restarted.ClaimAttemptForBroadcast(h.ctx, 40161, h.signerID, uuid.New(), time.Minute); err == nil {
+					t.Fatal("restarted worker replayed before due time")
+				}
+				if i+1 < len(tc.classes) {
+					if _, err := h.store.pool.Exec(h.ctx, `UPDATE tx_attempts SET next_broadcast_at=now()-interval '1 second' WHERE id=$1`, a.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if len(tc.classes) == 5 {
+				status, reason, _ := h.outboxState(id)
+				if status != TxStatusHeld || reason != HeldBroadcastExhausted {
+					t.Fatalf("status=%s/%s", status, reason)
+				}
+				var cooldown float64
+				if err := h.store.pool.QueryRow(h.ctx, `SELECT extract(epoch FROM o.next_recovery_at-a.updated_at)::float8 FROM tx_outbox o JOIN tx_attempts a ON a.id=o.active_attempt_id WHERE o.id=$1`, id).Scan(&cooldown); err != nil {
+					t.Fatal(err)
+				}
+				if cooldown != 60 {
+					t.Fatalf("cooldown=%v, want 60", cooldown)
+				}
+			}
+		})
 	}
 }

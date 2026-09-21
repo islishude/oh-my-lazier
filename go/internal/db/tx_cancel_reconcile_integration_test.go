@@ -498,7 +498,7 @@ func TestHeldManualCancelRecoversViaReRequest(t *testing.T) {
 		t.Fatalf("candidate = %d kind %q, want the held cancel lane", candidate.Outbox.ID, candidate.ActiveKind)
 	}
 	bumpLease := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, cancelAttempt.ID, bumpLease, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, cancelAttempt.ID, bumpLease, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning(held manual cancel): %v", err)
 	}
 	bump, err := h.store.InsertReplacementAttempt(h.ctx, id, cancelAttempt.ID, bumpLease, SignedAttempt{
@@ -781,7 +781,7 @@ func TestReconciliationParksExhaustedReleaseAsBroadcastExhausted(t *testing.T) {
 		t.Fatalf("candidate = %d kind %q, want the parked task lane", candidate.Outbox.ID, candidate.ActiveKind)
 	}
 	bumpLease := uuid.New()
-	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, bumpLease, 30*time.Second); err != nil {
+	if _, err := h.store.ClaimOutboxForReplacementSigning(h.ctx, id, original.ID, bumpLease, 30*time.Second, false); err != nil {
 		t.Fatalf("ClaimOutboxForReplacementSigning(broadcast_exhausted): %v", err)
 	}
 	replacement, err := h.store.InsertReplacementAttempt(h.ctx, id, original.ID, bumpLease, SignedAttempt{

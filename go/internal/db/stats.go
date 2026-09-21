@@ -335,6 +335,10 @@ func (s *Store) statusStats(ctx context.Context, table string) ([]JobStatusStat,
 // or cancel-nonce) can move the lane — readiness treats it like a manual hold.
 const HeldRepriceExhausted = "reprice_exhausted"
 
+// HeldBroadcastRetrying is a stats-only reason for an environmental hold that
+// still has automatic signing and replacement budget.
+const HeldBroadcastRetrying = "broadcast_retrying"
+
 // HeldCancelRequested is a synthetic stats-only reason: a row with pending
 // operator cancel intent, regardless of its held reason. Its age counts from
 // the immutable cancel_requested_at, so deferrals (fee-cap blocks, receipts
@@ -354,12 +358,13 @@ func (s *Store) txOutboxHeldStats(ctx context.Context) ([]TxOutboxHeldStat, erro
 	rows, err := s.pool.Query(ctx, `
 		SELECT o.chain_eid, o.signer_id,
 			CASE
+                WHEN `+environmentalHoldSQL+` THEN 'broadcast_retrying'
 				WHEN o.held_reason = $1
-					AND (o.cancel_requested_at IS NULL OR COALESCE(act.kind, '') = $5)
+					AND (o.cancel_requested_at IS NULL OR COALESCE(a.kind, '') = $5)
 					AND (
 						SELECT count(*) FROM tx_attempts r
 						WHERE r.outbox_id = o.id
-							AND r.kind = CASE WHEN COALESCE(act.kind, '') = $5 THEN $5 ELSE $2 END
+							AND r.kind = CASE WHEN COALESCE(a.kind, '') = $5 THEN $5 ELSE $2 END
 					) >= $3
 				THEN $4
 				ELSE o.held_reason
@@ -372,10 +377,10 @@ func (s *Store) txOutboxHeldStats(ctx context.Context) ([]TxOutboxHeldStat, erro
 			-- would otherwise report a perpetual one-minute age and the
 			-- readiness stall detection could never trigger.
 			COALESCE(floor(extract(epoch FROM now() - min(
-				CASE WHEN o.held_reason = $1 THEN COALESCE(act.created_at, o.updated_at) ELSE o.updated_at END
+				CASE WHEN o.held_reason IN ($1, 'broadcast_exhausted') THEN COALESCE(a.created_at, o.updated_at) ELSE o.updated_at END
 			)))::bigint, 0)
 		FROM tx_outbox o
-		LEFT JOIN tx_attempts act ON act.id = o.active_attempt_id
+		LEFT JOIN tx_attempts a ON a.id = o.active_attempt_id
 		WHERE o.status = 'held'
 		GROUP BY 1, 2, 3
 		UNION ALL

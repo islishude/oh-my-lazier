@@ -4474,3 +4474,142 @@ func TestRecoveryRPCFailurePreservesFeeBlockAge(t *testing.T) {
 	}
 	t.Fatal("missing recovery stats")
 }
+
+func TestEnvironmentalRecoveryTransitions(t *testing.T) {
+	for _, scenario := range []string{"same raw recovers", "replace and confirm", "RPC unavailable", "visibility unavailable", "visible", "nonce consumed", "historical receipt", "fee cap"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			client := &fakeChainClient{pendingNonce: 7, confirmedNonce: 7, estimatedGas: 60000, header: dynamicHeader(), suggestedGasTipCap: big.NewInt(130000), sendErr: errors.New("insufficient funds"), visibility: []rpcquorum.TransactionVisibility{{ProviderID: "rpc-1", State: "absent"}}}
+			now := time.Now().UTC()
+			manager := NewWithOptions(store, discardLogger(), Options{Now: func() time.Time { return now }})
+			target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+			id, err := store.EnqueueTx(t.Context(), db.TxRequest{ChainEID: 40161, Purpose: db.TxPurposePricingSetPriceSnapshot, To: common.HexToAddress("0x22"), Calldata: []byte{1}, Value: big.NewInt(0), SignerID: signer.Address().Hex()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = manager.ProcessNext(t.Context(), target); err != nil {
+				t.Fatal(err)
+			}
+			for i := 0; i < 5; i++ {
+				if scenario == "same raw recovers" && i == 4 {
+					client.sendErr = nil
+				}
+				if _, err = manager.ProcessBroadcast(t.Context(), target); err != nil {
+					t.Fatal(err)
+				}
+				if client.sent[i].Hash() != client.sent[0].Hash() {
+					t.Fatal("replay changed raw")
+				}
+				forceAttemptBroadcastDue(t, id)
+			}
+			original := client.sent[0]
+			if scenario == "same raw recovers" {
+				row, err := store.GetOutboxTx(t.Context(), id)
+				if err != nil || row.Status != db.TxStatusBroadcast {
+					t.Fatalf("row=%+v err=%v", row, err)
+				}
+				return
+			}
+			if _, err = manager.ProcessBroadcast(t.Context(), target); !errors.Is(err, db.ErrBroadcastLaneHeld) {
+				t.Fatalf("park: %v", err)
+			}
+			pool, err := pgxpool.New(t.Context(), os.Getenv("TEST_POSTGRES_URL"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pool.Close()
+			if _, err = pool.Exec(t.Context(), `UPDATE tx_attempts SET last_broadcast_at=now()-interval '2 minutes' WHERE outbox_id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = pool.Exec(t.Context(), `UPDATE tx_outbox SET next_recovery_at=now()-interval '1 minute' WHERE id=$1`, id); err != nil {
+				t.Fatal(err)
+			}
+			switch scenario {
+			case "RPC unavailable":
+				client.nonceAtErr = errors.New("quorum unavailable")
+			case "visibility unavailable":
+				client.visibility = []rpcquorum.TransactionVisibility{{ProviderID: "rpc-1", State: "unavailable"}}
+			case "visible":
+				client.visibility = []rpcquorum.TransactionVisibility{{ProviderID: "rpc-1", State: "pending"}}
+			case "nonce consumed":
+				client.confirmedNonce = 8
+			case "historical receipt":
+				client.receipts = map[common.Hash]*types.Receipt{original.Hash(): testReceipt(original.Hash(), types.ReceiptStatusSuccessful)}
+			}
+			now = time.Now().UTC().Add(-61 * time.Second)
+			if err = manager.ProcessRecovery(t.Context(), target); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "replace and confirm" || scenario == "fee cap" {
+				if _, err = manager.ProcessStaleBroadcastReplacement(t.Context(), target); !errors.Is(err, db.ErrNoStaleBroadcastReplacement) {
+					t.Fatalf("replaced without sustained absence: %v", err)
+				}
+				now = time.Now().UTC()
+				if err = manager.ProcessRecovery(t.Context(), target); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "fee cap" {
+					// The mandatory bump must not exceed the configured fee cap.
+					policy := target.FeePolicies[db.TxPurposePricingSetPriceSnapshot]
+					policy.ConfiguredMaxFeePerGas = original.GasFeeCap()
+					target.FeePolicies[db.TxPurposePricingSetPriceSnapshot] = policy
+				}
+				_, err = manager.ProcessStaleBroadcastReplacement(t.Context(), target)
+				if scenario == "fee cap" {
+					if !errors.Is(err, ErrTxDeferred) {
+						t.Fatalf("fee cap: %v", err)
+					}
+					row, e := store.GetOutboxTx(t.Context(), id)
+					if e != nil || row.TxHash != original.Hash() || row.Status != db.TxStatusHeld {
+						t.Fatalf("fee cap changed attempt: %+v %v", row, e)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				client.sendErr = nil
+				if _, err = manager.ProcessBroadcast(t.Context(), target); err != nil {
+					t.Fatal(err)
+				}
+				replacement := client.sent[len(client.sent)-1]
+				if replacement.Hash() == original.Hash() || replacement.Nonce() != original.Nonce() || replacement.GasFeeCap().Cmp(original.GasFeeCap()) <= 0 || !bytes.Equal(replacement.Data(), original.Data()) {
+					t.Fatal("replacement lost nonce, fee bump or intent")
+				}
+				client.receipts = map[common.Hash]*types.Receipt{replacement.Hash(): testReceipt(replacement.Hash(), types.ReceiptStatusSuccessful)}
+				if _, err = manager.ProcessReceipts(t.Context(), target, 1); err != nil {
+					t.Fatal(err)
+				}
+				row, e := store.GetOutboxTx(t.Context(), id)
+				if e != nil || row.Status != db.TxStatusConfirmed {
+					t.Fatalf("not confirmed: %+v %v", row, e)
+				}
+				return
+			}
+			row, err := store.GetOutboxTx(t.Context(), id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := db.TxStatusHeld
+			if scenario == "visible" || scenario == "historical receipt" {
+				want = db.TxStatusBroadcast
+			}
+			if row.Status != want {
+				t.Fatalf("status=%s want %s", row.Status, want)
+			}
+			var reason string
+			if err = pool.QueryRow(t.Context(), `SELECT COALESCE(held_reason,'') FROM tx_outbox WHERE id=$1`, id).Scan(&reason); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "nonce consumed" && reason != db.HeldNonceReconcileRequired {
+				t.Fatalf("nonce advanced without reconciliation: %s", reason)
+			}
+			if scenario != "visible" {
+				if _, err = manager.ProcessStaleBroadcastReplacement(t.Context(), target); err == nil && scenario != "historical receipt" {
+					t.Fatal("unsafe replacement")
+				}
+			}
+		})
+	}
+}

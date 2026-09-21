@@ -241,3 +241,25 @@ groups:
         annotations:
           summary: Transaction recovery requires operator attention
           runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+
+      - alert: LazTxBroadcastRetrying
+        expr: |
+          (laz_tx_outbox_held_oldest_age_seconds{reason="broadcast_retrying"} > 300)
+          and on (chain_eid, chain_name, job, instance)
+          label_replace(laz_chain_enabled == 1, "chain_eid", "$1", "eid", "(.+)")
+        labels:
+          severity: warning
+        annotations:
+          summary: Environmental transaction recovery is retrying; check RPC availability and signer balance
+          runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+
+      - alert: LazTxBroadcastExhausted
+        expr: |
+          (laz_tx_outbox_held_total{reason="broadcast_exhausted"} > 0)
+          and on (chain_eid, chain_name, job, instance)
+          label_replace(laz_chain_enabled == 1, "chain_eid", "$1", "eid", "(.+)")
+        labels:
+          severity: page
+        annotations:
+          summary: Broadcast recovery requires operator action; inspect RPC errors, balance and retry budgets before replace or cancel
+          runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md

@@ -193,14 +193,17 @@ function currentDocuments(): Map<string, string> {
 }
 
 for (const grouping of ["chain_eid, job, instance", "chain_eid, chain_name"]) {
-  test(`runbook review rejects quorum aggregation losing labels: ${grouping}`, () => {
+  test(`runbook review rejects alert grouping losing labels: ${grouping}`, () => {
     const documents = currentDocuments();
     const path = "docs/monitoring/prometheus-alerts.yml";
     const alerts = documents.get(path);
     assert.ok(alerts);
     documents.set(path, alerts.replaceAll("chain_eid, chain_name, job, instance", grouping));
     const issues = validateRunbookDocuments(documents);
-    assert.equal(issues.length, 1);
-    assert.match(issues[0]!, /alert LazRPCQuorumUnavailable missing required anchor/);
+    const affectedAlerts = ["LazRPCQuorumUnavailable", "LazTxBroadcastRetrying", "LazTxBroadcastExhausted"];
+    assert.equal(issues.length, affectedAlerts.length);
+    for (const [index, alert] of affectedAlerts.entries()) {
+      assert.ok(issues[index]!.includes(`alert ${alert} missing required anchor`));
+    }
   });
 }
