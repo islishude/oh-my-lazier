@@ -6,7 +6,7 @@ const config = defineConfig({
   solidity: {
     profiles: {
       default: {
-        version: "0.8.35",
+        version: "0.8.37",
         settings: {
           optimizer: {
             enabled: true,
@@ -17,7 +17,7 @@ const config = defineConfig({
         },
       },
       production: {
-        version: "0.8.35",
+        version: "0.8.37",
         settings: {
           optimizer: {
             enabled: true,
