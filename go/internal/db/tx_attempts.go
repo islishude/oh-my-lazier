@@ -189,47 +189,7 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 	}
 
 	if status == TxStatusQueued && nonce == nil {
-		// The send-scope gate runs before any nonce is reserved: a row whose
-		// pathway or chain is paused/disabled must not add a new nonce to the
-		// lane. Rows already holding a nonce are in flight and converge instead.
-		// The share locks taken here linearize this claim against concurrent
-		// pause/disable writers for the rest of the transaction.
-		if err := lockTxSendScope(ctx, tx, chainEID, purpose, guid); err != nil {
-			return OutboxTx{}, err
-		}
-		// A fresh nonce is one past every assigned nonce, so any signer row still
-		// short of broadcast blocks assigning it.
-		var blocked bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM tx_outbox
-				WHERE chain_eid = $1 AND signer_id = $2
-					AND status IN ('nonce_assigned', 'signed', 'held')
-			)
-		`, chainEID, signerID).Scan(&blocked); err != nil {
-			return OutboxTx{}, err
-		}
-		if blocked {
-			return OutboxTx{}, ErrSignerLaneBlocked
-		}
-		window := s.maxInflight
-		if window <= 0 {
-			window = config.DefaultMaxInflightPerSigner
-		}
-		var inflight int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM tx_outbox WHERE chain_eid=$1 AND signer_id=$2 AND nonce IS NOT NULL AND status NOT IN ('confirmed','failed')`, chainEID, signerID).Scan(&inflight); err != nil {
-			return OutboxTx{}, err
-		}
-		if inflight >= window {
-			return OutboxTx{}, ErrSignerLaneBlocked
-		}
-		next, err := s.claimCursorNonce(ctx, tx, chainEID, signerID)
-		if err != nil {
-			return OutboxTx{}, err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE tx_outbox SET nonce = $1, status = $2, updated_at = now() WHERE id = $3
-		`, int64(next), TxStatusNonceAssigned, id); err != nil {
+		if err := s.assignFreshOutboxNonce(ctx, tx, id, chainEID, signerID, purpose, guid); err != nil {
 			return OutboxTx{}, err
 		}
 	} else if status == TxStatusQueued {
@@ -1334,17 +1294,8 @@ func (s *Store) ClaimOutboxForReplacementSigning(ctx context.Context, id, expect
 // one transaction. The active-attempt CAS rejects a replacement raced by another
 // switch; tx_hash reinsertion is idempotent for crash recovery.
 func (s *Store) InsertReplacementAttempt(ctx context.Context, outboxID, expectedActiveAttemptID int64, leaseToken uuid.UUID, a SignedAttempt) (TxAttempt, error) {
-	if outboxID <= 0 || expectedActiveAttemptID <= 0 {
-		return TxAttempt{}, errors.New("outbox and expected active attempt ids are required")
-	}
-	if a.Kind != TxAttemptReplacement && a.Kind != TxAttemptCancel {
-		return TxAttempt{}, fmt.Errorf("replacement attempt kind %q must be %q or %q", a.Kind, TxAttemptReplacement, TxAttemptCancel)
-	}
-	if len(a.TxHash) != common.HashLength || len(a.RawTx) == 0 {
-		return TxAttempt{}, errors.New("attempt requires a 32-byte hash and non-empty raw tx")
-	}
-	if a.MaxFeePerGas == nil || a.MaxFeePerGas.Sign() <= 0 {
-		return TxAttempt{}, errors.New("attempt requires a positive max fee per gas")
+	if err := validateReplacementAttempt(outboxID, expectedActiveAttemptID, a); err != nil {
+		return TxAttempt{}, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -1438,4 +1389,67 @@ func (s *Store) InsertReplacementAttempt(ctx context.Context, outboxID, expected
 		return TxAttempt{}, err
 	}
 	return TxAttempt{ID: attemptID, OutboxID: outboxID, Kind: a.Kind, Nonce: a.Nonce, TxType: a.TxType, TxHash: a.TxHash, RawTx: a.RawTx, GasLimit: a.GasLimit, MaxFeePerGas: a.MaxFeePerGas, MaxPriorityFeePerGas: a.MaxPriorityFeePerGas, State: TxAttemptSigned, SigningToken: a.SigningToken}, nil
+}
+
+func (s *Store) assignFreshOutboxNonce(ctx context.Context, tx pgx.Tx, id int64, chainEID uint32, signerID, purpose string, guid []byte) error {
+	// The send-scope gate runs before any nonce is reserved: a row whose
+	// pathway or chain is paused/disabled must not add a new nonce to the
+	// lane. Rows already holding a nonce are in flight and converge instead.
+	// The share locks taken here linearize this claim against concurrent
+	// pause/disable writers for the rest of the transaction.
+	if err := lockTxSendScope(ctx, tx, chainEID, purpose, guid); err != nil {
+		return err
+	}
+	// A fresh nonce is one past every assigned nonce, so any signer row still
+	// short of broadcast blocks assigning it.
+	var blocked bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM tx_outbox
+			WHERE chain_eid = $1 AND signer_id = $2
+				AND status IN ('nonce_assigned', 'signed', 'held')
+		)
+	`, chainEID, signerID).Scan(&blocked); err != nil {
+		return err
+	}
+	if blocked {
+		return ErrSignerLaneBlocked
+	}
+	window := s.maxInflight
+	if window <= 0 {
+		window = config.DefaultMaxInflightPerSigner
+	}
+	var inflight int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM tx_outbox WHERE chain_eid=$1 AND signer_id=$2 AND nonce IS NOT NULL AND status NOT IN ('confirmed','failed')`, chainEID, signerID).Scan(&inflight); err != nil {
+		return err
+	}
+	if inflight >= window {
+		return ErrSignerLaneBlocked
+	}
+	next, err := s.claimCursorNonce(ctx, tx, chainEID, signerID)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE tx_outbox SET nonce = $1, status = $2, updated_at = now() WHERE id = $3
+	`, int64(next), TxStatusNonceAssigned, id); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateReplacementAttempt(outboxID, expectedActiveAttemptID int64, a SignedAttempt) error {
+	if outboxID <= 0 || expectedActiveAttemptID <= 0 {
+		return errors.New("outbox and expected active attempt ids are required")
+	}
+	if a.Kind != TxAttemptReplacement && a.Kind != TxAttemptCancel {
+		return fmt.Errorf("replacement attempt kind %q must be %q or %q", a.Kind, TxAttemptReplacement, TxAttemptCancel)
+	}
+	if len(a.TxHash) != common.HashLength || len(a.RawTx) == 0 {
+		return errors.New("attempt requires a 32-byte hash and non-empty raw tx")
+	}
+	if a.MaxFeePerGas == nil || a.MaxFeePerGas.Sign() <= 0 {
+		return errors.New("attempt requires a positive max fee per gas")
+	}
+	return nil
 }

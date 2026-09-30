@@ -112,51 +112,9 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	defer registry.Close()
 
-	if a.options.SkipOnchainCheck {
-		a.logger.Warn("worker starting with on-chain config check skipped")
-	} else {
-		a.logger.Info("worker starting and checking on-chain config...")
-		if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
-			return err
-		} else if !report.OK {
-			return fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
-		}
-	}
-	var priceSources map[uint32]pricing.ChainSources
-	if a.cfg.Pricing.Enabled {
-		priceSources, err = a.pricingSources(registry)
-		if err != nil {
-			return err
-		}
-		if a.options.SkipOnchainCheck {
-			// -skip-onchain-check bypasses the config check that normally
-			// establishes each chain's head quorum before its first on-chain
-			// read. On-chain source validation below (Chainlink, Uniswap)
-			// reads contract identity over RPC, and a fresh quorum client
-			// would serve that from whichever provider is listed first —
-			// establish the majority trust state for those chains so a
-			// minority fork cannot bias startup validation. Chains with only
-			// HTTP market-data sources make no startup RPC reads and are
-			// skipped.
-			for _, pricingChain := range a.cfg.Pricing.Chains {
-				if !pricingChainUsesSource(pricingChain, "chainlink") && !pricingChainUsesSource(pricingChain, "uniswap") {
-					continue
-				}
-				configuredChain, err := registry.Get(pricingChain.EID)
-				if err != nil {
-					return err
-				}
-				if configuredChain.RPC == nil {
-					continue
-				}
-				if _, err := configuredChain.RPC.CheckHead(ctx); err != nil {
-					return fmt.Errorf("check chain %d rpc head quorum: %w", pricingChain.EID, err)
-				}
-			}
-		}
-		if err := pricing.ValidateSourceConfigurations(ctx, priceSources, a.priceSelectionPolicy()); err != nil {
-			return err
-		}
+	priceSources, err := a.validateStartupSources(ctx, registry)
+	if err != nil {
+		return err
 	}
 
 	a.logger.Info("connecting to database and running migrations...")
@@ -180,17 +138,8 @@ func (a *App) Run(ctx context.Context) error {
 		// start, so DVN destination-config validation, executor readiness
 		// reads, and gas polls never run against a fresh all-healthy
 		// classification that a forked first provider could exploit.
-		for _, configuredChainConfig := range a.cfg.Chains {
-			configuredChain, err := registry.Get(configuredChainConfig.EID)
-			if err != nil {
-				return err
-			}
-			if configuredChain.RPC == nil {
-				continue
-			}
-			if _, err := configuredChain.RPC.CheckHead(ctx); err != nil {
-				return fmt.Errorf("check chain %d rpc head quorum: %w", configuredChainConfig.EID, err)
-			}
+		if err := a.checkChainHeads(ctx, registry); err != nil {
+			return err
 		}
 	}
 
@@ -204,8 +153,6 @@ func (a *App) Run(ctx context.Context) error {
 		chainNames[chain.EID] = chain.Name
 	}
 	runtimeMetrics := metrics.NewRegistry(chainNames)
-	pathways := registry.Pathways()
-	indexerStreams := indexer.StreamsForRoles(a.cfg.ExecutorEnabled(), a.cfg.DVNEnabled())
 	txTargets, err := a.txTargets(ctx, registry, store)
 	if err != nil {
 		return err
@@ -237,65 +184,7 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	errCh := make(chan error, 1)
-	start := func(name string, run func(context.Context) error) {
-		wg.Go(func() {
-			capDelay := time.Minute
-			if name == "pricing" {
-				capDelay = time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second
-			}
-			if err := superviseLoop(ctx, name, newLoopBackoff(capDelay), a.logger, runtimeMetrics, run); err != nil {
-				select {
-				case errCh <- fmt.Errorf("%s loop failed fatally: %w", name, err):
-				default:
-				}
-			}
-		})
-	}
-
-	start("metrics", metrics.NewWithReadiness(a.cfg.Metrics.ListenAddress, store, a.logger, readiness.Services{
-		ExecutorEnabled: a.cfg.ExecutorEnabled(),
-		DVNEnabled:      a.cfg.DVNEnabled(),
-	}, runtimeMetrics).Run)
-	if len(indexerStreams) > 0 {
-		for _, c := range registry.All() {
-			for _, stream := range indexerStreams {
-				start("indexer."+c.Name+"."+stream.String(), indexer.New(c, pathways, stream, store, a.logger).
-					WithMetrics(runtimeMetrics).
-					WithProgressLogInterval(a.options.IndexerProgressLogInterval).
-					Run)
-			}
-		}
-	}
-	if len(txTargets) > 0 {
-		start("signer_balance", txmgr.NewBalanceMonitor(txTargets, runtimeMetrics, a.logger).Run)
-		start("txmgr", txmgr.NewWithTargetsAndOptions(store, txTargets, a.logger, a.txManagerOptions()).Run)
-	}
-	if a.cfg.ExecutorEnabled() {
-		start("executor.committer", executorWorker.RunCommitter)
-		start("executor.deliverer", executorWorker.RunDeliverer)
-	}
-	if a.cfg.DVNEnabled() {
-		start("dvn", dvnWorker.Run)
-	}
-	if a.cfg.Pricing.Enabled {
-		start("fee_accounting", feeReconciler.Run)
-		start("pricing", priceBot.Run)
-	}
-
-	select {
-	case <-ctx.Done():
-		wg.Wait()
-		return nil
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
-		return err
-	}
+	return a.runLoops(ctx, registry, store, runtimeMetrics, txTargets, executorWorker, dvnWorker, priceBot, feeReconciler)
 }
 
 func (a *App) txManagerOptions() txmgr.Options {
@@ -479,79 +368,11 @@ func (a *App) pricingSources(registry *chain.Registry) (map[uint32]pricing.Chain
 	}
 	sources := make(map[uint32]pricing.ChainSources, len(a.cfg.Pricing.Chains))
 	for _, cfg := range a.cfg.Pricing.Chains {
-		configuredChain, err := registry.Get(cfg.EID)
+		source, err := configuredPricingSources(registry, cfg, coinMarketCapClient, coinGeckoClient)
 		if err != nil {
 			return nil, err
 		}
-		readers := make(map[string]pricing.ConfiguredPriceReader)
-		if pricingChainUsesSource(cfg, "coinmarketcap") && coinMarketCapClient != nil {
-			reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCap.ID)
-			if err != nil {
-				return nil, err
-			}
-			readers["coinmarketcap"] = pricing.ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader, MaxAge: time.Duration(cfg.CoinMarketCap.MaxAgeSeconds) * time.Second}
-		}
-		if pricingChainUsesSource(cfg, "coingecko") && coinGeckoClient != nil {
-			reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGecko.ID)
-			if err != nil {
-				return nil, err
-			}
-			readers["coingecko"] = pricing.ConfiguredPriceReader{Name: "coingecko", Reader: reader, MaxAge: time.Duration(cfg.CoinGecko.MaxAgeSeconds) * time.Second}
-		}
-		if pricingChainUsesSource(cfg, "chainlink") {
-			reader, err := pricing.NewChainlinkClient(configuredChain.RPC, configuredChain.RPC, pricing.ChainlinkConfig{
-				FeedAddress:         cfg.Chainlink.FeedAddress.Common(),
-				ExpectedDescription: cfg.Chainlink.ExpectedDescription,
-			})
-			if err != nil {
-				return nil, err
-			}
-			readers["chainlink"] = pricing.ConfiguredPriceReader{Name: "chainlink", Reader: reader, MaxAge: time.Duration(cfg.Chainlink.MaxAgeSeconds) * time.Second}
-		}
-		if pricingChainUsesSource(cfg, "uniswap") {
-			minimumLiquidity, err := bigutil.ParsePositiveDecimal("uniswap min_harmonic_mean_liquidity", cfg.Uniswap.MinHarmonicMeanLiquidity)
-			if err != nil {
-				return nil, err
-			}
-			sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, configuredChain.RPC, pricing.UniswapV3Config{
-				PoolAddress:              cfg.Uniswap.PoolAddress.Common(),
-				TokenIn:                  cfg.Uniswap.TokenIn.Common(),
-				TokenOut:                 cfg.Uniswap.TokenOut.Common(),
-				TWAPWindowSeconds:        uint32(cfg.Uniswap.TWAPWindowSeconds),
-				MinHarmonicMeanLiquidity: minimumLiquidity,
-			})
-			if err != nil {
-				return nil, err
-			}
-			readers["uniswap"] = pricing.ConfiguredPriceReader{Name: "uniswap", Reader: sanity, MaxAge: time.Duration(cfg.Uniswap.MaxBlockAgeSeconds) * time.Second}
-		}
-		var primary pricing.ConfiguredPriceReader
-		var sanityReaders []pricing.ConfiguredPriceReader
-		if cfg.PrimarySource != "" || len(cfg.SanitySources) != 0 {
-			primary = readers[cfg.PrimarySource]
-			if primary.Reader == nil {
-				return nil, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
-			}
-			sanityReaders = make([]pricing.ConfiguredPriceReader, 0, len(cfg.SanitySources))
-			for _, source := range cfg.SanitySources {
-				reader := readers[source]
-				if reader.Reader == nil {
-					return nil, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
-				}
-				sanityReaders = append(sanityReaders, reader)
-			}
-		}
-		dataFeePerByte, err := bigutil.ParseNonNegativeDecimal("data_fee_per_byte_wei", cfg.DataFeePerByteWei)
-		if err != nil {
-			return nil, fmt.Errorf("pricing chain %d data fee per byte: %w", cfg.EID, err)
-		}
-		sources[cfg.EID] = pricing.ChainSources{
-			Primary:           primary,
-			Sanity:            sanityReaders,
-			Gas:               configuredChain.RPC,
-			DataFeePerByteWei: dataFeePerByte,
-			NativeAssetID:     cfg.NativeAssetID,
-		}
+		sources[cfg.EID] = source
 	}
 	return sources, nil
 }
@@ -596,99 +417,16 @@ func (a *App) dvnWorker(store *db.Store, registry *chain.Registry) (*dvn.Worker,
 }
 
 func (a *App) txTargets(ctx context.Context, registry *chain.Registry, store *db.Store) ([]txmgr.Target, error) {
-	type targetKey struct {
-		chainEID uint32
-		signerID string
+	required := make(targetRequirements)
+
+	if err := a.executorTargetRequirements(registry, required); err != nil {
+		return nil, err
 	}
-	type targetRequirement struct {
-		policies            map[string]txmgr.FeePolicy
-		minNativeBalanceWei *big.Int
+	if err := a.pricingTargetRequirements(ctx, registry, required, store); err != nil {
+		return nil, err
 	}
-	required := make(map[targetKey]targetRequirement)
-	addPolicy := func(chainEID uint32, signerID, purpose string, policy txmgr.FeePolicy, minNativeBalanceWei *big.Int) {
-		key := targetKey{chainEID: chainEID, signerID: signerID}
-		requirement := required[key]
-		if requirement.policies == nil {
-			requirement.policies = make(map[string]txmgr.FeePolicy)
-		}
-		requirement.policies[purpose] = policy
-		requirement.minNativeBalanceWei = bigutil.Max(requirement.minNativeBalanceWei, minNativeBalanceWei)
-		required[key] = requirement
-	}
-	for _, configuredChain := range registry.All() {
-		if a.cfg.ExecutorEnabled() {
-			executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
-			}
-			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", configuredChain.TxRoles.Executor.MinNativeBalanceWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s executor min native balance: %w", configuredChain.Name, err)
-			}
-			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy, minBalance)
-			addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy, minBalance)
-		}
-	}
-	if a.cfg.Pricing.Enabled {
-		for _, pricingChain := range a.cfg.Pricing.Chains {
-			configuredChain, err := registry.Get(pricingChain.EID)
-			if err != nil {
-				return nil, err
-			}
-			pricingPolicy, err := feePolicy(pricingChain.TxPolicy.MaxFeePerGasWei, pricingChain.TxPolicy.MaxPriorityFeePerGasWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s pricing fee policy: %w", configuredChain.Name, err)
-			}
-			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", pricingChain.TxPolicy.MinNativeBalanceWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s pricing min native balance: %w", configuredChain.Name, err)
-			}
-			addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
-			// Rows enqueued by a previously configured pricing signer must keep
-			// converging after a rotation: they gate their feed until they
-			// resolve, and without a target nothing would ever sign, broadcast,
-			// or receipt-poll them. The rotation runbook keeps the old signer
-			// configured until its rows drain; fail fast when it was removed
-			// too early instead of gating the feed forever.
-			if store == nil {
-				// Targets built without a database (config-only tests) cannot
-				// check the outbox; Run always passes the connected store.
-				continue
-			}
-			legacySigners, err := store.ListPendingPricingSigners(ctx, configuredChain.EID)
-			if err != nil {
-				return nil, err
-			}
-			for _, legacy := range legacySigners {
-				if strings.EqualFold(legacy, a.cfg.Pricing.Signer.Hex()) {
-					continue
-				}
-				if !a.signerConfigured(legacy) {
-					return nil, fmt.Errorf("chain %s has pending pricing txs from previous signer %s; keep that signer configured until they drain or resolve the rows manually", configuredChain.Name, legacy)
-				}
-				addPolicy(configuredChain.EID, legacy, pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
-			}
-		}
-	}
-	if a.cfg.DVNEnabled() {
-		for _, pathway := range registry.Pathways() {
-			if pathway.DVNMode != config.DVNModeActive {
-				continue
-			}
-			dstChain, err := registry.Get(pathway.DstEID)
-			if err != nil {
-				return nil, err
-			}
-			dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
-			}
-			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", dstChain.TxRoles.DVN.MinNativeBalanceWei)
-			if err != nil {
-				return nil, fmt.Errorf("chain %s dvn min native balance: %w", dstChain.Name, err)
-			}
-			addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy, minBalance)
-		}
+	if err := a.dvnTargetRequirements(registry, required); err != nil {
+		return nil, err
 	}
 	if len(required) == 0 {
 		return nil, nil
@@ -820,4 +558,327 @@ func cloneFeePolicies(policies map[string]txmgr.FeePolicy) map[string]txmgr.FeeP
 		}
 	}
 	return out
+}
+
+func (a *App) validateStartupSources(ctx context.Context, registry *chain.Registry) (map[uint32]pricing.ChainSources, error) {
+	if a.options.SkipOnchainCheck {
+		a.logger.Warn("worker starting with on-chain config check skipped")
+	} else {
+		a.logger.Info("worker starting and checking on-chain config...")
+		if report, err := checkOnChainConfig(ctx, registry, configCheckOptions(a.cfg)...); err != nil {
+			return nil, err
+		} else if !report.OK {
+			return nil, fmt.Errorf("on-chain config check failed: %s", configcheck.RenderText(report))
+		}
+	}
+	var priceSources map[uint32]pricing.ChainSources
+	if a.cfg.Pricing.Enabled {
+		var err error
+		priceSources, err = a.pricingSources(registry)
+		if err != nil {
+			return nil, err
+		}
+		if a.options.SkipOnchainCheck {
+			// -skip-onchain-check bypasses the config check that normally
+			// establishes each chain's head quorum before its first on-chain
+			// read. On-chain source validation below (Chainlink, Uniswap)
+			// reads contract identity over RPC, and a fresh quorum client
+			// would serve that from whichever provider is listed first —
+			// establish the majority trust state for those chains so a
+			// minority fork cannot bias startup validation. Chains with only
+			// HTTP market-data sources make no startup RPC reads and are
+			// skipped.
+			if err := a.checkPricingHeads(ctx, registry); err != nil {
+				return nil, err
+			}
+		}
+		if err := pricing.ValidateSourceConfigurations(ctx, priceSources, a.priceSelectionPolicy()); err != nil {
+			return nil, err
+		}
+	}
+	return priceSources, nil
+}
+
+func (a *App) checkChainHeads(ctx context.Context, registry *chain.Registry) error {
+	for _, configuredChainConfig := range a.cfg.Chains {
+		configuredChain, err := registry.Get(configuredChainConfig.EID)
+		if err != nil {
+			return err
+		}
+		if configuredChain.RPC == nil {
+			continue
+		}
+		if _, err := configuredChain.RPC.CheckHead(ctx); err != nil {
+			return fmt.Errorf("check chain %d rpc head quorum: %w", configuredChainConfig.EID, err)
+		}
+	}
+	return nil
+}
+
+func (a *App) checkPricingHeads(ctx context.Context, registry *chain.Registry) error {
+	for _, pricingChain := range a.cfg.Pricing.Chains {
+		if !pricingChainUsesSource(pricingChain, "chainlink") && !pricingChainUsesSource(pricingChain, "uniswap") {
+			continue
+		}
+		configuredChain, err := registry.Get(pricingChain.EID)
+		if err != nil {
+			return err
+		}
+		if configuredChain.RPC == nil {
+			continue
+		}
+		if _, err := configuredChain.RPC.CheckHead(ctx); err != nil {
+			return fmt.Errorf("check chain %d rpc head quorum: %w", pricingChain.EID, err)
+		}
+	}
+	return nil
+}
+
+func configuredPricingSources(registry *chain.Registry, cfg config.PricingChainConfig, coinMarketCapClient *pricing.CoinMarketCapClient, coinGeckoClient *pricing.CoinGeckoClient) (pricing.ChainSources, error) {
+	configuredChain, err := registry.Get(cfg.EID)
+	if err != nil {
+		return pricing.ChainSources{}, err
+	}
+	readers := make(map[string]pricing.ConfiguredPriceReader)
+	if pricingChainUsesSource(cfg, "coinmarketcap") && coinMarketCapClient != nil {
+		reader, err := pricing.NewCoinMarketCapPriceReader(coinMarketCapClient, cfg.CoinMarketCap.ID)
+		if err != nil {
+			return pricing.ChainSources{}, err
+		}
+		readers["coinmarketcap"] = pricing.ConfiguredPriceReader{Name: "coinmarketcap", Reader: reader, MaxAge: time.Duration(cfg.CoinMarketCap.MaxAgeSeconds) * time.Second}
+	}
+	if pricingChainUsesSource(cfg, "coingecko") && coinGeckoClient != nil {
+		reader, err := pricing.NewCoinGeckoPriceReader(coinGeckoClient, cfg.CoinGecko.ID)
+		if err != nil {
+			return pricing.ChainSources{}, err
+		}
+		readers["coingecko"] = pricing.ConfiguredPriceReader{Name: "coingecko", Reader: reader, MaxAge: time.Duration(cfg.CoinGecko.MaxAgeSeconds) * time.Second}
+	}
+	if pricingChainUsesSource(cfg, "chainlink") {
+		reader, err := pricing.NewChainlinkClient(configuredChain.RPC, configuredChain.RPC, pricing.ChainlinkConfig{
+			FeedAddress:         cfg.Chainlink.FeedAddress.Common(),
+			ExpectedDescription: cfg.Chainlink.ExpectedDescription,
+		})
+		if err != nil {
+			return pricing.ChainSources{}, err
+		}
+		readers["chainlink"] = pricing.ConfiguredPriceReader{Name: "chainlink", Reader: reader, MaxAge: time.Duration(cfg.Chainlink.MaxAgeSeconds) * time.Second}
+	}
+	if pricingChainUsesSource(cfg, "uniswap") {
+		minimumLiquidity, err := bigutil.ParsePositiveDecimal("uniswap min_harmonic_mean_liquidity", cfg.Uniswap.MinHarmonicMeanLiquidity)
+		if err != nil {
+			return pricing.ChainSources{}, err
+		}
+		sanity, err := pricing.NewUniswapV3Client(configuredChain.RPC, configuredChain.RPC, pricing.UniswapV3Config{
+			PoolAddress:              cfg.Uniswap.PoolAddress.Common(),
+			TokenIn:                  cfg.Uniswap.TokenIn.Common(),
+			TokenOut:                 cfg.Uniswap.TokenOut.Common(),
+			TWAPWindowSeconds:        uint32(cfg.Uniswap.TWAPWindowSeconds),
+			MinHarmonicMeanLiquidity: minimumLiquidity,
+		})
+		if err != nil {
+			return pricing.ChainSources{}, err
+		}
+		readers["uniswap"] = pricing.ConfiguredPriceReader{Name: "uniswap", Reader: sanity, MaxAge: time.Duration(cfg.Uniswap.MaxBlockAgeSeconds) * time.Second}
+	}
+	var primary pricing.ConfiguredPriceReader
+	var sanityReaders []pricing.ConfiguredPriceReader
+	if cfg.PrimarySource != "" || len(cfg.SanitySources) != 0 {
+		primary = readers[cfg.PrimarySource]
+		if primary.Reader == nil {
+			return pricing.ChainSources{}, fmt.Errorf("pricing chain %d primary source %s is not configured", cfg.EID, cfg.PrimarySource)
+		}
+		sanityReaders = make([]pricing.ConfiguredPriceReader, 0, len(cfg.SanitySources))
+		for _, source := range cfg.SanitySources {
+			reader := readers[source]
+			if reader.Reader == nil {
+				return pricing.ChainSources{}, fmt.Errorf("pricing chain %d sanity source %s is not configured", cfg.EID, source)
+			}
+			sanityReaders = append(sanityReaders, reader)
+		}
+	}
+	dataFeePerByte, err := bigutil.ParseNonNegativeDecimal("data_fee_per_byte_wei", cfg.DataFeePerByteWei)
+	if err != nil {
+		return pricing.ChainSources{}, fmt.Errorf("pricing chain %d data fee per byte: %w", cfg.EID, err)
+	}
+	return pricing.ChainSources{
+		Primary:           primary,
+		Sanity:            sanityReaders,
+		Gas:               configuredChain.RPC,
+		DataFeePerByteWei: dataFeePerByte,
+		NativeAssetID:     cfg.NativeAssetID,
+	}, nil
+}
+
+type targetKey struct {
+	chainEID uint32
+	signerID string
+}
+type targetRequirement struct {
+	policies            map[string]txmgr.FeePolicy
+	minNativeBalanceWei *big.Int
+}
+
+type targetRequirements map[targetKey]targetRequirement
+
+func (required targetRequirements) addPolicy(chainEID uint32, signerID, purpose string, policy txmgr.FeePolicy, minNativeBalanceWei *big.Int) {
+	key := targetKey{chainEID: chainEID, signerID: signerID}
+	requirement := required[key]
+	if requirement.policies == nil {
+		requirement.policies = make(map[string]txmgr.FeePolicy)
+	}
+	requirement.policies[purpose] = policy
+	requirement.minNativeBalanceWei = bigutil.Max(requirement.minNativeBalanceWei, minNativeBalanceWei)
+	required[key] = requirement
+}
+
+func (a *App) executorTargetRequirements(registry *chain.Registry, required targetRequirements) error {
+	for _, configuredChain := range registry.All() {
+		if a.cfg.ExecutorEnabled() {
+			executorPolicy, err := feePolicy(configuredChain.TxRoles.Executor.MaxFeePerGasWei, configuredChain.TxRoles.Executor.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return fmt.Errorf("chain %s executor fee policy: %w", configuredChain.Name, err)
+			}
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", configuredChain.TxRoles.Executor.MinNativeBalanceWei)
+			if err != nil {
+				return fmt.Errorf("chain %s executor min native balance: %w", configuredChain.Name, err)
+			}
+			required.addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeCommitVerification, executorPolicy, minBalance)
+			required.addPolicy(configuredChain.EID, configuredChain.TxRoles.Executor.SignerID, executor.TxPurposeLzReceive, executorPolicy, minBalance)
+		}
+	}
+	return nil
+}
+
+func (a *App) pricingTargetRequirements(ctx context.Context, registry *chain.Registry, required targetRequirements, store *db.Store) error {
+	if a.cfg.Pricing.Enabled {
+		for _, pricingChain := range a.cfg.Pricing.Chains {
+			configuredChain, err := registry.Get(pricingChain.EID)
+			if err != nil {
+				return err
+			}
+			pricingPolicy, err := feePolicy(pricingChain.TxPolicy.MaxFeePerGasWei, pricingChain.TxPolicy.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return fmt.Errorf("chain %s pricing fee policy: %w", configuredChain.Name, err)
+			}
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", pricingChain.TxPolicy.MinNativeBalanceWei)
+			if err != nil {
+				return fmt.Errorf("chain %s pricing min native balance: %w", configuredChain.Name, err)
+			}
+			required.addPolicy(configuredChain.EID, a.cfg.Pricing.Signer.Hex(), pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
+			// Rows enqueued by a previously configured pricing signer must keep
+			// converging after a rotation: they gate their feed until they
+			// resolve, and without a target nothing would ever sign, broadcast,
+			// or receipt-poll them. The rotation runbook keeps the old signer
+			// configured until its rows drain; fail fast when it was removed
+			// too early instead of gating the feed forever.
+			if store == nil {
+				// Targets built without a database (config-only tests) cannot
+				// check the outbox; Run always passes the connected store.
+				continue
+			}
+			legacySigners, err := store.ListPendingPricingSigners(ctx, configuredChain.EID)
+			if err != nil {
+				return err
+			}
+			for _, legacy := range legacySigners {
+				if strings.EqualFold(legacy, a.cfg.Pricing.Signer.Hex()) {
+					continue
+				}
+				if !a.signerConfigured(legacy) {
+					return fmt.Errorf("chain %s has pending pricing txs from previous signer %s; keep that signer configured until they drain or resolve the rows manually", configuredChain.Name, legacy)
+				}
+				required.addPolicy(configuredChain.EID, legacy, pricing.TxPurposeSetPriceSnapshot, pricingPolicy, minBalance)
+			}
+		}
+	}
+	return nil
+}
+
+func (a *App) dvnTargetRequirements(registry *chain.Registry, required targetRequirements) error {
+	if a.cfg.DVNEnabled() {
+		for _, pathway := range registry.Pathways() {
+			if pathway.DVNMode != config.DVNModeActive {
+				continue
+			}
+			dstChain, err := registry.Get(pathway.DstEID)
+			if err != nil {
+				return err
+			}
+			dvnPolicy, err := feePolicy(dstChain.TxRoles.DVN.MaxFeePerGasWei, dstChain.TxRoles.DVN.MaxPriorityFeePerGasWei)
+			if err != nil {
+				return fmt.Errorf("chain %s dvn fee policy: %w", dstChain.Name, err)
+			}
+			minBalance, err := bigutil.ParsePositiveDecimal("min_native_balance_wei", dstChain.TxRoles.DVN.MinNativeBalanceWei)
+			if err != nil {
+				return fmt.Errorf("chain %s dvn min native balance: %w", dstChain.Name, err)
+			}
+			required.addPolicy(dstChain.EID, dstChain.TxRoles.DVN.SignerID, dvn.TxPurposeVerify, dvnPolicy, minBalance)
+		}
+	}
+	return nil
+}
+
+func (a *App) runLoops(ctx context.Context, registry *chain.Registry, store *db.Store, runtimeMetrics *metrics.Registry, txTargets []txmgr.Target, executorWorker *executor.Worker, dvnWorker *dvn.Worker, priceBot *pricing.Bot, feeReconciler *feeaccounting.Reconciler) error {
+	pathways := registry.Pathways()
+	indexerStreams := indexer.StreamsForRoles(a.cfg.ExecutorEnabled(), a.cfg.DVNEnabled())
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+	start := func(name string, run func(context.Context) error) {
+		wg.Go(func() {
+			capDelay := time.Minute
+			if name == "pricing" {
+				capDelay = time.Duration(a.cfg.Pricing.IntervalSeconds) * time.Second
+			}
+			if err := superviseLoop(ctx, name, newLoopBackoff(capDelay), a.logger, runtimeMetrics, run); err != nil {
+				select {
+				case errCh <- fmt.Errorf("%s loop failed fatally: %w", name, err):
+				default:
+				}
+			}
+		})
+	}
+
+	start("metrics", metrics.NewWithReadiness(a.cfg.Metrics.ListenAddress, store, a.logger, readiness.Services{
+		ExecutorEnabled: a.cfg.ExecutorEnabled(),
+		DVNEnabled:      a.cfg.DVNEnabled(),
+	}, runtimeMetrics).Run)
+	if len(indexerStreams) > 0 {
+		for _, c := range registry.All() {
+			for _, stream := range indexerStreams {
+				start("indexer."+c.Name+"."+stream.String(), indexer.New(c, pathways, stream, store, a.logger).
+					WithMetrics(runtimeMetrics).
+					WithProgressLogInterval(a.options.IndexerProgressLogInterval).
+					Run)
+			}
+		}
+	}
+	if len(txTargets) > 0 {
+		start("signer_balance", txmgr.NewBalanceMonitor(txTargets, runtimeMetrics, a.logger).Run)
+		start("txmgr", txmgr.NewWithTargetsAndOptions(store, txTargets, a.logger, a.txManagerOptions()).Run)
+	}
+	if a.cfg.ExecutorEnabled() {
+		start("executor.committer", executorWorker.RunCommitter)
+		start("executor.deliverer", executorWorker.RunDeliverer)
+	}
+	if a.cfg.DVNEnabled() {
+		start("dvn", dvnWorker.Run)
+	}
+	if a.cfg.Pricing.Enabled {
+		start("fee_accounting", feeReconciler.Run)
+		start("pricing", priceBot.Run)
+	}
+
+	select {
+	case <-ctx.Done():
+		wg.Wait()
+		return nil
+	case err := <-errCh:
+		cancel()
+		wg.Wait()
+		return err
+	}
 }

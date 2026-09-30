@@ -91,49 +91,7 @@ func providerDiagnostic(err error, rawURL string) string {
 }
 
 func redactProviderDiagnostic(message, rawURL string) string {
-	// Remove known URL components even when upstream repeats a credential
-	// outside the URL, including URL-encoded and JSON-escaped forms.
-	secrets := make(map[string]bool)
-	add := func(value string, credential bool) {
-		if value == "" {
-			return
-		}
-		quoted := strconv.Quote(value)
-		for _, form := range []string{value, url.QueryEscape(value), url.PathEscape(value), quoted[1 : len(quoted)-1]} {
-			secrets[form] = secrets[form] || credential
-		}
-	}
-	parsed, err := url.Parse(rawURL)
-	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
-		add(rawURL, true)
-		add(parsed.Host, false)
-		add(parsed.Hostname(), false)
-		if parsed.User != nil {
-			add(parsed.User.Username(), true)
-			password, _ := parsed.User.Password()
-			add(password, true)
-		}
-		add(parsed.Path, false)
-		add(parsed.EscapedPath(), false)
-		for _, segment := range strings.Split(parsed.Path, "/") {
-			add(segment, false)
-		}
-		for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
-			add(segment, false)
-		}
-		for _, parameter := range strings.Split(parsed.RawQuery, "&") {
-			key, value, _ := strings.Cut(parameter, "=")
-			key, _ = url.QueryUnescape(key)
-			add(value, diagnosticSecret.MatchString(key+"=x"))
-		}
-		for key, values := range parsed.Query() {
-			for _, value := range values {
-				add(value, diagnosticSecret.MatchString(key+"=x"))
-			}
-		}
-	} else if strings.HasPrefix(rawURL, "/") {
-		add(rawURL, true) // IPC socket path.
-	}
+	secrets := providerDiagnosticSecrets(rawURL)
 	values := make([]string, 0, len(secrets))
 	for value := range secrets {
 		values = append(values, value)
@@ -229,4 +187,51 @@ func providerFailureDetail(index int, context string, err error) string {
 		detail += ": " + err.Error()
 	}
 	return detail
+}
+
+func providerDiagnosticSecrets(rawURL string) map[string]bool {
+	// Remove known URL components even when upstream repeats a credential
+	// outside the URL, including URL-encoded and JSON-escaped forms.
+	secrets := make(map[string]bool)
+	add := func(value string, credential bool) {
+		if value == "" {
+			return
+		}
+		quoted := strconv.Quote(value)
+		for _, form := range []string{value, url.QueryEscape(value), url.PathEscape(value), quoted[1 : len(quoted)-1]} {
+			secrets[form] = secrets[form] || credential
+		}
+	}
+	parsed, err := url.Parse(rawURL)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		add(rawURL, true)
+		add(parsed.Host, false)
+		add(parsed.Hostname(), false)
+		if parsed.User != nil {
+			add(parsed.User.Username(), true)
+			password, _ := parsed.User.Password()
+			add(password, true)
+		}
+		add(parsed.Path, false)
+		add(parsed.EscapedPath(), false)
+		for _, segment := range strings.Split(parsed.Path, "/") {
+			add(segment, false)
+		}
+		for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+			add(segment, false)
+		}
+		for _, parameter := range strings.Split(parsed.RawQuery, "&") {
+			key, value, _ := strings.Cut(parameter, "=")
+			key, _ = url.QueryUnescape(key)
+			add(value, diagnosticSecret.MatchString(key+"=x"))
+		}
+		for key, values := range parsed.Query() {
+			for _, value := range values {
+				add(value, diagnosticSecret.MatchString(key+"=x"))
+			}
+		}
+	} else if strings.HasPrefix(rawURL, "/") {
+		add(rawURL, true) // IPC socket path.
+	}
+	return secrets
 }

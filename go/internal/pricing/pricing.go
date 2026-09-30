@@ -511,51 +511,8 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	spikes := make([]pricedGasSpike, 0, len(updates))
 	previousPending := b.pendingFeeds
-	carriedMarkers := make(map[string]struct{})
-	for _, update := range updates {
-		key := priceUpdateKey(update)
-		feedKey := pendingFeedKey(update.SrcEID, update.PriceFeed)
-		current := gasPrices[update.DstEID]
-		if current == nil {
-			// The key was not evaluated at all: keep any pending-observed
-			// marker alive so the post-drain forced evaluation survives the
-			// failed gas read instead of being consumed unseen.
-			if _, ok := previousPending[feedKey]; ok {
-				carriedMarkers[feedKey] = struct{}{}
-			}
-			continue
-		}
-		if _, isPending := pending[feedKey]; isPending {
-			b.logger.Debug("skipped gas-spike update", "reason", "pending", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "price_feed", update.PriceFeed)
-			continue
-		}
-		previous := b.lastGasPrices[key]
-		_, wasPending := b.pendingFeeds[feedKey]
-		if previous == nil && !wasPending {
-			b.lastGasPrices[key] = bigutil.Clone(current)
-			continue
-		}
-		if !wasPending && GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
-			continue
-		}
-		if previous == nil {
-			previous = current
-		}
-		spikes = append(spikes, pricedGasSpike{
-			update:   update,
-			previous: bigutil.Clone(previous),
-			current:  bigutil.Clone(current),
-		})
-	}
-	b.pendingFeeds = pending
-	if len(carriedMarkers) > 0 && b.pendingFeeds == nil {
-		b.pendingFeeds = make(map[string]struct{})
-	}
-	for feedKey := range carriedMarkers {
-		b.pendingFeeds[feedKey] = struct{}{}
-	}
+	spikes := b.selectGasSpikes(updates, gasPrices, pending)
 	if len(spikes) > 0 {
 		b.cycleWritten = make(map[string]cycleWrittenState)
 		b.cycleAnchors = make(map[uint32]cycleAnchorState)
@@ -597,15 +554,7 @@ func (b *Bot) EnqueueOnGasSpike(ctx context.Context) error {
 			// update in the batch was suppressed by deviation gating.
 			continue
 		}
-		for _, target := range enqueued {
-			for _, selected := range spikes {
-				if selected.update != target {
-					continue
-				}
-				b.logger.Warn("price bot enqueued gas-spike update", "src_eid", selected.update.SrcEID, "dst_eid", selected.update.DstEID, "price_feed", selected.update.PriceFeed, "previous_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.previous), "current_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.current), "tx_outbox_id", txOutboxID)
-				break
-			}
-		}
+		b.logGasSpikeUpdates(enqueued, spikes, txOutboxID)
 	}
 	// The baseline records the gas level this spike check has already reacted to. It
 	// must advance even when nothing was enqueued (paused chain or deviation-gated
@@ -1297,45 +1246,10 @@ func ChainNativePrice(ctx context.Context, sources map[uint32]ChainSources, eid 
 	configured := make([]ConfiguredPriceReader, 0, len(chainSources.Sanity)+1)
 	configured = append(configured, chainSources.Primary)
 	configured = append(configured, chainSources.Sanity...)
-	sourceNames := make(map[string]struct{}, len(configured))
-	for _, source := range configured {
-		if source.Name == "" || source.Reader == nil {
-			return nil, fmt.Errorf("pricing chain %d contains an incomplete price source", eid)
-		}
-		if source.MaxAge <= 0 {
-			return nil, fmt.Errorf("%s max age must be positive", source.Name)
-		}
-		if _, duplicate := sourceNames[source.Name]; duplicate {
-			return nil, fmt.Errorf("pricing chain %d contains duplicate source %s", eid, source.Name)
-		}
-		sourceNames[source.Name] = struct{}{}
+	if err := validateConfiguredPriceReaders(configured, eid); err != nil {
+		return nil, err
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, policy.SourceRequestTimeout)
-	defer cancel()
-	results := make(chan configuredPriceResult, len(configured))
-	for _, source := range configured {
-		go func(source ConfiguredPriceReader) {
-			price, err := source.Reader.PriceUSD(requestCtx)
-			results <- configuredPriceResult{configured: source, price: price, err: err}
-		}(source)
-	}
-	completed := make(map[string]configuredPriceResult, len(configured))
-	for len(completed) < len(configured) {
-		select {
-		case result := <-results:
-			if _, duplicate := completed[result.configured.Name]; duplicate {
-				continue
-			}
-			completed[result.configured.Name] = result
-		case <-requestCtx.Done():
-			for _, source := range configured {
-				if _, ok := completed[source.Name]; ok {
-					continue
-				}
-				completed[source.Name] = configuredPriceResult{configured: source, err: requestCtx.Err()}
-			}
-		}
-	}
+	completed := readConfiguredPrices(ctx, configured, policy.SourceRequestTimeout)
 	for _, result := range completed {
 		if isPriceSourceConfigurationError(result.err) || workerloop.IsFatal(result.err) {
 			return nil, result.err
@@ -1677,4 +1591,112 @@ func (s PriceSnapshot) Validate() error {
 		return fmt.Errorf("price snapshot stale_after exceeds OpenPriceFeed maximum %d", config.MaxPriceSnapshotStaleAfterSeconds)
 	}
 	return nil
+}
+
+func (b *Bot) selectGasSpikes(updates []pricedUpdate, gasPrices map[uint32]*big.Int, pending map[string]struct{}) []pricedGasSpike {
+	previousPending := b.pendingFeeds
+	spikes := make([]pricedGasSpike, 0, len(updates))
+	carriedMarkers := make(map[string]struct{})
+	for _, update := range updates {
+		key := priceUpdateKey(update)
+		feedKey := pendingFeedKey(update.SrcEID, update.PriceFeed)
+		current := gasPrices[update.DstEID]
+		if current == nil {
+			// The key was not evaluated at all: keep any pending-observed
+			// marker alive so the post-drain forced evaluation survives the
+			// failed gas read instead of being consumed unseen.
+			if _, ok := previousPending[feedKey]; ok {
+				carriedMarkers[feedKey] = struct{}{}
+			}
+			continue
+		}
+		if _, isPending := pending[feedKey]; isPending {
+			b.logger.Debug("skipped gas-spike update", "reason", "pending", "src_eid", update.SrcEID, "dst_eid", update.DstEID, "price_feed", update.PriceFeed)
+			continue
+		}
+		previous := b.lastGasPrices[key]
+		_, wasPending := b.pendingFeeds[feedKey]
+		if previous == nil && !wasPending {
+			b.lastGasPrices[key] = bigutil.Clone(current)
+			continue
+		}
+		if !wasPending && GasIncreaseBps(previous, current) < b.settings.GasSpikeBps {
+			continue
+		}
+		if previous == nil {
+			previous = current
+		}
+		spikes = append(spikes, pricedGasSpike{
+			update:   update,
+			previous: bigutil.Clone(previous),
+			current:  bigutil.Clone(current),
+		})
+	}
+	b.pendingFeeds = pending
+	if len(carriedMarkers) > 0 && b.pendingFeeds == nil {
+		b.pendingFeeds = make(map[string]struct{})
+	}
+	for feedKey := range carriedMarkers {
+		b.pendingFeeds[feedKey] = struct{}{}
+	}
+	return spikes
+}
+
+func (b *Bot) logGasSpikeUpdates(enqueued []pricedUpdate, spikes []pricedGasSpike, txOutboxID int64) {
+	for _, target := range enqueued {
+		for _, selected := range spikes {
+			if selected.update != target {
+				continue
+			}
+			b.logger.Warn("price bot enqueued gas-spike update", "src_eid", selected.update.SrcEID, "dst_eid", selected.update.DstEID, "price_feed", selected.update.PriceFeed, "previous_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.previous), "current_gas_price_gwei", bigutil.FormatWeiAsGwei(selected.current), "tx_outbox_id", txOutboxID)
+			break
+		}
+	}
+}
+
+func validateConfiguredPriceReaders(configured []ConfiguredPriceReader, eid uint32) error {
+	sourceNames := make(map[string]struct{}, len(configured))
+	for _, source := range configured {
+		if source.Name == "" || source.Reader == nil {
+			return fmt.Errorf("pricing chain %d contains an incomplete price source", eid)
+		}
+		if source.MaxAge <= 0 {
+			return fmt.Errorf("%s max age must be positive", source.Name)
+		}
+		if _, duplicate := sourceNames[source.Name]; duplicate {
+			return fmt.Errorf("pricing chain %d contains duplicate source %s", eid, source.Name)
+		}
+		sourceNames[source.Name] = struct{}{}
+	}
+	return nil
+}
+
+func readConfiguredPrices(ctx context.Context, configured []ConfiguredPriceReader, timeout time.Duration) map[string]configuredPriceResult {
+	requestCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	results := make(chan configuredPriceResult, len(configured))
+	for _, source := range configured {
+		go func(source ConfiguredPriceReader) {
+			price, err := source.Reader.PriceUSD(requestCtx)
+			results <- configuredPriceResult{configured: source, price: price, err: err}
+		}(source)
+	}
+	completed := make(map[string]configuredPriceResult, len(configured))
+	for len(completed) < len(configured) {
+		select {
+		case result := <-results:
+			if _, duplicate := completed[result.configured.Name]; duplicate {
+				continue
+			}
+			completed[result.configured.Name] = result
+		case <-requestCtx.Done():
+			for _, source := range configured {
+				if _, ok := completed[source.Name]; ok {
+					continue
+				}
+				completed[source.Name] = configuredPriceResult{configured: source, err: requestCtx.Err()}
+			}
+		}
+	}
+	return completed
 }

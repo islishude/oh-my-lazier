@@ -72,32 +72,7 @@ func (m *BalanceMonitor) pollOnce(ctx context.Context) error {
 			return errors.New("balance monitor target client is required")
 		}
 		signerID := target.Signer.Address().Hex()
-		// Surface each provider's quorum classification before touching the
-		// balance: in a deployment without indexers (for example pricing-only)
-		// the balance monitor is the loop that runs for every
-		// transaction-sending quorum client, and without this report the
-		// provider conflict alert could never fire. Providers() only returns
-		// cached classifications and BalanceAt is a single-provider read, so
-		// run a bounded head quorum probe first — its per-call
-		// reclassification keeps the exported statuses live after startup,
-		// steers the balance read below away from a hung provider, and must
-		// happen even when that read stalls or fails.
-		if m.recorder != nil {
-			if statusSource, ok := target.Client.(interface{ Providers() []rpcquorum.Provider }); ok {
-				if recorder, ok := m.recorder.(interface {
-					RecordRPCProviders(chainEID uint32, chainName string, providers []rpcquorum.Provider)
-				}); ok {
-					if prober, ok := target.Client.(interface {
-						CheckHead(ctx context.Context) (rpcquorum.HeadResult, error)
-					}); ok {
-						if _, headErr := prober.CheckHead(ctx); headErr != nil {
-							m.logger.Warn("balance poll head quorum probe failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "error", headErr.Error())
-						}
-					}
-					recorder.RecordRPCProviders(target.ChainEID, target.ChainName, statusSource.Providers())
-				}
-			}
-		}
+		m.recordProviderStatus(ctx, target)
 		started := time.Now()
 		balanceCtx, cancelBalance := context.WithTimeout(ctx, balanceReadTimeout)
 		balance, err := target.Client.BalanceAt(balanceCtx, target.Signer.Address(), nil)
@@ -118,4 +93,33 @@ func (m *BalanceMonitor) pollOnce(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (m *BalanceMonitor) recordProviderStatus(ctx context.Context, target Target) {
+	// Surface each provider's quorum classification before touching the
+	// balance: in a deployment without indexers (for example pricing-only)
+	// the balance monitor is the loop that runs for every
+	// transaction-sending quorum client, and without this report the
+	// provider conflict alert could never fire. Providers() only returns
+	// cached classifications and BalanceAt is a single-provider read, so
+	// run a bounded head quorum probe first — its per-call
+	// reclassification keeps the exported statuses live after startup,
+	// steers the balance read below away from a hung provider, and must
+	// happen even when that read stalls or fails.
+	if m.recorder != nil {
+		if statusSource, ok := target.Client.(interface{ Providers() []rpcquorum.Provider }); ok {
+			if recorder, ok := m.recorder.(interface {
+				RecordRPCProviders(chainEID uint32, chainName string, providers []rpcquorum.Provider)
+			}); ok {
+				if prober, ok := target.Client.(interface {
+					CheckHead(ctx context.Context) (rpcquorum.HeadResult, error)
+				}); ok {
+					if _, headErr := prober.CheckHead(ctx); headErr != nil {
+						m.logger.Warn("balance poll head quorum probe failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "error", headErr.Error())
+					}
+				}
+				recorder.RecordRPCProviders(target.ChainEID, target.ChainName, statusSource.Providers())
+			}
+		}
+	}
 }

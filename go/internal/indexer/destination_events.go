@@ -79,103 +79,11 @@ func applyExecutorDestinationLogs(ctx context.Context, store ExecutorDestination
 	}
 	result := destinationApplyResult{}
 	for _, log := range logs {
-		packet, ok, err := packetForDestinationLog(ctx, store, dstEID, log)
-		if errors.Is(err, pgx.ErrNoRows) {
-			pathway, matches, matchErr := executorDestinationLogPathway(pathways, dstEID, expectedExecutor, log)
-			if matchErr != nil {
-				return result, matchErr
-			}
-			if matches && pathway.Enabled {
-				skipped, skipErr := executorSourcePacketWasSkipped(ctx, store, dstEID, expectedExecutor, log)
-				if skipErr != nil {
-					return result, skipErr
-				}
-				if !skipped {
-					result.pending = true
-					if observer.executorSkipped != nil {
-						observer.executorSkipped("pending_source_packet", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
-					}
-					continue
-				}
-			}
-			if observer.executorSkipped != nil {
-				reason := "unknown_packet"
-				if matches && pathway.Enabled {
-					reason = "skipped_source_packet"
-				} else if matches {
-					reason = "pathway_disabled"
-				} else if len(pathways) > 0 {
-					reason = "unknown_pathway"
-				}
-				observer.executorSkipped(reason, db.PacketRecord{}, db.ExecutorJobRecord{}, log)
-			}
-			continue
-		}
+		applied, err := applyExecutorDestinationEvent(ctx, store, dstEID, pathways, expectedExecutor, log, observer)
+		result.applied += applied.applied
+		result.pending = result.pending || applied.pending
 		if err != nil {
 			return result, err
-		}
-		if !ok {
-			if observer.executorSkipped != nil {
-				observer.executorSkipped("unsupported_event", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
-			}
-			continue
-		}
-		if packet.DstEID != dstEID {
-			return result, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
-		}
-		if !executorDestinationLogExecutorAllowed(log, expectedExecutor) {
-			if observer.executorSkipped != nil {
-				observer.executorSkipped("unexpected_executor", packet, db.ExecutorJobRecord{}, log)
-			}
-			continue
-		}
-		job, err := store.GetExecutorJob(ctx, packet.GUID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			if pathway, matches := pathwayForPacket(pathways, packet); matches && pathway.Enabled {
-				skipped, skipErr := sourcePacketWasSkipped(ctx, store, sourceRoleExecutor, destinationPacketIdentity{
-					SrcEID:   packet.SrcEID,
-					DstEID:   packet.DstEID,
-					Sender:   packet.Sender,
-					Receiver: packet.Receiver,
-					Nonce:    packet.Nonce.Uint64(),
-				})
-				if skipErr != nil {
-					return result, skipErr
-				}
-				if skipped {
-					if observer.executorSkipped != nil {
-						observer.executorSkipped("skipped_source_packet", packet, db.ExecutorJobRecord{}, log)
-					}
-					continue
-				}
-				result.pending = true
-				if observer.executorSkipped != nil {
-					observer.executorSkipped("pending_executor_job", packet, db.ExecutorJobRecord{}, log)
-				}
-				continue
-			}
-			if observer.executorSkipped != nil {
-				observer.executorSkipped("missing_executor_job", packet, db.ExecutorJobRecord{}, log)
-			}
-			continue
-		} else if err != nil {
-			return result, err
-		}
-		if executorDestinationLogAlreadyApplied(job.Status, log.Topics[0]) {
-			if observer.executorSkipped != nil {
-				observer.executorSkipped("already_applied", packet, job, log)
-			}
-			continue
-		}
-		didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, job, log)
-		if err != nil {
-			return result, err
-		}
-		if didApply {
-			if observer.executorApplied != nil {
-				observer.executorApplied(packet, job, log)
-			}
-			result.applied++
 		}
 	}
 	return result, nil
@@ -225,97 +133,12 @@ func applyDVNDestinationLogs(ctx context.Context, store DVNDestinationStore, dst
 	}
 	result := destinationApplyResult{}
 	for _, log := range logs {
-		if len(log.Topics) == 0 || log.Topics[0] != lzabi.PayloadVerifiedTopic() {
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("unsupported_event", db.PacketRecord{}, db.DVNJobRecord{}, log)
-			}
-			continue
-		}
-		event, err := lzabi.DecodePayloadVerified(log)
+		applied, err := applyDVNDestinationEvent(ctx, store, dstEID, pathways, log, observer)
+		result.applied += applied.applied
+		result.pending = result.pending || applied.pending
 		if err != nil {
 			return result, err
 		}
-		packet, err := store.GetPacketByVerification(ctx, dstEID, event.Header, event.ProofHash)
-		if errors.Is(err, pgx.ErrNoRows) {
-			pathway, matches := pathwayForPayloadVerified(pathways, dstEID, event)
-			if matches && pathway.Enabled && event.DVN == pathway.DestinationWorkers.OpenDVN {
-				skipped, skipErr := dvnSourcePacketWasSkipped(ctx, store, dstEID, event)
-				if skipErr != nil {
-					return result, skipErr
-				}
-				if skipped {
-					if observer.dvnSkipped != nil {
-						observer.dvnSkipped("skipped_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
-					}
-					continue
-				}
-				result.pending = true
-				if observer.dvnSkipped != nil {
-					observer.dvnSkipped("pending_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
-				}
-				continue
-			}
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("unknown_pathway", db.PacketRecord{}, db.DVNJobRecord{}, log)
-			}
-			continue
-		}
-		if err != nil {
-			return result, err
-		}
-		if packet.DstEID != dstEID {
-			return result, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
-		}
-		pathway, ok := pathwayForPacket(pathways, packet)
-		if !ok {
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("unknown_pathway", packet, db.DVNJobRecord{}, log)
-			}
-			continue
-		}
-		if event.DVN != pathway.DestinationWorkers.OpenDVN {
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("unexpected_worker", packet, db.DVNJobRecord{}, log)
-			}
-			continue
-		}
-		if err := validatePayloadVerified(packet, event); err != nil {
-			return result, err
-		}
-		job, err := store.GetDVNJob(ctx, packet.GUID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			if pathway.Enabled {
-				result.pending = true
-				if observer.dvnSkipped != nil {
-					observer.dvnSkipped("pending_dvn_job", packet, db.DVNJobRecord{}, log)
-				}
-			} else if observer.dvnSkipped != nil {
-				observer.dvnSkipped("missing_dvn_job", packet, db.DVNJobRecord{}, log)
-			}
-			continue
-		}
-		if err != nil {
-			return result, err
-		}
-		if job.Status == string(packets.DVNVerified) {
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("already_applied", packet, job, log)
-			}
-			continue
-		}
-		if !dvnCanApplyPayloadVerified(job.Status) {
-			if observer.dvnSkipped != nil {
-				observer.dvnSkipped("status_not_applicable", packet, job, log)
-			}
-			continue
-		}
-		if err := store.MarkDVNVerifiedObserved(ctx, packet.GUID, log.TxHash, job.Status); err != nil {
-			return result, err
-		}
-		if observer.dvnApplied != nil {
-			observer.dvnApplied(packet, job, log)
-		}
-		result.applied++
 	}
 	return result, nil
 }
@@ -684,4 +507,196 @@ func validateOrigin(packet db.PacketRecord, origin lzabi.Origin) error {
 
 func originSenderAddress(origin lzabi.Origin) common.Address {
 	return common.BytesToAddress(origin.Sender.Bytes()[12:])
+}
+
+func (observer destinationLogObserver) notifyExecutorSkipped(reason string, packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log) {
+	if observer.executorSkipped != nil {
+		observer.executorSkipped(reason, packet, job, log)
+	}
+}
+
+func (observer destinationLogObserver) notifyDvnSkipped(reason string, packet db.PacketRecord, job db.DVNJobRecord, log gethtypes.Log) {
+	if observer.dvnSkipped != nil {
+		observer.dvnSkipped(reason, packet, job, log)
+	}
+}
+
+func (observer destinationLogObserver) notifyExecutorApplied(packet db.PacketRecord, job db.ExecutorJobRecord, log gethtypes.Log) {
+	if observer.executorApplied != nil {
+		observer.executorApplied(packet, job, log)
+	}
+}
+
+func (observer destinationLogObserver) notifyDvnApplied(packet db.PacketRecord, job db.DVNJobRecord, log gethtypes.Log) {
+	if observer.dvnApplied != nil {
+		observer.dvnApplied(packet, job, log)
+	}
+}
+
+func applyExecutorDestinationEvent(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, pathways []chain.Pathway, expectedExecutor common.Address, log gethtypes.Log, observer destinationLogObserver) (destinationApplyResult, error) {
+	result := destinationApplyResult{}
+	packet, ok, err := packetForDestinationLog(ctx, store, dstEID, log)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return missingExecutorSource(ctx, store, dstEID, pathways, expectedExecutor, log, observer)
+	}
+	if err != nil {
+		return result, err
+	}
+	if !ok {
+		observer.notifyExecutorSkipped("unsupported_event", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+		return result, nil
+	}
+	if packet.DstEID != dstEID {
+		return result, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+	}
+	if !executorDestinationLogExecutorAllowed(log, expectedExecutor) {
+		observer.notifyExecutorSkipped("unexpected_executor", packet, db.ExecutorJobRecord{}, log)
+		return result, nil
+	}
+	job, err := store.GetExecutorJob(ctx, packet.GUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if pathway, matches := pathwayForPacket(pathways, packet); matches && pathway.Enabled {
+			skipped, skipErr := sourcePacketWasSkipped(ctx, store, sourceRoleExecutor, destinationPacketIdentity{
+				SrcEID:   packet.SrcEID,
+				DstEID:   packet.DstEID,
+				Sender:   packet.Sender,
+				Receiver: packet.Receiver,
+				Nonce:    packet.Nonce.Uint64(),
+			})
+			if skipErr != nil {
+				return result, skipErr
+			}
+			if skipped {
+				observer.notifyExecutorSkipped("skipped_source_packet", packet, db.ExecutorJobRecord{}, log)
+				return result, nil
+			}
+			result.pending = true
+			observer.notifyExecutorSkipped("pending_executor_job", packet, db.ExecutorJobRecord{}, log)
+			return result, nil
+		}
+		observer.notifyExecutorSkipped("missing_executor_job", packet, db.ExecutorJobRecord{}, log)
+		return result, nil
+	} else if err != nil {
+		return result, err
+	}
+	if executorDestinationLogAlreadyApplied(job.Status, log.Topics[0]) {
+		observer.notifyExecutorSkipped("already_applied", packet, job, log)
+		return result, nil
+	}
+	didApply, err := ApplyExecutorDestinationLog(ctx, store, packet, job, log)
+	if err != nil {
+		return result, err
+	}
+	if didApply {
+		observer.notifyExecutorApplied(packet, job, log)
+		result.applied++
+	}
+	return result, nil
+}
+
+func applyDVNDestinationEvent(ctx context.Context, store DVNDestinationStore, dstEID uint32, pathways []chain.Pathway, log gethtypes.Log, observer destinationLogObserver) (destinationApplyResult, error) {
+	result := destinationApplyResult{}
+	if len(log.Topics) == 0 || log.Topics[0] != lzabi.PayloadVerifiedTopic() {
+		observer.notifyDvnSkipped("unsupported_event", db.PacketRecord{}, db.DVNJobRecord{}, log)
+		return result, nil
+	}
+	event, err := lzabi.DecodePayloadVerified(log)
+	if err != nil {
+		return result, err
+	}
+	packet, err := store.GetPacketByVerification(ctx, dstEID, event.Header, event.ProofHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		pathway, matches := pathwayForPayloadVerified(pathways, dstEID, event)
+		if matches && pathway.Enabled && event.DVN == pathway.DestinationWorkers.OpenDVN {
+			skipped, skipErr := dvnSourcePacketWasSkipped(ctx, store, dstEID, event)
+			if skipErr != nil {
+				return result, skipErr
+			}
+			if skipped {
+				observer.notifyDvnSkipped("skipped_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
+				return result, nil
+			}
+			result.pending = true
+			observer.notifyDvnSkipped("pending_source_packet", db.PacketRecord{}, db.DVNJobRecord{}, log)
+			return result, nil
+		}
+		observer.notifyDvnSkipped("unknown_pathway", db.PacketRecord{}, db.DVNJobRecord{}, log)
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	if packet.DstEID != dstEID {
+		return result, fmt.Errorf("packet %s destination eid %d does not match indexed chain %d", packet.GUID, packet.DstEID, dstEID)
+	}
+	pathway, ok := pathwayForPacket(pathways, packet)
+	if !ok {
+		observer.notifyDvnSkipped("unknown_pathway", packet, db.DVNJobRecord{}, log)
+		return result, nil
+	}
+	if event.DVN != pathway.DestinationWorkers.OpenDVN {
+		observer.notifyDvnSkipped("unexpected_worker", packet, db.DVNJobRecord{}, log)
+		return result, nil
+	}
+	if err := validatePayloadVerified(packet, event); err != nil {
+		return result, err
+	}
+	job, err := store.GetDVNJob(ctx, packet.GUID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if pathway.Enabled {
+			result.pending = true
+			observer.notifyDvnSkipped("pending_dvn_job", packet, db.DVNJobRecord{}, log)
+		} else if observer.dvnSkipped != nil {
+			observer.dvnSkipped("missing_dvn_job", packet, db.DVNJobRecord{}, log)
+		}
+		return result, nil
+	}
+	if err != nil {
+		return result, err
+	}
+	if job.Status == string(packets.DVNVerified) {
+		observer.notifyDvnSkipped("already_applied", packet, job, log)
+		return result, nil
+	}
+	if !dvnCanApplyPayloadVerified(job.Status) {
+		observer.notifyDvnSkipped("status_not_applicable", packet, job, log)
+		return result, nil
+	}
+	if err := store.MarkDVNVerifiedObserved(ctx, packet.GUID, log.TxHash, job.Status); err != nil {
+		return result, err
+	}
+	observer.notifyDvnApplied(packet, job, log)
+	result.applied++
+	return result, nil
+}
+
+func missingExecutorSource(ctx context.Context, store ExecutorDestinationStore, dstEID uint32, pathways []chain.Pathway, expectedExecutor common.Address, log gethtypes.Log, observer destinationLogObserver) (destinationApplyResult, error) {
+	result := destinationApplyResult{}
+	pathway, matches, matchErr := executorDestinationLogPathway(pathways, dstEID, expectedExecutor, log)
+	if matchErr != nil {
+		return result, matchErr
+	}
+	if matches && pathway.Enabled {
+		skipped, skipErr := executorSourcePacketWasSkipped(ctx, store, dstEID, expectedExecutor, log)
+		if skipErr != nil {
+			return result, skipErr
+		}
+		if !skipped {
+			result.pending = true
+			observer.notifyExecutorSkipped("pending_source_packet", db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+			return result, nil
+		}
+	}
+	if observer.executorSkipped != nil {
+		reason := "unknown_packet"
+		if matches && pathway.Enabled {
+			reason = "skipped_source_packet"
+		} else if matches {
+			reason = "pathway_disabled"
+		} else if len(pathways) > 0 {
+			reason = "unknown_pathway"
+		}
+		observer.executorSkipped(reason, db.PacketRecord{}, db.ExecutorJobRecord{}, log)
+	}
+	return result, nil
 }

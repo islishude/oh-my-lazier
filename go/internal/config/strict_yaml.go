@@ -68,16 +68,7 @@ func validateUnsignedIntegerNode(node *yaml.Node, target reflect.Type, path stri
 			}
 		}
 	case reflect.Map:
-		if node.Kind != yaml.MappingNode {
-			return nil
-		}
-		for idx := 0; idx+1 < len(node.Content); idx += 2 {
-			key := node.Content[idx]
-			value := node.Content[idx+1]
-			if err := validateUnsignedIntegerNode(value, target.Elem(), joinYAMLPath(path, key.Value)); err != nil {
-				return err
-			}
-		}
+		return validateUnsignedIntegerMap(node, target, path)
 	}
 	return nil
 }
@@ -141,4 +132,18 @@ func joinYAMLPath(parent, child string) string {
 		return child
 	}
 	return parent + "." + child
+}
+
+func validateUnsignedIntegerMap(node *yaml.Node, target reflect.Type, path string) error {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for idx := 0; idx+1 < len(node.Content); idx += 2 {
+		key := node.Content[idx]
+		value := node.Content[idx+1]
+		if err := validateUnsignedIntegerNode(value, target.Elem(), joinYAMLPath(path, key.Value)); err != nil {
+			return err
+		}
+	}
+	return nil
 }

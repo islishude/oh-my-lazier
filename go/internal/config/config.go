@@ -444,54 +444,7 @@ func load(path string, applyEnv bool) (Config, error) {
 		// Compose and managed deployments inject credentials through the environment.
 		cfg.DatabaseURL = env
 	}
-	if cfg.Metrics.ListenAddress == "" {
-		cfg.Metrics.ListenAddress = ":9090"
-	}
-	if cfg.TxManager.MaxInflightPerSigner == 0 {
-		cfg.TxManager.MaxInflightPerSigner = DefaultMaxInflightPerSigner
-	}
-	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
-		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds
-	}
-	if cfg.Pricing.Enabled {
-		if cfg.Pricing.IntervalSeconds == 0 {
-			cfg.Pricing.IntervalSeconds = 300
-		}
-		if cfg.Pricing.StaleAfterSeconds == 0 {
-			cfg.Pricing.StaleAfterSeconds = 1800
-		}
-		if cfg.Pricing.MaxDeviationBps == 0 {
-			cfg.Pricing.MaxDeviationBps = 500
-		}
-		if cfg.Pricing.MinUpdateDeviationBps == 0 {
-			cfg.Pricing.MinUpdateDeviationBps = 50
-		}
-		if cfg.Pricing.HeartbeatSeconds == 0 {
-			cfg.Pricing.HeartbeatSeconds = cfg.Pricing.StaleAfterSeconds / 2
-		}
-		if cfg.Pricing.SourceRequestTimeoutSeconds == 0 {
-			cfg.Pricing.SourceRequestTimeoutSeconds = 10
-		}
-		if cfg.Pricing.GasSpikeBps == 0 {
-			cfg.Pricing.GasSpikeBps = 1_000
-		}
-	}
-	for idx := range cfg.Chains {
-		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
-			cfg.Chains[idx].IndexerQueryBlockRange = 500
-		}
-		if cfg.Chains[idx].IndexerBackfillBlockRange == 0 {
-			cfg.Chains[idx].IndexerBackfillBlockRange = defaultIndexerBackfillBlockRange
-		}
-		if cfg.Chains[idx].IndexerPollIntervalSeconds == 0 {
-			cfg.Chains[idx].IndexerPollIntervalSeconds = defaultIndexerPollIntervalSeconds
-		}
-	}
-	for idx := range cfg.Pathways {
-		if cfg.Pathways[idx].DVN.Mode == "" {
-			cfg.Pathways[idx].DVN.Mode = DVNModeShadow
-		}
-	}
+	cfg.applyDefaults()
 	return cfg, cfg.Validate()
 }
 
@@ -531,60 +484,8 @@ func (c Config) Validate() error {
 	seen := make(map[uint32]struct{}, len(c.Chains))
 	chains := make(map[uint32]ChainConfig, len(c.Chains))
 	for _, chain := range c.Chains {
-		if chain.EID == 0 {
-			return errors.New("chain eid is required")
-		}
-		if chain.Name == "" {
-			return fmt.Errorf("chain %d name is required", chain.EID)
-		}
-		switch chain.Family {
-		case ChainFamilyEVM:
-		case "":
-			return fmt.Errorf("chain %s family is required", chain.Name)
-		default:
-			return fmt.Errorf("chain %s family must be %q in phase 1", chain.Name, ChainFamilyEVM)
-		}
-		if chain.ChainID <= 0 {
-			return fmt.Errorf("chain %s chain_id is required", chain.Name)
-		}
-		if chain.EndpointAddress.IsZero() {
-			return fmt.Errorf("chain %s endpoint_address is required", chain.Name)
-		}
-		if c.ExecutorEnabled() {
-			if err := validateExecutorTxRole(chain.Name, chain.TxRoles.Executor, signers); err != nil {
-				return err
-			}
-		}
-		if c.DVNEnabled() {
-			if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
-				return err
-			}
-		}
-		if chain.Confirmations == 0 {
-			return fmt.Errorf("chain %s confirmations is required", chain.Name)
-		}
-		if chain.IndexerQueryBlockRange == 0 {
-			return fmt.Errorf("chain %s indexer_query_block_range is required", chain.Name)
-		}
-		if chain.IndexerBackfillBlockRange == 0 {
-			return fmt.Errorf("chain %s indexer_backfill_block_range is required", chain.Name)
-		}
-		if chain.IndexerPollIntervalSeconds == 0 {
-			return fmt.Errorf("chain %s indexer_poll_interval_seconds is required", chain.Name)
-		}
-		if err := validateDurationSeconds(
-			fmt.Sprintf("chain %s indexer_poll_interval_seconds", chain.Name),
-			chain.IndexerPollIntervalSeconds,
-		); err != nil {
+		if err := c.validateChain(chain, signers); err != nil {
 			return err
-		}
-		if len(chain.RPCURLs) == 0 {
-			return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
-		}
-		for i, rpcURL := range chain.RPCURLs {
-			if err := ValidateRPCURL(rpcURL); err != nil {
-				return fmt.Errorf("chain %s rpc_urls[%d] is invalid: %w", chain.Name, i, err)
-			}
 		}
 		if _, ok := seen[chain.EID]; ok {
 			return fmt.Errorf("duplicate chain eid %d", chain.EID)
@@ -598,80 +499,8 @@ func (c Config) Validate() error {
 	pathways := make(map[string]struct{}, len(c.Pathways))
 	activeDVNDestinations := make(map[uint32]struct{})
 	for _, pathway := range c.Pathways {
-		if _, ok := seen[pathway.SrcEID]; !ok {
-			return fmt.Errorf("pathway source eid %d is not configured", pathway.SrcEID)
-		}
-		if _, ok := seen[pathway.DstEID]; !ok {
-			return fmt.Errorf("pathway destination eid %d is not configured", pathway.DstEID)
-		}
-		if pathway.SrcEID == pathway.DstEID {
-			return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
-		}
-		if pathway.SendULNConfirmations == 0 {
-			return fmt.Errorf("pathway %d -> %d send_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
-		}
-		if pathway.ReceiveULNConfirmations == 0 {
-			return fmt.Errorf("pathway %d -> %d receive_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
-		}
-		// SendUln302 assigns the send-side value to every DVN job while
-		// ReceiveUln302 enforces the receive-side threshold. A lower assignment
-		// value would make every packet on the pathway unverifiable.
-		if pathway.SendULNConfirmations < pathway.ReceiveULNConfirmations {
-			return fmt.Errorf(
-				"pathway %d -> %d send uln confirmations %d are below receive uln confirmations %d",
-				pathway.SrcEID, pathway.DstEID,
-				pathway.SendULNConfirmations, pathway.ReceiveULNConfirmations,
-			)
-		}
-		for label, value := range map[string]EVMAddress{
-			"src_oapp":                     pathway.SrcOApp,
-			"dst_oapp":                     pathway.DstOApp,
-			"send_lib":                     pathway.SendLib,
-			"receive_lib":                  pathway.ReceiveLib,
-			"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
-			"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
-			"source_workers.price_feed":    pathway.SourceWorkers.PriceFeed,
-			"destination_workers.open_dvn": pathway.DestinationWorkers.OpenDVN,
-		} {
-			if value.IsZero() {
-				return fmt.Errorf("pathway %d -> %d %s is required", pathway.SrcEID, pathway.DstEID, label)
-			}
-		}
-		if err := validateRequiredDVNSet(
-			fmt.Sprintf("pathway %d -> %d send_required_dvns", pathway.SrcEID, pathway.DstEID),
-			pathway.SendRequiredDVNs, pathway.SourceWorkers.OpenDVN,
-		); err != nil {
+		if err := c.validatePathway(pathway, seen, activeDVNDestinations); err != nil {
 			return err
-		}
-		if err := validateRequiredDVNSet(
-			fmt.Sprintf("pathway %d -> %d receive_required_dvns", pathway.SrcEID, pathway.DstEID),
-			pathway.ReceiveRequiredDVNs, pathway.DestinationWorkers.OpenDVN,
-		); err != nil {
-			return err
-		}
-		switch pathway.DVN.Mode {
-		case DVNModeShadow:
-		case DVNModeActive:
-			activeDVNDestinations[pathway.DstEID] = struct{}{}
-		default:
-			return fmt.Errorf("pathway %d -> %d unsupported dvn mode %q", pathway.SrcEID, pathway.DstEID, pathway.DVN.Mode)
-		}
-		if pathway.MaxMessageSize == 0 {
-			return fmt.Errorf("pathway %d -> %d max_message_size is required", pathway.SrcEID, pathway.DstEID)
-		}
-		if pathway.MaxMessageSize > math.MaxInt32 {
-			return fmt.Errorf("pathway %d -> %d max_message_size exceeds database integer limit", pathway.SrcEID, pathway.DstEID)
-		}
-		if pathway.MaxLzReceiveGas == 0 {
-			return fmt.Errorf("pathway %d -> %d max_lz_receive_gas is required", pathway.SrcEID, pathway.DstEID)
-		}
-		if pathway.MinLzReceiveGas > pathway.MaxLzReceiveGas {
-			return fmt.Errorf("pathway %d -> %d min_lz_receive_gas exceeds max_lz_receive_gas", pathway.SrcEID, pathway.DstEID)
-		}
-		if c.Pricing.Enabled {
-			if err := validatePathwayPricing(pathway); err != nil {
-				return err
-			}
 		}
 		key := fmt.Sprintf("%d:%d:%s:%s", pathway.SrcEID, pathway.DstEID, pathway.SrcOApp, pathway.DstOApp)
 		if _, ok := pathways[key]; ok {
@@ -814,35 +643,8 @@ func (c Config) validateSigners() (map[string]struct{}, error) {
 		if _, ok := seen[id]; ok {
 			return nil, fmt.Errorf("duplicate signer id %s", id)
 		}
-		switch signer.Type {
-		case "keystore":
-			if signer.Keystore.Path == "" {
-				return nil, fmt.Errorf("signer %s keystore.path is required", id)
-			}
-			sources := 0
-			for _, value := range []string{signer.Keystore.PasswordEnv, signer.Keystore.PasswordFile} {
-				if value != "" {
-					sources++
-				}
-			}
-			if sources != 1 {
-				return nil, fmt.Errorf("signer %s must configure exactly one keystore password source", id)
-			}
-		case "kms":
-			if signer.KMS.Address.IsZero() {
-				return nil, fmt.Errorf("signer %s kms.address is required", id)
-			}
-			if signer.KMS.Address.Hex() != id {
-				return nil, fmt.Errorf("signer %s kms.address must match id", id)
-			}
-			if signer.KMS.KeyID == "" {
-				return nil, fmt.Errorf("signer %s kms.key_id is required", id)
-			}
-			if signer.KMS.Region == "" {
-				return nil, fmt.Errorf("signer %s kms.region is required", id)
-			}
-		default:
-			return nil, fmt.Errorf("unsupported signer type %q", signer.Type)
+		if err := validateSigner(signer, id); err != nil {
+			return nil, err
 		}
 		seen[id] = struct{}{}
 	}
@@ -859,58 +661,8 @@ func (c Config) validatePricing(chains map[uint32]struct{}, signers map[string]s
 	if _, ok := signers[c.Pricing.Signer.Hex()]; !ok {
 		return errors.New("pricing signer must reference a configured signer")
 	}
-	if c.Pricing.IntervalSeconds == 0 {
-		return errors.New("pricing interval_seconds is required")
-	}
-	if err := validateDurationSeconds("pricing interval_seconds", c.Pricing.IntervalSeconds); err != nil {
+	if err := c.validatePricingTiming(); err != nil {
 		return err
-	}
-	if c.Pricing.StaleAfterSeconds == 0 {
-		return errors.New("pricing stale_after_seconds is required")
-	}
-	if err := validateDurationSeconds("pricing stale_after_seconds", c.Pricing.StaleAfterSeconds); err != nil {
-		return err
-	}
-	if c.Pricing.StaleAfterSeconds > MaxPriceSnapshotStaleAfterSeconds {
-		return fmt.Errorf("pricing stale_after_seconds exceeds OpenPriceFeed maximum %d", MaxPriceSnapshotStaleAfterSeconds)
-	}
-	if c.Pricing.MaxDeviationBps == 0 {
-		return errors.New("pricing max_deviation_bps is required")
-	}
-	if c.Pricing.MinUpdateDeviationBps == 0 {
-		return errors.New("pricing min_update_deviation_bps is required")
-	}
-	if c.Pricing.MinUpdateDeviationBps > 10_000 {
-		return errors.New("pricing min_update_deviation_bps exceeds 10000")
-	}
-	if c.Pricing.HeartbeatSeconds == 0 {
-		return errors.New("pricing heartbeat_seconds is required")
-	}
-	if err := validateDurationSeconds("pricing heartbeat_seconds", c.Pricing.HeartbeatSeconds); err != nil {
-		return err
-	}
-	if c.Pricing.HeartbeatSeconds >= c.Pricing.StaleAfterSeconds {
-		return errors.New("pricing heartbeat_seconds must be less than stale_after_seconds")
-	}
-	if c.Pricing.IntervalSeconds >= c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds {
-		return errors.New("pricing heartbeat_seconds plus interval_seconds must be less than stale_after_seconds")
-	}
-	// The margin left after the worst healthy write schedule is the budget for
-	// enqueue, signing, and confirmation. Readiness escalates a pending pricing
-	// transaction after the fixed stall threshold, so the margin must be at
-	// least that threshold or a stuck write could let the snapshot expire while
-	// readiness stays green.
-	if c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds-c.Pricing.IntervalSeconds < MinPricingFreshnessMarginSeconds {
-		return fmt.Errorf("pricing stale_after_seconds must exceed heartbeat_seconds plus interval_seconds by at least %d seconds", MinPricingFreshnessMarginSeconds)
-	}
-	if c.Pricing.SourceRequestTimeoutSeconds == 0 {
-		return errors.New("pricing source_request_timeout_seconds is required")
-	}
-	if err := validateDurationSeconds("pricing source_request_timeout_seconds", c.Pricing.SourceRequestTimeoutSeconds); err != nil {
-		return err
-	}
-	if c.Pricing.GasSpikeBps == 0 {
-		return errors.New("pricing gas_spike_bps is required")
 	}
 	seen := make(map[uint32]struct{}, len(c.Pricing.Chains))
 	pricingChains := make(map[uint32]PricingChainConfig, len(c.Pricing.Chains))
@@ -1292,6 +1044,286 @@ func validateOptionalTxSubmissionPolicy(prefix, maxFeePerGasWei, maxPriorityFeeP
 	if minNativeBalanceWei != "" {
 		_, err := bigutil.ParsePositiveDecimal(fmt.Sprintf("%s.min_native_balance_wei", prefix), minNativeBalanceWei)
 		return err
+	}
+	return nil
+}
+
+func (cfg *Config) applyDefaults() {
+	if cfg.Metrics.ListenAddress == "" {
+		cfg.Metrics.ListenAddress = ":9090"
+	}
+	if cfg.TxManager.MaxInflightPerSigner == 0 {
+		cfg.TxManager.MaxInflightPerSigner = DefaultMaxInflightPerSigner
+	}
+	if cfg.TxManager.StaleBroadcastReplacementAfterSeconds == 0 {
+		cfg.TxManager.StaleBroadcastReplacementAfterSeconds = defaultTxManagerStaleBroadcastReplacementAfterSeconds
+	}
+	if cfg.Pricing.Enabled {
+		if cfg.Pricing.IntervalSeconds == 0 {
+			cfg.Pricing.IntervalSeconds = 300
+		}
+		if cfg.Pricing.StaleAfterSeconds == 0 {
+			cfg.Pricing.StaleAfterSeconds = 1800
+		}
+		if cfg.Pricing.MaxDeviationBps == 0 {
+			cfg.Pricing.MaxDeviationBps = 500
+		}
+		if cfg.Pricing.MinUpdateDeviationBps == 0 {
+			cfg.Pricing.MinUpdateDeviationBps = 50
+		}
+		if cfg.Pricing.HeartbeatSeconds == 0 {
+			cfg.Pricing.HeartbeatSeconds = cfg.Pricing.StaleAfterSeconds / 2
+		}
+		if cfg.Pricing.SourceRequestTimeoutSeconds == 0 {
+			cfg.Pricing.SourceRequestTimeoutSeconds = 10
+		}
+		if cfg.Pricing.GasSpikeBps == 0 {
+			cfg.Pricing.GasSpikeBps = 1_000
+		}
+	}
+	for idx := range cfg.Chains {
+		if cfg.Chains[idx].IndexerQueryBlockRange == 0 {
+			cfg.Chains[idx].IndexerQueryBlockRange = 500
+		}
+		if cfg.Chains[idx].IndexerBackfillBlockRange == 0 {
+			cfg.Chains[idx].IndexerBackfillBlockRange = defaultIndexerBackfillBlockRange
+		}
+		if cfg.Chains[idx].IndexerPollIntervalSeconds == 0 {
+			cfg.Chains[idx].IndexerPollIntervalSeconds = defaultIndexerPollIntervalSeconds
+		}
+	}
+	for idx := range cfg.Pathways {
+		if cfg.Pathways[idx].DVN.Mode == "" {
+			cfg.Pathways[idx].DVN.Mode = DVNModeShadow
+		}
+	}
+}
+
+func (c Config) validateChain(chain ChainConfig, signers map[string]struct{}) error {
+	if chain.EID == 0 {
+		return errors.New("chain eid is required")
+	}
+	if chain.Name == "" {
+		return fmt.Errorf("chain %d name is required", chain.EID)
+	}
+	switch chain.Family {
+	case ChainFamilyEVM:
+	case "":
+		return fmt.Errorf("chain %s family is required", chain.Name)
+	default:
+		return fmt.Errorf("chain %s family must be %q in phase 1", chain.Name, ChainFamilyEVM)
+	}
+	if chain.ChainID <= 0 {
+		return fmt.Errorf("chain %s chain_id is required", chain.Name)
+	}
+	if chain.EndpointAddress.IsZero() {
+		return fmt.Errorf("chain %s endpoint_address is required", chain.Name)
+	}
+	if c.ExecutorEnabled() {
+		if err := validateExecutorTxRole(chain.Name, chain.TxRoles.Executor, signers); err != nil {
+			return err
+		}
+	}
+	if c.DVNEnabled() {
+		if err := validateOptionalDVNTxRole(chain.Name, chain.TxRoles.DVN); err != nil {
+			return err
+		}
+	}
+	if chain.Confirmations == 0 {
+		return fmt.Errorf("chain %s confirmations is required", chain.Name)
+	}
+	if chain.IndexerQueryBlockRange == 0 {
+		return fmt.Errorf("chain %s indexer_query_block_range is required", chain.Name)
+	}
+	if chain.IndexerBackfillBlockRange == 0 {
+		return fmt.Errorf("chain %s indexer_backfill_block_range is required", chain.Name)
+	}
+	if chain.IndexerPollIntervalSeconds == 0 {
+		return fmt.Errorf("chain %s indexer_poll_interval_seconds is required", chain.Name)
+	}
+	if err := validateDurationSeconds(
+		fmt.Sprintf("chain %s indexer_poll_interval_seconds", chain.Name),
+		chain.IndexerPollIntervalSeconds,
+	); err != nil {
+		return err
+	}
+	if len(chain.RPCURLs) == 0 {
+		return fmt.Errorf("chain %s must configure at least one rpc url", chain.Name)
+	}
+	for i, rpcURL := range chain.RPCURLs {
+		if err := ValidateRPCURL(rpcURL); err != nil {
+			return fmt.Errorf("chain %s rpc_urls[%d] is invalid: %w", chain.Name, i, err)
+		}
+	}
+	return nil
+}
+
+func (c Config) validatePathway(pathway PathwayConfig, seen map[uint32]struct{}, activeDVNDestinations map[uint32]struct{}) error {
+	if _, ok := seen[pathway.SrcEID]; !ok {
+		return fmt.Errorf("pathway source eid %d is not configured", pathway.SrcEID)
+	}
+	if _, ok := seen[pathway.DstEID]; !ok {
+		return fmt.Errorf("pathway destination eid %d is not configured", pathway.DstEID)
+	}
+	if pathway.SrcEID == pathway.DstEID {
+		return fmt.Errorf("pathway %d -> %d must cross chains", pathway.SrcEID, pathway.DstEID)
+	}
+	if pathway.SendULNConfirmations == 0 {
+		return fmt.Errorf("pathway %d -> %d send_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
+	}
+	if pathway.ReceiveULNConfirmations == 0 {
+		return fmt.Errorf("pathway %d -> %d receive_uln_confirmations is required", pathway.SrcEID, pathway.DstEID)
+	}
+	// SendUln302 assigns the send-side value to every DVN job while
+	// ReceiveUln302 enforces the receive-side threshold. A lower assignment
+	// value would make every packet on the pathway unverifiable.
+	if pathway.SendULNConfirmations < pathway.ReceiveULNConfirmations {
+		return fmt.Errorf(
+			"pathway %d -> %d send uln confirmations %d are below receive uln confirmations %d",
+			pathway.SrcEID, pathway.DstEID,
+			pathway.SendULNConfirmations, pathway.ReceiveULNConfirmations,
+		)
+	}
+	for label, value := range map[string]EVMAddress{
+		"src_oapp":                     pathway.SrcOApp,
+		"dst_oapp":                     pathway.DstOApp,
+		"send_lib":                     pathway.SendLib,
+		"receive_lib":                  pathway.ReceiveLib,
+		"source_workers.open_executor": pathway.SourceWorkers.OpenExecutor,
+		"source_workers.open_dvn":      pathway.SourceWorkers.OpenDVN,
+		"source_workers.price_feed":    pathway.SourceWorkers.PriceFeed,
+		"destination_workers.open_dvn": pathway.DestinationWorkers.OpenDVN,
+	} {
+		if value.IsZero() {
+			return fmt.Errorf("pathway %d -> %d %s is required", pathway.SrcEID, pathway.DstEID, label)
+		}
+	}
+	if err := validateRequiredDVNSet(
+		fmt.Sprintf("pathway %d -> %d send_required_dvns", pathway.SrcEID, pathway.DstEID),
+		pathway.SendRequiredDVNs, pathway.SourceWorkers.OpenDVN,
+	); err != nil {
+		return err
+	}
+	if err := validateRequiredDVNSet(
+		fmt.Sprintf("pathway %d -> %d receive_required_dvns", pathway.SrcEID, pathway.DstEID),
+		pathway.ReceiveRequiredDVNs, pathway.DestinationWorkers.OpenDVN,
+	); err != nil {
+		return err
+	}
+	switch pathway.DVN.Mode {
+	case DVNModeShadow:
+	case DVNModeActive:
+		activeDVNDestinations[pathway.DstEID] = struct{}{}
+	default:
+		return fmt.Errorf("pathway %d -> %d unsupported dvn mode %q", pathway.SrcEID, pathway.DstEID, pathway.DVN.Mode)
+	}
+	if pathway.MaxMessageSize == 0 {
+		return fmt.Errorf("pathway %d -> %d max_message_size is required", pathway.SrcEID, pathway.DstEID)
+	}
+	if pathway.MaxMessageSize > math.MaxInt32 {
+		return fmt.Errorf("pathway %d -> %d max_message_size exceeds database integer limit", pathway.SrcEID, pathway.DstEID)
+	}
+	if pathway.MaxLzReceiveGas == 0 {
+		return fmt.Errorf("pathway %d -> %d max_lz_receive_gas is required", pathway.SrcEID, pathway.DstEID)
+	}
+	if pathway.MinLzReceiveGas > pathway.MaxLzReceiveGas {
+		return fmt.Errorf("pathway %d -> %d min_lz_receive_gas exceeds max_lz_receive_gas", pathway.SrcEID, pathway.DstEID)
+	}
+	if c.Pricing.Enabled {
+		if err := validatePathwayPricing(pathway); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateSigner(signer SignerConfig, id string) error {
+	switch signer.Type {
+	case "keystore":
+		if signer.Keystore.Path == "" {
+			return fmt.Errorf("signer %s keystore.path is required", id)
+		}
+		sources := 0
+		for _, value := range []string{signer.Keystore.PasswordEnv, signer.Keystore.PasswordFile} {
+			if value != "" {
+				sources++
+			}
+		}
+		if sources != 1 {
+			return fmt.Errorf("signer %s must configure exactly one keystore password source", id)
+		}
+	case "kms":
+		if signer.KMS.Address.IsZero() {
+			return fmt.Errorf("signer %s kms.address is required", id)
+		}
+		if signer.KMS.Address.Hex() != id {
+			return fmt.Errorf("signer %s kms.address must match id", id)
+		}
+		if signer.KMS.KeyID == "" {
+			return fmt.Errorf("signer %s kms.key_id is required", id)
+		}
+		if signer.KMS.Region == "" {
+			return fmt.Errorf("signer %s kms.region is required", id)
+		}
+	default:
+		return fmt.Errorf("unsupported signer type %q", signer.Type)
+	}
+	return nil
+}
+
+func (c Config) validatePricingTiming() error {
+	if c.Pricing.IntervalSeconds == 0 {
+		return errors.New("pricing interval_seconds is required")
+	}
+	if err := validateDurationSeconds("pricing interval_seconds", c.Pricing.IntervalSeconds); err != nil {
+		return err
+	}
+	if c.Pricing.StaleAfterSeconds == 0 {
+		return errors.New("pricing stale_after_seconds is required")
+	}
+	if err := validateDurationSeconds("pricing stale_after_seconds", c.Pricing.StaleAfterSeconds); err != nil {
+		return err
+	}
+	if c.Pricing.StaleAfterSeconds > MaxPriceSnapshotStaleAfterSeconds {
+		return fmt.Errorf("pricing stale_after_seconds exceeds OpenPriceFeed maximum %d", MaxPriceSnapshotStaleAfterSeconds)
+	}
+	if c.Pricing.MaxDeviationBps == 0 {
+		return errors.New("pricing max_deviation_bps is required")
+	}
+	if c.Pricing.MinUpdateDeviationBps == 0 {
+		return errors.New("pricing min_update_deviation_bps is required")
+	}
+	if c.Pricing.MinUpdateDeviationBps > 10_000 {
+		return errors.New("pricing min_update_deviation_bps exceeds 10000")
+	}
+	if c.Pricing.HeartbeatSeconds == 0 {
+		return errors.New("pricing heartbeat_seconds is required")
+	}
+	if err := validateDurationSeconds("pricing heartbeat_seconds", c.Pricing.HeartbeatSeconds); err != nil {
+		return err
+	}
+	if c.Pricing.HeartbeatSeconds >= c.Pricing.StaleAfterSeconds {
+		return errors.New("pricing heartbeat_seconds must be less than stale_after_seconds")
+	}
+	if c.Pricing.IntervalSeconds >= c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds {
+		return errors.New("pricing heartbeat_seconds plus interval_seconds must be less than stale_after_seconds")
+	}
+	// The margin left after the worst healthy write schedule is the budget for
+	// enqueue, signing, and confirmation. Readiness escalates a pending pricing
+	// transaction after the fixed stall threshold, so the margin must be at
+	// least that threshold or a stuck write could let the snapshot expire while
+	// readiness stays green.
+	if c.Pricing.StaleAfterSeconds-c.Pricing.HeartbeatSeconds-c.Pricing.IntervalSeconds < MinPricingFreshnessMarginSeconds {
+		return fmt.Errorf("pricing stale_after_seconds must exceed heartbeat_seconds plus interval_seconds by at least %d seconds", MinPricingFreshnessMarginSeconds)
+	}
+	if c.Pricing.SourceRequestTimeoutSeconds == 0 {
+		return errors.New("pricing source_request_timeout_seconds is required")
+	}
+	if err := validateDurationSeconds("pricing source_request_timeout_seconds", c.Pricing.SourceRequestTimeoutSeconds); err != nil {
+		return err
+	}
+	if c.Pricing.GasSpikeBps == 0 {
+		return errors.New("pricing gas_spike_bps is required")
 	}
 	return nil
 }
