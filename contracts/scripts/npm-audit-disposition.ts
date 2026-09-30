@@ -23,6 +23,7 @@ const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
   ["@openzeppelin/contracts", "high"],
   ["@openzeppelin/contracts-upgradeable", "high"],
   ["undici", "high"],
+  ["@actions/http-client", "moderate"]
 ]);
 
 function runAudit(): AuditReport {
