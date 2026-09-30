@@ -23,9 +23,27 @@ make security-check
 
 - zero critical findings
 - every high or moderate finding to be present in the recorded disposition set
+- each recorded disposition to retain its expected severity
+- every recorded disposition to match a current high or moderate finding
+
+When a finding disappears or drops to low/info, the gate fails and names the
+stale entry. Remove that entry from `allowedOpenFindings` in
+[the checker](../../contracts/scripts/npm-audit-disposition.ts) and update this
+disposition record in the same change. Dependency upgrades must not leave unused
+exceptions behind.
 
 `make security-check` runs the security review document gate, npm audit
 disposition gate, and `govulncheck`.
+
+The 2026-09-30 audit after the undici override has five high, zero moderate,
+zero critical, and 24 low findings (29 total), down from six high, one moderate,
+and 24 low (31 total). All five remaining dispositions match current findings.
+
+The `undici` override pins both Hardhat dependency paths to `7.30.0`, replacing
+`@actions/http-client`'s nested `5.29.0` with the version already used by
+Hardhat utilities. The lockfile removes that nested copy and its unused
+`@fastify/busboy` dependency. The `undici` and inherited `@actions/http-client`
+findings are resolved; their audit exceptions have been removed.
 
 ## ABI source migration audit evidence
 
@@ -62,8 +80,9 @@ snapshot is superseded; it is not the migration baseline.
 
 The findings for `@chainlink/contracts`, `@arbitrum/nitro-contracts`,
 `@offchainlabs/upgrade-executor`, `tmp`, and `patch-package` disappeared with
-this removal. The high/moderate disposition map now contains only the five
-remaining high findings below. Obsolete high/moderate exceptions for retained
+this removal. At the migration snapshot, the high/moderate disposition map
+contained only the five LayerZero/CCIP-related high findings below.
+Obsolete high/moderate exceptions for retained
 Hardhat/Ignition tooling and other packages were also removed based on the
 current audit; no exemption was added or broadened. Hardhat/Ignition packages
 with remaining low findings are still recorded below.
@@ -80,8 +99,11 @@ with remaining low findings are still recorded below.
 
 ## Remaining Moderate and Low Findings
 
-There are no moderate package-level findings in this snapshot. The 24 low
-findings remain in the Ethers v5 / elliptic dependency graph, Optimism contracts
+There are no current moderate findings or dispositions. The inherited
+`@actions/http-client` finding was resolved by the undici override.
+
+The ABI migration snapshot had no moderate package-level findings. Its 24 low
+findings were in the Ethers v5 / elliptic dependency graph, Optimism contracts
 and core-utils, LayerZero protocol/v1 packages, hardhat-deploy/zksync-ethers,
 and retained Hardhat Ignition, Ignition-Viem, toolbox, and verify packages.
 They are not represented as high/moderate exceptions. This document grants no

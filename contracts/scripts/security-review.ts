@@ -43,6 +43,8 @@ const requiredDocs: RequiredSecurityDoc[] = [
       "make security-check",
       "zero critical findings",
       "every high or moderate finding to be present in the recorded disposition set",
+      "each recorded disposition to retain its expected severity",
+      "every recorded disposition to match a current high or moderate finding",
       "## ABI source migration audit evidence",
       "Generation and checks verify saved-file SHA-256 locally",
       "LayerZero's `@chainlink/contracts-ccip` remains installed.",

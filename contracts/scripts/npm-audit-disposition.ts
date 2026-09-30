@@ -22,8 +22,6 @@ const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
   ["@layerzerolabs/lz-evm-oapp-v2", "high"],
   ["@openzeppelin/contracts", "high"],
   ["@openzeppelin/contracts-upgradeable", "high"],
-  ["undici", "high"],
-  ["@actions/http-client", "moderate"]
 ]);
 
 function runAudit(): AuditReport {
@@ -42,8 +40,10 @@ function runAudit(): AuditReport {
   }
 }
 
-export function checkNPMAuditDisposition(): void {
-  const report = runAudit();
+export function validateNPMAuditDisposition(report: AuditReport): {
+  disposedFindings: number;
+  total: number;
+} {
   const counts = report.metadata?.vulnerabilities;
   if (!counts || !report.vulnerabilities) {
     throw new Error(
@@ -58,6 +58,7 @@ export function checkNPMAuditDisposition(): void {
   }
 
   const errors: string[] = [];
+  const openModerateOrHigh = new Set<string>();
   for (const vulnerability of Object.values(report.vulnerabilities)) {
     if (
       vulnerability.severity !== "high" &&
@@ -65,6 +66,7 @@ export function checkNPMAuditDisposition(): void {
     ) {
       continue;
     }
+    openModerateOrHigh.add(vulnerability.name);
     const expectedSeverity = allowedOpenFindings.get(vulnerability.name);
     if (!expectedSeverity) {
       errors.push(
@@ -79,19 +81,27 @@ export function checkNPMAuditDisposition(): void {
     }
   }
 
+  for (const name of allowedOpenFindings.keys()) {
+    if (!openModerateOrHigh.has(name)) {
+      errors.push(
+        `${name}: no high or moderate finding remains; remove from allowedOpenFindings`
+      );
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `npm audit disposition check failed:\n${errors.join("\n")}`
     );
   }
 
-  const openModerateOrHigh = Object.values(report.vulnerabilities).filter(
-    (vulnerability) =>
-      vulnerability.severity === "high" || vulnerability.severity === "moderate"
-  );
+  return { disposedFindings: openModerateOrHigh.size, total: counts.total ?? 0 };
+}
+
+export function checkNPMAuditDisposition(): void {
+  const { disposedFindings, total } = validateNPMAuditDisposition(runAudit());
 
   console.log(
-    `npm audit disposition ok: critical=0, disposed high/moderate findings=${openModerateOrHigh.length
-    }, total=${counts.total ?? 0}`
+    `npm audit disposition ok: critical=0, disposed high/moderate findings=${disposedFindings}, total=${total}`
   );
 }

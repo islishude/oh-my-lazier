@@ -45,7 +45,9 @@ rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|wit
   credentials.
 - `npm run check:npm-audit-disposition` requires zero critical npm findings and
   fails if any high or moderate finding appears outside the recorded
-  disposition set.
+  disposition set, an accepted finding changes severity, or a recorded
+  disposition no longer matches a high or moderate finding. Resolved or
+  low/info-only entries must be removed from `allowedOpenFindings`.
 - `govulncheck` currently reports no vulnerabilities in called Go code.
   The 2026-09-21 scan also reports 1 vulnerability in imported packages and 4
   in required modules that the code does not appear to call.
