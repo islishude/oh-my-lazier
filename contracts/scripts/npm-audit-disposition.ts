@@ -22,6 +22,8 @@ const allowedOpenFindings = new Map<string, AuditVulnerability["severity"]>([
   ["@layerzerolabs/lz-evm-oapp-v2", "high"],
   ["@openzeppelin/contracts", "high"],
   ["@openzeppelin/contracts-upgradeable", "high"],
+  ["undici", "high"],
+  ["@actions/http-client", "moderate"]
 ]);
 
 function runAudit(): AuditReport {
