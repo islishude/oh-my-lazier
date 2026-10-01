@@ -154,6 +154,24 @@ func TestTxTargetsSelectsTargetsForEnabledRoles(t *testing.T) {
 			},
 			wantPurposes: map[uint32][]string{},
 		},
+		{
+			name: "disabled roles do not load unused signer",
+			mutate: func(cfg *config.Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Services.DVN.Enabled = new(false)
+				cfg.Signers[0].Keystore.Path = filepath.Join(t.TempDir(), "missing-keystore")
+			},
+			wantPurposes: map[uint32][]string{},
+		},
+		{
+			name: "shadow dvn does not load unused signer",
+			mutate: func(cfg *config.Config) {
+				cfg.Services.Executor.Enabled = new(false)
+				cfg.Pathways[0].DVN.Mode = config.DVNModeShadow
+				cfg.Signers[0].Keystore.Path = filepath.Join(t.TempDir(), "missing-keystore")
+			},
+			wantPurposes: map[uint32][]string{},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

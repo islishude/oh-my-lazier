@@ -68,25 +68,15 @@ func decodeDVNSourceTxLogsForEndpoint(logs []gethtypes.Log, endpoint common.Addr
 			if err != nil {
 				return nil, nil, err
 			}
-			feeIndex := latestUnmatchedDVNFee(feeEvents, packet.SendLib)
-			if feeIndex < 0 {
-				if hasUnmatchedDVNAssignmentForPacket(assignments, packet) {
-					return nil, nil, errors.New("source tx PacketSent missing matching DVNFeePaid log")
-				}
-				continue
-			}
-			assignmentIndex, err := matchingDVNAssignment(assignments, packet, feeEvents[feeIndex].Event)
+			record, gap, err := matchDVNSourcePacket(packet, feeEvents, assignments)
 			if err != nil {
 				return nil, nil, err
 			}
-			feeEvents[feeIndex].Matched = true
-			if assignmentIndex >= 0 {
-				assignments[assignmentIndex].Matched = true
-				record := dvnRecordFromMatchedLogs(packet, assignments[assignmentIndex])
-				records = append(records, record)
-			} else {
-				fee := feeEvents[feeIndex].Event
-				gaps = append(gaps, dvnSourcePacketGap{Packet: packet, Fee: &fee})
+			if record != nil {
+				records = append(records, *record)
+			}
+			if gap != nil {
+				gaps = append(gaps, *gap)
 			}
 		}
 	}
@@ -191,4 +181,27 @@ func dvnFeeMatches(event lzabi.DVNFeePaid, expectedDVN common.Address, expectedF
 		}
 	}
 	return false
+}
+
+func matchDVNSourcePacket(packet db.PacketRecord, feeEvents []dvnFeeEvent, assignments []dvnAssignmentEvent) (*DVNSourceTxRecords, *dvnSourcePacketGap, error) {
+	feeIndex := latestUnmatchedDVNFee(feeEvents, packet.SendLib)
+	if feeIndex < 0 {
+		if hasUnmatchedDVNAssignmentForPacket(assignments, packet) {
+			return nil, nil, errors.New("source tx PacketSent missing matching DVNFeePaid log")
+		}
+		return nil, nil, nil
+	}
+	assignmentIndex, err := matchingDVNAssignment(assignments, packet, feeEvents[feeIndex].Event)
+	if err != nil {
+		return nil, nil, err
+	}
+	feeEvents[feeIndex].Matched = true
+	if assignmentIndex >= 0 {
+		assignments[assignmentIndex].Matched = true
+		record := dvnRecordFromMatchedLogs(packet, assignments[assignmentIndex])
+		return &record, nil, nil
+	} else {
+		fee := feeEvents[feeIndex].Event
+		return nil, &dvnSourcePacketGap{Packet: packet, Fee: &fee}, nil
+	}
 }

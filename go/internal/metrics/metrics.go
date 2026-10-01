@@ -631,36 +631,7 @@ func renderRuntimeMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
 	for _, stat := range snapshot.PricingSnapshots {
 		fmt.Fprintf(output, "laz_pricing_snapshot_time_to_stale_seconds{src_eid=%q,dst_eid=%q,src_chain_name=%s,dst_chain_name=%s,price_feed=%s} %.0f\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(chainNames[stat.SrcEID]), label(chainNames[stat.DstEID]), label(stat.PriceFeed), stat.TimeToStaleSeconds)
 	}
-	output.WriteString("# HELP laz_rpc_provider_status RPC provider quorum head classification (1 for the current status).\n")
-	output.WriteString("# TYPE laz_rpc_provider_status gauge\n")
-	for _, stat := range snapshot.RPCProviders {
-		fmt.Fprintf(output, "laz_rpc_provider_status{chain_eid=%q,chain_name=%s,provider=%s,status=%s} 1\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), label(stat.Status))
-	}
-	output.WriteString("# HELP laz_rpc_provider_state_conflict Whether the provider's last comparable state read disagreed with the state-read quorum (sticky until it agrees again).\n")
-	output.WriteString("# TYPE laz_rpc_provider_state_conflict gauge\n")
-	for _, stat := range snapshot.RPCProviders {
-		fmt.Fprintf(output, "laz_rpc_provider_state_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.StateConflict))
-	}
-	output.WriteString("# HELP laz_rpc_provider_log_conflict Whether the provider's last log window disagreed with the log quorum (sticky until it agrees again).\n")
-	output.WriteString("# TYPE laz_rpc_provider_log_conflict gauge\n")
-	for _, stat := range snapshot.RPCProviders {
-		fmt.Fprintf(output, "laz_rpc_provider_log_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.LogConflict))
-	}
-	output.WriteString("# HELP laz_rpc_provider_safe_conflict Whether the provider's safe-block answer disagreed with the safe-block quorum (sticky until it agrees again).\n")
-	output.WriteString("# TYPE laz_rpc_provider_safe_conflict gauge\n")
-	for _, stat := range snapshot.RPCProviders {
-		fmt.Fprintf(output, "laz_rpc_provider_safe_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.SafeConflict))
-	}
-	output.WriteString("# HELP laz_worker_loop_retries_total Worker loop restart attempts after returned errors.\n")
-	output.WriteString("# TYPE laz_worker_loop_retries_total counter\n")
-	for _, stat := range snapshot.LoopRetries {
-		fmt.Fprintf(output, "laz_worker_loop_retries_total{name=%s} %d\n", label(stat.Name), stat.Retries)
-	}
-	output.WriteString("# HELP laz_worker_loop_last_retry_timestamp_seconds Unix timestamp for the most recent worker loop retry.\n")
-	output.WriteString("# TYPE laz_worker_loop_last_retry_timestamp_seconds gauge\n")
-	for _, stat := range snapshot.LoopRetries {
-		fmt.Fprintf(output, "laz_worker_loop_last_retry_timestamp_seconds{name=%s} %d\n", label(stat.Name), stat.LastRetryUnix)
-	}
+	renderRPCAndLoopMetrics(output, snapshot)
 	output.WriteString("# HELP laz_indexer_poll_success Whether the most recent indexer poll succeeded.\n")
 	output.WriteString("# TYPE laz_indexer_poll_success gauge\n")
 	for _, stat := range snapshot.Indexers {
@@ -822,5 +793,39 @@ func renderRecoveryMetrics(output *strings.Builder, stats []db.RecoveryStat, cha
 			}
 			fmt.Fprintf(output, "laz_tx_recovery_%s{chain_eid=%q,chain_name=%s,signer=%s%s} %g\n", name, uint32Label(r.ChainEID), label(chainNames[r.ChainEID]), label(r.SignerID), extra, values[name])
 		}
+	}
+}
+
+func renderRPCAndLoopMetrics(output *strings.Builder, snapshot RuntimeSnapshot) {
+	chainNames := snapshot.ChainNames
+	output.WriteString("# HELP laz_rpc_provider_status RPC provider quorum head classification (1 for the current status).\n")
+	output.WriteString("# TYPE laz_rpc_provider_status gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_status{chain_eid=%q,chain_name=%s,provider=%s,status=%s} 1\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), label(stat.Status))
+	}
+	output.WriteString("# HELP laz_rpc_provider_state_conflict Whether the provider's last comparable state read disagreed with the state-read quorum (sticky until it agrees again).\n")
+	output.WriteString("# TYPE laz_rpc_provider_state_conflict gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_state_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.StateConflict))
+	}
+	output.WriteString("# HELP laz_rpc_provider_log_conflict Whether the provider's last log window disagreed with the log quorum (sticky until it agrees again).\n")
+	output.WriteString("# TYPE laz_rpc_provider_log_conflict gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_log_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.LogConflict))
+	}
+	output.WriteString("# HELP laz_rpc_provider_safe_conflict Whether the provider's safe-block answer disagreed with the safe-block quorum (sticky until it agrees again).\n")
+	output.WriteString("# TYPE laz_rpc_provider_safe_conflict gauge\n")
+	for _, stat := range snapshot.RPCProviders {
+		fmt.Fprintf(output, "laz_rpc_provider_safe_conflict{chain_eid=%q,chain_name=%s,provider=%s} %d\n", uint32Label(stat.ChainEID), label(chainNames[stat.ChainEID]), label(stat.ProviderID), boolGauge(stat.SafeConflict))
+	}
+	output.WriteString("# HELP laz_worker_loop_retries_total Worker loop restart attempts after returned errors.\n")
+	output.WriteString("# TYPE laz_worker_loop_retries_total counter\n")
+	for _, stat := range snapshot.LoopRetries {
+		fmt.Fprintf(output, "laz_worker_loop_retries_total{name=%s} %d\n", label(stat.Name), stat.Retries)
+	}
+	output.WriteString("# HELP laz_worker_loop_last_retry_timestamp_seconds Unix timestamp for the most recent worker loop retry.\n")
+	output.WriteString("# TYPE laz_worker_loop_last_retry_timestamp_seconds gauge\n")
+	for _, stat := range snapshot.LoopRetries {
+		fmt.Fprintf(output, "laz_worker_loop_last_retry_timestamp_seconds{name=%s} %d\n", label(stat.Name), stat.LastRetryUnix)
 	}
 }

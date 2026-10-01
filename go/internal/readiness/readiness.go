@@ -84,14 +84,7 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			})
 		}
 	}
-	for _, r := range snapshot.Recovery {
-		if _, ok := activeChains[r.ChainEID]; !ok {
-			continue
-		}
-		if r.Inflight > 0 && (r.Reason == "replacement_exhausted" || (r.Reason != "" && r.BlockedAge >= 900) || r.NonceStallAge >= 900) {
-			issues = append(issues, Issue{Code: "tx_recovery_stalled", Message: fmt.Sprintf("chain %d signer %s nonce %d recovery stalled: reason=%s blocked=%.0fs nonce_stall=%.0fs", r.ChainEID, r.SignerID, r.HeadNonce, r.Reason, r.BlockedAge, r.NonceStallAge)})
-		}
-	}
+	issues = append(issues, recoveryIssues(snapshot, activeChains)...)
 	for _, pathway := range snapshot.Pathways {
 		if !pathway.Enabled {
 			continue
@@ -117,6 +110,53 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			})
 		}
 	}
+	issues = append(issues, failedOutboxIssues(snapshot, activeChains)...)
+	issues = append(issues, heldOutboxIssues(snapshot, activeChains)...)
+	issues = append(issues, pendingOutboxIssues(snapshot, activeChains)...)
+	issues = append(issues, packetIssues(snapshot, activeChains)...)
+	issues = append(issues, jobIssues(snapshot, services)...)
+	issues = append(issues, cursorIssues(snapshot, activeChains, requiredCursors)...)
+	return Report{Ready: len(issues) == 0, Issues: issues, Stats: snapshot}
+}
+
+func requireCursor(required map[uint32]map[string]struct{}, chainEID uint32, stream string) {
+	if required[chainEID] == nil {
+		required[chainEID] = make(map[string]struct{})
+	}
+	required[chainEID][stream] = struct{}{}
+}
+
+// aggregateJobStatuses keeps readiness issues at their process-wide granularity.
+func aggregateJobStatuses(stats []db.JobStatusStat) []db.JobStatusStat {
+	var totals []db.JobStatusStat
+	indices := make(map[string]int)
+	for _, stat := range stats {
+		index, ok := indices[stat.Status]
+		if !ok {
+			index = len(totals)
+			indices[stat.Status] = index
+			totals = append(totals, db.JobStatusStat{Status: stat.Status})
+		}
+		totals[index].Count += stat.Count
+	}
+	return totals
+}
+
+func recoveryIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}) []Issue {
+	var issues []Issue
+	for _, r := range snapshot.Recovery {
+		if _, ok := activeChains[r.ChainEID]; !ok {
+			continue
+		}
+		if r.Inflight > 0 && (r.Reason == "replacement_exhausted" || (r.Reason != "" && r.BlockedAge >= 900) || r.NonceStallAge >= 900) {
+			issues = append(issues, Issue{Code: "tx_recovery_stalled", Message: fmt.Sprintf("chain %d signer %s nonce %d recovery stalled: reason=%s blocked=%.0fs nonce_stall=%.0fs", r.ChainEID, r.SignerID, r.HeadNonce, r.Reason, r.BlockedAge, r.NonceStallAge)})
+		}
+	}
+	return issues
+}
+
+func failedOutboxIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}) []Issue {
+	var issues []Issue
 	for _, outbox := range snapshot.TxOutbox {
 		if outbox.Status != db.TxStatusFailed || outbox.Count == 0 {
 			continue
@@ -132,6 +172,11 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			Message: fmt.Sprintf("chain %d has %d exhausted failed tx_outbox rows", outbox.ChainEID, outbox.Count),
 		})
 	}
+	return issues
+}
+
+func heldOutboxIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}) []Issue {
+	var issues []Issue
 	for _, held := range snapshot.TxOutboxHeld {
 		if held.Count == 0 {
 			continue
@@ -187,6 +232,11 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			}
 		}
 	}
+	return issues
+}
+
+func pendingOutboxIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}) []Issue {
+	var issues []Issue
 	for _, orphaned := range snapshot.TxOutboxOrphaned {
 		if orphaned.Count == 0 {
 			continue
@@ -221,6 +271,11 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			})
 		}
 	}
+	return issues
+}
+
+func packetIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}) []Issue {
+	var issues []Issue
 	for _, packet := range snapshot.Packets {
 		if packet.Status != string(packets.ExecutorManualReview) || packet.Count == 0 {
 			continue
@@ -236,6 +291,11 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			Message: fmt.Sprintf("pathway %d -> %d has %d packets requiring manual review", packet.SrcEID, packet.DstEID, packet.Count),
 		})
 	}
+	return issues
+}
+
+func jobIssues(snapshot db.StatsSnapshot, services Services) []Issue {
+	var issues []Issue
 	if services.ExecutorEnabled {
 		for _, job := range aggregateJobStatuses(snapshot.ExecutorJobs) {
 			if job.Count == 0 {
@@ -279,6 +339,11 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			}
 		}
 	}
+	return issues
+}
+
+func cursorIssues(snapshot db.StatsSnapshot, activeChains map[uint32]struct{}, requiredCursors map[uint32]map[string]struct{}) []Issue {
+	var issues []Issue
 	cursorProgress := make(map[uint32]map[string]uint64)
 	for _, cursor := range snapshot.IndexerCursors {
 		if _, ok := activeChains[cursor.ChainEID]; !ok {
@@ -307,28 +372,5 @@ func EvaluateWithServices(snapshot db.StatsSnapshot, services Services) Report {
 			}
 		}
 	}
-	return Report{Ready: len(issues) == 0, Issues: issues, Stats: snapshot}
-}
-
-func requireCursor(required map[uint32]map[string]struct{}, chainEID uint32, stream string) {
-	if required[chainEID] == nil {
-		required[chainEID] = make(map[string]struct{})
-	}
-	required[chainEID][stream] = struct{}{}
-}
-
-// aggregateJobStatuses keeps readiness issues at their process-wide granularity.
-func aggregateJobStatuses(stats []db.JobStatusStat) []db.JobStatusStat {
-	var totals []db.JobStatusStat
-	indices := make(map[string]int)
-	for _, stat := range stats {
-		index, ok := indices[stat.Status]
-		if !ok {
-			index = len(totals)
-			indices[stat.Status] = index
-			totals = append(totals, db.JobStatusStat{Status: stat.Status})
-		}
-		totals[index].Count += stat.Count
-	}
-	return totals
+	return issues
 }

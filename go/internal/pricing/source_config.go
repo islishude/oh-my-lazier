@@ -162,21 +162,7 @@ func ValidateSourceConfigurations(ctx context.Context, sources map[uint32]ChainS
 		return err
 	}
 
-	var configurationErrors []error
-	for index, check := range checks {
-		err := checkErrors[index]
-		if err == nil {
-			continue
-		}
-		if isPriceSourceConfigurationError(err) {
-			configurationErrors = append(configurationErrors, fmt.Errorf("%s source configuration for chain %d: %w", check.source, check.eid, err))
-			continue
-		}
-		notifyPriceSourceFailure(policy, PriceSourceFailure{
-			EID: check.eid, Source: check.source, Role: check.role, Category: priceSourceFailureCategory(err), Err: err,
-		})
-	}
-	return errors.Join(configurationErrors...)
+	return sourceConfigurationErrors(checks, checkErrors, policy)
 }
 
 func validateSourceConfigurationWithRetry(ctx context.Context, validator sourceConfigurationValidator) error {
@@ -227,4 +213,22 @@ func appendSourceConfigurationCheck(checks []sourceConfigurationCheck, eid uint3
 		return checks
 	}
 	return append(checks, sourceConfigurationCheck{eid: eid, source: source.Name, role: role, validate: validator})
+}
+
+func sourceConfigurationErrors(checks []sourceConfigurationCheck, checkErrors []error, policy PriceSelectionPolicy) error {
+	var configurationErrors []error
+	for index, check := range checks {
+		err := checkErrors[index]
+		if err == nil {
+			continue
+		}
+		if isPriceSourceConfigurationError(err) {
+			configurationErrors = append(configurationErrors, fmt.Errorf("%s source configuration for chain %d: %w", check.source, check.eid, err))
+			continue
+		}
+		notifyPriceSourceFailure(policy, PriceSourceFailure{
+			EID: check.eid, Source: check.source, Role: check.role, Category: priceSourceFailureCategory(err), Err: err,
+		})
+	}
+	return errors.Join(configurationErrors...)
 }

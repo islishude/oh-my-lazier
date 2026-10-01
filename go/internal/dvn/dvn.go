@@ -187,58 +187,7 @@ func (w *Worker) ProcessConfirmationsOnce(ctx context.Context) (bool, error) {
 		if len(work) == 0 {
 			continue
 		}
-		item := work[0]
-		if status == string(packets.DVNReorgDetected) {
-			if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
-				return false, err
-			}
-			w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations))
-			return true, nil
-		}
-		if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
-			if isDestinationVerificationConfigMismatch(err) {
-				return w.markDestinationConfigMismatch(ctx, item, status, err)
-			}
-			return w.deferDVNWorkError(ctx, item, status, "destination_config_check_error", err)
-		}
-		headReader := w.head(item.Packet.SrcEID)
-		if headReader == nil {
-			return w.deferDVNWorkError(ctx, item, status, "missing_source_head_reader", fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID))
-		}
-		headResult, err := headReader.CheckHead(ctx)
-		if err != nil {
-			if rpcquorum.IsHeadConflict(err) {
-				if pauseErr := w.store.PauseChain(ctx, item.Packet.SrcEID); pauseErr != nil {
-					return false, pauseErr
-				}
-				w.logger.Warn("dvn head quorum conflict paused chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", err.Error())
-				return true, nil
-			}
-			return w.deferDVNWorkError(ctx, item, status, "source_head_error", err)
-		}
-		if headResult.Number == nil {
-			return w.deferDVNWorkError(ctx, item, status, "missing_source_head_number", fmt.Errorf("source head result for eid %d is missing number", item.Packet.SrcEID))
-		}
-		head := headResult.Number.Uint64()
-		if !hasRequiredConfirmations(item.Packet.SrcBlockNumber, item.Job.ConfirmationsRequired, head) {
-			if status == string(packets.DVNAssigned) {
-				if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
-					return false, err
-				}
-				w.logger.Info("dvn job waiting for source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
-			} else {
-				if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
-					return false, err
-				}
-				w.logger.Debug("skipped dvn confirmations", "reason", "insufficient_confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
-			}
-			return true, nil
-		}
-		if err := w.store.MarkDVNQuorumChecking(ctx, item.Packet.GUID, status); err != nil {
-			return false, err
-		}
-		w.logger.Info("dvn job reached source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNQuorumChecking), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
-		return true, nil
+		return w.processConfirmations(ctx, work[0], status)
 	}
 	return false, nil
 }
@@ -353,56 +302,7 @@ func (w *Worker) ProcessReadyToVerifyOnce(ctx context.Context) (bool, error) {
 		}
 		w.logger.Info("dvn shadow job would verify", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNWouldVerify))
 	case config.DVNModeActive:
-		// One verified anchor covers this check's serial reads: re-establishing
-		// the head quorum per nil-block read would charge a probe deadline per
-		// read when a minority provider black-holes.
-		latestAnchor, err := w.destinationAnchor(ctx, item.Packet.DstEID)
-		if err != nil {
-			return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "destination_anchor_error", err)
-		}
-		complete, err := w.verificationAlreadyComplete(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired, latestAnchor)
-		if err != nil {
-			if isDestinationVerificationConfigMismatch(err) {
-				return w.markDestinationConfigMismatch(ctx, item, string(packets.DVNReadyToVerify), err)
-			}
-			return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
-		}
-		if complete {
-			// Only write the terminal verified state once the on-chain verification
-			// is buried under the destination confirmation depth, so a shallow
-			// third-party verification cannot be reorged out after we stop verifying.
-			confirmed, err := w.verificationConfirmedOnChain(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired)
-			if err != nil {
-				return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
-			}
-			if !confirmed {
-				if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), loopInterval); err != nil {
-					return false, err
-				}
-				w.logger.Debug("deferred dvn verification below confirmation depth", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", string(packets.DVNReadyToVerify))
-				return true, nil
-			}
-			if err := w.store.MarkDVNVerifiedFromChain(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
-				return false, err
-			}
-			w.logger.Info("dvn verification already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerified))
-			return true, nil
-		}
-		request, err := w.buildVerifyTx(item.Packet, pathway, item.Job.ConfirmationsRequired)
-		if err != nil {
-			return false, err
-		}
-		id, err := w.store.EnqueueDVNVerifyTx(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), request, item.Job.QuorumResult)
-		if errors.Is(err, db.ErrTxSendScopeInactive) {
-			// The pathway or chain was paused/disabled between work selection and
-			// this enqueue; the job keeps its status and resumes after unpause.
-			w.logger.Debug("skipped dvn verify tx enqueue", "reason", "send_scope_inactive", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID)
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-		w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerifyTxEnqueued), "tx_outbox_id", id)
+		return w.processActiveVerification(ctx, item, pathway)
 	default:
 		return false, workerloop.Fatal(fmt.Errorf("unsupported dvn mode %q", pathway.DVNMode))
 	}
@@ -1018,4 +918,112 @@ func validateReceiptPacket(expected, actual db.PacketRecord) error {
 		return errors.New("receipt encoded packet does not match stored encoded packet")
 	}
 	return nil
+}
+
+func (w *Worker) processConfirmations(ctx context.Context, item db.DVNWorkItem, status string) (bool, error) {
+	if status == string(packets.DVNReorgDetected) {
+		if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
+			return false, err
+		}
+		w.logger.Warn("dvn job rolled back after source reorg", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations))
+		return true, nil
+	}
+	if err := w.validateActiveDestinationConfig(ctx, item.Packet, item.Job.ConfirmationsRequired); err != nil {
+		if isDestinationVerificationConfigMismatch(err) {
+			return w.markDestinationConfigMismatch(ctx, item, status, err)
+		}
+		return w.deferDVNWorkError(ctx, item, status, "destination_config_check_error", err)
+	}
+	headReader := w.head(item.Packet.SrcEID)
+	if headReader == nil {
+		return w.deferDVNWorkError(ctx, item, status, "missing_source_head_reader", fmt.Errorf("missing source head reader for eid %d", item.Packet.SrcEID))
+	}
+	headResult, err := headReader.CheckHead(ctx)
+	if err != nil {
+		if rpcquorum.IsHeadConflict(err) {
+			if pauseErr := w.store.PauseChain(ctx, item.Packet.SrcEID); pauseErr != nil {
+				return false, pauseErr
+			}
+			w.logger.Warn("dvn head quorum conflict paused chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "error", err.Error())
+			return true, nil
+		}
+		return w.deferDVNWorkError(ctx, item, status, "source_head_error", err)
+	}
+	if headResult.Number == nil {
+		return w.deferDVNWorkError(ctx, item, status, "missing_source_head_number", fmt.Errorf("source head result for eid %d is missing number", item.Packet.SrcEID))
+	}
+	head := headResult.Number.Uint64()
+	if !hasRequiredConfirmations(item.Packet.SrcBlockNumber, item.Job.ConfirmationsRequired, head) {
+		if status == string(packets.DVNAssigned) {
+			if err := w.store.MarkDVNWaitingConfirmations(ctx, item.Packet.GUID, status); err != nil {
+				return false, err
+			}
+			w.logger.Info("dvn job waiting for source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNWaitingConfirmations), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
+		} else {
+			if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, status, loopInterval); err != nil {
+				return false, err
+			}
+			w.logger.Debug("skipped dvn confirmations", "reason", "insufficient_confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", status, "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
+		}
+		return true, nil
+	}
+	if err := w.store.MarkDVNQuorumChecking(ctx, item.Packet.GUID, status); err != nil {
+		return false, err
+	}
+	w.logger.Info("dvn job reached source confirmations", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", status, "to_status", string(packets.DVNQuorumChecking), "src_block_number", item.Packet.SrcBlockNumber, "observed_head_block", head, "confirmations_required", item.Job.ConfirmationsRequired)
+	return true, nil
+}
+
+func (w *Worker) processActiveVerification(ctx context.Context, item db.DVNWorkItem, pathway chain.Pathway) (bool, error) {
+	// One verified anchor covers this check's serial reads: re-establishing
+	// the head quorum per nil-block read would charge a probe deadline per
+	// read when a minority provider black-holes.
+	latestAnchor, err := w.destinationAnchor(ctx, item.Packet.DstEID)
+	if err != nil {
+		return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "destination_anchor_error", err)
+	}
+	complete, err := w.verificationAlreadyComplete(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired, latestAnchor)
+	if err != nil {
+		if isDestinationVerificationConfigMismatch(err) {
+			return w.markDestinationConfigMismatch(ctx, item, string(packets.DVNReadyToVerify), err)
+		}
+		return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
+	}
+	if complete {
+		// Only write the terminal verified state once the on-chain verification
+		// is buried under the destination confirmation depth, so a shallow
+		// third-party verification cannot be reorged out after we stop verifying.
+		confirmed, err := w.verificationConfirmedOnChain(ctx, item.Packet, pathway, item.Job.ConfirmationsRequired)
+		if err != nil {
+			return w.deferDVNWorkError(ctx, item, string(packets.DVNReadyToVerify), "verification_reconcile_error", err)
+		}
+		if !confirmed {
+			if err := w.store.DeferDVNJob(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), loopInterval); err != nil {
+				return false, err
+			}
+			w.logger.Debug("deferred dvn verification below confirmation depth", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "status", string(packets.DVNReadyToVerify))
+			return true, nil
+		}
+		if err := w.store.MarkDVNVerifiedFromChain(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), item.Job.QuorumResult); err != nil {
+			return false, err
+		}
+		w.logger.Info("dvn verification already completed on chain", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerified))
+		return true, nil
+	}
+	request, err := w.buildVerifyTx(item.Packet, pathway, item.Job.ConfirmationsRequired)
+	if err != nil {
+		return false, err
+	}
+	id, err := w.store.EnqueueDVNVerifyTx(ctx, item.Packet.GUID, string(packets.DVNReadyToVerify), string(packets.DVNVerifyTxEnqueued), request, item.Job.QuorumResult)
+	if errors.Is(err, db.ErrTxSendScopeInactive) {
+		// The pathway or chain was paused/disabled between work selection and
+		// this enqueue; the job keeps its status and resumes after unpause.
+		w.logger.Debug("skipped dvn verify tx enqueue", "reason", "send_scope_inactive", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID)
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	w.logger.Info("enqueued dvn verify tx", "guid", item.Packet.GUID, "src_eid", item.Packet.SrcEID, "dst_eid", item.Packet.DstEID, "from_status", string(packets.DVNReadyToVerify), "to_status", string(packets.DVNVerifyTxEnqueued), "tx_outbox_id", id)
+	return true, nil
 }

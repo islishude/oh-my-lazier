@@ -492,38 +492,7 @@ func (c *Client) CheckHead(ctx context.Context) (HeadResult, error) {
 		if best < quorum {
 			continue
 		}
-		for index, hash := range votes {
-			if hash == canonicalHash {
-				statuses[index] = ProviderHealthy
-			} else {
-				statuses[index] = ProviderConflict
-			}
-		}
-		for _, index := range fetchIndices {
-			if _, voted := votes[index]; !voted {
-				statuses[index] = ProviderUnavailable
-			}
-		}
-		for index, tip := range tips {
-			if tip.Cmp(height) < 0 {
-				statuses[index] = ProviderLagging
-			}
-		}
-		if level > 0 {
-			// The vote only reached quorum below the top candidate, so every
-			// tip above the accepted height is a divergent, unverified
-			// descendant — the round proves the chain through this height and
-			// nothing above it. Those providers keep their verified vote, but
-			// they must not stay healthy and serve single-source latest reads
-			// (eth_call, pending nonce, sends) from an arbitrary branch. A
-			// provider ahead of a first-candidate quorum is untouched: that is
-			// ordinary propagation lead, not divergence.
-			for index, tip := range tips {
-				if tip.Cmp(height) > 0 && statuses[index] == ProviderHealthy {
-					statuses[index] = ProviderUnavailable
-				}
-			}
-		}
+		classifyHeadVote(statuses, votes, canonicalHash, fetchIndices, tips, height, level)
 		c.applyProviderStatuses(statuses)
 		c.storeHeadSnapshot(&headSnapshot{number: new(big.Int).Set(height), hash: canonicalHash, tips: tips})
 		var headTime uint64
@@ -1530,11 +1499,6 @@ func (c *Client) TransactionReceiptAt(ctx context.Context, txHash common.Hash, m
 	}
 	quorum := total/2 + 1
 
-	type receiptProbe struct {
-		receipt  *gethtypes.Receipt
-		notFound bool
-		err      error
-	}
 	probes := make([]receiptProbe, total)
 	// A satisfied receipt majority returns immediately and cancels the
 	// stragglers: a hung minority provider must not add a full probe deadline
@@ -1599,33 +1563,7 @@ func (c *Client) TransactionReceiptAt(ctx context.Context, txHash common.Hash, m
 	// majority saying "absent" must beat any minority's fabricated receipts
 	// instead of letting them manufacture a pathway-pausing conflict.
 	if len(votes) == 0 {
-		notFoundQuorumVotes := notFoundTotal
-		if minBlock != nil {
-			snapshot := c.headSnapshotRef()
-			notFoundQuorumVotes = 0
-			for index, probe := range probes {
-				if !probe.notFound {
-					continue
-				}
-				var tip *big.Int
-				if snapshot != nil {
-					tip = snapshot.tips[index]
-				}
-				if tip != nil && tip.Cmp(minBlock) >= 0 {
-					notFoundQuorumVotes++
-				}
-			}
-		}
-		if notFoundQuorumVotes >= quorum {
-			return nil, ethereum.NotFound
-		}
-		if len(transientErrs) > 0 {
-			return nil, errors.Join(transientErrs...)
-		}
-		return nil, &QuorumUnavailableError{
-			ChainName: c.chainName,
-			Details:   []string{fmt.Sprintf("%d of %d configured providers gave a comparable receipt answer, quorum is %d", notFoundQuorumVotes, total, quorum)},
-		}
+		return c.receiptAbsentResult(probes, minBlock, notFoundTotal, total, quorum, transientErrs)
 	}
 	var highestCandidateBlock *big.Int
 	receiptVotes := 0
@@ -1640,20 +1578,7 @@ func (c *Client) TransactionReceiptAt(ctx context.Context, txHash common.Hash, m
 	for _, count := range votes {
 		receiptVotes += count
 	}
-	snapshot := c.headSnapshotRef()
-	unexcusedNotFound := 0
-	for index, probe := range probes {
-		if !probe.notFound {
-			continue
-		}
-		var tip *big.Int
-		if snapshot != nil {
-			tip = snapshot.tips[index]
-		}
-		if highestCandidateBlock != nil && tip != nil && tip.Cmp(highestCandidateBlock) >= 0 {
-			unexcusedNotFound++
-		}
-	}
+	unexcusedNotFound := comparableNotFoundVotes(probes, c.headSnapshotRef(), highestCandidateBlock)
 	if unexcusedNotFound >= quorum {
 		return nil, ethereum.NotFound
 	}
@@ -1863,4 +1788,79 @@ func validateProviderChainIDs(chainName string, expected *big.Int, ids []provide
 		}
 	}
 	return nil
+}
+
+func classifyHeadVote(statuses map[int]ProviderStatus, votes map[int]common.Hash, canonicalHash common.Hash, fetchIndices []int, tips map[int]*big.Int, height *big.Int, level int) {
+	for index, hash := range votes {
+		if hash == canonicalHash {
+			statuses[index] = ProviderHealthy
+		} else {
+			statuses[index] = ProviderConflict
+		}
+	}
+	for _, index := range fetchIndices {
+		if _, voted := votes[index]; !voted {
+			statuses[index] = ProviderUnavailable
+		}
+	}
+	for index, tip := range tips {
+		if tip.Cmp(height) < 0 {
+			statuses[index] = ProviderLagging
+		}
+	}
+	if level > 0 {
+		// The vote only reached quorum below the top candidate, so every
+		// tip above the accepted height is a divergent, unverified
+		// descendant — the round proves the chain through this height and
+		// nothing above it. Those providers keep their verified vote, but
+		// they must not stay healthy and serve single-source latest reads
+		// (eth_call, pending nonce, sends) from an arbitrary branch. A
+		// provider ahead of a first-candidate quorum is untouched: that is
+		// ordinary propagation lead, not divergence.
+		for index, tip := range tips {
+			if tip.Cmp(height) > 0 && statuses[index] == ProviderHealthy {
+				statuses[index] = ProviderUnavailable
+			}
+		}
+	}
+}
+
+type receiptProbe struct {
+	receipt  *gethtypes.Receipt
+	notFound bool
+	err      error
+}
+
+func comparableNotFoundVotes(probes []receiptProbe, snapshot *headSnapshot, highestCandidateBlock *big.Int) int {
+	unexcusedNotFound := 0
+	for index, probe := range probes {
+		if !probe.notFound {
+			continue
+		}
+		var tip *big.Int
+		if snapshot != nil {
+			tip = snapshot.tips[index]
+		}
+		if highestCandidateBlock != nil && tip != nil && tip.Cmp(highestCandidateBlock) >= 0 {
+			unexcusedNotFound++
+		}
+	}
+	return unexcusedNotFound
+}
+
+func (c *Client) receiptAbsentResult(probes []receiptProbe, minBlock *big.Int, notFoundTotal, total, quorum int, transientErrs []error) (*gethtypes.Receipt, error) {
+	notFoundQuorumVotes := notFoundTotal
+	if minBlock != nil {
+		notFoundQuorumVotes = comparableNotFoundVotes(probes, c.headSnapshotRef(), minBlock)
+	}
+	if notFoundQuorumVotes >= quorum {
+		return nil, ethereum.NotFound
+	}
+	if len(transientErrs) > 0 {
+		return nil, errors.Join(transientErrs...)
+	}
+	return nil, &QuorumUnavailableError{
+		ChainName: c.chainName,
+		Details:   []string{fmt.Sprintf("%d of %d configured providers gave a comparable receipt answer, quorum is %d", notFoundQuorumVotes, total, quorum)},
+	}
 }

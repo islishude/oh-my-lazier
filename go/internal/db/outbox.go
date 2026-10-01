@@ -467,70 +467,16 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 
-	// A canceled row was abandoned by the operator, and an externally consumed
-	// nonce can only be re-executed through resolve-external-nonce; requeueing
-	// either in place would try to reuse a consumed nonce.
-	if row.FailureKind == TxFailureCanceled || row.FailureKind == TxFailureNonceConsumedExternally {
-		return 0, fmt.Errorf("outbox tx %d failure kind %s is not retryable", id, row.FailureKind)
-	}
-
-	// A pinned receipt resolution means an attempt of this row mined and its
-	// nonce is consumed. Rows whose failure kind was finalized to NULL (for
-	// example an lzReceive failure whose executor job already advanced or
-	// parked) would otherwise take the requeue-in-place branch below, re-sign
-	// on the consumed nonce, and wedge the signer lane with an attempt the
-	// broadcast claim always refuses. Only the receipt-failed clone branch may
-	// act on such evidence, and it leaves the original row terminal.
-	if receiptOutcome != nil && row.FailureKind != TxFailureReceiptFailed {
-		return 0, fmt.Errorf("outbox tx %d has a pinned receipt resolution and its nonce is consumed; the row cannot be requeued in place", id)
-	}
-
-	// Pricing calldata carries a time-bound market observation: re-signing it
-	// later would write a price whose updatedAt may already be past its own
-	// staleAfter, so nonce-less pricing failures are refused and the bot
-	// rebuilds from a fresh observation. The exception is a failed pricing row
-	// still HOLDING an unconsumed nonce (an upgraded database can carry
-	// historical sign/broadcast failures from before the attempts cutover):
-	// nothing else can fill that nonce — failed rows do not block the
-	// lower-nonce selector, so newer transactions would sign above the gap and
-	// never mine — and the strictly-increasing on-chain timestamp makes a
-	// superseded re-send a harmless skip. The in-place requeue below keeps the
-	// nonce; pinned rows (consumed nonce) were already refused above.
-	// A receipt-failed pricing row is refused too: its nonce was consumed by
-	// the mined attempt, and the clone branch would re-sign the stale
-	// observation on a fresh nonce.
-	if row.Purpose == TxPurposePricingSetPriceSnapshot && (row.Nonce == nil || row.FailureKind == TxFailureReceiptFailed) {
-		return 0, fmt.Errorf("outbox tx %d carries a pricing observation and is not retryable; the price bot rebuilds automatically", id)
+	if err := validateFailedTxRetry(id, row.Purpose, row.FailureKind, row.Nonce, receiptOutcome); err != nil {
+		return 0, err
 	}
 	// The legacy in-place requeue participates in the same per-feed invariant
 	// as the bot's enqueue: under the feed advisory lock, an in-flight snapshot
 	// for the feed refuses the requeue, so two snapshots can never race and the
 	// stale calldata only re-signs to fill the nonce once the feed is idle.
 	if row.Purpose == TxPurposePricingSetPriceSnapshot {
-		if _, err := tx.Exec(ctx,
-			"SELECT pg_advisory_xact_lock($1::integer, hashtext($2)::integer)",
-			int32(row.ChainEID), "pricing_feed:"+common.BytesToAddress(toAddress).Hex(),
-		); err != nil {
+		if err := lockPricingRetryFeed(ctx, tx, id, row.ChainEID, toAddress, rowSignerID, *row.Nonce); err != nil {
 			return 0, err
-		}
-		// A same-signer in-flight row at a HIGHER nonce does not block: it can
-		// never mine before this row's nonce gap is filled, so refusing here
-		// would deadlock both (the pre-round-9 bot could enqueue such a row
-		// before gap rows became feed gates). Everything else — un-nonced
-		// queued rows, lower/equal nonces, other signers' lanes — still
-		// refuses, keeping the one-snapshot-per-feed race closed.
-		var blockingExists bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1 FROM tx_outbox
-				WHERE chain_eid = $1 AND purpose = $2 AND to_address = $3 AND status = ANY($4)
-					AND NOT (signer_id = $5 AND nonce IS NOT NULL AND nonce > $6)
-			)
-		`, row.ChainEID, row.Purpose, toAddress, txPricingPendingStatuses, rowSignerID, *row.Nonce).Scan(&blockingExists); err != nil {
-			return 0, err
-		}
-		if blockingExists {
-			return 0, fmt.Errorf("outbox tx %d cannot be requeued while another snapshot for its feed is in flight; retry after it resolves", id)
 		}
 	}
 
@@ -539,21 +485,8 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 		// retry budget and clears failure metadata while a paused scope cannot
 		// sign the queued row — the operator retry is refused instead of
 		// silently burning an attempt.
-		guid := []byte(nil)
-		if row.GUID != nil {
-			guid = *row.GUID
-		}
-		if err := lockTxSendScope(ctx, tx, row.ChainEID, row.Purpose, guid); err != nil {
-			if !errors.Is(err, ErrTxSendScopeInactive) {
-				return 0, err
-			}
-			if deferErr := deferFailedTxRetry(ctx, tx, id); deferErr != nil {
-				return 0, deferErr
-			}
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return 0, commitErr
-			}
-			return 0, ErrTxSendScopeInactive
+		if err := lockFailedRetryScope(ctx, tx, id, row.ChainEID, row.Purpose, row.GUID, ErrTxSendScopeInactive); err != nil {
+			return 0, err
 		}
 		if err := requeueFailedTx(ctx, tx, id); err != nil {
 			return 0, err
@@ -574,21 +507,8 @@ func (s *Store) RetryFailedTx(ctx context.Context, id int64) (int64, error) {
 	// its workflow preparation, where it can finalize the row because the
 	// deliverer owns resuming the job.
 	if row.Purpose != txPurposeExecutorLzReceive {
-		guid := []byte(nil)
-		if row.GUID != nil {
-			guid = *row.GUID
-		}
-		if err := lockTxSendScope(ctx, tx, row.ChainEID, row.Purpose, guid); err != nil {
-			if !errors.Is(err, ErrTxSendScopeInactive) {
-				return 0, err
-			}
-			if deferErr := deferFailedTxRetry(ctx, tx, id); deferErr != nil {
-				return 0, deferErr
-			}
-			if commitErr := tx.Commit(ctx); commitErr != nil {
-				return 0, commitErr
-			}
-			return 0, ErrTxSendScopeInactive
+		if err := lockFailedRetryScope(ctx, tx, id, row.ChainEID, row.Purpose, row.GUID, ErrTxSendScopeInactive); err != nil {
+			return 0, err
 		}
 	}
 	if retryPrepared, err := prepareReceiptRetryWorkflow(ctx, tx, id, row.ChainEID, row.Purpose, row.GUID); err != nil {
@@ -677,21 +597,8 @@ func (s *Store) PrepareNextFailedTxRetry(ctx context.Context, chainEID uint32, s
 		// mutating anything, exactly like the receipt-failed branch, or every
 		// pause cycle would burn an automatic retry for free.
 		{
-			guid := []byte(nil)
-			if row.GUID != nil {
-				guid = *row.GUID
-			}
-			if err := lockTxSendScope(ctx, tx, row.ChainEID, row.Purpose, guid); err != nil {
-				if !errors.Is(err, ErrTxSendScopeInactive) {
-					return 0, err
-				}
-				if deferErr := deferFailedTxRetry(ctx, tx, row.ID); deferErr != nil {
-					return 0, deferErr
-				}
-				if commitErr := tx.Commit(ctx); commitErr != nil {
-					return 0, commitErr
-				}
-				return 0, ErrNoFailedTxRetry
+			if err := lockFailedRetryScope(ctx, tx, row.ID, row.ChainEID, row.Purpose, row.GUID, ErrNoFailedTxRetry); err != nil {
+				return 0, err
 			}
 		}
 		if err := requeueFailedTx(ctx, tx, row.ID); err != nil {
@@ -702,21 +609,8 @@ func (s *Store) PrepareNextFailedTxRetry(ctx context.Context, chainEID uint32, s
 		// Same scope gate as RetryFailedTx: no clone while the scope is paused,
 		// only a deferred next_retry_at so the retry resumes after unpause.
 		if row.Purpose != txPurposeExecutorLzReceive {
-			guid := []byte(nil)
-			if row.GUID != nil {
-				guid = *row.GUID
-			}
-			if err := lockTxSendScope(ctx, tx, row.ChainEID, row.Purpose, guid); err != nil {
-				if !errors.Is(err, ErrTxSendScopeInactive) {
-					return 0, err
-				}
-				if deferErr := deferFailedTxRetry(ctx, tx, row.ID); deferErr != nil {
-					return 0, deferErr
-				}
-				if commitErr := tx.Commit(ctx); commitErr != nil {
-					return 0, commitErr
-				}
-				return 0, ErrNoFailedTxRetry
+			if err := lockFailedRetryScope(ctx, tx, row.ID, row.ChainEID, row.Purpose, row.GUID, ErrNoFailedTxRetry); err != nil {
+				return 0, err
 			}
 		}
 		if retryPrepared, err := prepareReceiptRetryWorkflow(ctx, tx, row.ID, row.ChainEID, row.Purpose, row.GUID); err != nil {
@@ -1238,4 +1132,92 @@ func autoRetryDelay(attempts uint32) time.Duration {
 
 func pgInterval(duration time.Duration) string {
 	return strconv.FormatInt(int64(duration/time.Microsecond), 10) + " microseconds"
+}
+
+// lockFailedRetryScope commits only the retry deferral when the scope is inactive.
+// On success the caller retains the transaction and its scope locks.
+func lockFailedRetryScope(ctx context.Context, tx pgx.Tx, id int64, chainEID uint32, purpose string, packetGUID *[]byte, inactiveErr error) error {
+	var guid []byte
+	if packetGUID != nil {
+		guid = *packetGUID
+	}
+	err := lockTxSendScope(ctx, tx, chainEID, purpose, guid)
+	if !errors.Is(err, ErrTxSendScopeInactive) {
+		return err
+	}
+	if err := deferFailedTxRetry(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return inactiveErr
+}
+
+func lockPricingRetryFeed(ctx context.Context, tx pgx.Tx, id int64, chainEID uint32, toAddress []byte, rowSignerID string, nonce int64) error {
+	if _, err := tx.Exec(ctx,
+		"SELECT pg_advisory_xact_lock($1::integer, hashtext($2)::integer)",
+		int32(chainEID), "pricing_feed:"+common.BytesToAddress(toAddress).Hex(),
+	); err != nil {
+		return err
+	}
+	// A same-signer in-flight row at a HIGHER nonce does not block: it can
+	// never mine before this row's nonce gap is filled, so refusing here
+	// would deadlock both (the pre-round-9 bot could enqueue such a row
+	// before gap rows became feed gates). Everything else — un-nonced
+	// queued rows, lower/equal nonces, other signers' lanes — still
+	// refuses, keeping the one-snapshot-per-feed race closed.
+	var blockingExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM tx_outbox
+			WHERE chain_eid = $1 AND purpose = $2 AND to_address = $3 AND status = ANY($4)
+				AND NOT (signer_id = $5 AND nonce IS NOT NULL AND nonce > $6)
+		)
+	`, chainEID, TxPurposePricingSetPriceSnapshot, toAddress, txPricingPendingStatuses, rowSignerID, nonce).Scan(&blockingExists); err != nil {
+		return err
+	}
+	if blockingExists {
+		return fmt.Errorf("outbox tx %d cannot be requeued while another snapshot for its feed is in flight; retry after it resolves", id)
+	}
+	return nil
+}
+
+func validateFailedTxRetry(id int64, purpose, failureKind string, nonce *int64, receiptOutcome *string) error {
+	// A canceled row was abandoned by the operator, and an externally consumed
+	// nonce can only be re-executed through resolve-external-nonce; requeueing
+	// either in place would try to reuse a consumed nonce.
+	if failureKind == TxFailureCanceled || failureKind == TxFailureNonceConsumedExternally {
+		return fmt.Errorf("outbox tx %d failure kind %s is not retryable", id, failureKind)
+	}
+
+	// A pinned receipt resolution means an attempt of this row mined and its
+	// nonce is consumed. Rows whose failure kind was finalized to NULL (for
+	// example an lzReceive failure whose executor job already advanced or
+	// parked) would otherwise take the requeue-in-place branch below, re-sign
+	// on the consumed nonce, and wedge the signer lane with an attempt the
+	// broadcast claim always refuses. Only the receipt-failed clone branch may
+	// act on such evidence, and it leaves the original row terminal.
+	if receiptOutcome != nil && failureKind != TxFailureReceiptFailed {
+		return fmt.Errorf("outbox tx %d has a pinned receipt resolution and its nonce is consumed; the row cannot be requeued in place", id)
+	}
+
+	// Pricing calldata carries a time-bound market observation: re-signing it
+	// later would write a price whose updatedAt may already be past its own
+	// staleAfter, so nonce-less pricing failures are refused and the bot
+	// rebuilds from a fresh observation. The exception is a failed pricing row
+	// still HOLDING an unconsumed nonce (an upgraded database can carry
+	// historical sign/broadcast failures from before the attempts cutover):
+	// nothing else can fill that nonce — failed rows do not block the
+	// lower-nonce selector, so newer transactions would sign above the gap and
+	// never mine — and the strictly-increasing on-chain timestamp makes a
+	// superseded re-send a harmless skip. The in-place requeue below keeps the
+	// nonce; pinned rows (consumed nonce) were already refused above.
+	// A receipt-failed pricing row is refused too: its nonce was consumed by
+	// the mined attempt, and the clone branch would re-sign the stale
+	// observation on a fresh nonce.
+	if purpose == TxPurposePricingSetPriceSnapshot && (nonce == nil || failureKind == TxFailureReceiptFailed) {
+		return fmt.Errorf("outbox tx %d carries a pricing observation and is not retryable; the price bot rebuilds automatically", id)
+	}
+	return nil
 }

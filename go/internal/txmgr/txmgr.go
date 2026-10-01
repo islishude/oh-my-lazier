@@ -176,134 +176,118 @@ func (m *Manager) runLoop(ctx context.Context, processOnce func(context.Context)
 func (m *Manager) processOnce(ctx context.Context) (bool, error) {
 	processed := false
 	for _, target := range m.targets {
-		signerID := "<nil>"
-		if target.Signer != nil {
-			signerID = target.Signer.Address().Hex()
+		didProcess, err := m.processTarget(ctx, target)
+		processed = processed || didProcess
+		if err != nil {
+			return processed, err
 		}
-		if target.Signer != nil {
-			if err := m.ProcessRecovery(ctx, target); err != nil {
-				m.logger.Warn("tx recovery probe failed", "chain_eid", target.ChainEID, "error", err)
-			}
+	}
+	return processed, nil
+}
+
+type targetStage struct {
+	run             func(context.Context, Target) (int64, error)
+	noWork          []error
+	deferred        []error
+	progressError   error
+	progressMessage string
+	failureMessage  string
+	successMessage  string
+}
+
+func (m *Manager) processTarget(ctx context.Context, target Target) (bool, error) {
+	signerID := "<nil>"
+	if target.Signer != nil {
+		signerID = target.Signer.Address().Hex()
+		if err := m.ProcessRecovery(ctx, target); err != nil {
+			m.logger.Warn("tx recovery probe failed", "chain_eid", target.ChainEID, "error", err)
 		}
-		// One durable action per target per pass; the hot loop reruns immediately
-		// while anything was processed. Receipts run first so a mined tx stops
-		// replacements and higher nonces; broadcasting persisted raws precedes
-		// creating new signed work.
-		id, err := m.ProcessReceipts(ctx, target, 1)
-		if errors.Is(err, ErrNoReceiptUpdate) {
-			// No mined receipt yet; broadcast work may still be due.
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("tx receipt processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("processed tx receipt", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
+	}
+	// One durable action per target per pass. Receipts precede replacement,
+	// and persisted broadcasts precede creating new signed work.
+	stages := []targetStage{
+		{
+			run:            m.processOneReceipt,
+			noWork:         []error{ErrNoReceiptUpdate},
+			failureMessage: "tx receipt processing failed",
+			successMessage: "processed tx receipt",
+		},
+		{
+			run:            m.ProcessNonceReconciliation,
+			noWork:         []error{db.ErrNoNonceReconcileWork},
+			failureMessage: "nonce reconciliation failed",
+			successMessage: "processed nonce reconciliation",
+		},
+		{
+			run:            m.ProcessCancelRequest,
+			noWork:         []error{db.ErrNoCancelWork, db.ErrOutboxLeaseLost, db.ErrActiveAttemptChanged},
+			deferred:       []error{ErrTxDeferred},
+			failureMessage: "cancel request processing failed",
+			successMessage: "processed cancel request",
+		},
+		{
+			run:             m.ProcessBroadcast,
+			progressError:   db.ErrBroadcastLaneHeld,
+			progressMessage: "held exhausted broadcast lane",
+			noWork:          []error{db.ErrNoBroadcastCandidate, db.ErrSignerLaneBlocked, db.ErrOutboxLeaseLost},
+			failureMessage:  "tx broadcast processing failed",
+			successMessage:  "processed tx broadcast",
+		},
+		{
+			run:            m.ProcessStaleBroadcastReplacement,
+			noWork:         []error{db.ErrNoStaleBroadcastReplacement},
+			deferred:       []error{ErrTxDeferred, db.ErrOutboxLeaseLost, db.ErrActiveAttemptChanged},
+			failureMessage: "stale tx replacement processing failed",
+			successMessage: "processed stale broadcast tx replacement",
+		},
+		{
+			run:            m.ProcessFailedRetry,
+			noWork:         []error{db.ErrNoFailedTxRetry},
+			failureMessage: "failed tx retry processing failed",
+			successMessage: "requeued failed tx outbox row",
+		},
+		{
+			run:            m.ProcessNext,
+			deferred:       []error{ErrNoQueuedTx, ErrTxDeferred, db.ErrSignerLaneBlocked, db.ErrOutboxLeaseLost, db.ErrTxSendScopeInactive},
+			failureMessage: "queued tx processing failed",
+			successMessage: "processed tx outbox row",
+		},
+	}
+	for _, stage := range stages {
+		id, err := stage.run(ctx, target)
+		if matchesStageError(err, stage.noWork) {
 			continue
 		}
-		id, err = m.ProcessNonceReconciliation(ctx, target)
-		if errors.Is(err, db.ErrNoNonceReconcileWork) {
-			// No held lane due for reconciliation; cancel work may be due.
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("nonce reconciliation failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("processed nonce reconciliation", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
+		if matchesStageError(err, stage.deferred) {
+			return false, nil
 		}
-		id, err = m.ProcessCancelRequest(ctx, target)
-		if errors.Is(err, db.ErrNoCancelWork) || errors.Is(err, db.ErrOutboxLeaseLost) || errors.Is(err, db.ErrActiveAttemptChanged) {
-			// No due cancel request, or normal contention; broadcast work may be due.
-		} else if errors.Is(err, ErrTxDeferred) {
-			// The cancel fee would exceed configured caps; the request was pushed back.
-			continue
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("cancel request processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("processed cancel request", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
-		}
-		id, err = m.ProcessBroadcast(ctx, target)
-		if errors.Is(err, db.ErrNoBroadcastCandidate) || errors.Is(err, db.ErrSignerLaneBlocked) || errors.Is(err, db.ErrOutboxLeaseLost) {
-			// Normal contention or no due attempt; replacement work may be due.
-		} else if errors.Is(err, db.ErrBroadcastLaneHeld) {
+		if stage.progressError != nil && errors.Is(err, stage.progressError) {
 			// Parking an exhausted lane is durable progress worth a hot rerun.
-			processed = true
-			m.logger.Info("held exhausted broadcast lane", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("tx broadcast processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("processed tx broadcast", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
-		}
-		id, err = m.ProcessStaleBroadcastReplacement(ctx, target)
-		if errors.Is(err, db.ErrNoStaleBroadcastReplacement) {
-			// No stale pending broadcast; failed retries may still be due.
-		} else if errors.Is(err, ErrTxDeferred) {
-			// Replacement fee would exceed configured caps; keep polling the original tx hash.
-			continue
-		} else if errors.Is(err, db.ErrOutboxLeaseLost) || errors.Is(err, db.ErrActiveAttemptChanged) {
-			// Another instance won the replacement race; nothing to do here.
-			continue
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("stale tx replacement processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("processed stale broadcast tx replacement", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
-		}
-		id, err = m.ProcessFailedRetry(ctx, target)
-		if errors.Is(err, db.ErrNoFailedTxRetry) {
-			// No due failed retry; queued work may still be available.
-		} else if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
-			}
-			m.logger.Warn("failed tx retry processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
-		} else {
-			processed = true
-			m.logger.Info("requeued failed tx outbox row", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
-			continue
-		}
-		id, err = m.ProcessNext(ctx, target)
-		if errors.Is(err, ErrNoQueuedTx) || errors.Is(err, ErrTxDeferred) ||
-			errors.Is(err, db.ErrSignerLaneBlocked) || errors.Is(err, db.ErrOutboxLeaseLost) ||
-			errors.Is(err, db.ErrTxSendScopeInactive) {
-			// No signable work, a fee deferral, normal multi-instance contention,
-			// or a pause/disable that landed between selection and the claim.
-			continue
+			m.logger.Info(stage.progressMessage, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
+			return true, nil
 		}
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return processed, ctxErr
+				return false, ctxErr
 			}
-			m.logger.Warn("queued tx processing failed", "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
-			continue
+			m.logger.Warn(stage.failureMessage, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "error", err.Error())
+			return false, nil
 		}
-		processed = true
-		m.logger.Info("processed tx outbox row", "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
+		m.logger.Info(stage.successMessage, "id", id, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID)
+		return true, nil
 	}
-	return processed, nil
+	return false, nil
+}
+
+func (m *Manager) processOneReceipt(ctx context.Context, target Target) (int64, error) {
+	return m.ProcessReceipts(ctx, target, 1)
+}
+
+func matchesStageError(err error, candidates []error) bool {
+	for _, candidate := range candidates {
+		if errors.Is(err, candidate) {
+			return true
+		}
+	}
+	return false
 }

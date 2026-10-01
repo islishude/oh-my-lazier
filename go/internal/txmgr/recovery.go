@@ -42,32 +42,12 @@ func (m *Manager) ProcessRecovery(ctx context.Context, target Target) error {
 	probe, cancel := context.WithTimeout(ctx, m.options.PreSignRPCTimeout)
 	defer cancel()
 	// Inspect every attempt, including a former attempt mined after replacement.
-	hashes, err := m.store.RecoveryHashes(probe, t.ID)
-	if err == nil {
-		for _, hash := range hashes {
-			receipt, e := target.Client.TransactionReceipt(probe, hash)
-			if errors.Is(e, ethereum.NotFound) {
-				continue
-			}
-			if e != nil {
-				err = e
-				break
-			}
-			if receipt != nil {
-				canonical, e := m.receiptOnCanonicalChain(probe, target, receipt)
-				if e != nil {
-					err = e
-					break
-				}
-				if canonical {
-					obs.Visible = true
-					obs.Reason = ""
-					return m.finishRecovery(ctx, target, t, obs)
-				}
-			}
-		}
+	visible, err := m.recoveryReceiptVisible(probe, target, t.ID)
+	if visible {
+		obs.Visible = true
+		obs.Reason = ""
 	}
-	if err != nil {
+	if visible || err != nil {
 		return m.finishRecovery(ctx, target, t, obs)
 	}
 	nonce, err := target.Client.NonceAt(probe, target.Signer.Address(), nil)
@@ -132,4 +112,28 @@ func (m *Manager) logRecoveryReason(ctx context.Context, target Target, id, atte
 		m.logger.Warn("tx recovery blocked", args...)
 	}
 	return nil
+}
+
+func (m *Manager) recoveryReceiptVisible(ctx context.Context, target Target, id int64) (bool, error) {
+	hashes, err := m.store.RecoveryHashes(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	for _, hash := range hashes {
+		receipt, err := target.Client.TransactionReceipt(ctx, hash)
+		if errors.Is(err, ethereum.NotFound) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if receipt == nil {
+			continue
+		}
+		canonical, err := m.receiptOnCanonicalChain(ctx, target, receipt)
+		if err != nil || canonical {
+			return canonical, err
+		}
+	}
+	return false, nil
 }

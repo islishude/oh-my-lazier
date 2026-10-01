@@ -414,47 +414,8 @@ func (c *checker) checkWorkers(ctx context.Context, srcClient, dstClient ChainCl
 		{label: "open_dvn", addr: pathway.SourceWorkers.OpenDVN, fee: pathway.Pricing.DVNFee},
 	}
 	for _, selected := range workers {
-		label := selected.label
-		worker := selected.addr
-		if err := c.requireCode(ctx, srcClient, srcChain, contextLabel, base+".source_workers."+label, worker); err != nil {
+		if err := c.checkSourceWorker(ctx, srcClient, contextLabel, base, srcChain, pathway, selected.label, selected.addr, selected.fee); err != nil {
 			return err
-		}
-		priceFeed, err := callAddress(ctx, srcClient, workerABI, worker, "priceFeed")
-		if err != nil {
-			return fmt.Errorf("read %s priceFeed for %s: %w", label, base, err)
-		}
-		if priceFeed != pathway.SourceWorkers.PriceFeed {
-			c.add(contextLabel, base+".source_workers."+label+".price_feed", "%s priceFeed %s does not match configured %s", label, priceFeed, pathway.SourceWorkers.PriceFeed)
-		}
-		allowed, err := callBool(ctx, srcClient, workerABI, worker, "allowedSendLib", pathway.SendLib)
-		if err != nil {
-			return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
-		}
-		if !allowed {
-			c.add(contextLabel, base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
-		}
-		config, err := callPathwayConfig(ctx, srcClient, worker, pathway.DstEID, pathway.SrcOApp)
-		if err != nil {
-			return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
-		}
-		if config.Enabled != pathway.Enabled {
-			c.add(contextLabel, base+".source_workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
-		}
-		if config.MaxMessageSize == nil || config.MaxMessageSize.Uint64() != pathway.MaxMessageSize {
-			c.add(contextLabel, base+".source_workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
-		}
-		if config.MinLzReceiveGas == nil || config.MinLzReceiveGas.Uint64() != pathway.MinLzReceiveGas {
-			c.add(contextLabel, base+".source_workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
-		}
-		if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
-			c.add(contextLabel, base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
-		}
-		if selected.fee.FixedFeeWei != "" {
-			actualFee, err := callFeeModel(ctx, srcClient, worker, pathway.DstEID)
-			if err != nil {
-				return fmt.Errorf("read %s feeModel for %s: %w", label, base, err)
-			}
-			c.compareFeeModel(contextLabel, base+".source_workers."+label+".fee_model", actualFee, selected.fee)
 		}
 	}
 	if err := c.requireCode(ctx, dstClient, dstChain, contextLabel, base+".destination_workers.open_dvn", pathway.DestinationWorkers.OpenDVN); err != nil {
@@ -868,4 +829,48 @@ func bigString(value *big.Int) string {
 		return "<nil>"
 	}
 	return value.String()
+}
+
+func (c *checker) checkSourceWorker(ctx context.Context, srcClient ChainClient, contextLabel, base string, srcChain chain.Chain, pathway chain.Pathway, label string, worker common.Address, fee config.WorkerFeeModelConfig) error {
+	if err := c.requireCode(ctx, srcClient, srcChain, contextLabel, base+".source_workers."+label, worker); err != nil {
+		return err
+	}
+	priceFeed, err := callAddress(ctx, srcClient, workerABI, worker, "priceFeed")
+	if err != nil {
+		return fmt.Errorf("read %s priceFeed for %s: %w", label, base, err)
+	}
+	if priceFeed != pathway.SourceWorkers.PriceFeed {
+		c.add(contextLabel, base+".source_workers."+label+".price_feed", "%s priceFeed %s does not match configured %s", label, priceFeed, pathway.SourceWorkers.PriceFeed)
+	}
+	allowed, err := callBool(ctx, srcClient, workerABI, worker, "allowedSendLib", pathway.SendLib)
+	if err != nil {
+		return fmt.Errorf("read %s allowedSendLib for %s: %w", label, base, err)
+	}
+	if !allowed {
+		c.add(contextLabel, base+".source_workers."+label+".allowed_send_lib", "%s does not allow send lib %s", label, pathway.SendLib)
+	}
+	config, err := callPathwayConfig(ctx, srcClient, worker, pathway.DstEID, pathway.SrcOApp)
+	if err != nil {
+		return fmt.Errorf("read %s pathwayConfig for %s: %w", label, base, err)
+	}
+	if config.Enabled != pathway.Enabled {
+		c.add(contextLabel, base+".source_workers."+label+".enabled", "worker enabled %t does not match configured %t", config.Enabled, pathway.Enabled)
+	}
+	if config.MaxMessageSize == nil || config.MaxMessageSize.Uint64() != pathway.MaxMessageSize {
+		c.add(contextLabel, base+".source_workers."+label+".max_message_size", "worker max message size %s does not match configured %d", bigString(config.MaxMessageSize), pathway.MaxMessageSize)
+	}
+	if config.MinLzReceiveGas == nil || config.MinLzReceiveGas.Uint64() != pathway.MinLzReceiveGas {
+		c.add(contextLabel, base+".source_workers."+label+".min_lz_receive_gas", "worker min lz receive gas %s does not match configured %d", bigString(config.MinLzReceiveGas), pathway.MinLzReceiveGas)
+	}
+	if config.MaxLzReceiveGas == nil || config.MaxLzReceiveGas.Uint64() != pathway.MaxLzReceiveGas {
+		c.add(contextLabel, base+".source_workers."+label+".max_lz_receive_gas", "worker max lz receive gas %s does not match configured %d", bigString(config.MaxLzReceiveGas), pathway.MaxLzReceiveGas)
+	}
+	if fee.FixedFeeWei != "" {
+		actualFee, err := callFeeModel(ctx, srcClient, worker, pathway.DstEID)
+		if err != nil {
+			return fmt.Errorf("read %s feeModel for %s: %w", label, base, err)
+		}
+		c.compareFeeModel(contextLabel, base+".source_workers."+label+".fee_model", actualFee, fee)
+	}
+	return nil
 }

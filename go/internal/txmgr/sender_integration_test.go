@@ -2690,92 +2690,134 @@ func TestProcessReceiptsResolvesRevertedLzReceiveAfterThirdPartyDelivery(t *test
 }
 
 func TestProcessReceiptsReplayFinalizesAfterManualReview(t *testing.T) {
-	store := openTestStore(t)
-	signer := newTestKeystoreSigner(t)
-	client := &fakeChainClient{
-		pendingNonce: 78,
-		receipts:     make(map[common.Hash]*types.Receipt),
-	}
-	manager := New(store, discardLogger())
-	packet := testExecutorPacket(t)
-	packet.Status = string(packets.ExecutorExecutable)
-	if err := store.UpsertPacket(t.Context(), packet); err != nil {
-		t.Fatalf("UpsertPacket() error = %v", err)
-	}
-	if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
-		GUID:        packet.GUID,
-		AssignedFee: big.NewInt(42),
-		Status:      string(packets.ExecutorExecutable),
-	}); err != nil {
-		t.Fatalf("UpsertExecutorJob() error = %v", err)
-	}
-	if _, err := store.EnqueueExecutorTx(
-		t.Context(),
-		packet.GUID,
-		string(packets.ExecutorExecutable),
-		string(packets.ExecutorLzReceiveTxEnqueued),
-		db.TxRequest{
-			ChainEID: packet.DstEID,
-			Purpose:  executorLzReceivePurpose,
-			GUID:     packet.GUID.Bytes(),
-			To:       packet.Receiver,
-			Calldata: []byte{0x04, 0x05},
-			Value:    big.NewInt(0),
-			SignerID: signer.Address().Hex(),
-		},
-	); err != nil {
-		t.Fatalf("EnqueueExecutorTx() error = %v", err)
-	}
+	for _, tc := range []struct {
+		name      string
+		pinned    bool
+		lookupErr error
+	}{
+		{name: "unpinned"},
+		{name: "pinned", pinned: true},
+		{name: "pinned temporarily absent", pinned: true, lookupErr: ethereum.NotFound},
+		{name: "pinned lookup failure", pinned: true, lookupErr: errors.New("receipt endpoint unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			client := &fakeChainClient{
+				pendingNonce: 78,
+				receipts:     make(map[common.Hash]*types.Receipt),
+			}
+			manager := New(store, discardLogger())
+			packet := testExecutorPacket(t)
+			packet.Status = string(packets.ExecutorExecutable)
+			if err := store.UpsertPacket(t.Context(), packet); err != nil {
+				t.Fatalf("UpsertPacket() error = %v", err)
+			}
+			if err := store.UpsertExecutorJob(t.Context(), db.ExecutorJobRecord{
+				GUID:        packet.GUID,
+				AssignedFee: big.NewInt(42),
+				Status:      string(packets.ExecutorExecutable),
+			}); err != nil {
+				t.Fatalf("UpsertExecutorJob() error = %v", err)
+			}
+			if _, err := store.EnqueueExecutorTx(
+				t.Context(),
+				packet.GUID,
+				string(packets.ExecutorExecutable),
+				string(packets.ExecutorLzReceiveTxEnqueued),
+				db.TxRequest{
+					ChainEID: packet.DstEID,
+					Purpose:  executorLzReceivePurpose,
+					GUID:     packet.GUID.Bytes(),
+					To:       packet.Receiver,
+					Calldata: []byte{0x04, 0x05},
+					Value:    big.NewInt(0),
+					SignerID: signer.Address().Hex(),
+				},
+			); err != nil {
+				t.Fatalf("EnqueueExecutorTx() error = %v", err)
+			}
 
-	target := testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy())
-	id, err := manager.ProcessNext(t.Context(), target)
-	if err != nil {
-		t.Fatalf("ProcessNext() error = %v", err)
-	}
-	if _, err := manager.ProcessBroadcast(t.Context(), target); err != nil {
-		t.Fatalf("ProcessBroadcast() error = %v", err)
-	}
-	outboxTx, err := store.GetOutboxTx(t.Context(), id)
-	if err != nil {
-		t.Fatalf("GetOutboxTx() error = %v", err)
-	}
-	client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
+			target := testTarget(packet.DstEID, big.NewInt(560048), signer, client, defaultFeePolicy())
+			id, err := manager.ProcessNext(t.Context(), target)
+			if err != nil {
+				t.Fatalf("ProcessNext() error = %v", err)
+			}
+			if _, err := manager.ProcessBroadcast(t.Context(), target); err != nil {
+				t.Fatalf("ProcessBroadcast() error = %v", err)
+			}
+			outboxTx, err := store.GetOutboxTx(t.Context(), id)
+			if err != nil {
+				t.Fatalf("GetOutboxTx() error = %v", err)
+			}
+			client.receipts[outboxTx.TxHash] = testReceipt(outboxTx.TxHash, types.ReceiptStatusFailed)
 
-	// Simulate a crash between the workflow write and the receipt finalizer: the
-	// workflow effect (LZ_RECEIVE_FAILED) already committed ...
-	if err := store.MarkExecutorReceiveFailed(t.Context(), packet.GUID, outboxTx.TxHash, "lzReceive transaction reverted"); err != nil {
-		t.Fatalf("MarkExecutorReceiveFailed() error = %v", err)
-	}
-	// ... and before the replay, the worker legally parks the job for operator
-	// review (for example the delivery retry budget runs out).
-	if err := store.MarkExecutorManualReview(t.Context(), packet.GUID, string(packets.ExecutorLzReceiveFailed), "delivery retry budget exhausted"); err != nil {
-		t.Fatalf("MarkExecutorManualReview() error = %v", err)
-	}
+			if tc.pinned {
+				tasks, err := store.ListReceiptPollTasks(t.Context(), target.ChainEID, signer.Address().Hex(), 1)
+				if err != nil || len(tasks) != 1 || len(tasks[0].Attempts) != 1 {
+					t.Fatalf("receipt tasks = %v, error = %v", tasks, err)
+				}
+				facts, err := txReceiptFacts(client.receipts[outboxTx.TxHash])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.PrepareReceiptResolution(t.Context(), tasks[0].Attempts[0].ID, facts); err != nil {
+					t.Fatalf("PrepareReceiptResolution() error = %v", err)
+				}
+			}
 
-	// The replay must treat MANUAL_REVIEW as a legal successor and still reach
-	// the receipt finalizer instead of wedging the receipt stage forever.
-	if _, err := manager.ProcessReceipts(t.Context(), Target{
-		ChainEID:  packet.DstEID,
-		ChainName: "hoodi",
-		ChainID:   big.NewInt(560048),
-		Signer:    signer,
-		Client:    client,
-	}, 1); err != nil {
-		t.Fatalf("ProcessReceipts(replay) error = %v", err)
-	}
-	parked, err := store.GetPacket(t.Context(), packet.GUID)
-	if err != nil {
-		t.Fatalf("GetPacket() error = %v", err)
-	}
-	if parked.Status != string(packets.ExecutorManualReview) {
-		t.Fatalf("packet status = %q, want %q (replay must not disturb the parked job)", parked.Status, packets.ExecutorManualReview)
-	}
-	finalized, err := store.GetOutboxTx(t.Context(), id)
-	if err != nil {
-		t.Fatalf("GetOutboxTx(finalized) error = %v", err)
-	}
-	if finalized.Status != db.TxStatusFailed || finalized.FailureKind != db.TxFailureReceiptFailed {
-		t.Fatalf("tx = %q/%q, want failed/receipt_failed (finalizer must still run)", finalized.Status, finalized.FailureKind)
+			// Simulate a crash between the workflow write and the receipt finalizer: the
+			// workflow effect (LZ_RECEIVE_FAILED) already committed ...
+			if err := store.MarkExecutorReceiveFailed(t.Context(), packet.GUID, outboxTx.TxHash, "lzReceive transaction reverted"); err != nil {
+				t.Fatalf("MarkExecutorReceiveFailed() error = %v", err)
+			}
+			// ... and before the replay, the worker legally parks the job for operator
+			// review (for example the delivery retry budget runs out).
+			if err := store.MarkExecutorManualReview(t.Context(), packet.GUID, string(packets.ExecutorLzReceiveFailed), "delivery retry budget exhausted"); err != nil {
+				t.Fatalf("MarkExecutorManualReview() error = %v", err)
+			}
+
+			if tc.lookupErr != nil {
+				client.receiptErrs = map[common.Hash]error{outboxTx.TxHash: tc.lookupErr}
+				if _, err := manager.ProcessReceipts(t.Context(), target, 1); !errors.Is(err, ErrNoReceiptUpdate) {
+					t.Fatalf("ProcessReceipts(unavailable pinned receipt) = %v, want ErrNoReceiptUpdate", err)
+				}
+				pending, err := store.GetOutboxTx(t.Context(), id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if pending.Status != db.TxStatusBroadcast || pending.ReceiptOutcome == "" {
+					t.Fatalf("unavailable receipt changed pinned state: %q/%q", pending.Status, pending.ReceiptOutcome)
+				}
+				delete(client.receiptErrs, outboxTx.TxHash)
+			}
+
+			// The replay must treat MANUAL_REVIEW as a legal successor and still reach
+			// the receipt finalizer instead of wedging the receipt stage forever.
+			if _, err := manager.ProcessReceipts(t.Context(), Target{
+				ChainEID:  packet.DstEID,
+				ChainName: "hoodi",
+				ChainID:   big.NewInt(560048),
+				Signer:    signer,
+				Client:    client,
+			}, 1); err != nil {
+				t.Fatalf("ProcessReceipts(replay) error = %v", err)
+			}
+			parked, err := store.GetPacket(t.Context(), packet.GUID)
+			if err != nil {
+				t.Fatalf("GetPacket() error = %v", err)
+			}
+			if parked.Status != string(packets.ExecutorManualReview) {
+				t.Fatalf("packet status = %q, want %q (replay must not disturb the parked job)", parked.Status, packets.ExecutorManualReview)
+			}
+			finalized, err := store.GetOutboxTx(t.Context(), id)
+			if err != nil {
+				t.Fatalf("GetOutboxTx(finalized) error = %v", err)
+			}
+			if finalized.Status != db.TxStatusFailed || finalized.FailureKind != db.TxFailureReceiptFailed {
+				t.Fatalf("tx = %q/%q, want failed/receipt_failed (finalizer must still run)", finalized.Status, finalized.FailureKind)
+			}
+		})
 	}
 }
 

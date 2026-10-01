@@ -482,44 +482,18 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 	}
 	quorum := total/2 + 1
 
-	type gasProbe struct {
-		gas          uint64
-		revertErr    error
-		transientErr error
-		responded    bool
-	}
 	probes := make([]gasProbe, total)
 	probeCtx, cancelProbes := context.WithCancel(ctx)
 	defer cancelProbes()
 	completions := make(chan int, total)
 	for index := range providers {
 		go func(index int) {
-			perProbeCtx, cancel := c.probeContext(probeCtx)
-			defer cancel()
-			client, err := c.providerClient(perProbeCtx, index)
-			if err != nil {
-				probes[index] = gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
-				completions <- index
-				return
-			}
-			gas, err := client.EstimateGas(perProbeCtx, call)
-			switch {
-			case err == nil:
-				probes[index] = gasProbe{gas: gas, responded: true}
-			case isDeterministicRevert(err):
-				probes[index] = gasProbe{revertErr: c.wrapProviderOperationError(index, "eth_estimateGas", err), responded: true}
-			default:
-				probes[index] = gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
-			}
+			probes[index] = c.probeGas(probeCtx, index, call)
 			completions <- index
 		}(index)
 	}
 
-	type successVote struct {
-		index int
-		gas   uint64
-	}
-	var successes []successVote
+	var successes []gasSuccessVote
 	revertVotes := make(map[string]int, total)
 	revertWinners := make(map[string]error, total)
 	comparable := 0
@@ -539,7 +513,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 			}
 		default:
 			comparable++
-			successes = append(successes, successVote{index: index, gas: probe.gas})
+			successes = append(successes, gasSuccessVote{index: index, gas: probe.gas})
 		}
 	}
 
@@ -563,37 +537,7 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 		}
 	}
 	if len(successes) >= quorum {
-		sorted := make([]uint64, len(successes))
-		for i, vote := range successes {
-			sorted[i] = vote.gas
-		}
-		slices.Sort(sorted)
-		median := sorted[len(sorted)/2]
-		lower := (median + 1) / 2
-		upper := median * 2
-		inBounds := make([]uint64, 0, len(successes))
-		for _, vote := range successes {
-			if vote.gas < lower || vote.gas > upper {
-				classification[vote.index] = "s:out-of-bounds"
-				continue
-			}
-			classification[vote.index] = "s:bounded"
-			inBounds = append(inBounds, vote.gas)
-		}
-		c.applyStateConflicts(classification, "s:bounded")
-		if len(inBounds) < quorum {
-			return 0, &EstimateGasConflictError{ChainName: c.chainName, Detail: fmt.Sprintf("only %d of %d estimates fall within the bounded set, need %d", len(inBounds), len(successes), quorum)}
-		}
-		result := inBounds[0]
-		for _, gas := range inBounds[1:] {
-			if gas > result {
-				result = gas
-			}
-		}
-		if result > blockGasLimit {
-			return 0, &EstimateGasConflictError{ChainName: c.chainName, Detail: fmt.Sprintf("bounded estimate %d exceeds the canonical block gas limit %d", result, blockGasLimit)}
-		}
-		return result, nil
+		return c.boundedGasEstimate(successes, classification, quorum, blockGasLimit)
 	}
 	if comparable >= quorum {
 		// No outcome reached the majority: every comparable probe is marked.
@@ -604,4 +548,68 @@ func (c *Client) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64
 		ChainName: c.chainName,
 		Details:   stateReadFailureDetails("eth_estimateGas", quorum, comparable, transientErrs),
 	}
+}
+
+type gasProbe struct {
+	gas          uint64
+	revertErr    error
+	transientErr error
+	responded    bool
+}
+
+func (c *Client) probeGas(ctx context.Context, index int, call ethereum.CallMsg) gasProbe {
+	perProbeCtx, cancel := c.probeContext(ctx)
+	defer cancel()
+	client, err := c.providerClient(perProbeCtx, index)
+	if err != nil {
+		return gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
+	}
+	gas, err := client.EstimateGas(perProbeCtx, call)
+	switch {
+	case err == nil:
+		return gasProbe{gas: gas, responded: true}
+	case isDeterministicRevert(err):
+		return gasProbe{revertErr: c.wrapProviderOperationError(index, "eth_estimateGas", err), responded: true}
+	default:
+		return gasProbe{transientErr: c.wrapProviderOperationError(index, "eth_estimateGas", err)}
+	}
+}
+
+type gasSuccessVote struct {
+	index int
+	gas   uint64
+}
+
+func (c *Client) boundedGasEstimate(successes []gasSuccessVote, classification map[int]string, quorum int, blockGasLimit uint64) (uint64, error) {
+	sorted := make([]uint64, len(successes))
+	for i, vote := range successes {
+		sorted[i] = vote.gas
+	}
+	slices.Sort(sorted)
+	median := sorted[len(sorted)/2]
+	lower := (median + 1) / 2
+	upper := median * 2
+	inBounds := make([]uint64, 0, len(successes))
+	for _, vote := range successes {
+		if vote.gas < lower || vote.gas > upper {
+			classification[vote.index] = "s:out-of-bounds"
+			continue
+		}
+		classification[vote.index] = "s:bounded"
+		inBounds = append(inBounds, vote.gas)
+	}
+	c.applyStateConflicts(classification, "s:bounded")
+	if len(inBounds) < quorum {
+		return 0, &EstimateGasConflictError{ChainName: c.chainName, Detail: fmt.Sprintf("only %d of %d estimates fall within the bounded set, need %d", len(inBounds), len(successes), quorum)}
+	}
+	result := inBounds[0]
+	for _, gas := range inBounds[1:] {
+		if gas > result {
+			result = gas
+		}
+	}
+	if result > blockGasLimit {
+		return 0, &EstimateGasConflictError{ChainName: c.chainName, Detail: fmt.Sprintf("bounded estimate %d exceeds the canonical block gas limit %d", result, blockGasLimit)}
+	}
+	return result, nil
 }
