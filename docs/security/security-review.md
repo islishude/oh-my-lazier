@@ -48,9 +48,14 @@ rg "(?i)(delegatecall|selfdestruct|tx\\.origin|assembly|unchecked|\\.call\\{|wit
   disposition set, an accepted finding changes severity, or a recorded
   disposition no longer matches a high or moderate finding. Resolved or
   low/info-only entries must be removed from `allowedOpenFindings`.
-- `govulncheck` currently reports no vulnerabilities in called Go code.
-  The 2026-09-21 scan also reports 1 vulnerability in imported packages and 4
-  in required modules that the code does not appear to call.
+- Go vulnerability results are toolchain-specific. The 2026-10-13 scan using
+  Go 1.27.2 reports zero reachable vulnerabilities and zero findings in imported
+  packages; three findings remain in required modules that the code does not
+  appear to call. `make security-check` passes. Raising the minimum Go version
+  to 1.27.2 resolves the nine reachable standard-library findings from the
+  Go 1.27.1 scan. CI selects the latest Go 1.27 patch, and the Docker builder
+  uses `golang:1.27.2-alpine`; existing deployed binaries must be rebuilt and
+  redeployed to receive the fixes.
 - The remaining npm audit findings are toolchain findings
   described in `docs/security/npm-audit-disposition.md`; they block final
   mainnet approval until upgraded or formally accepted.
@@ -130,6 +135,11 @@ Evidence:
   The five high findings remain in LayerZero, its required Chainlink CCIP
   dependency, and legacy OpenZeppelin copies. Retained Hardhat/Ignition tooling
   still has low inherited findings.
+- The 2026-10-13 scoped `hardhat-deploy` / `chokidar` override removes the
+  vulnerable `braces` dependency. The same-registry audit changes from 10 high
+  and 18 low to 5 high and 21 low findings (26 total), with no critical or
+  moderate findings. No audit exception was added; the five existing high
+  dispositions still match. Direct LayerZero versions remain unchanged.
 - Chainlink and Uniswap pricing ABIs are local SHA-256-verified sources with
   interface-specific licenses; their npm source packages have been removed.
   See [audit disposition](npm-audit-disposition.md) and

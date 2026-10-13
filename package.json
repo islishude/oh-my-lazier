@@ -75,6 +75,9 @@
     "undici": "7.30.0",
     "ws": "8.21.0",
     "js-yaml": "4.3.2",
-    "adm-zip": "0.6.1"
+    "adm-zip": "0.6.1",
+    "hardhat-deploy": {
+      "chokidar": "4.0.3"
+    }
   }
 }

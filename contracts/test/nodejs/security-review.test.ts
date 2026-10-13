@@ -66,7 +66,15 @@ const auditCases: Array<{
     error: /@chainlink\/contracts-ccip: severity changed from high to moderate/,
   },
   ...(["high", "moderate"] as const).flatMap((severity) =>
-    ["undici", "@actions/http-client"].map((name) => ({
+    [
+      "undici",
+      "@actions/http-client",
+      "braces",
+      "chokidar",
+      "hardhat-deploy",
+      "@layerzerolabs/lz-evm-protocol-v2",
+      "@layerzerolabs/lz-evm-v1-0.7",
+    ].map((name) => ({
       name: `rejects reintroduced ${severity} finding for ${name}`,
       change: (report: AuditReport) => {
         report.vulnerabilities![name] = { name, severity };

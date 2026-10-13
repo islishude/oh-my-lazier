@@ -35,9 +35,26 @@ exceptions behind.
 `make security-check` runs the security review document gate, npm audit
 disposition gate, and `govulncheck`.
 
-The 2026-09-30 audit after the undici override has five high, zero moderate,
-zero critical, and 24 low findings (29 total), down from six high, one moderate,
-and 24 low (31 total). All five remaining dispositions match current findings.
+The 2026-10-13 audit after the scoped chokidar override has five high, zero
+moderate, zero critical, and 21 low findings (26 total), down from ten high
+and 18 low (28 total) immediately before the override. All five remaining
+dispositions match current findings; no exception was added or broadened.
+
+The `hardhat-deploy` override pins only its `chokidar` dependency to `4.0.3`,
+replacing `3.6.0` and removing `braces` plus the unused glob-matching dependency
+chain. This removes GHSA-vfj7-8cjw-p6xm (deeply nested brace patterns can exhaust
+the stack); the published `braces` version `3.0.3` has no patched successor at
+this snapshot. The inherited high findings in `hardhat-deploy`,
+`@layerzerolabs/lz-evm-protocol-v2`, and `@layerzerolabs/lz-evm-v1-0.7` drop back
+to low. The `braces` and `chokidar` findings disappear.
+
+Chokidar 4 retains CommonJS loading but removes glob support. The pinned
+`hardhat-deploy` watcher passes source and deployment directory paths with a
+RegExp dotfile exclusion, rather than glob patterns. The repository uses
+Hardhat 3 with Ignition and does not register the inherited `hardhat-deploy`
+plugin. Hardhat's own `chokidar` remains `5.0.0`; all direct dependency versions
+and Solidity source packages are unchanged. Reassess the override if the
+inherited plugin or its watch inputs change.
 
 The `undici` override pins both Hardhat dependency paths to `7.30.0`, replacing
 `@actions/http-client`'s nested `5.29.0` with the version already used by
@@ -106,8 +123,8 @@ The ABI migration snapshot had no moderate package-level findings. Its 24 low
 findings were in the Ethers v5 / elliptic dependency graph, Optimism contracts
 and core-utils, LayerZero protocol/v1 packages, hardhat-deploy/zksync-ethers,
 and retained Hardhat Ignition, Ignition-Viem, toolbox, and verify packages.
-They are not represented as high/moderate exceptions. This document grants no
-mainnet approval for them. The Go worker embeds the generated ABI and has no
+The current snapshot has 21 low findings. They are not represented as
+high/moderate exceptions. This document grants no mainnet approval for them. The Go worker embeds the generated ABI and has no
 Node.js runtime dependency.
 
 ## Release Decision
@@ -131,7 +148,20 @@ make check
 git diff --check
 ```
 
-The migration passed a clean `npm ci`, the five table-driven local-source hash
+The 2026-10-13 chokidar remediation passed clean `npm ci`, CommonJS directory
+watcher checks for source and deployment paths, the audit disposition gate,
+and `make check` (61 Solidity tests and 271 script tests). Regression cases
+reject reintroduced high/moderate findings for all five reported packages.
+The initial `make security-check` run failed at `govulncheck` with nine
+reachable Go 1.27.1 standard-library findings. The accompanying Go 1.27.2
+minimum-version, CI, and Docker builder update resolves those findings;
+`make security-check` now passes. Three findings remain in required modules
+that the code does not appear to call. The Go 1.27.2 update also passed
+`make check`, `make test-integration` (including recovery race tests), and
+`make docker-smoke`. These are local checks, not remote CI or deployment
+evidence. See [security review](security-review.md#current-status).
+
+The ABI migration passed a clean `npm ci`, the five table-driven local-source hash
 cases (valid, tampered, missing file, missing hash, invalid hash), pricing ABI
 generation/check, Go pricing tests, `make check`, `make security-check`, and
 `git diff --check`. The full gate included 61 Solidity tests and 245 script tests.

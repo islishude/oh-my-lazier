@@ -90,7 +90,8 @@ OML_SCRIPT_PARAMS=config/scripts/examples/check-migration-evidence.json npm run 
 ## Local setup
 
 - Node.js 26+
-- Go 1.26+
+- Go 1.27.2+ (minimum recorded in `go.mod`; CI selects the latest Go 1.27 patch,
+  and the Docker builder must be updated for security patches)
 - Docker, for integration/E2E/smoke targets
 - Foundry `forge`, for Solidity formatting checks
 - `golangci-lint`, for `make check`

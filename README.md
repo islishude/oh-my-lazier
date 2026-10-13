@@ -10,7 +10,7 @@ options and operator independence requirements.
 
 ## Quick start
 
-Requires Node.js 26+, Go 1.26+, Docker, Foundry `forge`, and `golangci-lint`.
+Requires Node.js 26+, Go 1.27.2+, Docker, Foundry `forge`, and `golangci-lint`.
 
 ```bash
 npm install

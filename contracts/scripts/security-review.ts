@@ -18,7 +18,7 @@ const requiredDocs: RequiredSecurityDoc[] = [
       "npm run check:npm-audit-disposition",
       "secret logging guard",
       "zero critical npm findings",
-      "govulncheck` currently reports no vulnerabilities in called Go code.",
+      "Go vulnerability results are toolchain-specific.",
       "Private key material, decrypted keystore JSON, KMS signatures, and raw secrets",
       "Phase 1 remains EVM-only and scoped to Ethereum Sepolia <-> Hoodi.",
       "Self-only DVN is rejected",
