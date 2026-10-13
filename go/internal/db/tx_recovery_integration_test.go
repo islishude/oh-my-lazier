@@ -122,6 +122,12 @@ func TestRecoveryReasonClockAndLogPacing(t *testing.T) {
 }
 
 func TestRecoveryUpgradePreservesOldAttempts(t *testing.T) {
+	for _, count := range []int{3, 4} {
+		t.Run(fmt.Sprintf("after_%03d", count), func(t *testing.T) { testRecoveryUpgrade(t, count) })
+	}
+}
+
+func testRecoveryUpgrade(t *testing.T, appliedCount int) {
 	databaseURL := os.Getenv("TEST_POSTGRES_URL")
 	if databaseURL == "" {
 		t.Skip("TEST_POSTGRES_URL is not set")
@@ -146,7 +152,7 @@ func TestRecoveryUpgradePreservesOldAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	for _, name := range []string{"001_initial_schema.sql", "002_txmgr_attempts.sql", "003_txmgr_cancel_pacing.sql"} {
+	for _, name := range []string{"001_initial_schema.sql", "002_txmgr_attempts.sql", "003_txmgr_cancel_pacing.sql", "004_tx_recovery.sql"}[:appliedCount] {
 		body, e := migrations.Files.ReadFile(name)
 		if e != nil {
 			t.Fatal(e)
@@ -176,9 +182,27 @@ func TestRecoveryUpgradePreservesOldAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = pool.Exec(t.Context(), `INSERT INTO tx_outbox(id,chain_eid,purpose,to_address,calldata,signer_id,status) VALUES(2,1,'dvn_verify',decode(repeat('11',20),'hex'),'\x01','queued-worker','queued')`); err != nil {
+		t.Fatal(err)
+	}
 	store := &Store{pool: pool, maxInflight: config.DefaultMaxInflightPerSigner}
 	if err = store.Migrate(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	var preflightSince *time.Time
+	var preflightReason string
+	if err = pool.QueryRow(t.Context(), `SELECT preflight_failure_since,preflight_reason FROM tx_outbox WHERE id=2`).Scan(&preflightSince, &preflightReason); err != nil {
+		t.Fatal(err)
+	}
+	if preflightSince != nil || preflightReason != "" {
+		t.Fatal("migration backfilled preflight history")
+	}
+	observation, err := store.NextPreflightObservation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied, _, e := store.RecordPreflight(t.Context(), 2, observation, "fee_cap", "cap"); e != nil || !applied {
+		t.Fatalf("upgraded row observation=%t %v", applied, e)
 	}
 	var count int
 	var first *time.Time

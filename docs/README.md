@@ -20,6 +20,8 @@
 
 ## Deployment and release
 
+- [Kubernetes monitoring deployment](kubernetes-monitoring.md): probes, scrape rules, and isolated acceptance checks.
+
 - [TestOFT rehearsal policy](deployments/test-oft-policy.md)
 - [BSC testnet and GOAT ↔ BSC activation](deployments/bsc-testnet.md)
 - [LayerZero testnet addresses](deployments/layerzero-testnet-addresses.md)

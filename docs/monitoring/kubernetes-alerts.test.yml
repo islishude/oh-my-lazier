@@ -1,0 +1,62 @@
+rule_files:
+  - kubernetes-alerts.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="replace-me-namespace",service="replace-me-service",endpoint="metrics",instance="a"}'
+        values: '0 0 0 1 stale'
+      - series: 'up{namespace="other",service="replace-me-service",endpoint="metrics",instance="b"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: LazWorkerScrapeFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: LazWorkerScrapeFailed
+        exp_alerts:
+          - exp_labels:
+              namespace: replace-me-namespace
+              service: replace-me-service
+              endpoint: metrics
+              instance: a
+              severity: page
+            exp_annotations:
+              summary: LayerZero worker metrics scrape is failing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/kubernetes-monitoring.md
+      - eval_time: 3m
+        alertname: LazWorkerScrapeFailed
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LazWorkerTargetMissing
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: LazWorkerTargetMissing
+        exp_alerts:
+          - exp_labels:
+              namespace: replace-me-namespace
+              service: replace-me-service
+              endpoint: metrics
+              severity: page
+            exp_annotations:
+              summary: Expected LayerZero worker metrics target is missing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/kubernetes-monitoring.md
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="replace-me-namespace",service="replace-me-service",endpoint="metrics"}'
+        values: '_ _ _ _ _ _ 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LazWorkerTargetMissing
+        exp_alerts:
+          - exp_labels:
+              namespace: replace-me-namespace
+              service: replace-me-service
+              endpoint: metrics
+              severity: page
+            exp_annotations:
+              summary: Expected LayerZero worker metrics target is missing
+              runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/kubernetes-monitoring.md
+      - eval_time: 6m
+        alertname: LazWorkerTargetMissing
+        exp_alerts: []

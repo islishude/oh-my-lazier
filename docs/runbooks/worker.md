@@ -47,7 +47,7 @@ go run ./go/cmd/txretry -config <worker.yaml> -action inspect|retry-failed|repla
 go run ./go/cmd/txretry -config <worker.yaml> -action rebroadcast -id <tx_outbox_id> -rpc-url <rpc_url>
 ```
 
-Worker binaries default to `-log-level info`. Use `-log-level debug` when investigating normal skip/defer reasons such as indexer caught-up windows, disabled pathways, not-yet-confirmed DVN jobs, or deferred tx manager work.
+Worker binaries default to `-log-level info`. Use `-log-level debug` when investigating normal skip/defer reasons such as indexer caught-up windows, disabled pathways, not-yet-confirmed DVN jobs, or normal deferred tx manager work. Failed queued RPC preflight and fee-cap waits are always Warn, including repeats; no debug flag is needed.
 The long-running worker also defaults to `-indexer-progress-log-interval 1m`, which limits indexer progress `Info` logs to one line per chain and stream per interval; set it to `0` to disable periodic progress `Info` logs and rely on `/metrics` plus debug logs.
 Use `go run ./go/cmd/worker -config <worker.yaml> -skip-onchain-check` only as a long-running worker startup bypass for the on-chain config check. It does not skip local YAML/schema validation, and it does not affect `configcheck` or `pricebot-once`. Pricing chains configured with on-chain sources (Chainlink, Uniswap) still establish their RPC head quorum before source validation, and every remaining configured chain establishes it before the durable loops start, so the bypass never lets a single provider serve unverified startup reads.
 

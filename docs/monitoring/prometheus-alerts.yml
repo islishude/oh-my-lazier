@@ -2,12 +2,30 @@ groups:
   - name: oh-my-lazier.worker
     rules:
       - alert: LazWorkerReadinessFailed
-        expr: probe_success{job="laz-worker-readyz"} == 0
+        expr: laz_worker_readiness == 0
         for: 2m
         labels:
           severity: page
         annotations:
           summary: LayerZero worker readiness check is failing
+          runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+
+      - alert: LazTxPreflightStalled
+        expr: laz_tx_preflight_blocked_oldest_age_seconds >= 300
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: Transaction construction is blocked by preflight
+          runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
+
+      - alert: LazMetricsDBSnapshotUnavailable
+        expr: laz_metrics_db_snapshot_available == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: Worker database metrics snapshot is unavailable
           runbook: https://github.com/islishude/oh-my-lazier/blob/main/docs/runbooks/monitoring.md
 
       - alert: LazChainPaused

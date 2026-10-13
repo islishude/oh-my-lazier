@@ -85,6 +85,11 @@ func TestHandlerReadyUsesRoleAwareReadiness(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
+	metric := httptest.NewRecorder()
+	handler.ServeHTTP(metric, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(metric.Body.String(), "laz_worker_readiness 1") {
+		t.Fatal(metric.Body.String())
+	}
 }
 
 func TestHandlerMetricsRendersPrometheusSnapshot(t *testing.T) {
@@ -483,5 +488,127 @@ func TestChainNamesAreCopiedAndEscaped(t *testing.T) {
 		if dbAvailable && !strings.Contains(body, `laz_tx_outbox_total{chain_eid="1",chain_name="chain\"\\\nname",`) {
 			t.Fatalf("DB chain name missing: %s", body)
 		}
+	}
+}
+
+// contextStatsProvider exercises the actual request deadline, not a detached timeout wrapper.
+type contextStatsProvider struct {
+	calls int
+	block bool
+	err   error
+}
+
+func (p *contextStatsProvider) Stats(ctx context.Context) (db.StatsSnapshot, error) {
+	p.calls++
+	if p.block {
+		<-ctx.Done()
+		return db.StatsSnapshot{}, ctx.Err()
+	}
+	return cleanSnapshotWith(nil), p.err
+}
+
+func TestMetricsSnapshotTimeoutCancellationAndRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		canceled bool
+	}{{"timeout", false}, {"request canceled", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &contextStatsProvider{block: true}
+			handler := Handler(p, NewRegistry(map[uint32]string{1: "test"}))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			rec := httptest.NewRecorder()
+			start := time.Now()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil).WithContext(ctx))
+			elapsed := time.Since(start)
+			if elapsed > DefaultStatsTimeout+time.Second {
+				t.Fatalf("query did not cancel: %s", elapsed)
+			}
+			if !tc.canceled && elapsed < DefaultStatsTimeout {
+				t.Fatalf("deadline too short: %s", elapsed)
+			}
+			if rec.Code != 200 || !strings.Contains(rec.Body.String(), "laz_metrics_db_snapshot_available 0") || !strings.Contains(rec.Body.String(), "laz_worker_info 1") || strings.Contains(rec.Body.String(), "laz_worker_readiness") {
+				t.Fatal(rec.Body.String())
+			}
+			p.block = false
+			rec = httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			if !strings.Contains(rec.Body.String(), "laz_worker_readiness 1") || !strings.Contains(rec.Body.String(), "laz_metrics_db_snapshot_available 1") || p.calls != 2 {
+				t.Fatal(rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestMetricsRemainAvailableForBusinessReadinessFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*db.StatsSnapshot)
+	}{
+		{"paused chain", func(s *db.StatsSnapshot) { s.Chains[0].Paused = true }},
+		{"paused pathway", func(s *db.StatsSnapshot) { s.Pathways[0].Paused = true }},
+		{"failed outbox", func(s *db.StatsSnapshot) {
+			s.TxOutbox = []db.TxOutboxStat{{ChainEID: 40161, Status: db.TxStatusFailed, RetryState: db.TxOutboxRetryStateExhausted, Count: 1}}
+		}},
+		{"held nonce", func(s *db.StatsSnapshot) {
+			s.TxOutboxHeld = []db.TxOutboxHeldStat{{ChainEID: 40161, HeldReason: db.HeldManual, Count: 1}}
+		}},
+		{"missing cursor", func(s *db.StatsSnapshot) { s.IndexerCursors = nil }},
+		{"DVN conflict", func(s *db.StatsSnapshot) {
+			s.DVNJobs = []db.JobStatusStat{{Status: string(packets.DVNQuorumConflict), Count: 1}}
+		}},
+
+		{"unstarted cursor", func(s *db.StatsSnapshot) { s.IndexerCursors[0].LastBlock = 0 }},
+		{"recovery stalled", func(s *db.StatsSnapshot) {
+			s.Recovery = []db.RecoveryStat{{ChainEID: 40161, Inflight: 1, Reason: "fee_cap", BlockedAge: 900}}
+		}},
+		{"orphaned outbox", func(s *db.StatsSnapshot) {
+			s.TxOutboxOrphaned = []db.TxOutboxOrphanedStat{{ChainEID: 40161, Status: "signed", Count: 1}}
+		}},
+		{"pricing stalled", func(s *db.StatsSnapshot) {
+			s.PricingPending = []db.PricingPendingStat{{ChainEID: 40161, Count: 1, OldestAgeSeconds: 301}}
+		}},
+		{"manual packet", func(s *db.StatsSnapshot) {
+			s.Packets = []db.PacketStat{{SrcEID: 40161, DstEID: 40449, Status: "MANUAL_REVIEW", Count: 1}}
+		}},
+		{"executor failed", func(s *db.StatsSnapshot) {
+			s.ExecutorJobs = []db.JobStatusStat{{Status: string(packets.ExecutorLzReceiveFailed), Count: 1}}
+		}},
+		{"executor manual", func(s *db.StatsSnapshot) {
+			s.ExecutorJobs = []db.JobStatusStat{{Status: string(packets.ExecutorManualReview), Count: 1}}
+		}},
+		{"DVN manual", func(s *db.StatsSnapshot) {
+			s.DVNJobs = []db.JobStatusStat{{Status: string(packets.DVNManualReview), Count: 1}}
+		}},
+		{"DVN reorg", func(s *db.StatsSnapshot) {
+			s.DVNJobs = []db.JobStatusStat{{Status: string(packets.DVNReorgDetected), Count: 1}}
+		}},
+		{"preflight only", func(s *db.StatsSnapshot) {
+			s.Preflight = []db.TxPreflightStat{{ChainEID: 40161, SignerID: "worker", Purpose: "dvn_verify", Reason: "invalid_priority_fee", Count: 1, OldestAgeSeconds: 300}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := cleanSnapshotWith(tc.change)
+			handler := Handler(fakeProvider{snapshot: snapshot})
+			ready := httptest.NewRecorder()
+			handler.ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+			metric := httptest.NewRecorder()
+			handler.ServeHTTP(metric, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+			wantCode := 503
+			wantGauge := "laz_worker_readiness 0"
+			if tc.name == "preflight only" {
+				wantCode = 200
+				wantGauge = "laz_worker_readiness 1"
+			}
+			if ready.Code != wantCode || metric.Code != 200 || !strings.Contains(metric.Body.String(), wantGauge) {
+				t.Fatalf("ready=%d metrics=%d %s", ready.Code, metric.Code, metric.Body.String())
+			}
+			if tc.name == "preflight only" && !strings.Contains(metric.Body.String(), `reason="invalid_priority_fee"} 300`) {
+				t.Fatal(metric.Body.String())
+			}
+		})
 	}
 }

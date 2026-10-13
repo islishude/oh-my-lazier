@@ -26,7 +26,7 @@ worker-fee, and price-snapshot series use `src_chain_name` and `dst_chain_name`.
 Existing EID labels remain the identifiers; executor/DVN job gauges are grouped
 by `src_eid`, `dst_eid`, and `status`. Readiness continues to aggregate job counts
 across pathways. `LazWorkerReadinessFailed` describes the whole process and keeps
-its probe target labels without a chain name.
+its scrape target labels without a chain name.
 
 DB metrics resolve names from persisted chain records, including retained
 history. Runtime metrics use a copy of startup chain names, so RPC, signer,
@@ -43,7 +43,7 @@ Required alerts:
 
 - `LazPricingSourceFailing`: `increase(laz_pricing_source_failures_total[1h]) >= 2`; warning without an additional hold time. Inspect the indicated instance, EID, source, role, and category. See [pricing source rejection](#pricing-source-rejection) for counter and recovery semantics.
 
-- `LazWorkerReadinessFailed`: `/readyz` returns non-200 for more than two scrape intervals; page. Readiness also fails while any active-chain signer lane is parked `held(manual)`, `held(nonce_consumed_externally)`, `held(broadcast_exhausted)` without automatic recovery eligibility, or reprice-held past the automatic replacement cap (reported as the synthetic `reprice_exhausted` reason) — those holds block every higher nonce for the signer until the operator resolves them with `txretry`; the self-healing `broadcast_retrying` and `reprice_required` (below the cap) and `nonce_reconcile_required` holds and fresh pending cancels do not fail readiness — except a `broadcast_retrying` or `reprice_required` hold or a pending cancel older than fifteen minutes, which means recovery has stalled (check RPC availability, signer balance and configured fee caps) and also fails readiness. The cancel age counts from the immutable `cancel_requested_at`; deferrals only move the separate pacing column, so a fee-cap-stuck cancel cannot hide behind a perpetually young age.
+- `LazWorkerReadinessFailed`: `laz_worker_readiness == 0` for two minutes; page. The metric uses the same role-aware evaluator as `/readyz`, from the same database snapshot as the other metrics. No blackbox probe is required. Readiness also fails while any active-chain signer lane is parked `held(manual)`, `held(nonce_consumed_externally)`, `held(broadcast_exhausted)` without automatic recovery eligibility, or reprice-held past the automatic replacement cap (reported as the synthetic `reprice_exhausted` reason) — those holds block every higher nonce for the signer until the operator resolves them with `txretry`; the self-healing `broadcast_retrying` and `reprice_required` (below the cap) and `nonce_reconcile_required` holds and fresh pending cancels do not fail readiness — except a `broadcast_retrying` or `reprice_required` hold or a pending cancel older than fifteen minutes, which means recovery has stalled (check RPC availability, signer balance and configured fee caps) and also fails readiness. The cancel age counts from the immutable `cancel_requested_at`; deferrals only move the separate pacing column, so a fee-cap-stuck cancel cannot hide behind a perpetually young age.
 - `LazChainPaused`: `laz_chain_paused == 1` for any chain; page immediately. This means chain-wide quorum safety logic paused the worker path. A chain removed from configuration keeps its pause bit in the database as a safety state for a possible re-enable, but its gauge reports 0 — readiness and the durable loops ignore disabled records, so their retained pause must not page.
 - `LazPathwayPaused`: `laz_pathway_paused == 1` for any pathway; page immediately. This means packet-level receipt/log conflict safety logic paused a pathway. The `src_eid`, `dst_eid`, `src_oapp`, and `dst_oapp` labels preserve the full pathway identity, including multiple OApp pairs on the same chain direction. Disabled pathways likewise report 0.
 - Disabled scopes are invisible to packet, job, and outbox statistics: when a chain or pathway is removed from configuration, its retained packets, executor/DVN jobs, and outbox rows (a pricing row follows its send chain) drop out of the `laz_packets_total`, `laz_executor_jobs_total`, `laz_dvn_jobs_total`, and `laz_tx_outbox_total` gauges and out of `/readyz`, so historical `MANUAL_REVIEW`, failed, or exhausted rows of a removed scope neither page nor hold readiness at 503. Paused scopes stay fully visible — a pause is temporary safety, not removal. Held signer-lane gauges retain historical records, but their alerts and readiness checks apply only while the chain is enabled: a held row physically blocks that active signer lane.
@@ -122,7 +122,7 @@ ORDER BY chain_eid, signer_id, nonce;
 Readiness fails with `orphaned_outbox_row` for every affected active chain while any row remains.
 
 - Txmgr automatically retries failed outbox rows with classified failure kinds for up to five attempts. Broadcast outcomes never destroy send state: an unrecognized or transport-level send error is treated as possibly accepted, the persisted raw is replayed with bounded backoff (never-accepted business `retryable_env` results use 20/40/80/160-second waits), and receipt polling covers every persisted attempt hash. Stale broadcast rows are automatically replaced after `tx_manager.stale_broadcast_replacement_after_seconds` seconds, and an underpriced (reprice-held) row is automatically repriced after a one-minute cooldown — both keep the nonce, bump the fee at least 10% over the latest attempt, respect the configured caps, and stop at the automatic replacement cap. At that cap an accepted broadcast row simply stays under receipt polling, while a still-underpriced row remains reprice-held and surfaces as the synthetic `reprice_exhausted` held reason, which fails readiness until the operator replaces or cancels it. A `nonce too low` hold is reconciled automatically each minute against the chain's confirmed account nonce: a still-unspent nonce resumes broadcasting (unless its attempt's broadcast budget is already exhausted — then it parks as `held(broadcast_exhausted)`, because resuming would strand it outside both the replay pipeline and the lower-nonce barrier; the last nonce-error class does not qualify for environmental automatic recovery); a nonce the chain consumed with no receipt on any of our attempts parks as `held(nonce_consumed_externally)` with the observed evidence (this indicates the single-broadcaster assumption was violated — treat it as a key-management incident) and fast-forwards the local nonce cursor so fresh work signs past the consumed range. A row in `status = held` blocks all higher nonces for its signer. Eligible environmental holds recover as described below; other exhausted holds need operator action: `txretry -action replace` authorizes one more replacement for a broadcast, reprice-held, or `broadcast_exhausted` row (a replacement is a fresh attempt with a fresh replay budget for the same intent); `txretry -action cancel-nonce` abandons any nonce-holding row with a same-nonce noop self transfer (the owning job parks as MANUAL_REVIEW, the row terminates as `failed/canceled`, and the lane unlocks) and clears any pending replace request — re-requesting cancel on an already-canceling row is what authorizes one cancel fee bump; `txretry -action resolve-external-nonce -resolution retry|abandon` terminates an externally consumed row and either clones a fresh task or parks the job. Watch `laz_tx_outbox_held_total` and `laz_tx_outbox_held_oldest_age_seconds` (labels: chain, signer, reason — including the synthetic `cancel_requested`) for stuck lanes.
-- If Postgres-backed stats are temporarily unavailable, `/metrics` still exposes process-local indexer and worker loop retry metrics and sets `laz_metrics_db_snapshot_available 0`; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
+- The entire `/metrics` database snapshot has a three-second deadline, including pool waits and all queries. If Postgres-backed stats are temporarily unavailable or exceed this budget, `/metrics` still exposes process-local indexer and worker loop retry metrics and returns HTTP `200` and sets `laz_metrics_db_snapshot_available 0`. Database metrics, including `laz_worker_readiness`, are omitted rather than rendered as zero or stale values; `/readyz` remains unavailable until the DB-backed readiness snapshot succeeds.
 - `/healthz` is only a liveness probe. Use `/readyz` and `/metrics` for operational readiness and alerting.
 - Do not unpause a chain or pathway until the conflict source is identified and the latest `inspect:lz-config` output still matches the intended migration config.
 - Pause semantics on the send side: once a pause or config-disable commits, the worker adds no new nonce for that scope — work selection stops offering the affected jobs, executor/DVN/pricing transaction enqueues are refused, queued outbox rows are held back from signing, and automatic failure retries — receipt-failed clones and estimate-revert requeues alike — are deferred (their failure metadata and attempt budget stay untouched) until the scope is active again — except the lzReceive purpose, whose failed outbox row is finalized while the `LZ_RECEIVE_FAILED` job keeps carrying the retry budget; the deliverer re-enqueues it once the pathway is active. A packet's scope is its exact pathway plus both endpoint chains; a pricing transaction's scope is its send chain. The bounded set of transactions that already held a nonce before the pause still converges: they are broadcast, replaced, repriced, reconciled, and receipt-polled to a terminal state, because freezing them would wedge the shared signer lane. Operator cancel (`txretry -action cancel-nonce`) and nonce reconciliation stay available while paused — they repair the lane rather than add spend.
@@ -383,3 +383,41 @@ cannot overwrite the request's schedule or hold state; receipt and replacement
 preflight checks still apply.
 Reserve the key-access audit and `resolve-external-nonce` procedure for
 `nonce_consumed_externally`; an environmental rejection alone does not justify it.
+
+
+## Preflight construction failures
+
+`LazTxPreflightStalled` pages when
+`laz_tx_preflight_blocked_oldest_age_seconds >= 300`, without an additional hold
+period. `laz_tx_preflight_blocked_total` counts affected unclaimed transactions.
+Both gauges use `chain_eid`, `chain_name`, `signer`, `purpose`, and `reason` labels.
+No transaction IDs, GUIDs, or diagnostic text are metric labels.
+
+Every failed queued preflight, including repeated failures and fee-cap waits,
+logs at Warn with the outbox ID and diagnostic. Reasons are `invalid_priority_fee`
+(nil, zero, or negative RPC suggestion), `fee_cap`, `fee_quote_error`, and
+`estimate_gas_error`. Inspect the row with `txretry -action inspect -id <id>`;
+`preflight_failure_since`, `preflight_observed_at`, `preflight_reason`, and
+`preflight_error` identify the continuous episode. Follow the existing
+[RPC diagnostic policy](../runtime.md#rpc-quorum) when sharing this output.
+
+Restore RPC fee suggestions, estimation availability, or approved fee caps as
+indicated. No fallback tip is substituted. Retrying or changing failure reason
+does not reset the episode age. Successful preflight clears it and logs recovery
+at Info. Shutdown cancellation is not a business failure. The worker keeps
+retrying without assigning a nonce or consuming signing/broadcast budgets for
+these failures. Preflight alone does not change `/readyz` or `readinesscheck`.
+Deterministic estimate reverts retain their existing terminal failure handling.
+
+Only queued rows without a nonce or active attempt contribute to these gauges.
+Disabled chains/pathways are excluded; paused scopes remain visible. Observation
+tokens fence stale concurrent checks and survive restarts. Migration
+`005_tx_preflight.sql` adds diagnostics without backfilling existing rows; old
+queued failures start timing on their next observed failure after upgrade.
+
+`LazMetricsDBSnapshotUnavailable` pages after
+`laz_metrics_db_snapshot_available == 0` persists for two minutes. Missing
+business metrics during a database outage do not prove business recovery.
+Deploy worker and alert updates together. See the
+[Kubernetes monitoring deployment and acceptance checks](../kubernetes-monitoring.md)
+for scrape-failure and target-missing rules independent of business readiness.

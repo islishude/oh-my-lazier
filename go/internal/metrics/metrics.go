@@ -22,6 +22,9 @@ import (
 	"github.com/islishude/oh-my-lazier/go/internal/workerloop"
 )
 
+// DefaultStatsTimeout bounds the entire database snapshot, including pool waits.
+const DefaultStatsTimeout = 3 * time.Second
+
 // StatsProvider supplies read-only worker state for metrics rendering.
 type StatsProvider interface {
 	Stats(context.Context) (db.StatsSnapshot, error)
@@ -473,10 +476,12 @@ func HandlerWithReadiness(provider StatsProvider, services readiness.Services, r
 		_, _ = w.Write([]byte("ready\n"))
 	})
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		snapshot, err := provider.Stats(r.Context())
+		statsCtx, cancel := context.WithTimeout(r.Context(), DefaultStatsTimeout)
+		snapshot, err := provider.Stats(statsCtx)
+		cancel()
 		runtimeSnapshot := collectRuntime(runtime)
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = w.Write([]byte(renderPrometheus(snapshot, err == nil, runtimeSnapshot)))
+		_, _ = w.Write([]byte(renderPrometheusWithServices(snapshot, err == nil, runtimeSnapshot, services)))
 	})
 	return mux
 }
@@ -487,6 +492,10 @@ func RenderPrometheus(snapshot db.StatsSnapshot) string {
 }
 
 func renderPrometheus(snapshot db.StatsSnapshot, dbSnapshotAvailable bool, runtime RuntimeSnapshot) string {
+	return renderPrometheusWithServices(snapshot, dbSnapshotAvailable, runtime, readiness.Services{ExecutorEnabled: true, DVNEnabled: true})
+}
+
+func renderPrometheusWithServices(snapshot db.StatsSnapshot, dbSnapshotAvailable bool, runtime RuntimeSnapshot, services readiness.Services) string {
 	var output strings.Builder
 	output.WriteString("# HELP laz_worker_info Static worker process information.\n")
 	output.WriteString("# TYPE laz_worker_info gauge\n")
@@ -495,6 +504,8 @@ func renderPrometheus(snapshot db.StatsSnapshot, dbSnapshotAvailable bool, runti
 	output.WriteString("# TYPE laz_metrics_db_snapshot_available gauge\n")
 	fmt.Fprintf(&output, "laz_metrics_db_snapshot_available %d\n", boolGauge(dbSnapshotAvailable))
 	if dbSnapshotAvailable {
+		output.WriteString("# HELP laz_worker_readiness Whether durable business state passes the role-aware readiness checks.\n# TYPE laz_worker_readiness gauge\n")
+		fmt.Fprintf(&output, "laz_worker_readiness %d\n", boolGauge(readiness.EvaluateWithServices(snapshot, services).Ready))
 		renderDBMetrics(&output, snapshot)
 	}
 	renderRuntimeMetrics(&output, runtime)
@@ -540,6 +551,7 @@ func renderDBMetrics(output *strings.Builder, snapshot db.StatsSnapshot) {
 	for _, stat := range snapshot.DVNJobs {
 		fmt.Fprintf(output, "laz_dvn_jobs_total{src_eid=%q,dst_eid=%q,src_chain_name=%s,dst_chain_name=%s,status=%s} %d\n", uint32Label(stat.SrcEID), uint32Label(stat.DstEID), label(chainNames[stat.SrcEID]), label(chainNames[stat.DstEID]), label(stat.Status), stat.Count)
 	}
+	renderPreflightMetrics(output, snapshot.Preflight, chainNames)
 	output.WriteString("# HELP laz_tx_outbox_total Transaction outbox rows by chain, status, and retry state.\n")
 	output.WriteString("# TYPE laz_tx_outbox_total gauge\n")
 	for _, stat := range snapshot.TxOutbox {
@@ -827,5 +839,15 @@ func renderRPCAndLoopMetrics(output *strings.Builder, snapshot RuntimeSnapshot) 
 	output.WriteString("# TYPE laz_worker_loop_last_retry_timestamp_seconds gauge\n")
 	for _, stat := range snapshot.LoopRetries {
 		fmt.Fprintf(output, "laz_worker_loop_last_retry_timestamp_seconds{name=%s} %d\n", label(stat.Name), stat.LastRetryUnix)
+	}
+}
+
+func renderPreflightMetrics(output *strings.Builder, stats []db.TxPreflightStat, names map[uint32]string) {
+	output.WriteString("# HELP laz_tx_preflight_blocked_total Unclaimed transactions blocked by preflight.\n# TYPE laz_tx_preflight_blocked_total gauge\n")
+	output.WriteString("# HELP laz_tx_preflight_blocked_oldest_age_seconds Longest continuous preflight failure.\n# TYPE laz_tx_preflight_blocked_oldest_age_seconds gauge\n")
+	for _, stat := range stats {
+		labels := fmt.Sprintf("chain_eid=%q,chain_name=%s,signer=%s,purpose=%s,reason=%s", uint32Label(stat.ChainEID), label(names[stat.ChainEID]), label(stat.SignerID), label(stat.Purpose), label(stat.Reason))
+		fmt.Fprintf(output, "laz_tx_preflight_blocked_total{%s} %d\n", labels, stat.Count)
+		fmt.Fprintf(output, "laz_tx_preflight_blocked_oldest_age_seconds{%s} %g\n", labels, stat.OldestAgeSeconds)
 	}
 }

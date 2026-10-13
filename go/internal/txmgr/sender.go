@@ -81,7 +81,9 @@ var ErrTxDeferred = errors.New("tx deferred")
 // FeeCapError describes a policy wait without exposing RPC errors or secrets.
 type FeeCapError struct{ RequiredFee, RequiredTip, FeeLimit, TipLimit string }
 
-func (e *FeeCapError) Error() string { return "replacement exceeds configured fee cap" }
+func (e *FeeCapError) Error() string {
+	return fmt.Sprintf("transaction exceeds configured fee cap: required_fee=%s required_tip=%s fee_limit=%s tip_limit=%s", e.RequiredFee, e.RequiredTip, e.FeeLimit, e.TipLimit)
+}
 func (e *FeeCapError) Unwrap() error { return ErrTxDeferred }
 func capError(fee, tip *big.Int, policy FeePolicy) error {
 	text := func(n *big.Int) string {
@@ -139,13 +141,16 @@ func (m *Manager) ProcessNext(ctx context.Context, target Target) (int64, error)
 // deterministic estimate revert never consumes a nonce, then claims the row,
 // signs, and persists the attempt.
 func (m *Manager) signQueuedTx(ctx context.Context, target Target, signerID string, queued db.QueuedOutboxTx, policy FeePolicy) (int64, error) {
-	quote, gasLimit, err := m.preflight(ctx, target, queued, policy, false)
+	observation, err := m.store.NextPreflightObservation(ctx)
 	if err != nil {
-		if errors.Is(err, ErrTxDeferred) {
-			m.logger.Debug("deferred tx outbox row", "reason", "fee_cap", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose)
-			return 0, err
-		}
-		if isEstimateGasRevert(err) {
+		return 0, fmt.Errorf("begin preflight observation: %w", err)
+	}
+	quote, gasLimit, err := m.preflight(ctx, target, queued, policy, false)
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	if err != nil {
+		if stage, ok := errors.AsType[*preflightError](err); ok && stage.stage == "estimate_gas_error" && isEstimateGasRevert(err) {
 			// The compare-and-set loses against another instance that meanwhile
 			// claimed or signed this row; that instance owns it now.
 			applied, markErr := m.store.MarkQueuedTxEstimateRevertFailed(ctx, queued.ID, fmt.Errorf("estimate gas reverted: %w", err))
@@ -159,8 +164,17 @@ func (m *Manager) signQueuedTx(ctx context.Context, target Target, signerID stri
 			m.logger.Warn("failed tx gas estimate", "reason", "estimate_gas_revert", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose, "failure_kind", db.TxFailureEstimateGasRevert, "error", err.Error())
 			return queued.ID, nil
 		}
-		m.logger.Debug("deferred tx outbox row", "reason", "preflight_error", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose, "error", err.Error())
-		return 0, fmt.Errorf("%w: preflight for outbox tx %d: %w", ErrTxDeferred, queued.ID, err)
+		return m.recordQueuedPreflightFailure(ctx, target, signerID, queued, observation, err)
+	}
+	applied, recovered, recordErr := m.store.RecordPreflight(ctx, queued.ID, observation, "", "")
+	if recordErr != nil {
+		return 0, fmt.Errorf("record preflight recovery: %w", recordErr)
+	}
+	if !applied {
+		return 0, fmt.Errorf("%w: stale preflight observation for outbox tx %d", ErrTxDeferred, queued.ID)
+	}
+	if recovered {
+		m.logger.Info("tx preflight recovered", "id", queued.ID, "chain_eid", target.ChainEID, "chain_name", target.ChainName, "signer", signerID, "purpose", queued.Purpose)
 	}
 	outboxTx, leaseToken, err := m.claimForSigning(ctx, target, signerID, queued.ID)
 	if err != nil {
@@ -191,13 +205,13 @@ func (m *Manager) preflight(ctx context.Context, target Target, queued db.Queued
 	defer cancel()
 	quote, err := quoteFee(rpcCtx, queued, policy, target.Client)
 	if err != nil {
-		return feeQuote{}, 0, err
+		return feeQuote{}, 0, &preflightError{stage: "fee_quote_error", cause: err}
 	}
 	gasLimit := queued.GasLimit
 	if !reuseGasLimit || gasLimit == 0 {
 		gasLimit, err = estimateGas(rpcCtx, queued, target.Signer.Address(), target.Client)
 		if err != nil {
-			return feeQuote{}, 0, err
+			return feeQuote{}, 0, &preflightError{stage: "estimate_gas_error", cause: err}
 		}
 	}
 	return quote, gasLimit, nil
@@ -937,7 +951,7 @@ func quoteDynamicFee(ctx context.Context, queued db.QueuedOutboxTx, policy FeePo
 		return feeQuote{}, err
 	}
 	if suggestedTip == nil || suggestedTip.Sign() <= 0 {
-		return feeQuote{}, fmt.Errorf("outbox tx %d priority fee per gas is required", queued.ID)
+		return feeQuote{}, &InvalidPriorityFeeError{OutboxID: queued.ID, Value: priorityFeeValue(suggestedTip)}
 	}
 	tip := bigutil.Min(suggestedTip, policy.ConfiguredMaxPriorityFeePerGas)
 	hasPreviousFee := queued.Nonce != nil && (queued.MaxFeePerGas != nil || queued.MaxPriorityFeePerGas != nil)

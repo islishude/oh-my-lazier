@@ -114,3 +114,22 @@ func TestQuoteFeeAssignedNonceWithoutPreviousFeesUsesFreshQuote(t *testing.T) {
 		}
 	})
 }
+
+func TestPreflightReason(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"invalid tip", &preflightError{stage: "fee_quote_error", cause: &InvalidPriorityFeeError{OutboxID: 1, Value: "nil"}}, "invalid_priority_fee"},
+		{"fee cap", &preflightError{stage: "fee_quote_error", cause: &FeeCapError{}}, "fee_cap"},
+		{"RPC fee quote", &preflightError{stage: "fee_quote_error", cause: errors.New("unavailable")}, "fee_quote_error"},
+		{"estimate", &preflightError{stage: "estimate_gas_error", cause: errors.New("unavailable")}, "estimate_gas_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preflightReason(tc.err); got != tc.want {
+				t.Fatalf("reason=%s", got)
+			}
+		})
+	}
+}

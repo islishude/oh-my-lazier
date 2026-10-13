@@ -449,7 +449,7 @@ func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *test
 				header:             dynamicHeader(),
 				suggestedGasTipCap: big.NewInt(1_000_000_000),
 			}
-			logger, logs := captureLogger(slog.LevelDebug)
+			logger, logs := captureLogger(slog.LevelInfo)
 			manager := New(store, logger)
 
 			queuedID, err := store.EnqueueTx(t.Context(), db.TxRequest{
@@ -489,9 +489,9 @@ func TestProcessNextDefersEstimateGasNonRevertErrorBeforeNonceAssignment(t *test
 			}
 			assertEstimateGasCall(t, client, signer.Address(), common.HexToAddress("0x2222222222222222222222222222222222222222"), big.NewInt(123), []byte{0x01, 0x02, 0x03})
 			assertLogContains(t, logs.String(),
-				`level=DEBUG`,
+				`level=WARN`,
 				`msg="deferred tx outbox row"`,
-				`reason=preflight_error`,
+				`reason=estimate_gas_error`,
 				test.err.Error(),
 			)
 		})
@@ -3663,6 +3663,8 @@ type fakeChainClient struct {
 	suggestGasPriceErr    error
 	suggestGasPriceCalls  int
 	suggestedGasTipCap    *big.Int
+	suggestGasTipCapHook  func()
+	nilGasTip             bool
 	suggestGasTipCapErr   error
 	suggestGasTipCapCalls int
 	sendErr               error
@@ -3760,6 +3762,12 @@ func (f *fakeChainClient) SuggestGasPrice(context.Context) (*big.Int, error) {
 
 func (f *fakeChainClient) SuggestGasTipCap(context.Context) (*big.Int, error) {
 	f.suggestGasTipCapCalls++
+	if f.suggestGasTipCapHook != nil {
+		f.suggestGasTipCapHook()
+	}
+	if f.nilGasTip {
+		return nil, nil
+	}
 	if f.suggestGasTipCapErr != nil {
 		return nil, f.suggestGasTipCapErr
 	}
@@ -4651,6 +4659,102 @@ func TestEnvironmentalRecoveryTransitions(t *testing.T) {
 				if _, err = manager.ProcessStaleBroadcastReplacement(t.Context(), target); err == nil && scenario != "historical receipt" {
 					t.Fatal("unsafe replacement")
 				}
+			}
+		})
+	}
+}
+
+func TestPreflightPriorityFeeBlockedAndRecovered(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tip    *big.Int
+		nilTip bool
+	}{
+		{"nil", nil, true}, {"zero", big.NewInt(0), false}, {"negative", big.NewInt(-1), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			logger, logs := captureLogger(slog.LevelInfo)
+			client := &fakeChainClient{nilGasTip: tc.nilTip, suggestedGasTipCap: tc.tip, estimatedGas: 100000}
+			target := testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy())
+			manager := New(store, logger)
+			id, err := store.EnqueueTx(t.Context(), db.TxRequest{ChainEID: 40161, Purpose: db.TxPurposePricingSetPriceSnapshot, To: common.HexToAddress("0x22"), Calldata: []byte{1}, Value: big.NewInt(0), SignerID: signer.Address().Hex()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				_, err = manager.ProcessNext(t.Context(), target)
+				var invalid *InvalidPriorityFeeError
+				if !errors.Is(err, ErrTxDeferred) || !errors.As(err, &invalid) {
+					t.Fatalf("error=%v", err)
+				}
+			}
+			if strings.Count(logs.String(), "level=WARN") != 2 || !strings.Contains(logs.String(), "reason=invalid_priority_fee") {
+				t.Fatal(logs.String())
+			}
+			if client.pendingNonceCalls != 0 || len(client.sent) != 0 {
+				t.Fatal("failed preflight consumed nonce or broadcast")
+			}
+			inspection, err := store.InspectTx(t.Context(), id)
+			if err != nil || !strings.Contains(string(inspection), `"preflight_reason": "invalid_priority_fee"`) {
+				t.Fatalf("inspection=%s err=%v", inspection, err)
+			}
+			client.nilGasTip = false
+			client.suggestedGasTipCap = big.NewInt(1_000_000_000)
+			if _, err = manager.ProcessNext(t.Context(), target); err != nil {
+				t.Fatal(err)
+			}
+			inspection, err = store.InspectTx(t.Context(), id)
+			if err != nil || !strings.Contains(string(inspection), `"preflight_failure_since": null`) {
+				t.Fatalf("inspection=%s err=%v", inspection, err)
+			}
+			if !strings.Contains(logs.String(), "tx preflight recovered") {
+				t.Fatal(logs.String())
+			}
+		})
+	}
+}
+
+func TestPreflightCancellationAndPersistenceFailure(t *testing.T) {
+	for _, tc := range []string{"shutdown", "persistence failure", "fee quote revert"} {
+		t.Run(tc, func(t *testing.T) {
+			store := openTestStore(t)
+			signer := newTestKeystoreSigner(t)
+			logger, logs := captureLogger(slog.LevelInfo)
+			manager := New(store, logger)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			client := &fakeChainClient{suggestedGasTipCap: big.NewInt(0)}
+			switch tc {
+			case "shutdown":
+				client.suggestGasTipCapHook = cancel
+			case "persistence failure":
+				client.suggestGasTipCapHook = store.Close
+			case "fee quote revert":
+				client.suggestGasTipCapErr = errors.New("execution reverted")
+			}
+			_, err := store.EnqueueTx(ctx, db.TxRequest{ChainEID: 40161, Purpose: db.TxPurposePricingSetPriceSnapshot, To: common.HexToAddress("0x22"), Calldata: []byte{1}, Value: big.NewInt(0), SignerID: signer.Address().Hex()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = manager.ProcessNext(ctx, testTarget(40161, big.NewInt(11155111), signer, client, defaultFeePolicy()))
+			switch tc {
+			case "shutdown":
+				if !errors.Is(err, context.Canceled) || strings.Contains(logs.String(), "level=WARN") {
+					t.Fatalf("error=%v logs=%s", err, logs.String())
+				}
+			case "persistence failure":
+				if err == nil || errors.Is(err, ErrTxDeferred) || !strings.Contains(err.Error(), "record preflight failure") {
+					t.Fatalf("lost persistence error: %v", err)
+				}
+			case "fee quote revert":
+				if !errors.Is(err, ErrTxDeferred) || !strings.Contains(logs.String(), "reason=fee_quote_error") {
+					t.Fatalf("quote error terminalized: %v %s", err, logs.String())
+				}
+			}
+			if client.pendingNonceCalls != 0 || len(client.sent) != 0 {
+				t.Fatal("failed preflight spent nonce or broadcast")
 			}
 		})
 	}

@@ -168,6 +168,8 @@ func (s *Store) InspectTx(ctx context.Context, id int64) (json.RawMessage, error
 	var result []byte
 	err := s.pool.QueryRow(ctx, `SELECT jsonb_build_object(
  'id',o.id,'chain_eid',o.chain_eid,'signer',o.signer_id,'nonce',o.nonce,'status',o.status,
+ 'preflight_reason',o.preflight_reason,'preflight_error',o.preflight_error,
+ 'preflight_failure_since',o.preflight_failure_since,'preflight_observed_at',o.preflight_observed_at,
  'active_attempt_id',o.active_attempt_id,'replace_requested_at',o.replace_requested_at,
  'first_broadcast_at',COALESCE(o.first_broadcast_at,(SELECT min(created_at) FROM tx_attempts WHERE outbox_id=o.id AND broadcast_count>0)),
  'last_seen_at',o.last_seen_at,'absent_since',o.absent_since,'next_check_at',o.next_visibility_at,

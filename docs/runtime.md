@@ -97,3 +97,26 @@ For commands and startup options, see [worker operation](runbooks/worker.md).
 - Retryable loop errors use exponential restart delays of 5, 10, 20, 40, then 60 seconds. Pricing instead caps the delay at its configured `interval_seconds` (starting at the smaller of five seconds and that interval). An uninterrupted run of at least the greater of five minutes and twice the cap resets the delay; unexpected successful returns also back off. Cancellation interrupts the wait and non-retryable loop errors stop `App.Run` immediately.
 
 - Runtime price-source rejections stay inside the pricing loop. A failed EID cools down for one `interval_seconds` after the read completes, shared by periodic and gas-spike evaluation; independent feeds continue. A timer evaluates again at cooldown expiry, so recovery can wait one full interval after the preceding failure, plus read/enqueue/confirmation time. No stale observation is reused. Cooldowns survive supervisor re-entry of the same bot but not process restart. Single-shot pricing still reports total failure as an error.
+
+
+## Monitoring availability
+
+Queued preflight failures are durable diagnostic episodes, logged at Warn on
+every failed attempt. A five-minute continuous episode pages independently of
+readiness; successful preflight clears it and logs Info. New observations are
+ordered by database tokens allocated before RPC work, so old concurrent results
+cannot overwrite newer observations or rows that already acquired a nonce.
+Existing estimate-revert, nonce, signing, and broadcast safety rules remain in
+force. See [preflight construction failures](runbooks/monitoring.md#preflight-construction-failures).
+
+`/metrics` gives the complete database statistics read a three-second deadline.
+Timeouts cancel the actual query or connection-pool wait; no detached query is
+left running. Failed snapshots return HTTP 200 with process-local metrics and
+`laz_metrics_db_snapshot_available=0`, omitting database metrics. Healthy snapshots
+also export `laz_worker_readiness` using the configured roles and the same
+business checks as `/readyz`. Readiness never gates the metrics handler.
+
+The metrics listener starts after initialization. Fatal startup or process
+failures can make it unreachable; independent scrape and missing-target alerts
+cover that case. The [Kubernetes monitoring guidance](kubernetes-monitoring.md)
+describes strict readiness, a startup probe, and an explicit scrape timeout.

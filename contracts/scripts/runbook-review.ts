@@ -57,6 +57,8 @@ const requiredDocs: RequiredDoc[] = [
       "LazExecutorReceiveFailed",
       "LazWorkerManualReview",
       "LazTxOutboxFailed",
+      "LazTxPreflightStalled",
+      "LazMetricsDBSnapshotUnavailable",
       "LazWorkerFeeNegativeMargin",
       "LazWorkerFeeReconciliationPending",
       "LazSignerLowNativeBalance",
@@ -202,9 +204,11 @@ const requiredDocs: RequiredDoc[] = [
 ];
 
 const requiredAlertRules: RequiredAlertRule[] = [
+  { alert: "LazTxPreflightStalled", anchors: ["laz_tx_preflight_blocked_oldest_age_seconds >= 300", "severity: page"] },
+  { alert: "LazMetricsDBSnapshotUnavailable", anchors: ["laz_metrics_db_snapshot_available == 0", "for: 2m", "severity: page"] },
   {
     alert: "LazWorkerReadinessFailed",
-    anchors: ['probe_success{job="laz-worker-readyz"} == 0', "severity: page"],
+    anchors: ["laz_worker_readiness == 0", "severity: page"],
   },
   {
     alert: "LazChainPaused",

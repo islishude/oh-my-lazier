@@ -190,8 +190,10 @@ build-go:
 check-alerts:
 	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 check rules prometheus-alerts.yml
 	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 test rules prometheus-alerts.test.yml
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 check rules kubernetes-alerts.yml
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/docs/monitoring:/rules:ro" -w /rules prom/prometheus:v3.5.0 test rules kubernetes-alerts.test.yml
 
 .PHONY: test-recovery-race
 test-recovery-race:
 	@test -n "$$TEST_POSTGRES_URL" || (echo "TEST_POSTGRES_URL is required for recovery race coverage" >&2; exit 1)
-	go test -race -count=1 -p 1 -run 'TestEnvironmental|TestRecovery|TestManualRebroadcast|TestRebroadcast|TestAcceptedThenMissing|TestTransactionVisibility|TestVisibilityVerdict|TestInspect' ./go/internal/db ./go/internal/txmgr ./go/internal/rpcquorum ./go/cmd/txretry/...
+	go test -race -count=1 -p 1 -run 'TestPreflight|TestEnvironmental|TestRecovery|TestManualRebroadcast|TestRebroadcast|TestAcceptedThenMissing|TestTransactionVisibility|TestVisibilityVerdict|TestInspect' ./go/internal/db ./go/internal/txmgr ./go/internal/rpcquorum ./go/cmd/txretry/...
