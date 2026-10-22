@@ -62,12 +62,12 @@
     "@layerzerolabs/lz-evm-oapp-v2": "3.0.168",
     "@layerzerolabs/lz-evm-protocol-v2": "3.0.168",
     "@nomicfoundation/hardhat-toolbox-viem": "5.0.7",
-    "@nomicfoundation/ignition-core": "3.1.10",
+    "@nomicfoundation/ignition-core": "3.1.11",
     "@openzeppelin/contracts": "5.6.1",
     "@types/node": "26.6.5",
-    "hardhat": "3.19.0",
+    "hardhat": "3.20.0",
     "typescript": "6.0.3",
-    "viem": "2.57.4"
+    "viem": "2.57.7"
   },
   "overrides": {
     "axios": "1.20.0",
