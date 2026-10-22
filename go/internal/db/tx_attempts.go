@@ -188,11 +188,12 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 		return OutboxTx{}, fmt.Errorf("outbox tx %d is not signable in status %s", id, status)
 	}
 
-	if status == TxStatusQueued && nonce == nil {
+	switch {
+	case status == TxStatusQueued && nonce == nil:
 		if err := s.assignFreshOutboxNonce(ctx, tx, id, chainEID, signerID, purpose, guid); err != nil {
 			return OutboxTx{}, err
 		}
-	} else if status == TxStatusQueued {
+	case status == TxStatusQueued:
 		// A requeued row keeps its previously assigned nonce; only the standard
 		// low-nonce barrier applies.
 		if *nonce < 0 {
@@ -210,7 +211,7 @@ func (s *Store) ClaimOutboxForSigning(ctx context.Context, id int64, chainEID ui
 		`, TxStatusNonceAssigned, id); err != nil {
 			return OutboxTx{}, err
 		}
-	} else {
+	default:
 		if nonce == nil || *nonce < 0 {
 			return OutboxTx{}, fmt.Errorf("outbox tx %d nonce_assigned without a nonce", id)
 		}

@@ -1164,7 +1164,9 @@ func TestSourceAssignmentReplayLocksJobBeforePacket(t *testing.T) {
 			}
 			if packetLockedEarly {
 				_ = holder.Rollback(ctx)
-				<-replayResult
+				if err := <-replayResult; err != nil {
+					t.Errorf("assignment replay after rollback: %v", err)
+				}
 				t.Fatal("assignment replay locked packets while waiting for its existing job row")
 			}
 			if _, err := holder.Exec(ctx, `UPDATE packets SET updated_at = now() WHERE guid = $1`, packet.GUID.Bytes()); err != nil {

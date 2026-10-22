@@ -652,6 +652,8 @@ func testRegistry(t *testing.T) *chain.Registry {
 
 func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *chain.Registry {
 	t.Helper()
+	// Sources and snapshots are supplied by test doubles. Leave RPC URLs empty
+	// so head-time fallback never performs real I/O inside synctest bubbles.
 	registry, err := chain.NewRegistry([]config.ChainConfig{
 		{
 			EID:             40161,
@@ -660,7 +662,6 @@ func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *ch
 			ChainID:         11155111,
 			EndpointAddress: config.MustEVMAddress("0x1111111111111111111111111111111111111111"),
 			Confirmations:   12,
-			RPCURLs:         []string{"http://localhost:8545"},
 			TxRoles: config.ChainTxRolesConfig{
 				Executor: testExecutorRole(),
 			},
@@ -672,7 +673,6 @@ func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *ch
 			ChainID:         560048,
 			EndpointAddress: config.MustEVMAddress("0x4444444444444444444444444444444444444444"),
 			Confirmations:   12,
-			RPCURLs:         []string{"http://localhost:8546"},
 			TxRoles: config.ChainTxRolesConfig{
 				Executor: testExecutorRole(),
 			},
@@ -684,7 +684,6 @@ func testRegistryWithPathways(t *testing.T, pathways []config.PathwayConfig) *ch
 			ChainID:         40500,
 			EndpointAddress: config.MustEVMAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 			Confirmations:   12,
-			RPCURLs:         []string{"http://localhost:8547"},
 			TxRoles: config.ChainTxRolesConfig{
 				Executor: testExecutorRole(),
 			},
