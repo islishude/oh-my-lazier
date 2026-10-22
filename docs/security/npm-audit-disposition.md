@@ -35,7 +35,16 @@ exceptions behind.
 `make security-check` runs the security review document gate, npm audit
 disposition gate, and `govulncheck`.
 
-The 2026-10-13 audit after the scoped chokidar override has five high, zero
+The 2026-10-22 Hardhat group update refreshes the transitive `follow-redirects`
+lockfile entry from `1.16.0` to `1.16.1`, within the existing Axios dependency
+range. This fixes GHSA-q3jh-wrc6-jgq8 (array-form headers bypass credential
+stripping on cross-origin redirects) and GHSA-8r9p-f939-6h3c (incomplete regex
+escaping for custom sensitive headers). No override or audit exception is added.
+The audit disposition gate passes with five high findings and 26 total, down
+from six high and 27 total before the refresh; zero critical or moderate
+findings remain. The five existing high dispositions are unchanged.
+
+The 2026-10-13 audit after the scoped chokidar override had five high, zero
 moderate, zero critical, and 21 low findings (26 total), down from ten high
 and 18 low (28 total) immediately before the override. All five remaining
 dispositions match current findings; no exception was added or broadened.

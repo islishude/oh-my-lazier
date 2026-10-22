@@ -222,7 +222,9 @@ func TestBotRunRetriesBetweenPeriodicTicks(t *testing.T) {
 		synctest.Wait() // t=75s, ahead of the t=120s periodic tick.
 		cancel()
 		synctest.Wait()
-		<-done
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run = %v, want context.Canceled", err)
+		}
 		if source.count.Load() != 3 || len(store.requests) != 4 {
 			t.Fatalf("off-grid recovery reads=%d writes=%d", source.count.Load(), len(store.requests))
 		}
@@ -332,7 +334,9 @@ func TestBotExpiredCooldownWaitsForPendingDrain(t *testing.T) {
 		synctest.Wait()
 		cancel()
 		synctest.Wait()
-		<-done
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run = %v, want context.Canceled", err)
+		}
 		if source.count.Load() != 2 || len(store.requests) != 1 {
 			t.Fatalf("drain reads=%d writes=%d", source.count.Load(), len(store.requests))
 		}

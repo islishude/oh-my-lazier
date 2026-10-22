@@ -144,6 +144,10 @@ Evidence:
   interface-specific licenses; their npm source packages have been removed.
   See [audit disposition](npm-audit-disposition.md) and
   [ABI source records](../../contracts/vendor/abis/README.md).
+- The 2026-10-22 Hardhat group update also refreshes `follow-redirects` from
+  `1.16.0` to `1.16.1` within its existing dependency range to resolve the
+  cross-origin credential stripping advisories GHSA-q3jh-wrc6-jgq8 and
+  GHSA-8r9p-f939-6h3c. No audit exception is added.
 - `npm run check:npm-audit-disposition` tracks the current accepted disposition
   set and fails on new high or moderate findings.
 
