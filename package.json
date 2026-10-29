@@ -65,9 +65,9 @@
     "@nomicfoundation/ignition-core": "3.1.11",
     "@openzeppelin/contracts": "5.6.1",
     "@types/node": "26.6.5",
-    "hardhat": "3.20.0",
+    "hardhat": "3.21.0",
     "typescript": "6.0.3",
-    "viem": "2.57.7"
+    "viem": "2.57.11"
   },
   "overrides": {
     "axios": "1.20.0",
