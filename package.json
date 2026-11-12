@@ -67,7 +67,7 @@
     "@types/node": "26.6.6",
     "hardhat": "3.21.2",
     "typescript": "6.0.3",
-    "viem": "2.57.14"
+    "viem": "2.57.17"
   },
   "overrides": {
     "axios": "1.20.0",
