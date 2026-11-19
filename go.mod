@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/kms v1.62.2
 	github.com/ethereum/go-ethereum v1.17.10
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
